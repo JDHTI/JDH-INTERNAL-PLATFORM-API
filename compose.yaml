@@ -103,6 +103,9 @@ services:
       S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-internal-platform}
+      AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
+      AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
+      AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: ${AUTH_MICROSOFT_ENTRA_ID_TENANT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy

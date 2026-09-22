@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     S3_BUCKET: str = "internal-platform"
     S3_CONNECT_TIMEOUT_SECONDS: float = 2.0
 
+    # Microsoft Entra ID
+    AUTH_MICROSOFT_ENTRA_ID_SECRET: SecretStr = SecretStr("")
+    AUTH_MICROSOFT_ENTRA_ID_ID: str = ""
+    AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: str = ""
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def APP_ENV(self) -> str:
