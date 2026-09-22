@@ -45,6 +45,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 `.env.example` contiene valores locales seguros para el stack de desarrollo.
 Los secretos reales deben inyectarse mediante el entorno del proceso o el
 gestor de secretos del despliegue. `ENVIRONMENT` acepta `dev`, `test` y `prod`.
+Las variables `AUTH_MICROSOFT_ENTRA_ID_*` se cargan desde el `.env` local o
+desde el gestor de secretos del entorno; el valor de
+`AUTH_MICROSOFT_ENTRA_ID_SECRET` nunca debe versionarse.
 
 ## Calidad y migraciones
 
