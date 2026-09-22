@@ -78,6 +78,11 @@ o nodo individual.
 
 ## Diseño
 
+Las reglas para el historial y para registrar dependencias están en
+[`docs/conventional-commits.md`](docs/conventional-commits.md) y
+[`docs/wiring-guideline.md`](docs/wiring-guideline.md). La guía de creación de
+módulos se encuentra en [`docs/module-guideline.md`](docs/module-guideline.md).
+
 `app/core` contiene configuración, logging y middleware. El composition root
 está en [`app/app_container.py`](app/app_container.py): allí se inicializan los
 recursos globales y se conecta [`app/v1_0/v1_containers.py`](app/v1_0/v1_containers.py),
