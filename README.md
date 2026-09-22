@@ -35,7 +35,8 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 ## Endpoints base
 
 - `GET /api/health/live`: confirma que el proceso responde.
-- `GET /api/health/ready`: comprueba PostgreSQL, Redis y el bucket S3.
+- `GET /api/health/ready`: comprueba PostgreSQL, Redis, el bucket S3 y el
+  proveedor de datawarehouse configurado.
 - `GET /api/v1/auth/login`: inicia el SSO con Microsoft Entra ID mediante el
   flujo de código de autorización y PKCE.
 - `GET /api/v1/auth/callback`: callback de Entra; la API registra el usuario en
