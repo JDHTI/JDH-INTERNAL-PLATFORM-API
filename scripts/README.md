@@ -31,3 +31,9 @@ segundo argumento se convierte en un filtro `pytest -k`; esto permite ejecutar
 una prueba concreta dentro de un módulo sin acoplar el script a nombres de
 archivos. Los scopes `all`, `module` y `test` hacen explícita la intención en
 CI o en scripts superiores.
+
+Para promover un usuario de Entra ya registrado al rol inicial de administrador:
+
+```bash
+poetry run python scripts/promote-user.py --tenant-id <tenant> --entra-object-id <oid>
+```
