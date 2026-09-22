@@ -42,6 +42,10 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   su primer acceso y administra los tokens exclusivamente en cookies `HttpOnly`.
 - `GET /api/v1/auth/me`: devuelve el perfil local autenticado. El frontend debe
   usar `credentials: include`; no debe guardar tokens en `localStorage`.
+- `GET /api/v1/clientes?limit=50&cursor=...`: consume la vista
+  `consumo.clientes` mediante paginación por cursor. La respuesta incluye
+  `items`, `has_more` y `next_cursor`; el cursor se envía únicamente para
+  solicitar la página siguiente.
 - Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
   `/api/v1/areas`; requieren el rol local `admin`.
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
@@ -56,6 +60,11 @@ gestor de secretos del despliegue. `ENVIRONMENT` acepta `dev`, `test` y `prod`.
 Las variables `AUTH_MICROSOFT_ENTRA_ID_*` se cargan desde el `.env` local o
 desde el gestor de secretos del entorno; el valor de
 `AUTH_MICROSOFT_ENTRA_ID_SECRET` nunca debe versionarse.
+El datawarehouse se configura con `DWH_*`; el proveedor inicial es PostgreSQL
+y el usuario debe tener permisos de lectura sobre el esquema `consumo`. La
+conexión se abre bajo demanda, se comprueba en readiness y se cierra con el
+proceso. Cambiar `DWH_PROVIDER` queda preparado para incorporar otro adaptador
+sin cambiar el contrato del endpoint.
 
 ## SSO y bypass de desarrollo
 
