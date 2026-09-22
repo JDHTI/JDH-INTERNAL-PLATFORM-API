@@ -32,4 +32,4 @@ def test_readiness_is_unavailable_without_dependencies() -> None:
 
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
-    assert set(response.json()["checks"]) == {"postgres", "redis", "s3"}
+    assert set(response.json()["checks"]) == {"postgres", "redis", "s3", "datawarehouse"}

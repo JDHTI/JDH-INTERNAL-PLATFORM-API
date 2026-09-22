@@ -1,10 +1,13 @@
 """Typed application configuration loaded from environment variables."""
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 
 from pydantic import SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CONFIGURED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class Environment(StrEnum):
@@ -64,6 +67,23 @@ class Settings(BaseSettings):
     DATABASE_MAX_OVERFLOW: int = 10
     DATABASE_POOL_TIMEOUT: int = 10
     DATABASE_CONNECT_TIMEOUT_SECONDS: float = 2.0
+
+    # Read-only external data provider. The first adapter uses PostgreSQL and
+    # reads only the configured consumption schema.
+    DWH_ENABLED: bool = True
+    DWH_PROVIDER: str = "postgres"
+    DWH_HOST: str = ""
+    DWH_PORT: int = 5432
+    DWH_DATABASE: str = ""
+    DWH_USER: str = ""
+    DWH_PASSWORD: SecretStr = SecretStr("")
+    DWH_SCHEMA: str = "consumo"
+    DWH_CLIENTS_VIEW: str = "clientes"
+    DWH_POOL_MIN_SIZE: int = 1
+    DWH_POOL_MAX_SIZE: int = 5
+    DWH_CONNECT_TIMEOUT_SECONDS: float = 2.0
+    DWH_COMMAND_TIMEOUT_SECONDS: float = 10.0
+    DWH_CURSOR_SECRET: SecretStr = SecretStr("")
 
     REDIS_URL: SecretStr = SecretStr("redis://:redis@127.0.0.1:6379/0")
     REDIS_KEY_PREFIX: str = "internal-platform"
@@ -170,6 +190,23 @@ class Settings(BaseSettings):
                 "max_overflow": self.DATABASE_MAX_OVERFLOW,
                 "pool_timeout": self.DATABASE_POOL_TIMEOUT,
                 "connect_timeout": self.DATABASE_CONNECT_TIMEOUT_SECONDS,
+            },
+            "data_provider": {
+                "enabled": self.DWH_ENABLED,
+                "provider_name": self.DWH_PROVIDER,
+                "host": self.DWH_HOST,
+                "port": self.DWH_PORT,
+                "database": self.DWH_DATABASE,
+                "user": self.DWH_USER,
+                "password": self.DWH_PASSWORD.get_secret_value(),
+                "schema": self.DWH_SCHEMA,
+                "clients_view": self.DWH_CLIENTS_VIEW,
+                "min_size": self.DWH_POOL_MIN_SIZE,
+                "max_size": self.DWH_POOL_MAX_SIZE,
+                "connect_timeout": self.DWH_CONNECT_TIMEOUT_SECONDS,
+                "command_timeout": self.DWH_COMMAND_TIMEOUT_SECONDS,
+                "cursor_secret": self.DWH_CURSOR_SECRET.get_secret_value()
+                or f"{self.APP_NAME}:{self.DWH_PROVIDER}",
             },
             "redis": {
                 "url": self.REDIS_URL.get_secret_value(),
