@@ -64,6 +64,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         database=database,
         redis=redis,
         storage=storage,
+        data_provider=data_provider,
         settings=settings,
     )
 
@@ -88,7 +89,9 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     container = ApplicationContainer()
     container.settings.override(app_settings)
     container.config.from_dict(app_settings.container_config())
-    container.wire(modules=[health_router_module, identity_router_module])
+    container.wire(
+        modules=[health_router_module, identity_router_module, consumption_router_module]
+    )
     return container
 
 

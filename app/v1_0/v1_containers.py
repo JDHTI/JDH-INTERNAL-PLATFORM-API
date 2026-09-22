@@ -3,6 +3,7 @@
 from dependency_injector import containers, providers
 
 from app.core.config import Settings
+from app.infrastructure.data_provider import DataProviderConnection
 from app.infrastructure.database import Database
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
@@ -21,6 +22,7 @@ class V1Container(containers.DeclarativeContainer):
     database = providers.Dependency(instance_of=Database)
     redis = providers.Dependency(instance_of=RedisClient)
     storage = providers.Dependency(instance_of=S3Storage)
+    data_provider = providers.Dependency(instance_of=DataProviderConnection)
     settings = providers.Dependency(instance_of=Settings)
 
     health_service = providers.Factory(
