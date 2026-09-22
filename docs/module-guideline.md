@@ -33,7 +33,9 @@ app/
 Un módulo pequeño puede comenzar con menos archivos, pero conserva estas
 fronteras. El servicio de aplicación recibe puertos, no sesiones ni clientes
 concretos. Los repositorios delimitan la transacción y no deben ser usados
-directamente desde un router.
+directamente desde un router. Los servicios y repositorios deben seguir el
+[estándar de docstrings](documentation-guideline.md), con `Args` y `Returns` en
+cada operación pública.
 
 ## Contenedor y wiring
 

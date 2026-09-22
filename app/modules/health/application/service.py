@@ -25,11 +25,27 @@ class HealthService:
     """Application service that coordinates dependency checks."""
 
     def __init__(self, database: Database, redis: RedisClient, storage: S3Storage) -> None:
+        """Create the service with the infrastructure adapters to probe.
+
+        Args:
+            database (Database): PostgreSQL adapter used by the readiness probe.
+            redis (RedisClient): Redis adapter used by the readiness probe.
+            storage (S3Storage): S3-compatible storage adapter used by the
+                readiness probe.
+        """
+
         self.database = database
         self.redis = redis
         self.storage = storage
 
     async def readiness(self) -> tuple[bool, dict[str, ComponentResult]]:
+        """Probe every configured dependency concurrently.
+
+        Returns:
+            tuple[bool, dict[str, ComponentResult]]: A readiness flag and the
+                result of each dependency probe.
+        """
+
         checks: dict[str, Callable[[], Awaitable[None]]] = {
             "postgres": self.database.check,
             "redis": self.redis.check,
@@ -44,6 +60,19 @@ class HealthService:
     async def _probe(
         self, name: str, probe: Callable[[], Awaitable[None]]
     ) -> tuple[str, ComponentResult]:
+        """Execute one dependency probe and convert failures into a result.
+
+        Args:
+            name (str): Stable name used to identify the dependency in the
+                readiness response.
+            probe (Callable[[], Awaitable[None]]): Async connectivity check to
+                execute.
+
+        Returns:
+            tuple[str, ComponentResult]: Dependency name and measured probe
+                result.
+        """
+
         started = time.perf_counter()
         try:
             await probe()
