@@ -8,7 +8,7 @@ from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Response, status
 from pydantic import BaseModel, Field
 
-from app.core.container import ApplicationContainer
+from app.app_container import ApplicationContainer
 from app.modules.health.application.service import HealthService
 
 router = APIRouter()
@@ -41,7 +41,9 @@ async def live() -> dict[str, str]:
 @inject
 async def ready(
     response: Response,
-    health_service: HealthService = Depends(Provide[ApplicationContainer.health_service]),  # noqa: B008
+    health_service: HealthService = Depends(  # noqa: B008
+        Provide[ApplicationContainer.v1_container.health_service]
+    ),
 ) -> ReadinessResponse:
     """Return dependency status and use HTTP 503 until all are available."""
 

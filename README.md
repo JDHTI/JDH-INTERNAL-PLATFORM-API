@@ -59,10 +59,30 @@ Alembic usa SQLAlchemy async y una revisión inicial vacía. Cada módulo debe
 registrar sus modelos en el metadata antes de ejecutar `alembic revision
 --autogenerate` y revisar el diff generado antes de aplicarlo.
 
+## Scripts de desarrollo
+
+Los comandos frecuentes están automatizados en [`scripts/`](scripts/README.md):
+
+```bash
+./scripts/run-backend.sh
+./scripts/run-test.sh
+./scripts/run-test.sh ventas
+./scripts/run-test.sh ventas agregar_compra
+./scripts/run-test.sh test tests/test_app.py::test_liveness_and_request_id
+./scripts/run-tests.sh ventas agregar_compra
+```
+
+`run-backend.sh` usa reload en desarrollo y acepta `MIGRATE=true` para ejecutar
+Alembic antes de levantar Uvicorn. `run-test.sh` acepta scope completo, módulo
+o nodo individual.
+
 ## Diseño
 
-`app/core` contiene configuración, logging, middleware y el composition root.
-`app/infrastructure` contiene adaptadores compartidos para PostgreSQL, Redis y
-S3. `app/modules` contiene módulos verticales y `app/api` conecta routers por
-versión. Esta separación permite reemplazar un adaptador local por un cliente
-remoto si un módulo se convierte en microservicio.
+`app/core` contiene configuración, logging y middleware. El composition root
+está en [`app/app_container.py`](app/app_container.py): allí se inicializan los
+recursos globales y se conecta [`app/v1_0/v1_containers.py`](app/v1_0/v1_containers.py),
+que contiene los servicios de la versión 1. El registro explícito de routers
+vive en `app/v1_0/v1_router.py`. `app/infrastructure` contiene adaptadores
+compartidos para PostgreSQL, Redis y S3; `app/modules` contiene módulos
+verticales. Esta separación permite reemplazar un adaptador local por un
+cliente remoto si un módulo se convierte en microservicio.

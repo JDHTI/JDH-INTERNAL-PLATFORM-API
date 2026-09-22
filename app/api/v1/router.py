@@ -1,9 +1,5 @@
-"""Versioned API router. Add module routers here explicitly."""
+"""Backward-compatible import path for the version 1 router registry."""
 
-from fastapi import APIRouter
+from app.v1_0.v1_router import v1_router
 
-v1_router = APIRouter(prefix="/v1", tags=["v1"])
-
-# Example when a module is added:
-# from app.modules.orders.presentation.router import router as orders_router
-# v1_router.include_router(orders_router, prefix="/orders", tags=["orders"])
+__all__ = ["v1_router"]

@@ -20,6 +20,16 @@ app/modules/<module_name>/
     └── router.py            # DTO HTTP y endpoints FastAPI
 ```
 
+La composición transversal sigue esta estructura fija:
+
+```text
+app/
+├── app_container.py          # Recursos globales y wiring de la aplicación
+└── v1_0/
+    ├── v1_containers.py      # Servicios y repositorios de la API v1
+    └── v1_router.py          # Registro explícito de routers v1
+```
+
 Un módulo pequeño puede comenzar con menos archivos, pero conserva estas
 fronteras. El servicio de aplicación recibe puertos, no sesiones ni clientes
 concretos. Los repositorios delimitan la transacción y no deben ser usados
@@ -39,8 +49,9 @@ class OrdersContainer(containers.DeclarativeContainer):
     service = providers.Factory(OrderService, repository=repository)
 ```
 
-Agrega el contenedor como proveedor en `app/core/container.py` y conecta el
-router explícitamente en `app/api/v1/router.py`:
+Agrega los proveedores globales en `app/app_container.py` y los proveedores del
+módulo en `app/v1_0/v1_containers.py`. El router se conecta explícitamente en
+`app/v1_0/v1_router.py`:
 
 ```python
 from app.modules.orders.presentation.router import router as orders_router
@@ -49,21 +60,26 @@ v1_router.include_router(orders_router, prefix="/orders", tags=["orders"])
 ```
 
 En el router usa `Provide` y `@inject` para que las pruebas puedan sobrescribir
-el repositorio:
+el servicio. El provider debe venir del contenedor de la versión, nunca de una
+instanciación manual dentro del endpoint:
 
 ```python
 @router.get("/{order_id}")
 @inject
 async def get_order(
     order_id: UUID,
-    service: Annotated[OrderService, Depends(Provide[ApplicationContainer.order_service])],
+    service: OrderService = Depends(Provide[ApplicationContainer.v1_container.order_service]),
 ):
     return await service.get(order_id)
 ```
 
-El composition root debe hacer `container.config.from_dict(...)` y
-`container.wire(...)` una sola vez por instancia de aplicación. No crees
-contenedores ni clientes globales dentro de routers.
+`build_application_container()` debe hacer `config.from_dict(...)` y
+`container.wire(...)` una sola vez por instancia de aplicación. El lifespan usa
+`initialize_global_resources()` y `shutdown_global_resources()` para controlar
+el ciclo de vida. No crees contenedores ni clientes globales dentro de routers.
+
+`app/core/container.py` únicamente conserva un import de compatibilidad; el
+nuevo código debe importar desde `app.app_container`.
 
 ## Modelos y Alembic
 

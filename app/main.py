@@ -9,29 +9,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.app_container import (
+    GlobalResources,
+    build_application_container,
+    initialize_global_resources,
+    shutdown_global_resources,
+)
 from app.core.config import Settings, settings
-from app.core.container import ApplicationContainer
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
-from app.infrastructure.database import Database
-from app.infrastructure.redis import RedisClient
-from app.infrastructure.s3 import S3Storage
-from app.modules.health.presentation import router as health_router_module
-
-
-async def _shutdown_resources(
-    database: Database | None,
-    redis: RedisClient | None,
-    storage: S3Storage | None,
-) -> None:
-    """Close only the resources that were successfully created."""
-
-    if redis is not None:
-        await redis.close()
-    if database is not None:
-        await database.dispose()
-    if storage is not None:
-        storage.close()
 
 
 def create_app(app_settings: Settings | None = None) -> FastAPI:
@@ -39,20 +25,14 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
 
     runtime_settings = app_settings or settings
     configure_logging(runtime_settings)
-    container = ApplicationContainer()
-    container.config.from_dict(runtime_settings.container_config())
-    container.wire(modules=[health_router_module])
+    container = build_application_container(runtime_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        database: Database | None = None
-        redis: RedisClient | None = None
-        storage: S3Storage | None = None
+        resources: GlobalResources | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
-            database = container.database()
-            redis = container.redis()
-            storage = container.storage()
+            resources = await initialize_global_resources(container)
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -67,7 +47,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
-            await _shutdown_resources(database, redis, storage)
+            if resources is not None:
+                await shutdown_global_resources(resources)
 
     allow_credentials = "*" not in runtime_settings.cors_origins
     app = FastAPI(
