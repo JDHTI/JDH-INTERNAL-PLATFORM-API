@@ -1,0 +1,2 @@
+Alembic migration scripts belong here. Module models must be imported into
+the metadata registry before autogenerate is run; see docs/module-guideline.md.
