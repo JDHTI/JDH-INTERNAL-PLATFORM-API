@@ -149,3 +149,5 @@ vive en `app/v1_0/v1_router.py`. `app/infrastructure` contiene adaptadores
 compartidos para PostgreSQL, Redis y S3; `app/modules` contiene módulos
 verticales. Esta separación permite reemplazar un adaptador local por un
 cliente remoto si un módulo se convierte en microservicio.
+El estándar para incorporar nuevas vistas de consumo está en
+[`docs/consumption-views.md`](docs/consumption-views.md).
