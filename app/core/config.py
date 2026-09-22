@@ -144,14 +144,6 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_DEV_BYPASS is only allowed in the dev environment")
         if self.ENVIRONMENT is Environment.PROD and self.AUTH_COOKIE_SECURE is False:
             raise ValueError("AUTH_COOKIE_SECURE=false is not allowed in production")
-        if self.DWH_POOL_MIN_SIZE < 0 or self.DWH_POOL_MAX_SIZE < self.DWH_POOL_MIN_SIZE:
-            raise ValueError("DWH pool sizes are invalid")
-        if self.DWH_PROVIDER.strip().lower() not in {"postgres"}:
-            raise ValueError("DWH_PROVIDER must be postgres")
-        if not _CONFIGURED_IDENTIFIER.fullmatch(self.DWH_SCHEMA):
-            raise ValueError("DWH_SCHEMA must be a valid SQL identifier")
-        if not _CONFIGURED_IDENTIFIER.fullmatch(self.DWH_CLIENTS_VIEW):
-            raise ValueError("DWH_CLIENTS_VIEW must be a valid SQL identifier")
         return self
 
     @computed_field  # type: ignore[prop-decorator]
