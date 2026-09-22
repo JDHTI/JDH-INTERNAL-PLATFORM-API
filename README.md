@@ -83,7 +83,9 @@ Las reglas para el historial y para registrar dependencias están en
 [`docs/wiring-guideline.md`](docs/wiring-guideline.md). La guía de creación de
 módulos se encuentra en [`docs/module-guideline.md`](docs/module-guideline.md),
 y el formato de docstrings en
-[`docs/documentation-guideline.md`](docs/documentation-guideline.md).
+[`docs/documentation-guideline.md`](docs/documentation-guideline.md). El flujo
+de ramas y Pull Requests está definido en
+[`docs/git-workflow.md`](docs/git-workflow.md).
 
 `app/core` contiene configuración, logging y middleware. El composition root
 está en [`app/app_container.py`](app/app_container.py): allí se inicializan los
