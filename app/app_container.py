@@ -17,6 +17,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
     """Global resources plus the versioned service containers."""
 
     config = providers.Configuration()
+    settings = providers.Dependency(instance_of=Settings)
 
     database = providers.Singleton(
         Database,
@@ -48,6 +49,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         database=database,
         redis=redis,
         storage=storage,
+        settings=settings,
     )
 
 
@@ -64,10 +66,12 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     """Configure and wire one container instance for one application instance."""
 
     from app.modules.health.presentation import router as health_router_module
+    from app.modules.identity.presentation import router as identity_router_module
 
     container = ApplicationContainer()
+    container.settings.override(app_settings)
     container.config.from_dict(app_settings.container_config())
-    container.wire(modules=[health_router_module])
+    container.wire(modules=[health_router_module, identity_router_module])
     return container
 
 

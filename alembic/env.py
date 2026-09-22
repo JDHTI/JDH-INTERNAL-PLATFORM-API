@@ -8,6 +8,7 @@ from logging.config import fileConfig
 from alembic import context
 from app.core.config import settings
 from app.infrastructure.database import Base
+from app.modules.identity.infrastructure import models as identity_models  # noqa: F401
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config

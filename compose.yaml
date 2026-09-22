@@ -95,6 +95,16 @@ services:
       PORT: 8000
       API_PREFIX: ${API_PREFIX:-/api}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+      ENTRA_API_AUDIENCE: ${ENTRA_API_AUDIENCE:-}
+      ENTRA_API_SCOPE: ${ENTRA_API_SCOPE:-access_as_user}
+      ENTRA_REDIRECT_URI: ${ENTRA_REDIRECT_URI:-http://localhost:8000/api/v1/auth/callback}
+      AUTH_FRONTEND_REDIRECT_URI: ${AUTH_FRONTEND_REDIRECT_URI:-}
+      AUTH_DEV_BYPASS: ${AUTH_DEV_BYPASS:-true}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-internal_platform}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-internal-platform}
