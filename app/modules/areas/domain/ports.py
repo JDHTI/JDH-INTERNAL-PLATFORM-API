@@ -13,21 +13,24 @@ class DirectoryUser(Protocol):
     """The part of a platform user this module reads."""
 
     id: UUID
-    email: str
+    email: str | None
     display_name: str | None
 
 
 class UserDirectory(Protocol):
     """Look users up without reading the identity module's tables."""
 
-    async def ensure_user(self, email: str) -> DirectoryUser:
-        """Return the user with this email, creating a stub when missing.
+    async def require_user(self, email: str) -> DirectoryUser:
+        """Return the user with this email.
 
         Args:
             email (str): Email address of the person.
 
         Returns:
-            DirectoryUser: Existing or newly created user.
+            DirectoryUser: The existing user.
+
+        Raises:
+            NotFoundError: When nobody with that email has signed in yet.
         """
         ...
 

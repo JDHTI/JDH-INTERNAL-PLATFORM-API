@@ -50,12 +50,14 @@ async def test_non_members_only_see_their_areas(areas, admin, login) -> None:
         await areas.get_area("mercadeo", ana)
 
 
-async def test_responsible_can_be_assigned_before_first_sign_in(areas, admin, user_repo) -> None:
-    view = await areas.create_area(
-        CreateAreaCommand(slug="ti", name="TI", responsible_email="Nuevo@JDH.com.co"), admin
-    )
+async def test_responsible_must_have_signed_in(areas, admin, login) -> None:
+    command = CreateAreaCommand(slug="ti", name="TI", responsible_email="Nuevo@JDH.com.co")
+    with pytest.raises(NotFoundError):
+        await areas.create_area(command, admin)
+
+    await login("nuevo@jdh.com.co")
+    view = await areas.create_area(command, admin)
     assert view.responsible.email == "nuevo@jdh.com.co"
-    assert any(u.email == "nuevo@jdh.com.co" for u in user_repo.users.values())
 
     updated = await areas.update_area(
         "ti", UpdateAreaCommand(fields=frozenset({"responsible_email"})), admin

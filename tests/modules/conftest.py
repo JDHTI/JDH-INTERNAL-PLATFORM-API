@@ -1,29 +1,20 @@
 import pytest
 from app.modules.areas.application.service import AreaService
 from app.modules.documents.application.service import DocumentService
-from app.modules.identity.application.service import IdentityService
 
 from tests.modules.fakes import (
     FakeAreaRepository,
+    FakeDirectory,
     FakeDocumentRepository,
     FakeStorage,
-    FakeTokenVerifier,
-    FakeUserRepository,
 )
 
 ADMIN_EMAIL = "analista.ti@jdh.com.co"
 
 
 @pytest.fixture
-def user_repo() -> FakeUserRepository:
-    return FakeUserRepository()
-
-
-@pytest.fixture
-def identity(user_repo) -> IdentityService:
-    return IdentityService(
-        repository=user_repo, token_verifier=FakeTokenVerifier(), admin_emails=[ADMIN_EMAIL]
-    )
+def directory() -> FakeDirectory:
+    return FakeDirectory()
 
 
 @pytest.fixture
@@ -32,8 +23,8 @@ def area_repo() -> FakeAreaRepository:
 
 
 @pytest.fixture
-def areas(area_repo, identity) -> AreaService:
-    return AreaService(repository=area_repo, users=identity)
+def areas(area_repo, directory) -> AreaService:
+    return AreaService(repository=area_repo, users=directory)
 
 
 @pytest.fixture
@@ -59,23 +50,17 @@ def documents(doc_repo, storage, areas) -> DocumentService:
 
 
 @pytest.fixture
-async def admin(identity):
-    return await _login(identity, ADMIN_EMAIL)
+async def admin(directory):
+    """A platform administrator (identity role ``admin``) who has signed in."""
 
-
-async def _login(identity: IdentityService, email: str):
-    """Sign in through the dev bypass, enabled only for this call."""
-
-    identity.dev_bypass = True
-    try:
-        return await identity.authenticate(None, dev_email=email)
-    finally:
-        identity.dev_bypass = False
+    return directory.sign_in(ADMIN_EMAIL, admin=True)
 
 
 @pytest.fixture
-def login(identity):
+def login(directory):
+    """Sign a regular user in, which is what makes them known to the directory."""
+
     async def _do(email: str):
-        return await _login(identity, email)
+        return directory.sign_in(email)
 
     return _do

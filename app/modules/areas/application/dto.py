@@ -10,7 +10,7 @@ from uuid import UUID
 @dataclass(frozen=True)
 class UserRef:
     id: UUID
-    email: str
+    email: str | None
     display_name: str | None
 
 

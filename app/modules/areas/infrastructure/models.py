@@ -10,7 +10,6 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
-    Integer,
     String,
     UniqueConstraint,
     func,
@@ -21,27 +20,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
 
+# The ``areas`` row is shared with the identity module (users.area_id points
+# at it), so this module maps the identity model rather than a second class
+# on the same table. Its area-space columns come from migration 0003_areas.
+from app.modules.identity.infrastructure.models import AreaModel
 
-class AreaModel(Base):
-    __tablename__ = "areas"
-    __table_args__ = (Index("uq_areas_name_lower", text("lower(name)"), unique=True),)
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(150), nullable=False)
-    remit: Mapped[str | None] = mapped_column(String(300))
-    # Icon name the UI maps to a glyph (lucide), e.g. "Server".
-    icon: Mapped[str | None] = mapped_column(String(64))
-    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    responsible_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+__all__ = ["AreaMemberModel", "AreaModel", "AreaRoleModel"]
 
 
 class AreaRoleModel(Base):

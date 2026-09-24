@@ -22,8 +22,8 @@ from app.modules.areas.application.dto import (
 )
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.domain.entities import AreaRole
-from app.modules.identity.domain.entities import Principal
-from app.modules.identity.presentation.dependencies import get_current_principal
+from app.modules.identity.domain.principal import Principal
+from app.modules.identity.presentation.principal import get_current_principal
 
 router = APIRouter()
 
@@ -36,7 +36,7 @@ _service = Depends(Provide[ApplicationContainer.v1_container.area_service])
 
 class UserRefResponse(BaseModel):
     id: UUID
-    email: str
+    email: str | None
     display_name: str | None
 
 

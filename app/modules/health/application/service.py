@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.core.logging import logger
+from app.infrastructure.data_provider import DataProviderConnection
 from app.infrastructure.database import Database
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
@@ -24,7 +25,13 @@ class ComponentResult:
 class HealthService:
     """Application service that coordinates dependency checks."""
 
-    def __init__(self, database: Database, redis: RedisClient, storage: S3Storage) -> None:
+    def __init__(
+        self,
+        database: Database,
+        redis: RedisClient,
+        storage: S3Storage,
+        data_provider: DataProviderConnection,
+    ) -> None:
         """Create the service with the infrastructure adapters to probe.
 
         Args:
@@ -32,11 +39,14 @@ class HealthService:
             redis (RedisClient): Redis adapter used by the readiness probe.
             storage (S3Storage): S3-compatible storage adapter used by the
                 readiness probe.
+            data_provider (DataProviderConnection): External provider used by
+                the readiness probe.
         """
 
         self.database = database
         self.redis = redis
         self.storage = storage
+        self.data_provider = data_provider
 
     async def readiness(self) -> tuple[bool, dict[str, ComponentResult]]:
         """Probe every configured dependency concurrently.
@@ -50,6 +60,7 @@ class HealthService:
             "postgres": self.database.check,
             "redis": self.redis.check,
             "s3": self.storage.check,
+            "datawarehouse": self.data_provider.check,
         }
         results = await asyncio.gather(
             *(self._probe(name, probe) for name, probe in checks.items())

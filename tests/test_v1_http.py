@@ -1,43 +1,41 @@
-"""HTTP contract of the v1 modules with the services overridden in the container."""
+"""HTTP contract of the areas and documents modules, services overridden in the container."""
+
+import uuid
+from types import SimpleNamespace
 
 from app.core.config import Environment, Settings
 from app.main import create_app
+from app.modules.identity.presentation.router import get_current_user
 from fastapi.testclient import TestClient
 
 
-def test_v1_endpoints_require_authentication() -> None:
+def test_areas_and_documents_require_a_session() -> None:
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
     with TestClient(app) as client:
-        for path in ("/api/v1/me", "/api/v1/areas", "/api/v1/documents/search"):
+        for path in ("/api/v1/areas", "/api/v1/areas/ti", "/api/v1/documents/search"):
             response = client.get(path)
             assert response.status_code == 401, path
-            assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
-def test_dev_bypass_header_is_ignored_when_bypass_is_off() -> None:
-    app = create_app(Settings(ENVIRONMENT=Environment.DEV, AUTH_DEV_BYPASS=False))
-    with TestClient(app) as client:
-        response = client.get("/api/v1/me", headers={"X-Dev-User-Email": "analista.ti@jdh.com.co"})
-    assert response.status_code == 401
-
-
-def test_areas_are_listed_through_the_container(monkeypatch) -> None:
+def test_areas_see_the_session_user_as_principal() -> None:
     from app.modules.areas.application.dto import AreaView
-    from app.modules.identity.domain.entities import Principal
 
-    from tests.modules.fakes import NOW, principal
+    from tests.modules.fakes import NOW
 
-    caller: Principal = principal(admin=True)
-
-    class StubIdentity:
-        async def authenticate(self, token, dev_email=None):
-            return caller
+    session_user = SimpleNamespace(
+        id=uuid.uuid4(),
+        email="analista.ti@jdh.com.co",
+        name="Analista TI",
+        role=SimpleNamespace(code="admin"),
+    )
+    seen = []
 
     class StubAreas:
-        async def list_areas(self, _principal):
+        async def list_areas(self, principal):
+            seen.append(principal)
             return [
                 AreaView(
-                    id=caller.user_id,
+                    id=uuid.uuid4(),
                     slug="ti",
                     name="TI",
                     remit="Infraestructura",
@@ -52,14 +50,17 @@ def test_areas_are_listed_through_the_container(monkeypatch) -> None:
             ]
 
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
+    app.dependency_overrides[get_current_user] = lambda: session_user
     container = app.state.container
     with (
-        container.v1_container.identity_service.override(StubIdentity()),
         container.v1_container.area_service.override(StubAreas()),
         TestClient(app) as client,
     ):
-        response = client.get("/api/v1/areas", headers={"Authorization": "Bearer x"})
+        response = client.get("/api/v1/areas")
 
     assert response.status_code == 200
     body = response.json()
     assert [(a["slug"], a["icon"], a["sort_order"]) for a in body] == [("ti", "Server", 10)]
+    assert seen[0].user_id == session_user.id
+    assert seen[0].email == "analista.ti@jdh.com.co"
+    assert seen[0].is_platform_admin is True

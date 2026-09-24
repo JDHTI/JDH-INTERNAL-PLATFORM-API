@@ -24,7 +24,7 @@ from app.modules.areas.application.dto import (
 )
 from app.modules.areas.domain.entities import Area, AreaRole, clean_name, validate_slug
 from app.modules.areas.domain.ports import AreaRepository, DirectoryUser, UserDirectory
-from app.modules.identity.domain.entities import Principal
+from app.modules.identity.domain.principal import Principal
 
 
 def _user_ref(user: DirectoryUser | None) -> UserRef | None:
@@ -205,7 +205,7 @@ class AreaService:
 
         Args:
             command (CreateAreaCommand): Area data; the responsible is given by
-                email and provisioned as a stub if they never signed in.
+                email and must have signed in at least once.
             principal (Principal): The caller; must be a platform administrator.
 
         Returns:
@@ -217,7 +217,7 @@ class AreaService:
         name = clean_name(command.name)
         await self._check_unique(slug, name)
         responsible = (
-            await self.users.ensure_user(command.responsible_email)
+            await self.users.require_user(command.responsible_email)
             if command.responsible_email
             else None
         )
@@ -260,7 +260,7 @@ class AreaService:
         if "responsible_email" in command.fields:
             if command.responsible_email:
                 area.responsible_user_id = (
-                    await self.users.ensure_user(command.responsible_email)
+                    await self.users.require_user(command.responsible_email)
                 ).id
             else:
                 area.responsible_user_id = None
@@ -386,7 +386,7 @@ class AreaService:
             for m in members
             if m.user_id in users and m.role_id in roles
         ]
-        return sorted(views, key=lambda v: (v.role.name, v.user.display_name or v.user.email))
+        return sorted(views, key=lambda v: (v.role.name, v.user.display_name or v.user.email or ""))
 
     async def add_member(
         self, slug: str, email: str, role_id: UUID, principal: Principal
@@ -395,8 +395,8 @@ class AreaService:
 
         Args:
             slug (str): Area slug.
-            email (str): Person's email; provisioned as a stub if they never
-                signed in, and linked on their first sign-in.
+            email (str): Person's email; they must have signed in at least
+                once, since platform users are created by Entra sign-in.
             role_id (UUID): A role of the same area.
             principal (Principal): The caller; must be a platform administrator.
 
@@ -407,7 +407,7 @@ class AreaService:
         self._require_admin(principal)
         area = await self._get_area(slug)
         role = await self._get_role(area.id, role_id)
-        user = await self.users.ensure_user(email)
+        user = await self.users.require_user(email)
         if await self.repository.get_member_by_user(area.id, user.id):
             raise ConflictError("La persona ya es miembro del área")
         member = await self.repository.create_member(area.id, user.id, role.id)

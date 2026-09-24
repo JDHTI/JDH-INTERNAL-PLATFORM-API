@@ -36,6 +36,14 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 
 - `GET /api/health/live`: confirma que el proceso responde.
 - `GET /api/health/ready`: comprueba PostgreSQL, Redis y el bucket S3.
+- `GET /api/v1/auth/login`: inicia el SSO con Microsoft Entra ID mediante el
+  flujo de código de autorización y PKCE.
+- `GET /api/v1/auth/callback`: callback de Entra; la API registra el usuario en
+  su primer acceso y administra los tokens exclusivamente en cookies `HttpOnly`.
+- `GET /api/v1/auth/me`: devuelve el perfil local autenticado. El frontend debe
+  usar `credentials: include`; no debe guardar tokens en `localStorage`.
+- Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
+  `/api/v1/areas`; requieren el rol local `admin`.
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
 - En `ENVIRONMENT=prod` se deshabilitan OpenAPI, Swagger UI y ReDoc; también
   se fuerza `debug=False` aunque una variable externa intente activarlo.
@@ -48,6 +56,49 @@ gestor de secretos del despliegue. `ENVIRONMENT` acepta `dev`, `test` y `prod`.
 Las variables `AUTH_MICROSOFT_ENTRA_ID_*` se cargan desde el `.env` local o
 desde el gestor de secretos del entorno; el valor de
 `AUTH_MICROSOFT_ENTRA_ID_SECRET` nunca debe versionarse.
+El datawarehouse se configura con `DWH_*`; el proveedor inicial es PostgreSQL
+y el usuario debe tener permisos de lectura sobre el esquema `consumo`. La
+conexión se abre bajo demanda, se comprueba en readiness y se cierra con el
+proceso. Cambiar `DWH_PROVIDER` queda preparado para incorporar otro adaptador
+sin cambiar el contrato del endpoint.
+
+## SSO y bypass de desarrollo
+
+La API usa el flujo OIDC de Microsoft Entra ID. El navegador recibe únicamente
+cookies `HttpOnly`; la cookie de acceso se renueva automáticamente usando la
+cookie de renovación cuando expira. Configura `ENTRA_TENANT_ID`,
+`ENTRA_CLIENT_ID`, `ENTRA_API_AUDIENCE` y la URL de callback registrada en Entra.
+Para capturar cargo y foto mediante Microsoft Graph, la aplicación necesita
+consentimiento delegado para `User.Read` y una credencial de cliente para el
+flujo On-Behalf-Of.
+
+En `ENVIRONMENT=dev` se puede activar `AUTH_DEV_BYPASS=true`. Este modo crea un
+usuario administrador local determinista y no acepta ni genera tokens; se
+rechaza automáticamente en `test` y `prod`. Para promover un usuario real al
+primer administrador, ejecútalo después de su primer ingreso:
+
+```powershell
+poetry run python scripts/promote-user.py --tenant-id <tenant> --entra-object-id <oid>
+```
+
+## SSO y bypass de desarrollo
+
+La API usa el flujo OIDC de Microsoft Entra ID. El navegador recibe únicamente
+cookies `HttpOnly`; la cookie de acceso se renueva automáticamente usando la
+cookie de renovación cuando expira. Configura `ENTRA_TENANT_ID`,
+`ENTRA_CLIENT_ID`, `ENTRA_API_AUDIENCE` y la URL de callback registrada en Entra.
+Para capturar cargo y foto mediante Microsoft Graph, la aplicación necesita
+consentimiento delegado para `User.Read` y una credencial de cliente para el
+flujo On-Behalf-Of.
+
+En `ENVIRONMENT=dev` se puede activar `AUTH_DEV_BYPASS=true`. Este modo crea un
+usuario administrador local determinista y no acepta ni genera tokens; se
+rechaza automáticamente en `test` y `prod`. Para promover un usuario real al
+primer administrador, ejecútalo después de su primer ingreso:
+
+```powershell
+poetry run python scripts/promote-user.py --tenant-id <tenant> --entra-object-id <oid>
+```
 
 ## Calidad y migraciones
 

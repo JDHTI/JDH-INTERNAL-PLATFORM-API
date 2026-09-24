@@ -50,14 +50,17 @@ _ORDER = (AreaModel.sort_order, AreaModel.name)
 class SqlAlchemyAreaRepository:
     """Persist areas, roles and members; each operation owns its transaction."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, tenant_id: str) -> None:
         """Create the repository.
 
         Args:
             database (Database): Shared engine and session factory.
+            tenant_id (str): Entra tenant new areas belong to, the same one the
+                identity module assigns to users.
         """
 
         self.database = database
+        self.tenant_id = tenant_id
 
     async def _add(self, model):
         async with self.database.session_factory() as session:
@@ -208,6 +211,7 @@ class SqlAlchemyAreaRepository:
         """
 
         model = AreaModel(
+            tenant_id=self.tenant_id,
             slug=slug,
             name=name,
             remit=remit,

@@ -6,11 +6,11 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, NotFoundError
 from app.modules.areas.domain.entities import Area, AreaMember, AreaRole
 from app.modules.documents.domain.entities import Document, DocumentFolder
 from app.modules.documents.domain.ports import SearchFilters
-from app.modules.identity.domain.entities import Principal, User, VerifiedIdentity
+from app.modules.identity.domain.principal import DirectoryUser, Principal
 
 NOW = datetime(2026, 9, 23, tzinfo=UTC)
 
@@ -21,51 +21,29 @@ def principal(email: str = "ana@jdh.com.co", admin: bool = False, user_id=None) 
     )
 
 
-class FakeUserRepository:
+class FakeDirectory:
+    """Users as the identity module would expose them after Entra sign-in."""
+
     def __init__(self) -> None:
-        self.users: dict[uuid.UUID, User] = {}
+        self.users: dict[uuid.UUID, DirectoryUser] = {}
 
-    def _by_email(self, email: str) -> User | None:
-        return next((u for u in self.users.values() if u.email == email), None)
+    def sign_in(self, email: str, admin: bool = False) -> Principal:
+        """Register a user the way a first sign-in does and return their principal."""
 
-    async def upsert_from_identity(self, identity: VerifiedIdentity) -> User:
-        user = next(
-            (
-                u
-                for u in self.users.values()
-                if identity.entra_object_id and u.entra_object_id == identity.entra_object_id
-            ),
-            None,
-        ) or self._by_email(identity.email.lower())
+        user = next((u for u in self.users.values() if u.email == email.lower()), None)
         if user is None:
-            user = User(uuid.uuid4(), identity.email.lower(), None, None, None, NOW, NOW)
+            user = DirectoryUser(id=uuid.uuid4(), email=email.lower(), display_name=None)
             self.users[user.id] = user
-        user.display_name = identity.display_name or user.display_name
-        user.entra_object_id = identity.entra_object_id or user.entra_object_id
-        user.last_seen_at = NOW
+        return principal(user.email, admin=admin, user_id=user.id)
+
+    async def require_user(self, email: str) -> DirectoryUser:
+        user = next((u for u in self.users.values() if u.email == email.strip().lower()), None)
+        if user is None:
+            raise NotFoundError(f"No hay un usuario con el correo {email}")
         return user
 
-    async def ensure_by_email(self, email: str) -> User:
-        user = self._by_email(email)
-        if user is None:
-            user = User(uuid.uuid4(), email, None, None, None, NOW, NOW)
-            self.users[user.id] = user
-        return user
-
-    async def get_many(self, user_ids):
+    async def get_users(self, user_ids):
         return {i: self.users[i] for i in user_ids if i in self.users}
-
-
-class FakeTokenVerifier:
-    def __init__(self, identity: VerifiedIdentity | None = None) -> None:
-        self.identity = identity
-
-    async def verify(self, token: str) -> VerifiedIdentity:
-        from app.core.errors import UnauthenticatedError
-
-        if self.identity is None or token != "valid":
-            raise UnauthenticatedError("Token inválido o vencido")
-        return self.identity
 
 
 class FakeAreaRepository:

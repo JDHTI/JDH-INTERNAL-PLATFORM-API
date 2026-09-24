@@ -24,8 +24,8 @@ from app.modules.documents.application.dto import (
 )
 from app.modules.documents.application.service import DocumentService
 from app.modules.documents.domain.entities import Document
-from app.modules.identity.domain.entities import Principal
-from app.modules.identity.presentation.dependencies import get_current_principal
+from app.modules.identity.domain.principal import Principal
+from app.modules.identity.presentation.principal import get_current_principal
 
 area_router = APIRouter()
 router = APIRouter()

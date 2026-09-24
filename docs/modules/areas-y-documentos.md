@@ -4,29 +4,32 @@ Tres módulos que trabajan juntos:
 
 | Módulo | Responsabilidad |
 |---|---|
-| `identity` | Usuarios de la plataforma y autenticación de cada request (Entra ID). |
+| `identity` | Usuarios, roles de plataforma (`admin` / `user`) y sesión SSO con Entra ID. |
 | `areas` | Áreas, su catálogo de roles y sus miembros. Decide quién entra a cada área. |
 | `documents` | Gestor documental por área: área / carpeta / archivo, sobre S3. |
 
 `documents` no lee las tablas de `areas`: pregunta por acceso a través del
 puerto `AreaAccess`, que implementa `AreaService`. `areas` resuelve personas con
-el puerto `UserDirectory`, que implementa `IdentityService`.
+el puerto `UserDirectory` (`identity/application/directory.py`) y nunca lee la
+tabla `users`. Ambos módulos reciben al usuario como `Principal`
+(`identity/domain/principal.py`), resuelto por `get_current_principal`.
 
 ## Autenticación
 
-- Producción: `Authorization: Bearer <access token de Entra>` emitido para esta
-  API (audiencia `AUTH_MICROSOFT_ENTRA_ID_ID` o `api://<id>`). Se valida la
-  firma con el JWKS del tenant y se aceptan los emisores v1 y v2.
-- El usuario se crea en `users` en su primer request. Si un administrador lo
-  agregó antes a un área por correo, ese registro se vincula (por correo) en
-  su primer inicio de sesión.
-- Desarrollo: con `AUTH_DEV_BYPASS=true` (solo `ENVIRONMENT=dev`; en otro
-  entorno la API no arranca), un request sin token actúa como el correo del
-  header `X-Dev-User-Email`, o como `AUTH_DEV_USER_EMAIL` si no lo trae.
+- La sesión es la del módulo `identity`: SSO de Entra con los tokens en cookies
+  HttpOnly (`/api/v1/auth/login`, `/auth/callback`, `/auth/refresh`,
+  `/auth/logout`). El navegador envía las cookies (`credentials: "include"`);
+  no hay token en el cuerpo de las respuestas.
+- El usuario se registra en `users` en su primer inicio de sesión, con rol
+  `user`. Como cada usuario necesita su identidad de Entra (tenant y object id),
+  **solo se puede agregar a un área, o nombrar responsable, a quien ya inició
+  sesión una vez**; si no, la API responde 404 con ese motivo.
+- Desarrollo: con `AUTH_DEV_BYPASS=true` (solo `ENVIRONMENT=dev`), un request sin
+  cookies actúa como el administrador de desarrollo (`AUTH_DEV_USER_*`).
 
 ## Acceso
 
-- **Administradores de plataforma** (`PLATFORM_ADMIN_EMAILS`): crean y editan
+- **Administradores de plataforma** (rol `admin` de `identity`): crean y editan
   áreas, roles y miembros, y ven todas las áreas.
 - **Miembros y responsable de un área**: ven el área, su equipo y su catálogo
   de roles, y gestionan carpetas y documentos de esa área.
@@ -35,10 +38,13 @@ el puerto `UserDirectory`, que implementa `IdentityService`.
 
 ## Modelo
 
-- `areas`: `id` (uuid), `slug` (segmento de URL del UI, inmutable), `name`,
-  `remit`, `icon` (nombre lucide-react), `sort_order`, `responsible_user_id`,
-  `created_at` y `updated_at`. La migración `0003_areas` siembra las 8 áreas que
-  el UI tenía mockeadas.
+- `areas`: la tabla de `0002_identity` (`id`, `tenant_id`, `name`; a ella
+  apunta `users.area_id`), que `0003_areas` extiende con `slug` (segmento de URL
+  del UI, único e inmutable), `remit`, `icon` (nombre lucide-react), `sort_order`
+  y `responsible_user_id`. El modelo es `identity.AreaModel`, que ambos módulos
+  mapean. La migración asigna slug a las áreas existentes, fusiona por nombre
+  las que coinciden con las 8 áreas que el UI tenía mockeadas y crea las que
+  faltan en el tenant configurado.
 - `area_roles`: catálogo por área ("Líder BI", "Analista BI").
 - `area_members`: usuario más un rol **de la misma área**, garantizado por una
   FK compuesta.
@@ -53,7 +59,7 @@ el puerto `UserDirectory`, que implementa `IdentityService`.
 
 | Método | Ruta | Quién |
 |---|---|---|
-| GET | `/me` | autenticado |
+| GET | `/users/me` (módulo `identity`) | autenticado |
 | GET | `/areas` | autenticado (las suyas; admin: todas) |
 | POST | `/areas` | admin |
 | GET / PATCH / DELETE | `/areas/{slug}` | acceso / admin / admin |

@@ -95,6 +95,16 @@ services:
       PORT: 8000
       API_PREFIX: ${API_PREFIX:-/api}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+      ENTRA_API_AUDIENCE: ${ENTRA_API_AUDIENCE:-}
+      ENTRA_API_SCOPE: ${ENTRA_API_SCOPE:-access_as_user}
+      ENTRA_REDIRECT_URI: ${ENTRA_REDIRECT_URI:-http://localhost:8000/api/v1/auth/callback}
+      AUTH_FRONTEND_REDIRECT_URI: ${AUTH_FRONTEND_REDIRECT_URI:-}
+      AUTH_DEV_BYPASS: ${AUTH_DEV_BYPASS:-true}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-internal_platform}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-internal-platform}
@@ -106,9 +116,20 @@ services:
       AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
       AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
       AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: ${AUTH_MICROSOFT_ENTRA_ID_TENANT_ID:-}
-      AUTH_DEV_BYPASS: ${AUTH_DEV_BYPASS:-false}
-      AUTH_DEV_USER_EMAIL: ${AUTH_DEV_USER_EMAIL:-usuario@jdh.com.co}
-      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-analista.ti@jdh.com.co,requerimientos@jdh.com.co}
+      DWH_ENABLED: ${DWH_ENABLED:-true}
+      DWH_PROVIDER: ${DWH_PROVIDER:-postgres}
+      DWH_HOST: ${DWH_HOST:-}
+      DWH_PORT: ${DWH_PORT:-5432}
+      DWH_DATABASE: ${DWH_DATABASE:-}
+      DWH_USER: ${DWH_USER:-}
+      DWH_PASSWORD: ${DWH_PASSWORD:-}
+      DWH_SCHEMA: ${DWH_SCHEMA:-consumo}
+      DWH_CLIENTS_VIEW: ${DWH_CLIENTS_VIEW:-clientes}
+      DWH_POOL_MIN_SIZE: ${DWH_POOL_MIN_SIZE:-1}
+      DWH_POOL_MAX_SIZE: ${DWH_POOL_MAX_SIZE:-5}
+      DWH_CONNECT_TIMEOUT_SECONDS: ${DWH_CONNECT_TIMEOUT_SECONDS:-2}
+      DWH_COMMAND_TIMEOUT_SECONDS: ${DWH_COMMAND_TIMEOUT_SECONDS:-10}
+      DWH_CURSOR_SECRET: ${DWH_CURSOR_SECRET:-}
       # The API reaches minio:9000; the browser reaches the published port, and
       # the download signature covers the host.
       S3_PUBLIC_ENDPOINT_URL: http://localhost:${S3_HOST_PORT:-9000}

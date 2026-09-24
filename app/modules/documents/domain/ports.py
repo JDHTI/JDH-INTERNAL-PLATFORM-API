@@ -8,7 +8,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.documents.domain.entities import Document, DocumentFolder
-from app.modules.identity.domain.entities import Principal
+from app.modules.identity.domain.principal import Principal
 
 
 @dataclass(frozen=True)

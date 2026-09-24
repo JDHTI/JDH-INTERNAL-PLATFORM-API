@@ -53,7 +53,7 @@ from app.modules.documents.domain.ports import (
     ObjectStorage,
     SearchFilters,
 )
-from app.modules.identity.domain.entities import Principal
+from app.modules.identity.domain.principal import Principal
 
 _DUPLICATE_DOCUMENT = "Ya existe un documento con ese nombre en la carpeta"
 _DUPLICATE_FOLDER = "Ya existe una carpeta con ese nombre en el área"

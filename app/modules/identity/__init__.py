@@ -1,1 +1,1 @@
-"""Platform users and request authentication (Microsoft Entra ID)."""
+"""Identity, authentication, roles, and organization areas."""

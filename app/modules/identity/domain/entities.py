@@ -1,48 +1,46 @@
-"""Identity entities: platform users and the authenticated principal."""
+"""Framework-independent identity entities used by application services."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from uuid import UUID
 
 
-@dataclass
-class User:
-    """A person known to the platform.
+@dataclass(frozen=True, slots=True)
+class EntraProfile:
+    """Profile claims obtained from Entra ID and Microsoft Graph."""
 
-    Users are provisioned on their first authenticated request, or earlier as
-    a stub (email only) when an administrator adds them to an area before they
-    ever sign in. ``entra_object_id`` links the stub once they do.
-    """
+    tenant_id: str
+    object_id: str
+    name: str
+    email: str | None
+    job_title: str | None = None
+    photo: bytes | None = None
+    photo_content_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityToken:
+    """Validated token claims needed by the local identity service."""
+
+    tenant_id: str
+    object_id: str
+    name: str | None
+    email: str | None
+    access_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class UserView:
+    """Stable application representation of a local user."""
 
     id: UUID
-    email: str
-    display_name: str | None
-    entra_object_id: str | None
-    last_seen_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass(frozen=True)
-class VerifiedIdentity:
-    """Claims taken from a verified credential, before touching persistence."""
-
-    email: str
-    display_name: str | None = None
-    entra_object_id: str | None = None
-
-
-@dataclass(frozen=True)
-class Principal:
-    """Who is performing the current request."""
-
-    user_id: UUID
-    email: str
-    display_name: str | None
-    is_platform_admin: bool
-
-
-def normalize_email(email: str) -> str:
-    return email.strip().lower()
+    tenant_id: str
+    entra_object_id: str
+    name: str
+    email: str | None
+    job_title: str | None
+    role: str
+    area_id: UUID | None
+    area_name: str | None
+    photo_available: bool
