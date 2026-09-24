@@ -95,6 +95,8 @@ services:
       PORT: 8000
       API_PREFIX: ${API_PREFIX:-/api}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Explicit origins: SSO uses cookies, and credentialed CORS cannot use "*".
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
       ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
       ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
