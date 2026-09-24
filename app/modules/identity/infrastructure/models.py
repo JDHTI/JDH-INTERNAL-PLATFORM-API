@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database import Base
@@ -27,7 +27,13 @@ class RoleModel(Base):
 
 
 class AreaModel(Base):
-    """An organization area to which users can be assigned."""
+    """An organization area to which users can be assigned.
+
+    The same row is the area's space in the areas module: ``slug``, ``remit``,
+    ``icon``, ``sort_order`` and ``responsible_user_id`` belong to that module
+    (migration ``0003_areas``), which maps this model instead of a second one
+    so both modules read and write one table.
+    """
 
     __tablename__ = "areas"
     __table_args__ = (
@@ -38,6 +44,18 @@ class AreaModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    # URL segment of the area in the UI (/ti, /calidad). Immutable once set.
+    slug: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    remit: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # lucide-react icon name the UI maps to a glyph, e.g. "Server".
+    icon: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    responsible_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        # use_alter: users.area_id already points here, so the two tables
+        # reference each other and one FK has to be added after both exist.
+        ForeignKey("users.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
@@ -45,7 +63,11 @@ class AreaModel(Base):
         DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
-    users: Mapped[list[UserModel]] = relationship(back_populates="area")
+    # Explicit foreign keys: areas and users are joined both by users.area_id
+    # and by areas.responsible_user_id, so the join path must be named.
+    users: Mapped[list[UserModel]] = relationship(
+        back_populates="area", foreign_keys="UserModel.area_id"
+    )
 
 
 class UserModel(Base):
@@ -78,4 +100,4 @@ class UserModel(Base):
     )
 
     role: Mapped[RoleModel] = relationship(back_populates="users")
-    area: Mapped[AreaModel | None] = relationship(back_populates="users")
+    area: Mapped[AreaModel | None] = relationship(back_populates="users", foreign_keys=[area_id])

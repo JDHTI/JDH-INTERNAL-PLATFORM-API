@@ -14,7 +14,7 @@ from app.modules.identity.infrastructure.entra import (
     EntraTokenExpired,
     TokenSet,
 )
-from app.modules.identity.infrastructure.models import AreaModel, RoleModel, UserModel
+from app.modules.identity.infrastructure.models import RoleModel, UserModel
 from app.modules.identity.infrastructure.repository import IdentityRepository
 
 
@@ -216,25 +216,6 @@ class IdentityService:
         await self.repository.ensure_role("admin", "Administrator")
         await self.repository.ensure_role("user", "User")
         return list(await self.repository.list_roles())
-
-    async def list_areas(self, offset: int, limit: int) -> list[AreaModel]:
-        """Return organization areas."""
-
-        return list(await self.repository.list_areas(self.tenant_id, offset, limit))
-
-    async def create_area(self, name: str) -> AreaModel:
-        """Create an organization area with a normalized name."""
-
-        if not name.strip():
-            raise ValueError("area_name_required")
-        return await self.repository.create_area(self.tenant_id, name)
-
-    async def update_area(self, area_id: UUID, name: str) -> AreaModel | None:
-        """Rename an organization area."""
-
-        if not name.strip():
-            raise ValueError("area_name_required")
-        return await self.repository.update_area(area_id, self.tenant_id, name)
 
     async def photo(self, user: UserModel) -> bytes | None:
         """Read a private profile photo from object storage."""

@@ -24,7 +24,6 @@ from app.modules.identity.application.service import (
 )
 from app.modules.identity.infrastructure.entra import EntraConfigurationError, EntraError
 from app.modules.identity.infrastructure.models import UserModel
-from app.modules.identity.infrastructure.repository import DuplicateAreaError
 
 router = APIRouter()
 _identity_service_dependency = Depends(Provide[ApplicationContainer.v1_container.identity_service])
@@ -62,14 +61,6 @@ class RoleResponse(BaseModel):
     name: str
 
 
-class AreaResponse(BaseModel):
-    """Organization area."""
-
-    id: UUID
-    tenant_id: str
-    name: str
-
-
 class UserPage(BaseModel):
     """Paginated administrator user response."""
 
@@ -85,18 +76,6 @@ class UpdateUserRequest(BaseModel):
     job_title: str | None = Field(default=None, max_length=200)
     role: str | None = Field(default=None, pattern="^(admin|user)$")
     area_id: UUID | None = None
-
-
-class CreateAreaRequest(BaseModel):
-    """New organization area."""
-
-    name: str = Field(min_length=1, max_length=150)
-
-
-class UpdateAreaRequest(BaseModel):
-    """Area rename request."""
-
-    name: str = Field(min_length=1, max_length=150)
 
 
 def _cookie_kwargs(settings: Settings, max_age: int) -> dict[str, object]:
@@ -399,59 +378,8 @@ async def list_roles(
     ]
 
 
-@router.get("/areas", response_model=list[AreaResponse])
-@inject
-async def list_areas(
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 100,
-    _: UserModel = Depends(require_admin),  # noqa: B008
-    service: IdentityService = _identity_service_dependency,
-) -> list[AreaResponse]:
-    """List organization areas."""
-
-    return [
-        AreaResponse.model_validate(area, from_attributes=True)
-        for area in await service.list_areas(offset, limit)
-    ]
-
-
-@router.post("/areas", response_model=AreaResponse, status_code=status.HTTP_201_CREATED)
-@inject
-async def create_area(
-    body: CreateAreaRequest,
-    _: UserModel = Depends(require_admin),  # noqa: B008
-    service: IdentityService = _identity_service_dependency,
-) -> AreaResponse:
-    """Create an organization area."""
-
-    try:
-        area = await service.create_area(body.name)
-    except DuplicateAreaError as exc:
-        raise HTTPException(status_code=409, detail="Area name already exists") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AreaResponse.model_validate(area, from_attributes=True)
-
-
-@router.patch("/areas/{area_id}", response_model=AreaResponse)
-@inject
-async def update_area(
-    area_id: UUID,
-    body: UpdateAreaRequest,
-    _: UserModel = Depends(require_admin),  # noqa: B008
-    service: IdentityService = _identity_service_dependency,
-) -> AreaResponse:
-    """Rename an organization area."""
-
-    try:
-        area = await service.update_area(area_id, body.name)
-    except DuplicateAreaError as exc:
-        raise HTTPException(status_code=409, detail="Area name already exists") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if area is None:
-        raise HTTPException(status_code=404, detail="Area not found")
-    return AreaResponse.model_validate(area, from_attributes=True)
+# Areas are served by the areas module under /v1/areas (by slug), which also
+# owns their members, role catalog and document space.
 
 
 @router.get("/auth/me/photo")

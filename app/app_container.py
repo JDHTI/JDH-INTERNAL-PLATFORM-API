@@ -43,6 +43,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         secret_access_key=config.s3.secret_access_key,
         bucket=config.s3.bucket,
         connect_timeout=config.s3.connect_timeout,
+        public_endpoint_url=config.s3.public_endpoint_url,
     )
     data_provider = providers.Singleton(
         DataProviderConnection,
@@ -61,6 +62,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
 
     v1_container = providers.Container(
         V1Container,
+        config=config,
         database=database,
         redis=redis,
         storage=storage,
@@ -82,7 +84,9 @@ class GlobalResources:
 def build_application_container(app_settings: Settings) -> ApplicationContainer:
     """Configure and wire one container instance for one application instance."""
 
+    from app.modules.areas.presentation import router as areas_router_module
     from app.modules.consumption.presentation import router as consumption_router_module
+    from app.modules.documents.presentation import router as documents_router_module
     from app.modules.health.presentation import router as health_router_module
     from app.modules.identity.presentation import router as identity_router_module
 
@@ -90,7 +94,13 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     container.settings.override(app_settings)
     container.config.from_dict(app_settings.container_config())
     container.wire(
-        modules=[health_router_module, identity_router_module, consumption_router_module]
+        modules=[
+            health_router_module,
+            identity_router_module,
+            consumption_router_module,
+            areas_router_module,
+            documents_router_module,
+        ]
     )
     return container
 

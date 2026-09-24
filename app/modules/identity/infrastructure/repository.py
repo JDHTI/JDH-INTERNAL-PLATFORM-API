@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 from uuid import UUID
@@ -13,10 +13,6 @@ from sqlalchemy.orm import selectinload
 
 from app.infrastructure.database import Database
 from app.modules.identity.infrastructure.models import AreaModel, RoleModel, UserModel
-
-
-class DuplicateAreaError(Exception):
-    """Raised when an organization area name is already in use."""
 
 
 class IdentityRepository:
@@ -211,54 +207,42 @@ class IdentityRepository:
         async with self._session() as session:
             return (await session.scalars(select(RoleModel).order_by(RoleModel.code))).all()
 
-    async def list_areas(self, tenant_id: str, offset: int, limit: int) -> Sequence[AreaModel]:
-        """Return a page of areas belonging to the configured tenant."""
-
-        async with self._session() as session:
-            return (
-                await session.scalars(
-                    select(AreaModel)
-                    .where(AreaModel.tenant_id == tenant_id)
-                    .order_by(AreaModel.name, AreaModel.id)
-                    .offset(offset)
-                    .limit(limit)
-                )
-            ).all()
-
-    async def create_area(self, tenant_id: str, name: str) -> AreaModel:
-        """Create an organization area."""
-
-        async with self._session() as session:
-            area = AreaModel(tenant_id=tenant_id, name=name.strip())
-            session.add(area)
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise DuplicateAreaError from exc
-            await session.refresh(area)
-            return area
-
     async def get_area(self, area_id: UUID) -> AreaModel | None:
         """Return an area by UUID."""
 
         async with self._session() as session:
             return await session.get(AreaModel, area_id)
 
-    async def update_area(self, area_id: UUID, tenant_id: str, name: str) -> AreaModel | None:
-        """Rename an area belonging to the configured tenant."""
+    async def get_user_by_email(self, email: str) -> UserModel | None:
+        """Find a user by email, ignoring case.
+
+        Args:
+            email (str): Email address to look up.
+
+        Returns:
+            UserModel | None: The user when one has that email.
+        """
 
         async with self._session() as session:
-            area = await session.scalar(
-                select(AreaModel).where(AreaModel.id == area_id, AreaModel.tenant_id == tenant_id)
+            return await session.scalar(
+                select(UserModel)
+                .where(func.lower(UserModel.email) == email.strip().lower())
+                .options(selectinload(UserModel.role), selectinload(UserModel.area))
+                .limit(1)
             )
-            if area is None:
-                return None
-            area.name = name.strip()
-            try:
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise DuplicateAreaError from exc
-            await session.refresh(area)
-            return area
+
+    async def get_users_by_ids(self, user_ids: Iterable[UUID]) -> Sequence[UserModel]:
+        """Load several users at once.
+
+        Args:
+            user_ids (Iterable[UUID]): Local user identifiers.
+
+        Returns:
+            Sequence[UserModel]: The users that exist, in no particular order.
+        """
+
+        ids = set(user_ids)
+        if not ids:
+            return []
+        async with self._session() as session:
+            return (await session.scalars(select(UserModel).where(UserModel.id.in_(ids)))).all()
