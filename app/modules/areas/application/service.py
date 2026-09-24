@@ -60,6 +60,12 @@ class AreaService:
         if not principal.is_platform_admin:
             raise ForbiddenError("Solo un administrador de la plataforma puede hacer esto")
 
+    @staticmethod
+    def _require_active_user(user: DirectoryUser) -> DirectoryUser:
+        if not user.is_active:
+            raise ConflictError("No se puede asignar un usuario inactivo")
+        return user
+
     async def _get_area(self, slug: str) -> Area:
         area = await self.repository.get_by_slug(slug)
         if area is None:
@@ -217,7 +223,7 @@ class AreaService:
         name = clean_name(command.name)
         await self._check_unique(slug, name)
         responsible = (
-            await self.users.require_user(command.responsible_email)
+            self._require_active_user(await self.users.require_user(command.responsible_email))
             if command.responsible_email
             else None
         )
@@ -259,7 +265,7 @@ class AreaService:
             area.sort_order = command.sort_order
         if "responsible_email" in command.fields:
             if command.responsible_email:
-                area.responsible_user_id = (
+                area.responsible_user_id = self._require_active_user(
                     await self.users.require_user(command.responsible_email)
                 ).id
             else:
@@ -407,7 +413,7 @@ class AreaService:
         self._require_admin(principal)
         area = await self._get_area(slug)
         role = await self._get_role(area.id, role_id)
-        user = await self.users.require_user(email)
+        user = self._require_active_user(await self.users.require_user(email))
         if await self.repository.get_member_by_user(area.id, user.id):
             raise ConflictError("La persona ya es miembro del área")
         member = await self.repository.create_member(area.id, user.id, role.id)

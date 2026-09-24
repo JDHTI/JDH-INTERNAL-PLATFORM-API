@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.config import Settings
+from app.core.config import Environment, Settings
 from app.infrastructure.s3 import S3Storage
 from app.modules.identity.domain.entities import EntraProfile, IdentityToken, UserView
 from app.modules.identity.infrastructure.entra import (
@@ -68,6 +68,8 @@ class IdentityService:
         identity = await self.entra.validate_access_token(tokens.access_token)
         profile = await self.entra.profile(identity)
         user, is_new = await self.register_profile(profile)
+        if not getattr(user, "is_active", True):
+            raise AuthenticationRequired
         return user, tokens, is_new
 
     async def register_profile(self, profile: EntraProfile) -> tuple[UserModel, bool]:
@@ -134,6 +136,8 @@ class IdentityService:
         if user is None:
             profile = await self.entra.profile(identity)
             user, _ = await self.register_profile(profile)
+        if not getattr(user, "is_active", True):
+            raise AuthenticationRequired
         return AuthenticatedUser(user=user, refreshed_tokens=refreshed)
 
     async def _development_user(self) -> UserModel:
@@ -175,11 +179,13 @@ class IdentityService:
             update_role=True,
         )
 
-    async def list_users(self, offset: int, limit: int) -> tuple[list[UserModel], int]:
+    async def list_users(
+        self, offset: int, limit: int, is_active: bool | None = None
+    ) -> tuple[list[UserModel], int]:
         """Return a paginated user list."""
 
-        users = await self.repository.list_users(offset, limit)
-        return list(users), await self.repository.count_users()
+        users = await self.repository.list_users(offset, limit, is_active)
+        return list(users), await self.repository.count_users(is_active)
 
     async def update_user(
         self,
@@ -188,27 +194,72 @@ class IdentityService:
         job_title: str | None,
         role_code: str | None,
         area_id: UUID | None,
+        is_active: bool | None,
         update_job_title: bool,
         update_role: bool,
         update_area: bool,
+        update_is_active: bool,
     ) -> UserModel | None:
         """Apply admin changes while preserving at least one administrator."""
 
         current = await self.repository.get_user(user_id)
         if current is None:
             return None
+        if update_is_active and is_active is None:
+            raise ValueError("is_active_required")
+        current_is_active = getattr(current, "is_active", True)
         if update_role and role_code != "admin" and current.role.code == "admin":
-            if await self.repository.count_admins() <= 1:
+            if current_is_active and await self.repository.count_admins(active_only=True) <= 1:
                 raise ProtectedMutationError
+        if update_is_active and is_active is False and current_is_active:
+            if (
+                current.role.code == "admin"
+                and await self.repository.count_admins(active_only=True) <= 1
+            ):
+                raise ProtectedMutationError
+        if update_area and area_id is not None and not current_is_active:
+            raise ValueError("inactive_user")
         return await self.repository.update_user(
             user_id,
             job_title=job_title,
             role_code=role_code,
             area_id=area_id,
+            is_active=is_active,
             update_job_title=update_job_title,
             update_role=update_role,
             update_area=update_area,
+            update_is_active=update_is_active,
         )
+
+    async def seed_development_users(self) -> list[UserModel]:
+        """Create or refresh deterministic users for a local development database."""
+
+        if self.settings.ENVIRONMENT is not Environment.DEV:
+            raise RuntimeError("Development seed is only allowed in ENVIRONMENT=dev")
+
+        tenant_id = self.settings.AUTH_DEV_SEED_TENANT_ID or self.tenant_id
+        seed_users = [
+            {
+                "tenant_id": tenant_id,
+                "object_id": self.settings.AUTH_DEV_USER_OBJECT_ID,
+                "name": "Analista TI",
+                "email": self.settings.AUTH_DEV_SEED_ANALYST_EMAIL,
+                "job_title": "Analista TI",
+                "role_code": "admin",
+            },
+            *[
+                {
+                    "tenant_id": tenant_id,
+                    "object_id": f"{self.settings.AUTH_DEV_SEED_MOCK_PREFIX}-{index}",
+                    "name": f"Usuario Mock {index}",
+                    "email": f"mock.usuario{index}@jdh.com.co",
+                    "job_title": "Usuario de pruebas",
+                    "role_code": "user",
+                }
+                for index in range(1, 5)
+            ],
+        ]
+        return [await self.repository.ensure_seed_user(**seed_user) for seed_user in seed_users]
 
     async def list_roles(self) -> list[RoleModel]:
         """Return configured platform roles."""
@@ -251,6 +302,7 @@ def user_view(user: UserModel) -> UserView:
         name=user.name,
         email=user.email,
         job_title=user.job_title,
+        is_active=getattr(user, "is_active", True),
         role=user.role.code,
         area_id=user.area_id,
         area_name=user.area.name if user.area is not None else None,

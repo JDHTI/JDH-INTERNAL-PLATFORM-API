@@ -40,6 +40,7 @@ class UserView:
     name: str
     email: str | None
     job_title: str | None
+    is_active: bool
     role: str
     area_id: UUID | None
     area_name: str | None

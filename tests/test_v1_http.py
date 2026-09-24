@@ -64,3 +64,53 @@ def test_areas_see_the_session_user_as_principal() -> None:
     assert seen[0].user_id == session_user.id
     assert seen[0].email == "analista.ti@jdh.com.co"
     assert seen[0].is_platform_admin is True
+
+
+def test_admin_user_list_forwards_activity_filter_and_pagination() -> None:
+    from app.modules.identity.presentation.router import require_admin
+
+    admin = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id="tenant",
+        entra_object_id="admin-object",
+        name="Analista TI",
+        email="analista.ti@jdh.com.co",
+        job_title="Analista TI",
+        is_active=True,
+        role=SimpleNamespace(code="admin"),
+        area_id=None,
+        area=None,
+        photo_key=None,
+        photo_content_type=None,
+    )
+    listed = SimpleNamespace(
+        id=uuid.uuid4(),
+        tenant_id="tenant",
+        entra_object_id="mock-1",
+        name="Usuario Mock 1",
+        email="mock.usuario1@jdh.com.co",
+        job_title="Usuario de pruebas",
+        is_active=True,
+        role=SimpleNamespace(code="user"),
+        area_id=None,
+        area=None,
+        photo_key=None,
+        photo_content_type=None,
+    )
+    seen: list[tuple[int, int, bool | None]] = []
+
+    class StubIdentity:
+        async def list_users(self, offset, limit, is_active=None):
+            seen.append((offset, limit, is_active))
+            return [listed], 1
+
+    app = create_app(Settings(ENVIRONMENT=Environment.TEST))
+    app.dependency_overrides[require_admin] = lambda: admin
+    with app.state.container.v1_container.identity_service.override(StubIdentity()):
+        with TestClient(app) as client:
+            response = client.get("/api/v1/users?offset=2&limit=10&is_active=true")
+
+    assert response.status_code == 200
+    assert seen == [(2, 10, True)]
+    assert response.json()["items"][0]["is_active"] is True
+    assert response.json()["total"] == 1

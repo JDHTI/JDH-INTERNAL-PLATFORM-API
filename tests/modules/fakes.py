@@ -27,13 +27,22 @@ class FakeDirectory:
     def __init__(self) -> None:
         self.users: dict[uuid.UUID, DirectoryUser] = {}
 
-    def sign_in(self, email: str, admin: bool = False) -> Principal:
+    def sign_in(self, email: str, admin: bool = False, is_active: bool = True) -> Principal:
         """Register a user the way a first sign-in does and return their principal."""
 
         user = next((u for u in self.users.values() if u.email == email.lower()), None)
         if user is None:
-            user = DirectoryUser(id=uuid.uuid4(), email=email.lower(), display_name=None)
+            user = DirectoryUser(
+                id=uuid.uuid4(), email=email.lower(), display_name=None, is_active=is_active
+            )
             self.users[user.id] = user
+        elif user.is_active != is_active:
+            self.users[user.id] = DirectoryUser(
+                id=user.id,
+                email=user.email,
+                display_name=user.display_name,
+                is_active=is_active,
+            )
         return principal(user.email, admin=admin, user_id=user.id)
 
     async def require_user(self, email: str) -> DirectoryUser:

@@ -30,7 +30,9 @@ def principal_from_user(user: UserModel) -> Principal:
 
 
 def _directory_user(user: UserModel) -> DirectoryUser:
-    return DirectoryUser(id=user.id, email=user.email, display_name=user.name)
+    return DirectoryUser(
+        id=user.id, email=user.email, display_name=user.name, is_active=user.is_active
+    )
 
 
 class UserDirectory:

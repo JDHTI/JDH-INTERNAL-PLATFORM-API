@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 
 from app.modules.identity.application.directory import principal_from_user
 from app.modules.identity.domain.principal import Principal
@@ -22,6 +22,10 @@ async def get_current_principal(
         Principal: The caller as other modules see it.
     """
 
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
     return principal_from_user(user)
 
 

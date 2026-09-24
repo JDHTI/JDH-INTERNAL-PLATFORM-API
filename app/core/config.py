@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     AUTH_DEV_USER_OBJECT_ID: str = "development-user"
     AUTH_DEV_USER_EMAIL: str = "developer@localhost"
     AUTH_DEV_USER_NAME: str = "Development Administrator"
+    AUTH_DEV_SEED_ANALYST_EMAIL: str = "analista.ti@jdh.com.co"
+    AUTH_DEV_SEED_TENANT_ID: str = ""
+    AUTH_DEV_SEED_MOCK_PREFIX: str = "development-mock"
     AUTH_COOKIE_DOMAIN: str | None = None
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_COOKIE_SECURE: bool | None = None
@@ -250,6 +253,9 @@ class Settings(BaseSettings):
                 "dev_user_object_id": self.AUTH_DEV_USER_OBJECT_ID,
                 "dev_user_email": self.AUTH_DEV_USER_EMAIL,
                 "dev_user_name": self.AUTH_DEV_USER_NAME,
+                "dev_seed_analyst_email": self.AUTH_DEV_SEED_ANALYST_EMAIL,
+                "dev_seed_tenant_id": self.AUTH_DEV_SEED_TENANT_ID,
+                "dev_seed_mock_prefix": self.AUTH_DEV_SEED_MOCK_PREFIX,
                 "authority": self.entra_authority,
                 "issuer": self.entra_issuer,
                 "cookie_domain": self.AUTH_COOKIE_DOMAIN,

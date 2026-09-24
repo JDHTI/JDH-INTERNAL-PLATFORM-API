@@ -40,6 +40,7 @@ class UserResponse(BaseModel):
     name: str
     email: str | None
     job_title: str | None
+    is_active: bool
     role: str
     area_id: UUID | None
     area_name: str | None
@@ -76,6 +77,7 @@ class UpdateUserRequest(BaseModel):
     job_title: str | None = Field(default=None, max_length=200)
     role: str | None = Field(default=None, pattern="^(admin|user)$")
     area_id: UUID | None = None
+    is_active: bool | None = None
 
 
 def _cookie_kwargs(settings: Settings, max_age: int) -> dict[str, object]:
@@ -128,6 +130,12 @@ def _user_response(user: UserModel) -> UserResponse:
     return UserResponse.model_validate(user_view(user), from_attributes=True)
 
 
+def _require_active_user(user: UserModel) -> UserModel:
+    if not getattr(user, "is_active", True):
+        raise AuthenticationRequired
+    return user
+
+
 def _pkce_pair() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(verifier.encode()).digest()
@@ -147,6 +155,7 @@ async def get_current_user(
     refresh_token = request.cookies.get(service.settings.AUTH_REFRESH_COOKIE_NAME)
     try:
         authenticated = await service.current_user(access_token, refresh_token)
+        _require_active_user(authenticated.user)
     except (AuthenticationRequired, EntraError) as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -169,6 +178,10 @@ _current_user_dependency = Depends(get_current_user)
 async def require_admin(user: UserModel = _current_user_dependency) -> UserModel:
     """Require the local administrator role."""
 
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
     if user.role.code != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Administrator role required"
@@ -189,6 +202,7 @@ async def login(
         refresh_token = request.cookies.get(service.settings.AUTH_REFRESH_COOKIE_NAME)
         try:
             user = await service.current_user(access_token, refresh_token)
+            _require_active_user(user.user)
         except (AuthenticationRequired, EntraError) as exc:
             raise HTTPException(status_code=401, detail="Authentication required") from exc
         return _no_store(
@@ -234,6 +248,8 @@ async def callback(
         raise HTTPException(
             status_code=503, detail="Entra authentication is not configured"
         ) from exc
+    except AuthenticationRequired as exc:
+        raise HTTPException(status_code=401, detail="Authentication required") from exc
     except EntraError as exc:
         raise HTTPException(status_code=401, detail="Unable to complete SSO") from exc
 
@@ -268,6 +284,7 @@ async def refresh(
         raise HTTPException(status_code=401, detail="Refresh session required")
     try:
         authenticated = await service.current_user(None, refresh_token)
+        _require_active_user(authenticated.user)
     except (AuthenticationRequired, EntraError) as exc:
         raise HTTPException(status_code=401, detail="Refresh session expired") from exc
     response = JSONResponse(
@@ -306,12 +323,13 @@ async def me(user: UserModel = _current_user_dependency) -> UserResponse:
 async def list_users(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    is_active: bool | None = Query(default=None),
     _: UserModel = Depends(require_admin),  # noqa: B008
     service: IdentityService = _identity_service_dependency,
 ) -> UserPage:
     """List local users for administrators."""
 
-    users, total = await service.list_users(offset, limit)
+    users, total = await service.list_users(offset, limit, is_active)
     return UserPage(
         items=[_user_response(user) for user in users], total=total, offset=offset, limit=limit
     )
@@ -349,15 +367,22 @@ async def update_user(
             job_title=body.job_title,
             role_code=body.role,
             area_id=body.area_id,
+            is_active=body.is_active,
             update_job_title="job_title" in fields,
             update_role="role" in fields,
             update_area="area_id" in fields,
+            update_is_active="is_active" in fields,
         )
     except ProtectedMutationError as exc:
         raise HTTPException(
             status_code=409, detail="At least one administrator must remain"
         ) from exc
     except ValueError as exc:
+        if str(exc) == "inactive_user":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Inactive users cannot receive new area assignments",
+            ) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")

@@ -15,6 +15,7 @@ class DirectoryUser(Protocol):
     id: UUID
     email: str | None
     display_name: str | None
+    is_active: bool
 
 
 class UserDirectory(Protocol):

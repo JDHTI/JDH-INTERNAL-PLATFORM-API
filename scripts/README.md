@@ -37,3 +37,15 @@ Para promover un usuario de Entra ya registrado al rol inicial de administrador:
 ```bash
 poetry run python scripts/promote-user.py --tenant-id <tenant> --entra-object-id <oid>
 ```
+
+Para poblar una base local de desarrollo con el administrador
+`analista.ti@jdh.com.co` y cuatro usuarios mock activos y deterministas:
+
+```bash
+poetry run alembic upgrade head
+poetry run python scripts/seed-dev-users.py
+```
+
+El seed solo acepta `ENVIRONMENT=dev` y puede ejecutarse varias veces sin
+duplicar usuarios. Usa `AUTH_DEV_USER_OBJECT_ID` para la identidad del analista
+y el tenant configurado (o `development`) para las identidades mock.
