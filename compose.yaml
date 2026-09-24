@@ -106,6 +106,13 @@ services:
       AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
       AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
       AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: ${AUTH_MICROSOFT_ENTRA_ID_TENANT_ID:-}
+      AUTH_DEV_BYPASS: ${AUTH_DEV_BYPASS:-false}
+      AUTH_DEV_USER_EMAIL: ${AUTH_DEV_USER_EMAIL:-usuario@jdh.com.co}
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-analista.ti@jdh.com.co,requerimientos@jdh.com.co}
+      # The API reaches minio:9000; the browser reaches the published port, and
+      # the download signature covers the host.
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:${S3_HOST_PORT:-9000}
+      DOCUMENTS_MAX_UPLOAD_MB: ${DOCUMENTS_MAX_UPLOAD_MB:-25}
     depends_on:
       postgres:
         condition: service_healthy

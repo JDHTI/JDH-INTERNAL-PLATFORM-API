@@ -3,7 +3,7 @@
 from enum import StrEnum
 from functools import lru_cache
 
-from pydantic import SecretStr, computed_field
+from pydantic import SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -53,11 +53,34 @@ class Settings(BaseSettings):
     S3_SECRET_ACCESS_KEY: SecretStr = SecretStr("minioadmin")
     S3_BUCKET: str = "internal-platform"
     S3_CONNECT_TIMEOUT_SECONDS: float = 2.0
+    # Host used to sign download URLs. The signature covers the host, so it
+    # must be the one the browser reaches; empty means S3_ENDPOINT_URL.
+    S3_PUBLIC_ENDPOINT_URL: str = ""
 
     # Microsoft Entra ID
     AUTH_MICROSOFT_ENTRA_ID_SECRET: SecretStr = SecretStr("")
     AUTH_MICROSOFT_ENTRA_ID_ID: str = ""
     AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: str = ""
+    # Dev-only stand-in for Entra while the UI has no real session: requests
+    # without a bearer token act as X-Dev-User-Email or AUTH_DEV_USER_EMAIL.
+    # Refused at startup outside ENVIRONMENT=dev.
+    AUTH_DEV_BYPASS: bool = False
+    AUTH_DEV_USER_EMAIL: str = "usuario@jdh.com.co"
+    # Platform administrators: manage areas, roles and members, and see every area.
+    PLATFORM_ADMIN_EMAILS: str = "analista.ti@jdh.com.co,requerimientos@jdh.com.co"
+
+    # Document management
+    DOCUMENTS_MAX_UPLOAD_MB: int = 25
+    DOCUMENTS_ALLOWED_EXTENSIONS: str = (
+        "pdf,doc,docx,xls,xlsx,xlsm,csv,ppt,pptx,txt,png,jpg,jpeg,zip"
+    )
+    DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS: int = 300
+
+    @model_validator(mode="after")
+    def _forbid_dev_bypass_outside_dev(self) -> "Settings":
+        if self.AUTH_DEV_BYPASS and self.ENVIRONMENT is not Environment.DEV:
+            raise ValueError("AUTH_DEV_BYPASS solo se permite con ENVIRONMENT=dev")
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -113,8 +136,25 @@ class Settings(BaseSettings):
                 "secret_access_key": self.S3_SECRET_ACCESS_KEY.get_secret_value(),
                 "bucket": self.S3_BUCKET,
                 "connect_timeout": self.S3_CONNECT_TIMEOUT_SECONDS,
+                "public_endpoint_url": self.S3_PUBLIC_ENDPOINT_URL,
+            },
+            "auth": {
+                "tenant_id": self.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID,
+                "client_id": self.AUTH_MICROSOFT_ENTRA_ID_ID,
+                "dev_bypass": self.AUTH_DEV_BYPASS,
+                "dev_user_email": self.AUTH_DEV_USER_EMAIL.strip().lower(),
+                "admin_emails": _split_lower(self.PLATFORM_ADMIN_EMAILS),
+            },
+            "documents": {
+                "max_upload_bytes": self.DOCUMENTS_MAX_UPLOAD_MB * 1024 * 1024,
+                "allowed_extensions": _split_lower(self.DOCUMENTS_ALLOWED_EXTENSIONS),
+                "download_url_ttl": self.DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS,
             },
         }
+
+
+def _split_lower(value: str) -> list[str]:
+    return [item.strip().lower().lstrip(".") for item in value.split(",") if item.strip()]
 
 
 @lru_cache
