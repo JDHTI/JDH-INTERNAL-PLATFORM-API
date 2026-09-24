@@ -16,6 +16,7 @@ from app.app_container import (
     shutdown_global_resources,
 )
 from app.core.config import Settings, settings
+from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
 
@@ -74,6 +75,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RequestContextMiddleware)
+    register_error_handlers(app)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:
