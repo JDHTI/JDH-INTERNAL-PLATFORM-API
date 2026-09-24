@@ -65,6 +65,19 @@ async def test_responsible_must_have_signed_in(areas, admin, login) -> None:
     assert updated.responsible is None
 
 
+async def test_inactive_users_cannot_be_assigned(areas, admin, directory) -> None:
+    inactive = directory.sign_in("inactivo@jdh.com.co", is_active=False)
+    with pytest.raises(ConflictError, match="inactivo"):
+        await areas.create_area(
+            CreateAreaCommand(slug="ti", name="TI", responsible_email=inactive.email), admin
+        )
+
+    await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
+    role = await areas.create_role("bi", "Analista BI", admin)
+    with pytest.raises(ConflictError, match="inactivo"):
+        await areas.add_member("bi", inactive.email, role.id, admin)
+
+
 async def test_member_role_must_belong_to_the_same_area(areas, admin, login) -> None:
     ana = await login("ana@jdh.com.co")
     await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)

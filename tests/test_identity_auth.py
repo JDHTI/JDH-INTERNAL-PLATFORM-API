@@ -32,6 +32,7 @@ def _user(role: str = "user") -> SimpleNamespace:
         name="Ada Lovelace",
         email="ada@example.test",
         job_title="Engineer",
+        is_active=True,
         role=SimpleNamespace(code=role),
         area_id=None,
         area=None,
@@ -93,5 +94,19 @@ def test_development_bypass_does_not_accept_invalid_cookies() -> None:
         with TestClient(app) as client:
             client.cookies.set(settings.AUTH_ACCESS_COOKIE_NAME, "invalid")
             response = client.get("/api/v1/auth/login")
+
+    assert response.status_code == 401
+
+
+def test_inactive_user_cannot_authenticate_even_with_dev_bypass() -> None:
+    settings = _settings(AUTH_DEV_BYPASS=True)
+    app = create_app(settings)
+    inactive = _user("admin")
+    inactive.is_active = False
+    service = FakeIdentityService(settings, inactive)
+
+    with app.state.container.v1_container.identity_service.override(service):
+        with TestClient(app) as client:
+            response = client.get("/api/v1/auth/me")
 
     assert response.status_code == 401

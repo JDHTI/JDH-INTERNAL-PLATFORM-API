@@ -83,6 +83,7 @@ class IdentityRepository:
         email: str | None,
         job_title: str | None,
         role_code: str = "user",
+        is_active: bool = True,
     ) -> UserModel:
         """Create a user with the requested role and no area assignment."""
 
@@ -98,6 +99,7 @@ class IdentityRepository:
                 name=name,
                 email=email,
                 job_title=job_title,
+                is_active=is_active,
                 role_id=role.id,
             )
             session.add(user)
@@ -134,24 +136,31 @@ class IdentityRepository:
             await session.refresh(user, attribute_names=["role", "area"])
             return user
 
-    async def list_users(self, offset: int, limit: int) -> Sequence[UserModel]:
+    async def list_users(
+        self, offset: int, limit: int, is_active: bool | None = None
+    ) -> Sequence[UserModel]:
         """Return a page of local users."""
 
         async with self._session() as session:
+            query = select(UserModel)
+            if is_active is not None:
+                query = query.where(UserModel.is_active.is_(is_active))
             result = await session.scalars(
-                select(UserModel)
-                .options(selectinload(UserModel.role), selectinload(UserModel.area))
+                query.options(selectinload(UserModel.role), selectinload(UserModel.area))
                 .order_by(UserModel.name, UserModel.id)
                 .offset(offset)
                 .limit(limit)
             )
             return result.all()
 
-    async def count_users(self) -> int:
+    async def count_users(self, is_active: bool | None = None) -> int:
         """Return the number of local users."""
 
         async with self._session() as session:
-            return int(await session.scalar(select(func.count()).select_from(UserModel)) or 0)
+            query = select(func.count()).select_from(UserModel)
+            if is_active is not None:
+                query = query.where(UserModel.is_active.is_(is_active))
+            return int(await session.scalar(query) or 0)
 
     async def update_user(
         self,
@@ -160,9 +169,11 @@ class IdentityRepository:
         job_title: str | None | Any = None,
         role_code: str | None | Any = None,
         area_id: UUID | None | Any = None,
+        is_active: bool | Any = True,
         update_job_title: bool = False,
         update_role: bool = False,
         update_area: bool = False,
+        update_is_active: bool = False,
     ) -> UserModel | None:
         """Apply explicitly supplied administrative user changes."""
 
@@ -179,27 +190,76 @@ class IdentityRepository:
                 user.role_id = role.id
             if update_area:
                 if area_id is not None:
+                    if not user.is_active:
+                        raise ValueError("inactive_user")
                     area = await session.get(AreaModel, area_id)
                     if area is None or area.tenant_id != user.tenant_id:
                         raise ValueError("area_not_found")
                 user.area_id = area_id
+            if update_is_active:
+                user.is_active = is_active
             await session.commit()
             await session.refresh(user, attribute_names=["role", "area"])
             return user
 
-    async def count_admins(self) -> int:
-        """Count users currently holding the administrator role."""
+    async def count_admins(self, *, active_only: bool = False) -> int:
+        """Count users holding the administrator role."""
 
         async with self._session() as session:
-            return int(
-                await session.scalar(
-                    select(func.count())
-                    .select_from(UserModel)
-                    .join(RoleModel)
-                    .where(RoleModel.code == "admin")
-                )
-                or 0
+            query = (
+                select(func.count())
+                .select_from(UserModel)
+                .join(RoleModel)
+                .where(RoleModel.code == "admin")
             )
+            if active_only:
+                query = query.where(UserModel.is_active.is_(True))
+            return int(await session.scalar(query) or 0)
+
+    async def ensure_seed_user(
+        self,
+        *,
+        tenant_id: str,
+        object_id: str,
+        name: str,
+        email: str,
+        job_title: str,
+        role_code: str,
+    ) -> UserModel:
+        """Create or refresh one deterministic development seed user."""
+
+        async with self._session() as session:
+            role = await session.scalar(select(RoleModel).where(RoleModel.code == role_code))
+            if role is None:
+                role = RoleModel(code=role_code, name=role_code.title())
+                session.add(role)
+                await session.flush()
+            user = await session.scalar(
+                select(UserModel).where(
+                    UserModel.tenant_id == tenant_id,
+                    UserModel.entra_object_id == object_id,
+                )
+            )
+            if user is None:
+                user = UserModel(
+                    tenant_id=tenant_id,
+                    entra_object_id=object_id,
+                    name=name,
+                    email=email,
+                    job_title=job_title,
+                    is_active=True,
+                    role_id=role.id,
+                )
+                session.add(user)
+            else:
+                user.name = name
+                user.email = email
+                user.job_title = job_title
+                user.is_active = True
+                user.role_id = role.id
+            await session.commit()
+            await session.refresh(user, attribute_names=["role", "area"])
+            return user
 
     async def list_roles(self) -> Sequence[RoleModel]:
         """Return all configured roles."""

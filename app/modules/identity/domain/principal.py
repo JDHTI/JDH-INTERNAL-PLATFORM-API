@@ -30,3 +30,4 @@ class DirectoryUser:
     id: UUID
     email: str | None
     display_name: str | None
+    is_active: bool = True
