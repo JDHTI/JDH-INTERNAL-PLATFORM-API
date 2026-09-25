@@ -5,13 +5,18 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import delete, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
-from app.modules.documents.domain.entities import Document, DocumentFolder
+from app.modules.documents.domain.entities import Document, DocumentFolder, TagColor
 from app.modules.documents.domain.ports import SearchFilters
-from app.modules.documents.infrastructure.models import DocumentFolderModel, DocumentModel
+from app.modules.documents.infrastructure.models import (
+    DocumentFolderModel,
+    DocumentModel,
+    DocumentTagColorModel,
+)
 
 _DOCUMENT_FIELDS = (
     "id",
@@ -46,6 +51,16 @@ def _folder(m: DocumentFolderModel) -> DocumentFolder:
 
 def _document(m: DocumentModel) -> Document:
     return Document(**{name: getattr(m, name) for name in _DOCUMENT_FIELDS})
+
+
+def _tag_color(m: DocumentTagColorModel) -> TagColor:
+    return TagColor(
+        area_id=m.area_id,
+        tag=m.tag,
+        color=m.color,
+        updated_by=m.updated_by,
+        updated_at=m.updated_at,
+    )
 
 
 class SqlAlchemyDocumentRepository:
@@ -352,3 +367,73 @@ class SqlAlchemyDocumentRepository:
                 .limit(size)
             )
             return [_document(m) for m in result.scalars()], int(total)
+
+    # --- Tag colors ---
+
+    async def list_tag_colors(self, area_id: UUID) -> list[TagColor]:
+        """List the tag colors of an area.
+
+        Args:
+            area_id (UUID): The area.
+
+        Returns:
+            list[TagColor]: Colors ordered by tag.
+        """
+
+        async with self.database.session_factory() as session:
+            result = await session.execute(
+                select(DocumentTagColorModel)
+                .where(DocumentTagColorModel.area_id == area_id)
+                .order_by(DocumentTagColorModel.tag)
+            )
+            return [_tag_color(m) for m in result.scalars()]
+
+    async def save_tag_color(
+        self, area_id: UUID, tag: str, color: str, updated_by: str
+    ) -> TagColor:
+        """Create or replace the color of a tag.
+
+        Args:
+            area_id (UUID): The area.
+            tag (str): Normalized tag.
+            color (str): Normalized ``#rrggbb`` color.
+            updated_by (str): Email of whoever set it.
+
+        Returns:
+            TagColor: The stored color.
+        """
+
+        # Upsert in one statement: two people coloring the same tag at once
+        # both succeed and the last write wins, instead of one getting a 409.
+        statement = (
+            insert(DocumentTagColorModel)
+            .values(area_id=area_id, tag=tag, color=color, updated_by=updated_by)
+            .on_conflict_do_update(
+                index_elements=["area_id", "tag"],
+                set_={"color": color, "updated_by": updated_by, "updated_at": func.now()},
+            )
+            .returning(DocumentTagColorModel)
+        )
+        async with self.database.session_factory() as session:
+            model = (await session.execute(statement)).scalar_one()
+            await session.commit()
+            return _tag_color(model)
+
+    async def delete_tag_color(self, area_id: UUID, tag: str) -> None:
+        """Remove the color of a tag; succeeds when it had none.
+
+        Args:
+            area_id (UUID): The area.
+            tag (str): Normalized tag.
+
+        Returns:
+            None
+        """
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                delete(DocumentTagColorModel).where(
+                    DocumentTagColorModel.area_id == area_id, DocumentTagColorModel.tag == tag
+                )
+            )
+            await session.commit()

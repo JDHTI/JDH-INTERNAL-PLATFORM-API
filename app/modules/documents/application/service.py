@@ -10,6 +10,9 @@ Rules:
 - Delete removes the object first (idempotent) and then the index entry, so a
   storage failure leaves the entry in place and the delete can be retried.
 - A folder that still holds documents cannot be deleted.
+- Tag colors belong to the area, not to a document: coloring "contratos" once
+  colors it on every document of that area. Anyone who can use the area may
+  set them.
 """
 
 from __future__ import annotations
@@ -40,9 +43,12 @@ from app.modules.documents.application.dto import (
 from app.modules.documents.domain.entities import (
     Document,
     DocumentFolder,
+    TagColor,
     clean_text,
     content_type_for,
     download_filename,
+    normalize_color,
+    normalize_tag,
     normalize_tags,
     split_filename,
     storage_key_for,
@@ -384,3 +390,54 @@ class DocumentService:
             document.storage_key, filename, self.download_url_ttl
         )
         return DownloadLink(url=url, filename=filename, expires_in=self.download_url_ttl)
+
+    # --- Tag colors ---
+
+    async def list_tag_colors(self, area_slug: str, principal: Principal) -> list[TagColor]:
+        """List the tag colors of an area.
+
+        Args:
+            area_slug (str): Area slug.
+            principal (Principal): The caller.
+
+        Returns:
+            list[TagColor]: Colors ordered by tag; tags without one are absent.
+        """
+
+        area = await self.areas.authorize(area_slug, principal)
+        return await self.repository.list_tag_colors(area.id)
+
+    async def set_tag_color(
+        self, area_slug: str, tag: str, color: str, principal: Principal
+    ) -> TagColor:
+        """Assign a color to a tag of an area, replacing the previous one.
+
+        Args:
+            area_slug (str): Area slug.
+            tag (str): Tag, normalized like the ones on documents.
+            color (str): ``#rrggbb``, case-insensitive.
+            principal (Principal): The caller.
+
+        Returns:
+            TagColor: The stored color.
+        """
+
+        area = await self.areas.authorize(area_slug, principal)
+        return await self.repository.save_tag_color(
+            area.id, normalize_tag(tag), normalize_color(color), principal.email
+        )
+
+    async def clear_tag_color(self, area_slug: str, tag: str, principal: Principal) -> None:
+        """Return a tag to the default look.
+
+        Args:
+            area_slug (str): Area slug.
+            tag (str): Tag, normalized like the ones on documents.
+            principal (Principal): The caller.
+
+        Returns:
+            None
+        """
+
+        area = await self.areas.authorize(area_slug, principal)
+        await self.repository.delete_tag_color(area.id, normalize_tag(tag))

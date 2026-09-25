@@ -6,6 +6,7 @@ Depth is fixed at area / folder / file: folders have no parent.
 from __future__ import annotations
 
 import mimetypes
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
@@ -15,6 +16,8 @@ from app.core.errors import InvalidInputError
 
 MAX_TAGS = 20
 MAX_TAG_LENGTH = 50
+
+_HEX_COLOR = re.compile(r"#[0-9a-f]{6}")
 
 # mimetypes does not know every Office format on every platform.
 _CONTENT_TYPES = {
@@ -61,6 +64,17 @@ class Document:
     updated_at: datetime
 
 
+@dataclass
+class TagColor:
+    """Color of a tag inside an area; every document of the area shows it."""
+
+    area_id: UUID
+    tag: str
+    color: str
+    updated_by: str
+    updated_at: datetime
+
+
 def clean_text(value: str, field: str, max_length: int) -> str:
     cleaned = " ".join(value.split())
     if not cleaned:
@@ -90,6 +104,24 @@ def normalize_tags(raw: list[str] | str | None) -> list[str]:
     if len(tags) > MAX_TAGS:
         raise InvalidInputError(f"Máximo {MAX_TAGS} etiquetas por documento")
     return tags
+
+
+def normalize_tag(raw: str) -> str:
+    """One tag under the same rules as ``normalize_tags``, so colors match them."""
+
+    tags = normalize_tags([raw])
+    if not tags:
+        raise InvalidInputError("La etiqueta no puede estar vacía")
+    return tags[0]
+
+
+def normalize_color(raw: str) -> str:
+    """Lowercase ``#rrggbb``; shorthand and named colors are rejected."""
+
+    color = raw.strip().lower()
+    if not _HEX_COLOR.fullmatch(color):
+        raise InvalidInputError("El color debe ser hexadecimal de seis dígitos, p. ej. #1d4ed8")
+    return color
 
 
 def split_filename(filename: str | None) -> tuple[str, str]:

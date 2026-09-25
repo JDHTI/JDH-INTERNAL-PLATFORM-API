@@ -23,7 +23,7 @@ from app.modules.documents.application.dto import (
     UploadCommand,
 )
 from app.modules.documents.application.service import DocumentService
-from app.modules.documents.domain.entities import Document
+from app.modules.documents.domain.entities import MAX_TAG_LENGTH, Document, TagColor
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 
@@ -95,6 +95,24 @@ class DownloadLinkResponse(BaseModel):
     url: str
     filename: str
     expires_in: int
+
+
+class TagColorRequest(BaseModel):
+    """The tag travels in the body: tags may contain "/" and would break a path."""
+
+    tag: str = Field(min_length=1, max_length=MAX_TAG_LENGTH)
+    color: str = Field(description="Hexadecimal #rrggbb", examples=["#1d4ed8"])
+
+
+class TagColorResponse(BaseModel):
+    tag: str
+    color: str
+    updated_by: str
+    updated_at: datetime
+
+
+def _tag_color(tag_color: TagColor) -> TagColorResponse:
+    return TagColorResponse.model_validate(tag_color, from_attributes=True)
 
 
 def _folder(view: FolderView) -> FolderResponse:
@@ -214,6 +232,47 @@ async def upload_document(
         filename=file.filename, content=content, name=name, description=description, tags=tags
     )
     return _document(await service.upload(slug, folder_id, command, principal))
+
+
+@area_router.get(
+    "/{slug}/tag-colors", response_model=list[TagColorResponse], summary="Tag colors of an area"
+)
+@inject
+async def list_tag_colors(
+    slug: str, principal: Principal = _principal, service: DocumentService = _service
+) -> list[TagColorResponse]:
+    return [_tag_color(c) for c in await service.list_tag_colors(slug, principal)]
+
+
+@area_router.put(
+    "/{slug}/tag-colors",
+    response_model=TagColorResponse,
+    summary="Set tag color",
+    description="Creates or replaces the color; it applies to every document of the area.",
+)
+@inject
+async def set_tag_color(
+    slug: str,
+    payload: TagColorRequest,
+    principal: Principal = _principal,
+    service: DocumentService = _service,
+) -> TagColorResponse:
+    return _tag_color(await service.set_tag_color(slug, payload.tag, payload.color, principal))
+
+
+@area_router.delete(
+    "/{slug}/tag-colors",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear tag color",
+)
+@inject
+async def clear_tag_color(
+    slug: str,
+    tag: str = Query(min_length=1, max_length=MAX_TAG_LENGTH),
+    principal: Principal = _principal,
+    service: DocumentService = _service,
+) -> None:
+    await service.clear_tag_color(slug, tag, principal)
 
 
 # --- Across areas / one document ---

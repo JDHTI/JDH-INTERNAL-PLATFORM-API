@@ -73,10 +73,21 @@ tabla `users`. Ambos módulos reciben al usuario como `Principal`
 | GET | `/documents/search?area=&folder_id=&q=&tags=a,b&extension=&page=&size=` | autenticado |
 | GET / PATCH / DELETE | `/documents/{id}` | acceso al área del documento |
 | GET | `/documents/{id}/download-url` | acceso al área del documento |
+| GET / PUT | `/areas/{slug}/tag-colors` (PUT: `{"tag", "color"}`) | acceso |
+| DELETE | `/areas/{slug}/tag-colors?tag=` | acceso |
 
 Errores: `401` sin sesión, `403` sin acceso, `404` no existe, `409` nombre
 duplicado o borrado bloqueado, `413` archivo grande, `415` extensión no
 permitida, `422` datos inválidos. Todos responden `{"detail": "..."}`.
+
+## Colores de etiqueta
+
+Las etiquetas siguen siendo texto en cada documento; `document_tag_colors`
+guarda un color `#rrggbb` por (área, etiqueta). Colorear «contratos» una vez
+lo colorea en todos los documentos del área. La etiqueta se normaliza igual
+que en los documentos (minúsculas, espacios colapsados), y viaja en el cuerpo
+o en la query porque puede contener `/`. `PUT` crea o reemplaza (gana la
+última escritura); `DELETE` sobre una etiqueta sin color responde 204.
 
 ## Descargas
 
