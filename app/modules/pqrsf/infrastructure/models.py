@@ -45,8 +45,8 @@ class PqrsfRequestModel(Base):
 
     __tablename__ = "pqrsf_requests"
     __table_args__ = (
-        UniqueConstraint("reference", name="uq_pqrsf_requests_reference"),
-        UniqueConstraint("idempotency_key", name="uq_pqrsf_requests_idempotency_key"),
+        UniqueConstraint("reference", name="pqrsf_requests_reference_key"),
+        UniqueConstraint("idempotency_key", name="pqrsf_requests_idempotency_key_key"),
         Index("ix_pqrsf_requests_type_created", "request_type_id", "created_at"),
         Index("ix_pqrsf_requests_site_created", "site_id", "created_at"),
         Index("ix_pqrsf_requests_created_at", "created_at"),
@@ -86,7 +86,7 @@ class PqrsfAttachmentModel(Base):
 
     __tablename__ = "pqrsf_attachments"
     __table_args__ = (
-        UniqueConstraint("storage_key", name="uq_pqrsf_attachments_storage_key"),
+        UniqueConstraint("storage_key", name="pqrsf_attachments_storage_key_key"),
         Index("ix_pqrsf_attachments_request_id", "request_id"),
     )
 
