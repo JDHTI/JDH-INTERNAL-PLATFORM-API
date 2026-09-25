@@ -100,3 +100,6 @@ layout autenticado. Puede reutilizar los tokens visuales y la fuente de la
 plataforma, pero no debe montar sidebar, header, sesión ni navegación privada.
 Las llamadas públicas deben omitir credenciales (`credentials: "omit"`); las
 operaciones administrativas conservan `credentials: "include"`.
+
+El plan ejecutable de la interfaz está en
+[`docs/pqrsf-ui-plan.md`](pqrsf-ui-plan.md).
