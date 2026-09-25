@@ -16,6 +16,7 @@ from app.modules.documents.application.dto import (
     UploadCommand,
 )
 from app.modules.documents.domain.entities import (
+    normalize_color,
     normalize_tags,
     split_filename,
     storage_key_for,
@@ -169,6 +170,39 @@ async def test_search_scope_depends_on_the_caller(
     page = await documents.search(SearchQuery(), nobody)
     assert doc_repo.last_filters.area_ids == []
     assert page.total == 0
+
+
+async def test_tag_color_matches_the_normalized_tag_and_is_replaced(documents, setup) -> None:
+    _, _, ana = setup
+
+    await documents.set_tag_color("bi", "  Contratos ", "#1D4ED8", ana)
+    color = await documents.set_tag_color("bi", "contratos", "#067647", ana)
+
+    assert (color.tag, color.color, color.updated_by) == ("contratos", "#067647", ana.email)
+    assert [c.tag for c in await documents.list_tag_colors("bi", ana)] == ["contratos"]
+
+    await documents.clear_tag_color("bi", "CONTRATOS", ana)
+    await documents.clear_tag_color("bi", "contratos", ana)  # already clear: no error
+    assert await documents.list_tag_colors("bi", ana) == []
+
+
+async def test_tag_colors_stay_inside_their_area(areas, documents, admin, setup) -> None:
+    _, _, ana = setup
+    await areas.create_area(CreateAreaCommand(slug="mercadeo", name="Mercadeo"), admin)
+    await documents.set_tag_color("mercadeo", "contratos", "#b42318", admin)
+
+    assert await documents.list_tag_colors("bi", ana) == []
+    with pytest.raises(ForbiddenError):
+        await documents.set_tag_color("mercadeo", "contratos", "#067647", ana)
+    with pytest.raises(ForbiddenError):
+        await documents.list_tag_colors("mercadeo", ana)
+
+
+@pytest.mark.parametrize("bad", ["1d4ed8", "#1d4", "#1d4ed8ff", "blue", "#gggggg", ""])
+def test_normalize_color_accepts_only_six_digit_hex(bad) -> None:
+    assert normalize_color(" #1D4ED8 ") == "#1d4ed8"
+    with pytest.raises(InvalidInputError):
+        normalize_color(bad)
 
 
 def test_split_filename_strips_client_paths() -> None:

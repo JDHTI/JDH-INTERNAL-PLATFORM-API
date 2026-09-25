@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.documents.domain.entities import Document, DocumentFolder
+from app.modules.documents.domain.entities import Document, DocumentFolder, TagColor
 from app.modules.identity.domain.principal import Principal
 
 
@@ -271,5 +271,44 @@ class DocumentRepository(Protocol):
 
         Returns:
             tuple[list[Document], int]: The page of documents and the total count.
+        """
+        ...
+
+    async def list_tag_colors(self, area_id: UUID) -> list[TagColor]:
+        """List the tag colors of an area.
+
+        Args:
+            area_id (UUID): The area.
+
+        Returns:
+            list[TagColor]: Colors ordered by tag.
+        """
+        ...
+
+    async def save_tag_color(
+        self, area_id: UUID, tag: str, color: str, updated_by: str
+    ) -> TagColor:
+        """Create or replace the color of a tag.
+
+        Args:
+            area_id (UUID): The area.
+            tag (str): Normalized tag.
+            color (str): Normalized ``#rrggbb`` color.
+            updated_by (str): Email of whoever set it.
+
+        Returns:
+            TagColor: The stored color.
+        """
+        ...
+
+    async def delete_tag_color(self, area_id: UUID, tag: str) -> None:
+        """Remove the color of a tag; succeeds when it had none.
+
+        Args:
+            area_id (UUID): The area.
+            tag (str): Normalized tag.
+
+        Returns:
+            None
         """
         ...

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from app.core.errors import ConflictError, NotFoundError
 from app.modules.areas.domain.entities import Area, AreaMember, AreaRole
-from app.modules.documents.domain.entities import Document, DocumentFolder
+from app.modules.documents.domain.entities import Document, DocumentFolder, TagColor
 from app.modules.documents.domain.ports import SearchFilters
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 
@@ -169,6 +169,7 @@ class FakeDocumentRepository:
         self.documents: dict[uuid.UUID, Document] = {}
         self.fail_next_add: Exception | None = None
         self.last_filters: SearchFilters | None = None
+        self.tag_colors: dict[tuple[uuid.UUID, str], TagColor] = {}
 
     async def list_folders(self, area_id):
         return [
@@ -233,6 +234,18 @@ class FakeDocumentRepository:
             if filters.area_ids is None or d.area_id in filters.area_ids
         ]
         return items, len(items)
+
+    async def list_tag_colors(self, area_id):
+        return sorted(
+            (c for (a, _), c in self.tag_colors.items() if a == area_id), key=lambda c: c.tag
+        )
+
+    async def save_tag_color(self, area_id, tag, color, updated_by):
+        self.tag_colors[(area_id, tag)] = TagColor(area_id, tag, color, updated_by, NOW)
+        return self.tag_colors[(area_id, tag)]
+
+    async def delete_tag_color(self, area_id, tag):
+        self.tag_colors.pop((area_id, tag), None)
 
 
 class FakeStorage:

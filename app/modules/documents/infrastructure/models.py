@@ -83,3 +83,23 @@ class DocumentModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class DocumentTagColorModel(Base):
+    """One color per (area, tag). Tags stay plain text on documents; this is a lookup."""
+
+    __tablename__ = "document_tag_colors"
+    __table_args__ = (
+        CheckConstraint("color ~ '^#[0-9a-f]{6}$'", name="ck_document_tag_colors_hex"),
+    )
+
+    # CASCADE: a color means nothing once its area is gone.
+    area_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("areas.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag: Mapped[str] = mapped_column(String(50), primary_key=True)
+    color: Mapped[str] = mapped_column(String(7), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
