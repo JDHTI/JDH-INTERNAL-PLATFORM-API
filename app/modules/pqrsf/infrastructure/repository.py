@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError
@@ -93,6 +93,17 @@ _REQUEST_QUERY = (
     .join(RequestTypeModel, PqrsfRequestModel.request_type_id == RequestTypeModel.id)
     .join(SiteModel, PqrsfRequestModel.site_id == SiteModel.id)
 )
+_REQUEST_TYPE_ORDER = case(
+    {
+        "peticion": 0,
+        "queja": 1,
+        "reclamo": 2,
+        "sugerencia": 3,
+        "felicitacion": 4,
+    },
+    value=RequestTypeModel.code,
+    else_=99,
+)
 
 
 class SqlAlchemyPqrsfRepository:
@@ -110,7 +121,7 @@ class SqlAlchemyPqrsfRepository:
     async def list_request_types(self, active_only: bool = True) -> list[RequestType]:
         """List request types by display order."""
 
-        query = select(RequestTypeModel).order_by(RequestTypeModel.id)
+        query = select(RequestTypeModel).order_by(_REQUEST_TYPE_ORDER, RequestTypeModel.id)
         if active_only:
             query = query.where(RequestTypeModel.is_active.is_(True))
         async with self.database.session_factory() as session:
