@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -51,6 +51,41 @@ class PqrsfRequest:
     idempotency_hash: str
     created_at: datetime
     updated_at: datetime
+    attachments: list[PqrsfAttachment] = field(default_factory=list)
+
+
+@dataclass
+class PqrsfAttachment:
+    """Sanitized image metadata stored next to a PQRSF request."""
+
+    id: UUID
+    request_id: UUID
+    original_filename: str
+    extension: str
+    content_type: str
+    size_bytes: int
+    checksum_sha256: str
+    storage_key: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class SanitizedImage:
+    """Image bytes after format validation and metadata stripping."""
+
+    original_filename: str
+    extension: str
+    content_type: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class ImageUpload:
+    """Raw multipart image passed from the HTTP boundary."""
+
+    filename: str | None
+    content_type: str | None
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -106,3 +141,9 @@ def validate_idempotency_key(value: str) -> str:
     if not _IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
         raise InvalidInputError("Idempotency-Key debe ser un UUID válido")
     return key
+
+
+def storage_key_for(request_id: UUID, attachment_id: UUID, extension: str) -> str:
+    """Build a private object key from generated identifiers only."""
+
+    return f"pqrsf/{request_id}/{attachment_id}.{extension}"

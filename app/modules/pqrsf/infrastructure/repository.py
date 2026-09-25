@@ -4,18 +4,23 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.entities import (
+    PqrsfAttachment,
     PqrsfFilters,
     PqrsfPage,
     PqrsfRequest,
     RequestType,
 )
-from app.modules.pqrsf.infrastructure.models import PqrsfRequestModel, RequestTypeModel
+from app.modules.pqrsf.infrastructure.models import (
+    PqrsfAttachmentModel,
+    PqrsfRequestModel,
+    RequestTypeModel,
+)
 from app.modules.sites.domain.entities import Site
 from app.modules.sites.infrastructure.models import SiteModel
 
@@ -44,6 +49,20 @@ def _site(model: SiteModel) -> Site:
     )
 
 
+def _attachment(model: PqrsfAttachmentModel) -> PqrsfAttachment:
+    return PqrsfAttachment(
+        id=model.id,
+        request_id=model.request_id,
+        original_filename=model.original_filename,
+        extension=model.extension,
+        content_type=model.content_type,
+        size_bytes=model.size_bytes,
+        checksum_sha256=model.checksum_sha256,
+        storage_key=model.storage_key,
+        created_at=model.created_at,
+    )
+
+
 def _request(
     model: PqrsfRequestModel, request_type: RequestTypeModel, site: SiteModel
 ) -> PqrsfRequest:
@@ -65,6 +84,7 @@ def _request(
         idempotency_hash=model.idempotency_hash,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        attachments=[],
     )
 
 
@@ -150,7 +170,16 @@ class SqlAlchemyPqrsfRepository:
         query = _REQUEST_QUERY.where(PqrsfRequestModel.id == request_id)
         async with self.database.session_factory() as session:
             row = (await session.execute(query)).one_or_none()
-            return _request(*row) if row else None
+            if row is None:
+                return None
+            request = _request(*row)
+            attachments = await session.execute(
+                select(PqrsfAttachmentModel)
+                .where(PqrsfAttachmentModel.request_id == request_id)
+                .order_by(PqrsfAttachmentModel.created_at, PqrsfAttachmentModel.id)
+            )
+            request.attachments = [_attachment(model) for model in attachments.scalars()]
+            return request
 
     async def list_requests(self, filters: PqrsfFilters, page: int, size: int) -> PqrsfPage:
         """Return a page ordered newest first."""
@@ -173,3 +202,61 @@ class SqlAlchemyPqrsfRepository:
             return PqrsfPage(
                 items=[_request(*row) for row in rows], total=total, page=page, size=size
             )
+
+    async def add_attachments(self, attachments: list[PqrsfAttachment]) -> None:
+        """Persist attachment metadata after all objects are stored."""
+
+        if not attachments:
+            return
+        models = [
+            PqrsfAttachmentModel(
+                id=attachment.id,
+                request_id=attachment.request_id,
+                original_filename=attachment.original_filename,
+                extension=attachment.extension,
+                content_type=attachment.content_type,
+                size_bytes=attachment.size_bytes,
+                checksum_sha256=attachment.checksum_sha256,
+                storage_key=attachment.storage_key,
+            )
+            for attachment in attachments
+        ]
+        async with self.database.session_factory() as session:
+            session.add_all(models)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudieron registrar los adjuntos") from exc
+
+    async def list_attachments(self, request_id: UUID) -> list[PqrsfAttachment]:
+        """List attachment metadata for a request."""
+
+        query = (
+            select(PqrsfAttachmentModel)
+            .where(PqrsfAttachmentModel.request_id == request_id)
+            .order_by(PqrsfAttachmentModel.created_at, PqrsfAttachmentModel.id)
+        )
+        async with self.database.session_factory() as session:
+            result = await session.execute(query)
+            return [_attachment(model) for model in result.scalars()]
+
+    async def get_attachment(self, request_id: UUID, attachment_id: UUID) -> PqrsfAttachment | None:
+        """Find an attachment that belongs to the request."""
+
+        query = select(PqrsfAttachmentModel).where(
+            PqrsfAttachmentModel.request_id == request_id,
+            PqrsfAttachmentModel.id == attachment_id,
+        )
+        async with self.database.session_factory() as session:
+            model = (await session.execute(query)).scalar_one_or_none()
+            return _attachment(model) if model else None
+
+    async def delete_request(self, request_id: UUID) -> None:
+        """Delete a request after a failed object-storage transaction."""
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                delete(PqrsfRequestModel).where(PqrsfRequestModel.id == request_id)
+            )
+            await session.commit()

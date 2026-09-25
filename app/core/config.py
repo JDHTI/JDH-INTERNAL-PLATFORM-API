@@ -125,6 +125,15 @@ class Settings(BaseSettings):
     )
     DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS: int = 300
 
+    # Public PQRSF uploads are stricter than the internal document manager.
+    PQRSF_MAX_ATTACHMENTS: int = 5
+    PQRSF_MAX_ATTACHMENT_MB: int = 5
+    PQRSF_MAX_TOTAL_ATTACHMENT_MB: int = 25
+    PQRSF_MAX_IMAGE_PIXELS: int = 20_000_000
+    PQRSF_CLAMAV_HOST: str = "clamav"
+    PQRSF_CLAMAV_PORT: int = 3310
+    PQRSF_CLAMAV_TIMEOUT_SECONDS: float = 10.0
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def APP_ENV(self) -> str:
@@ -250,6 +259,15 @@ class Settings(BaseSettings):
                 "max_upload_bytes": self.DOCUMENTS_MAX_UPLOAD_MB * 1024 * 1024,
                 "allowed_extensions": _split_lower(self.DOCUMENTS_ALLOWED_EXTENSIONS),
                 "download_url_ttl": self.DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS,
+            },
+            "pqrsf": {
+                "max_attachments": self.PQRSF_MAX_ATTACHMENTS,
+                "max_attachment_bytes": self.PQRSF_MAX_ATTACHMENT_MB * 1024 * 1024,
+                "max_total_attachment_bytes": self.PQRSF_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
+                "max_image_pixels": self.PQRSF_MAX_IMAGE_PIXELS,
+                "clamav_host": self.PQRSF_CLAMAV_HOST,
+                "clamav_port": self.PQRSF_CLAMAV_PORT,
+                "clamav_timeout": self.PQRSF_CLAMAV_TIMEOUT_SECONDS,
             },
             "identity": {
                 "tenant_id": self.ENTRA_TENANT_ID,

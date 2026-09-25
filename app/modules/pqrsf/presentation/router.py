@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Form, Header, Query, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, status
 from pydantic import BaseModel, EmailStr
 
 from app.app_container import ApplicationContainer
@@ -14,7 +15,13 @@ from app.core.rate_limit import rate_limit
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.presentation.router import require_admin
 from app.modules.pqrsf.application.service import PqrsfService
-from app.modules.pqrsf.domain.entities import PqrsfFilters, PqrsfPage, PqrsfRequest, RequestType
+from app.modules.pqrsf.domain.entities import (
+    ImageUpload,
+    PqrsfFilters,
+    PqrsfPage,
+    PqrsfRequest,
+    RequestType,
+)
 from app.modules.sites.domain.entities import Site
 
 public_router = APIRouter(prefix="/public/pqrsf")
@@ -71,8 +78,24 @@ class PqrsfRequestResponse(BaseModel):
     email: EmailStr
     reason: str | None
     description: str
+    attachments: list[PqrsfAttachmentResponse]
     created_at: datetime
     updated_at: datetime
+
+
+class PqrsfAttachmentResponse(BaseModel):
+    """Administrator attachment metadata without the private storage key."""
+
+    id: UUID
+    original_filename: str
+    extension: str
+    content_type: str
+    size_bytes: int
+    checksum_sha256: str
+    created_at: datetime
+
+
+PqrsfRequestResponse.model_rebuild()
 
 
 class PqrsfPageResponse(BaseModel):
@@ -107,6 +130,10 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
         email=value.email,
         reason=value.reason,
         description=value.description,
+        attachments=[
+            PqrsfAttachmentResponse.model_validate(attachment, from_attributes=True)
+            for attachment in value.attachments
+        ],
         created_at=value.created_at,
         updated_at=value.updated_at,
     )
@@ -149,13 +176,13 @@ async def create_public_request(
     email: EmailStr = Form(...),  # noqa: B008
     description: str = Form(...),  # noqa: B008
     reason: str | None = Form(default=None),  # noqa: B008
+    images: list[UploadFile] = File(default=[]),  # noqa: B008
     idempotency_key: str = Header(alias="Idempotency-Key"),
     service: PqrsfService = _service,
 ) -> PqrsfReceiptResponse:
     """Create a request without requiring an Entra session.
 
-    The endpoint accepts regular form fields today; the upload layer extends
-    it to multipart without changing the names of the fields.
+    The endpoint accepts multipart form fields and optional images.
     """
 
     values = {
@@ -185,6 +212,14 @@ async def create_public_request(
         description=description,
         idempotency_key=idempotency_key,
         idempotency_payload=values,
+        images=[
+            ImageUpload(
+                filename=image.filename,
+                content_type=image.content_type,
+                content=await image.read(service.max_attachment_bytes + 1),
+            )
+            for image in images
+        ],
     )
     return PqrsfReceiptResponse(
         id=result.request.id,
@@ -226,6 +261,33 @@ async def get_request(
     """Return a request to an administrator."""
 
     return _request(await service.get_request(request_id))
+
+
+@admin_router.get(
+    "/requests/{request_id}/attachments/{attachment_id}/download",
+    summary="Download PQRSF attachment",
+    response_class=Response,
+)
+@inject
+async def download_attachment(
+    request_id: UUID,
+    attachment_id: UUID,
+    _: UserModel = Depends(require_admin),  # noqa: B008
+    service: PqrsfService = _service,
+) -> Response:
+    """Return a private attachment only to an administrator."""
+
+    attachment, content = await service.download_attachment(request_id, attachment_id)
+    filename = quote(attachment.original_filename)
+    return Response(
+        content=content,
+        media_type=attachment.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _page(value: PqrsfPage) -> PqrsfPageResponse:

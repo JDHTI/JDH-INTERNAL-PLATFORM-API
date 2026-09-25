@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -77,4 +78,28 @@ class PqrsfRequestModel(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class PqrsfAttachmentModel(Base):
+    """Metadata for one sanitized PQRSF image."""
+
+    __tablename__ = "pqrsf_attachments"
+    __table_args__ = (
+        UniqueConstraint("storage_key", name="uq_pqrsf_attachments_storage_key"),
+        Index("ix_pqrsf_attachments_request_id", "request_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="CASCADE"), nullable=False
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(8), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

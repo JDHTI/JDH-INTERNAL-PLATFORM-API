@@ -21,6 +21,7 @@ from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
+from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 
@@ -115,4 +116,25 @@ class V1Container(containers.DeclarativeContainer):
     site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
     site_service = providers.Factory(SiteService, repository=site_repository)
     pqrsf_repository = providers.Factory(SqlAlchemyPqrsfRepository, database=database)
-    pqrsf_service = providers.Factory(PqrsfService, repository=pqrsf_repository, sites=site_service)
+    pqrsf_image_processor = providers.Singleton(
+        PillowImageProcessor,
+        max_bytes=config.pqrsf.max_attachment_bytes,
+        max_pixels=config.pqrsf.max_image_pixels,
+    )
+    pqrsf_malware_scanner = providers.Singleton(
+        ClamAVScanner,
+        host=config.pqrsf.clamav_host,
+        port=config.pqrsf.clamav_port,
+        timeout=config.pqrsf.clamav_timeout,
+    )
+    pqrsf_service = providers.Factory(
+        PqrsfService,
+        repository=pqrsf_repository,
+        sites=site_service,
+        storage=storage,
+        image_processor=pqrsf_image_processor,
+        malware_scanner=pqrsf_malware_scanner,
+        max_attachments=config.pqrsf.max_attachments,
+        max_attachment_bytes=config.pqrsf.max_attachment_bytes,
+        max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,
+    )

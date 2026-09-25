@@ -10,12 +10,13 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.core.rate_limit import rate_limit
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.presentation.router import require_admin
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(rate_limit("medium"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.site_service])
 
 
