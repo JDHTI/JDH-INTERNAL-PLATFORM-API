@@ -19,6 +19,8 @@ from app.modules.identity.application.directory import UserDirectory
 from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
+from app.modules.sites.application.service import SiteService
+from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 
 
 class V1Container(containers.DeclarativeContainer):
@@ -108,3 +110,5 @@ class V1Container(containers.DeclarativeContainer):
         allowed_extensions=config.documents.allowed_extensions,
         download_url_ttl=config.documents.download_url_ttl,
     )
+    site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
+    site_service = providers.Factory(SiteService, repository=site_repository)

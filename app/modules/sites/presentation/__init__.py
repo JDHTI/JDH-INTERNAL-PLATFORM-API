@@ -1,0 +1,1 @@
+"""Site catalog HTTP layer."""
