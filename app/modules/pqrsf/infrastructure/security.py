@@ -151,7 +151,10 @@ class ClamAVScanner:
         finally:
             if writer is not None:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
 
         normalized_result = result.rstrip(b"\0\r\n ")
         if b"FOUND" in normalized_result:
