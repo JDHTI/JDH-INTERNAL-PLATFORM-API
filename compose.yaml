@@ -35,6 +35,8 @@ services:
 
   clamav:
     image: ${CLAMAV_IMAGE:-clamav/clamav:1.4.6}
+    ports:
+      - "127.0.0.1:${CLAMAV_HOST_PORT:-3310}:3310"
     volumes:
       - clamav_data:/var/lib/clamav
     healthcheck:
