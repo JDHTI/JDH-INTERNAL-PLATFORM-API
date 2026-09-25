@@ -1,8 +1,9 @@
+import asyncio
 from io import BytesIO
 
 import pytest
 from app.core.errors import InvalidInputError, PayloadTooLargeError
-from app.modules.pqrsf.infrastructure.security import PillowImageProcessor
+from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from PIL import Image
 
 
@@ -63,3 +64,30 @@ async def test_processor_rejects_oversized_and_unsupported_images() -> None:
 
     with pytest.raises(InvalidInputError, match="JPG"):
         await processor.sanitize("evidence.gif", "image/gif", _image_bytes("PNG"))
+
+
+@pytest.mark.asyncio
+async def test_clamav_accepts_null_terminated_clean_response(monkeypatch) -> None:
+    class FakeReader:
+        async def read(self, size: int) -> bytes:
+            return b"stream: OK\0"
+
+    class FakeWriter:
+        def write(self, content: bytes) -> None:
+            pass
+
+        async def drain(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_open_connection(host: str, port: int):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+
+    await ClamAVScanner("clamav", 3310, 1).scan(b"clean")

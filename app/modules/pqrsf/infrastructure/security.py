@@ -153,9 +153,10 @@ class ClamAVScanner:
                 writer.close()
                 await writer.wait_closed()
 
-        if b"FOUND" in result:
+        normalized_result = result.rstrip(b"\0\r\n ")
+        if b"FOUND" in normalized_result:
             raise InvalidInputError("La imagen fue rechazada por el antivirus")
-        if not result.rstrip().endswith(b"OK"):
+        if not normalized_result.endswith(b"OK"):
             raise DependencyUnavailableError("El antivirus no pudo validar la imagen")
 
 
