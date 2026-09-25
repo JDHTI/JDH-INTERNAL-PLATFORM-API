@@ -1,0 +1,1 @@
+"""Pure site catalog rules."""

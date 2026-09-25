@@ -44,6 +44,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   usar `credentials: include`; no debe guardar tokens en `localStorage`.
 - Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
   `/api/v1/areas`; requieren el rol local `admin`.
+- El formulario público y el contrato de PQRSF están documentados en
+  [`docs/pqrsf.md`](docs/pqrsf.md); su página visual debe usar `/pqrsf` fuera
+  del layout autenticado.
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
 - En `ENVIRONMENT=prod` se deshabilitan OpenAPI, Swagger UI y ReDoc; también
   se fuerza `debug=False` aunque una variable externa intente activarlo.

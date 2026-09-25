@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     REDIS_DEFAULT_TTL_SECONDS: int = 3600
     REDIS_CONNECT_TIMEOUT_SECONDS: float = 2.0
 
+    # Public and administrative API protection. Values are intentionally
+    # separate so each module can choose a tolerance profile without code edits.
+    RATE_LIMIT_STRICT_REQUESTS: int = 5
+    RATE_LIMIT_STRICT_WINDOW_SECONDS: int = 600
+    RATE_LIMIT_MEDIUM_REQUESTS: int = 30
+    RATE_LIMIT_MEDIUM_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_RELAXED_REQUESTS: int = 120
+    RATE_LIMIT_RELAXED_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_TRUSTED_PROXY_IPS: str = ""
+
     S3_ENDPOINT_URL: str = "http://127.0.0.1:9000"
     S3_REGION: str = "us-east-1"
     S3_ACCESS_KEY_ID: str = "minioadmin"
@@ -114,6 +124,15 @@ class Settings(BaseSettings):
         "pdf,doc,docx,xls,xlsx,xlsm,csv,ppt,pptx,txt,png,jpg,jpeg,zip"
     )
     DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS: int = 300
+
+    # Public PQRSF uploads are stricter than the internal document manager.
+    PQRSF_MAX_ATTACHMENTS: int = 5
+    PQRSF_MAX_ATTACHMENT_MB: int = 5
+    PQRSF_MAX_TOTAL_ATTACHMENT_MB: int = 25
+    PQRSF_MAX_IMAGE_PIXELS: int = 20_000_000
+    PQRSF_CLAMAV_HOST: str = "clamav"
+    PQRSF_CLAMAV_PORT: int = 3310
+    PQRSF_CLAMAV_TIMEOUT_SECONDS: float = 10.0
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -241,6 +260,15 @@ class Settings(BaseSettings):
                 "allowed_extensions": _split_lower(self.DOCUMENTS_ALLOWED_EXTENSIONS),
                 "download_url_ttl": self.DOCUMENTS_DOWNLOAD_URL_TTL_SECONDS,
             },
+            "pqrsf": {
+                "max_attachments": self.PQRSF_MAX_ATTACHMENTS,
+                "max_attachment_bytes": self.PQRSF_MAX_ATTACHMENT_MB * 1024 * 1024,
+                "max_total_attachment_bytes": self.PQRSF_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
+                "max_image_pixels": self.PQRSF_MAX_IMAGE_PIXELS,
+                "clamav_host": self.PQRSF_CLAMAV_HOST,
+                "clamav_port": self.PQRSF_CLAMAV_PORT,
+                "clamav_timeout": self.PQRSF_CLAMAV_TIMEOUT_SECONDS,
+            },
             "identity": {
                 "tenant_id": self.ENTRA_TENANT_ID,
                 "client_id": self.ENTRA_CLIENT_ID,
@@ -269,6 +297,45 @@ class Settings(BaseSettings):
                 "state_cookie_max_age": self.AUTH_STATE_COOKIE_MAX_AGE,
             },
         }
+
+    def rate_limit_policy(self, profile: str) -> tuple[int, int]:
+        """Return the configured ``(limit, window_seconds)`` for a profile.
+
+        Args:
+            profile (str): One of ``strict``, ``medium`` or ``relaxed``.
+
+        Returns:
+            tuple[int, int]: Maximum requests and window duration.
+
+        Raises:
+            ValueError: When the profile is unknown or has invalid values.
+        """
+
+        policies = {
+            "strict": (self.RATE_LIMIT_STRICT_REQUESTS, self.RATE_LIMIT_STRICT_WINDOW_SECONDS),
+            "medium": (self.RATE_LIMIT_MEDIUM_REQUESTS, self.RATE_LIMIT_MEDIUM_WINDOW_SECONDS),
+            "relaxed": (
+                self.RATE_LIMIT_RELAXED_REQUESTS,
+                self.RATE_LIMIT_RELAXED_WINDOW_SECONDS,
+            ),
+        }
+        try:
+            limit, window = policies[profile]
+        except KeyError as exc:
+            raise ValueError(f"Unknown rate limit profile: {profile}") from exc
+        if limit < 1 or window < 1:
+            raise ValueError(f"Rate limit profile {profile} must be positive")
+        return limit, window
+
+    @property
+    def trusted_proxy_ips(self) -> frozenset[str]:
+        """Return proxy addresses allowed to provide ``X-Forwarded-For``."""
+
+        return frozenset(
+            address.strip()
+            for address in self.RATE_LIMIT_TRUSTED_PROXY_IPS.split(",")
+            if address.strip()
+        )
 
 
 def _split_lower(value: str) -> list[str]:

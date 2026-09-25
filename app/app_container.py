@@ -89,6 +89,8 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     from app.modules.documents.presentation import router as documents_router_module
     from app.modules.health.presentation import router as health_router_module
     from app.modules.identity.presentation import router as identity_router_module
+    from app.modules.pqrsf.presentation import router as pqrsf_router_module
+    from app.modules.sites.presentation import router as sites_router_module
 
     container = ApplicationContainer()
     container.settings.override(app_settings)
@@ -100,6 +102,8 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             consumption_router_module,
             areas_router_module,
             documents_router_module,
+            sites_router_module,
+            pqrsf_router_module,
         ]
     )
     return container
