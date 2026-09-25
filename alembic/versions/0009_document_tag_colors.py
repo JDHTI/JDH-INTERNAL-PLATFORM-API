@@ -6,8 +6,9 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0006_document_tag_colors"
-down_revision: str | None = "0005_user_activity"
+revision: str = "0009_document_tag_colors"
+# After the PQRSF chain: both branches started at 0005 and master had two heads.
+down_revision: str | None = "0008_pqrsf_attachments"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
