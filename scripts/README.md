@@ -49,3 +49,16 @@ poetry run python scripts/seed-dev-users.py
 El seed solo acepta `ENVIRONMENT=dev` y puede ejecutarse varias veces sin
 duplicar usuarios. Usa `AUTH_DEV_USER_OBJECT_ID` para la identidad del analista
 y el tenant configurado (o `development`) para las identidades mock.
+
+Para migrar el Excel P.13.F.01 «Seguimiento Peticiones» (exportado a CSV) a
+casos de PQRSF. Sin `--apply` solo muestra el reporte; con `--apply` es
+repetible y omite las filas ya cargadas:
+
+```bash
+poetry run python scripts/import-pqrsf-tracking.py P.13.F.csv --year 2026 \
+  --site "Copacabana=medellin" --site "Funza=bogota" \
+  --assignee "Nombre Responsable=correo@jdh.com.co" --apply
+```
+
+Detalles y decisiones de la importación en
+[`docs/pqrsf-seguimiento.md`](../docs/pqrsf-seguimiento.md#migración-del-excel).
