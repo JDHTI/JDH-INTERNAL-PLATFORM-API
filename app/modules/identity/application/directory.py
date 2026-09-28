@@ -83,3 +83,17 @@ class UserDirectory:
 
         users = await self.repository.get_users_by_ids(user_ids)
         return {user.id: _directory_user(user) for user in users}
+
+    async def search_users(self, query: str, limit: int = 20) -> list[DirectoryUser]:
+        """Find active users by name or email, for people pickers.
+
+        Args:
+            query (str): Text contained in the name or email.
+            limit (int): Maximum number of users to return.
+
+        Returns:
+            list[DirectoryUser]: Matching active users ordered by name.
+        """
+
+        users = await self.repository.search_active_users(query, limit)
+        return [_directory_user(user) for user in users]

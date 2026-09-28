@@ -306,3 +306,26 @@ class IdentityRepository:
             return []
         async with self._session() as session:
             return (await session.scalars(select(UserModel).where(UserModel.id.in_(ids)))).all()
+
+    async def search_active_users(self, query: str, limit: int) -> Sequence[UserModel]:
+        """Find active users whose name or email contains the text.
+
+        Args:
+            query (str): Text to look for; blank lists users alphabetically.
+            limit (int): Maximum number of users to return.
+
+        Returns:
+            Sequence[UserModel]: Matching active users ordered by name.
+        """
+
+        statement = select(UserModel).where(UserModel.is_active.is_(True))
+        text = query.strip()
+        if text:
+            pattern = f"%{text}%"
+            statement = statement.where(
+                UserModel.name.ilike(pattern) | UserModel.email.ilike(pattern)
+            )
+        async with self._session() as session:
+            return (
+                await session.scalars(statement.order_by(UserModel.name, UserModel.id).limit(limit))
+            ).all()
