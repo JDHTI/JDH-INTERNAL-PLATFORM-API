@@ -15,10 +15,15 @@ La base local es `/api/v1`.
 | `GET` | `/pqrsf/requests` | Admin | `medium` |
 | `GET` | `/pqrsf/requests/{request_id}` | Admin | `medium` |
 | `GET` | `/pqrsf/requests/{request_id}/attachments/{attachment_id}/download` | Admin | `medium` |
+| `POST` | `/pqrsf/requests/{request_id}/case` | Admin | `medium` |
 | `GET` | `/sites` | Admin | `medium` |
 | `POST` | `/sites` | Admin | `medium` |
 | `PATCH` | `/sites/{site_id}` | Admin | `medium` |
 | `DELETE` | `/sites/{site_id}` | Admin | `medium` |
+
+El seguimiento interno de los casos (bandeja, estados, responsables,
+documentos y SLA) está documentado en
+[`docs/pqrsf-seguimiento.md`](pqrsf-seguimiento.md).
 
 El catálogo devuelve `request_types` y `sites`. Cada tipo contiene `id`,
 `code`, `name`, `allows_reason` y `allows_attachments`; la interfaz debe usar
@@ -47,7 +52,11 @@ Campos de formulario:
   sugerencia o felicitación.
 - `images`: cero o más archivos sólo para petición, queja y reclamo.
 
-El servidor devuelve `201` con `{ "id", "reference", "created_at" }`. Los
+El servidor devuelve `201` con `{ "id", "reference", "tracking_code",
+"created_at" }`. `tracking_code` es el consecutivo del caso de seguimiento
+(`Q-2026-00012`) y es el número que la UI debe mostrar al cliente; puede ser
+`null` si el caso no se pudo abrir en ese momento (ver
+[`docs/pqrsf-seguimiento.md`](pqrsf-seguimiento.md)). Los
 errores de validación usan el formato de errores de la API y normalmente
 responden `422`; un límite excedido responde `413`, una clave de idempotencia
 reutilizada con datos distintos responde `409`, rate limiting responde `429` y

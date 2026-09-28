@@ -35,7 +35,16 @@ def _type(model: RequestTypeModel) -> RequestType:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        prefix=model.prefix,
+        requires_follow_up=model.requires_follow_up,
+        sla_days=model.sla_days,
     )
+
+
+def request_type_from_model(model: RequestTypeModel) -> RequestType:
+    """Map a request type row; shared with the case repository."""
+
+    return _type(model)
 
 
 def _site(model: SiteModel) -> Site:
@@ -134,6 +143,31 @@ class SqlAlchemyPqrsfRepository:
         async with self.database.session_factory() as session:
             model = await session.get(RequestTypeModel, request_type_id)
             return _type(model) if model else None
+
+    async def save_request_type(self, request_type: RequestType) -> RequestType:
+        """Persist the follow-up settings of a request type.
+
+        Args:
+            request_type (RequestType): Type with the new settings.
+
+        Returns:
+            RequestType: The stored type.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(RequestTypeModel, request_type.id)
+            if model is None:
+                raise ConflictError("El tipo de solicitud ya no existe")
+            model.prefix = request_type.prefix
+            model.requires_follow_up = request_type.requires_follow_up
+            model.sla_days = request_type.sla_days
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("Otro tipo de solicitud ya usa ese prefijo") from exc
+            await session.refresh(model)
+            return _type(model)
 
     async def get_by_idempotency_key(self, key: str) -> PqrsfRequest | None:
         """Find a request by its client idempotency key."""

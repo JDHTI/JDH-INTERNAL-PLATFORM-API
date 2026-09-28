@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -29,11 +31,14 @@ from app.modules.pqrsf.domain.entities import (
 )
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
+    CaseOpener,
     ImageProcessor,
     MalwareScanner,
     PqrsfRepository,
 )
 from app.modules.sites.application.service import SiteService
+
+logger = logging.getLogger(__name__)
 
 
 class PqrsfService:
@@ -46,6 +51,7 @@ class PqrsfService:
         storage: BinaryStorage | None = None,
         image_processor: ImageProcessor | None = None,
         malware_scanner: MalwareScanner | None = None,
+        cases: CaseOpener | None = None,
         max_attachments: int = 5,
         max_attachment_bytes: int = 5 * 1024 * 1024,
         max_total_attachment_bytes: int = 25 * 1024 * 1024,
@@ -58,6 +64,7 @@ class PqrsfService:
             storage (BinaryStorage | None): Private object storage adapter.
             image_processor (ImageProcessor | None): Image sanitation adapter.
             malware_scanner (MalwareScanner | None): Antivirus adapter.
+            cases (CaseOpener | None): Opens the follow-up case of new requests.
             max_attachments (int): Maximum number of images per request.
             max_attachment_bytes (int): Maximum bytes per image.
             max_total_attachment_bytes (int): Maximum bytes across images.
@@ -68,6 +75,7 @@ class PqrsfService:
         self.storage = storage
         self.image_processor = image_processor
         self.malware_scanner = malware_scanner
+        self.cases = cases
         self.max_attachments = max_attachments
         self.max_attachment_bytes = max_attachment_bytes
         self.max_total_attachment_bytes = max_total_attachment_bytes
@@ -117,6 +125,77 @@ class PqrsfService:
             CreateResult: The stored request and whether it was replayed.
         """
 
+        result = await self._store_request(
+            request_type_id=request_type_id,
+            site_id=site_id,
+            full_name=full_name,
+            business_name=business_name,
+            nit=nit,
+            address=address,
+            department=department,
+            city=city,
+            email=email,
+            reason=reason,
+            description=description,
+            idempotency_key=idempotency_key,
+            idempotency_payload=idempotency_payload,
+            images=images,
+        )
+        return await self._with_case(result)
+
+    async def _with_case(self, result: CreateResult) -> CreateResult:
+        """Open (or find) the follow-up case without failing the submission.
+
+        The request is already stored; a failure here is logged and the case
+        can be opened later with the recovery endpoint.
+        """
+
+        if self.cases is None:
+            return result
+        try:
+            if result.replayed:
+                code = await self.cases.code_for_request(result.request.id)
+                if code is None:
+                    code = (await self.cases.open_for_request(result.request)).code
+            else:
+                code = (await self.cases.open_for_request(result.request)).code
+        except Exception:
+            logger.exception("Could not open the follow-up case of PQRSF %s", result.request.id)
+            return result
+        return replace(result, tracking_code=code)
+
+    async def open_case(self, request_id: UUID) -> str:
+        """Open the follow-up case of a stored request that has none.
+
+        Args:
+            request_id (UUID): Public request identifier.
+
+        Returns:
+            str: The case consecutive.
+        """
+
+        if self.cases is None:
+            raise DependencyUnavailableError("El seguimiento de casos no está configurado")
+        return (await self.cases.open_for_request(await self.get_request(request_id))).code
+
+    async def _store_request(
+        self,
+        *,
+        request_type_id: UUID,
+        site_id: UUID,
+        full_name: str,
+        business_name: str,
+        nit: str,
+        address: str,
+        department: str,
+        city: str,
+        email: str,
+        reason: str | None,
+        description: str,
+        idempotency_key: str,
+        idempotency_payload: Mapping[str, object],
+        images: Sequence[ImageUpload],
+    ) -> CreateResult:
         key = validate_idempotency_key(idempotency_key)
         request_type = await self.repository.get_request_type(request_type_id)
         if request_type is None or not request_type.is_active:

@@ -752,6 +752,21 @@ files = [
 ]
 
 [[package]]
+name = "holidays"
+version = "0.105"
+description = "Open World Holidays Framework"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "holidays-0.105-py3-none-any.whl", hash = "sha256:7fbd87770f1128eb24514fbb4c3ec6afa1c72d65c346713dbc13c2d0297df481"},
+    {file = "holidays-0.105.tar.gz", hash = "sha256:fc9abc0c187b62e955f92aa12dbe7ed1998cc94712f295ec9244db788594d662"},
+]
+
+[package.dependencies]
+python-dateutil = ">=2.9.0.post0,<3"
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 description = "A minimal low-level HTTP client."
@@ -1800,6 +1815,18 @@ files = [
 typing-extensions = ">=4.15.0"
 
 [[package]]
+name = "tzdata"
+version = "2026.4"
+description = "Provider of IANA time zone data"
+optional = false
+python-versions = ">=2"
+groups = ["main"]
+files = [
+    {file = "tzdata-2026.4-py2.py3-none-any.whl", hash = "sha256:c2169a8b0a7a5e9674da5a135ccdfb2b3e671b333ed9fed17b41f73c34476e81"},
+    {file = "tzdata-2026.4.tar.gz", hash = "sha256:f1b8bd365d8d210c55353f4d7f8d6d8561c0ba50d704b700d195a9424bba0d79"},
+]
+
+[[package]]
 name = "urllib3"
 version = "2.8.0"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
@@ -2114,4 +2141,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "52f5983b882e2722b1dd1a4859befbeef434125441081a48c266a47547eaead7"
+content-hash = "b731f3117cc39eee02b2912cc761b0329fd2c11b530ffcd83ec7fac4652bf0ac"
