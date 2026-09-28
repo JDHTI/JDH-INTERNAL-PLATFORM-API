@@ -191,6 +191,7 @@ class CaseFilters:
     site_id: UUID | None = None
     open_only: bool = False
     overdue: bool = False
+    due_today: bool = False
     received_from: date | None = None
     received_to: date | None = None
     query: str | None = None

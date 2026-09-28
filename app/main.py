@@ -73,6 +73,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Lets the browser read the server-chosen name of downloaded files.
+        expose_headers=["Content-Disposition"],
     )
     app.add_middleware(RequestContextMiddleware)
     register_error_handlers(app)

@@ -252,10 +252,12 @@ def _conditions(filters: CaseFilters, today: date) -> list:
         conditions.append(CaseModel.dependency_id == filters.dependency_id)
     if filters.site_id:
         conditions.append(CaseModel.site_id == filters.site_id)
-    if filters.open_only or filters.overdue:
+    if filters.open_only or filters.overdue or filters.due_today:
         conditions.append(CaseStatusModel.is_terminal.is_(False))
     if filters.overdue:
         conditions.append(CaseModel.due_on < today)
+    if filters.due_today:
+        conditions.append(CaseModel.due_on == today)
     if filters.received_from:
         conditions.append(CaseModel.received_on >= filters.received_from)
     if filters.received_to:

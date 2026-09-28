@@ -167,6 +167,14 @@ class CaseTrackingService:
                 created_by=users.get(case.created_by_user_id) if case.created_by_user_id else None,
                 access=self._access(case, principal, is_manager),
                 is_overdue=case.is_overdue(today),
+                overdue_item_ids=frozenset(
+                    item.id
+                    for item in case.items
+                    if not case.is_closed
+                    and item.responded_on is None
+                    and item.due_on is not None
+                    and item.due_on < today
+                ),
             )
             for case in cases
         ]
@@ -1009,12 +1017,21 @@ class CaseTrackingService:
         case.assignee_user_id = assignee_user_id
         # A new responsible has not read it yet.
         case.first_read_at = None
+        # Names are kept as they were, so the timeline reads right after reassignments.
+        people = await self.people.get_users(
+            i for i in (previous, assignee_user_id) if i is not None
+        )
         event = self._event(
             case.id,
             EventType.ASSIGNED,
             principal.user_id,
             note=clean_optional(note, "nota", 2_000),
-            data={"from_user_id": _str(previous), "to_user_id": _str(assignee_user_id)},
+            data={
+                "from_user_id": _str(previous),
+                "from_name": _person_name(people.get(previous) if previous else None),
+                "to_user_id": _str(assignee_user_id),
+                "to_name": _person_name(people.get(assignee_user_id) if assignee_user_id else None),
+            },
         )
         stored = await self.repository.save_case(case, [event])
         return await self._view(stored, principal, True)
@@ -1383,6 +1400,12 @@ def _item_name(item: CaseItem | None) -> str:
     if item.document_type is not None:
         return item.document_type.name
     return item.description or ""
+
+
+def _person_name(user: DirectoryUser | None) -> str | None:
+    if user is None:
+        return None
+    return user.display_name or user.email
 
 
 def _str(value: object) -> str | None:

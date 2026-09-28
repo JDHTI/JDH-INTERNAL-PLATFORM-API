@@ -36,6 +36,7 @@ class CaseView:
     created_by: DirectoryUser | None
     access: CaseAccess
     is_overdue: bool = False
+    overdue_item_ids: frozenset[UUID] = frozenset()
 
 
 @dataclass(frozen=True)

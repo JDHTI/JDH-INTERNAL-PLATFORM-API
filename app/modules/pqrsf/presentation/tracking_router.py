@@ -150,6 +150,8 @@ class CaseItemResponse(BaseModel):
     response_days: int | None
     difference_days: int | None
     is_late: bool
+    # Unanswered, past its due date, in an open case.
+    is_overdue: bool
     delay_cause: str | None
     delay_detail: str | None
 
@@ -415,8 +417,9 @@ def _site(value: Site) -> TrackingSiteResponse:
     return TrackingSiteResponse.model_validate(value, from_attributes=True)
 
 
-def _item(value: CaseItem) -> CaseItemResponse:
+def _item(value: CaseItem, overdue_ids: frozenset[UUID]) -> CaseItemResponse:
     return CaseItemResponse(
+        is_overdue=value.id in overdue_ids,
         id=value.id,
         document_type=_document_type(value.document_type) if value.document_type else None,
         description=value.description,
@@ -464,7 +467,7 @@ def _case(view: CaseView) -> CaseResponse:
         first_read_at=case.first_read_at,
         closed_at=case.closed_at,
         legacy=case.legacy,
-        items=[_item(item) for item in case.items],
+        items=[_item(item, view.overdue_item_ids) for item in case.items],
         item_count=len(case.items),
         responded_count=sum(1 for item in case.items if item.responded_on is not None),
         permissions=CasePermissionsResponse(
@@ -522,6 +525,7 @@ def _filters(
     site_id: UUID | None = None,
     open_only: bool = False,
     overdue: bool = False,
+    due_today: bool = False,
     received_from: date | None = None,
     received_to: date | None = None,
     q: str | None = Query(default=None, max_length=100),
@@ -538,6 +542,7 @@ def _filters(
         site_id=site_id,
         open_only=open_only,
         overdue=overdue,
+        due_today=due_today,
         received_from=received_from,
         received_to=received_to,
         query=q.strip() if q and q.strip() else None,

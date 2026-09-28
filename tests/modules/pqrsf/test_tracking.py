@@ -430,3 +430,29 @@ async def test_import_keeps_historical_consecutive_and_skips_reruns() -> None:
 
     following = await s.service.create_case(s.command(), s.seller)
     assert following.case.code == "P-2026-02719"
+
+
+@pytest.mark.asyncio
+async def test_unanswered_documents_past_due_are_flagged_and_assignments_keep_names() -> None:
+    s = Setup()
+    # Received Mon 14 Sep: certificado due Wed 16, ficha due Fri 18; today is 28 Sep.
+    view = await s.service.create_case(s.command(received_on=date(2026, 9, 14)), s.admin)
+    certificado, ficha = view.case.items
+    answered = await s.service.update_item(
+        view.case.id,
+        certificado.id,
+        ItemChanges(
+            fields=frozenset({"responded_on", "delay_cause"}),
+            responded_on=date(2026, 9, 28),
+            delay_cause="Proveedor",
+        ),
+        s.admin,
+    )
+    assert answered.is_overdue
+    assert answered.overdue_item_ids == frozenset({ficha.id})
+
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+    await s.service.assign(view.case.id, s.seller.user_id, None, s.admin)
+    assignments = [e for e in s.cases.events if e.event_type == "assigned"]
+    assert assignments[-1].data["from_name"] == "cristian@jdh.com.co"
+    assert assignments[-1].data["to_name"] == "carolina@jdh.com.co"

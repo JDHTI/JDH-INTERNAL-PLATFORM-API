@@ -81,7 +81,13 @@ a la bandeja, pero no tienen fecha límite.
   solicitud (15 días hábiles para P/Q/R/S).
 - Al responder se guardan `response_days` y se expone `difference_days`
   (respuesta − establecido) e `is_late`. Si `is_late`, la causal es obligatoria.
-- `is_overdue` = caso abierto con `due_on` anterior a hoy.
+- `is_overdue` = caso abierto con `due_on` anterior a hoy. Cada documento trae
+  también `is_overdue`: sin respuesta, en un caso abierto y con su `due_on`
+  vencido.
+- El evento `assigned` guarda `from_name` y `to_name` además de los ids, para
+  que la línea de tiempo siga siendo legible tras varias reasignaciones.
+- La descarga del CSV expone `Content-Disposition` por CORS para que la UI
+  use el nombre de archivo del servidor.
 
 ## Equivalencia con el Excel
 
@@ -150,7 +156,7 @@ no duplique estas reglas. El responsable debe haber iniciado sesión una vez
 
 Filtros de `/cases`, `/cases/summary` y `/cases/export`: `status_id`
 (repetible), `request_type_id`, `assignee_user_id`, `unassigned`,
-`dependency_id`, `site_id`, `open_only`, `overdue`, `received_from`,
+`dependency_id`, `site_id`, `open_only`, `overdue`, `due_today`, `received_from`,
 `received_to`, `q` (código, cliente, NIT, proveedor, ejecutivo, usuario, asunto),
 `mine` y `sort` (`received_on`, `due_on`, `code`, `updated_at`, con `-` para
 descendente). Paginación: `page`, `size` (máx. 100).
