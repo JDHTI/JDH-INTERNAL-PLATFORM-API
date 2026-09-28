@@ -59,7 +59,16 @@ class PqrsfReceiptResponse(BaseModel):
 
     id: UUID
     reference: str
+    # Consecutive the customer can quote (P-2026-00012); null if the case
+    # could not be opened at submission time.
+    tracking_code: str | None = None
     created_at: datetime
+
+
+class OpenCaseResponse(BaseModel):
+    """Consecutive of the case opened for a request."""
+
+    tracking_code: str
 
 
 class PqrsfRequestResponse(BaseModel):
@@ -224,6 +233,7 @@ async def create_public_request(
     return PqrsfReceiptResponse(
         id=result.request.id,
         reference=result.request.reference,
+        tracking_code=result.tracking_code,
         created_at=result.request.created_at,
     )
 
@@ -261,6 +271,22 @@ async def get_request(
     """Return a request to an administrator."""
 
     return _request(await service.get_request(request_id))
+
+
+@admin_router.post(
+    "/requests/{request_id}/case",
+    response_model=OpenCaseResponse,
+    summary="Open the follow-up case of a request",
+)
+@inject
+async def open_request_case(
+    request_id: UUID,
+    _: UserModel = Depends(require_admin),  # noqa: B008
+    service: PqrsfService = _service,
+) -> OpenCaseResponse:
+    """Open the case of a request whose case failed at submission; idempotent."""
+
+    return OpenCaseResponse(tracking_code=await service.open_case(request_id))
 
 
 @admin_router.get(

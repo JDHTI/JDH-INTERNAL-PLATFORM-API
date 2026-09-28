@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Container, Iterable
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.pqrsf.domain.entities import (
     PqrsfAttachment,
     PqrsfFilters,
@@ -12,6 +15,16 @@ from app.modules.pqrsf.domain.entities import (
     PqrsfRequest,
     RequestType,
     SanitizedImage,
+)
+from app.modules.pqrsf.domain.tracking import (
+    CaseEvent,
+    CaseFilters,
+    CasePage,
+    CaseStatus,
+    CaseSummary,
+    Dependency,
+    DocumentType,
+    TrackingCase,
 )
 
 
@@ -56,6 +69,160 @@ class PqrsfRepository(Protocol):
 
     async def delete_request(self, request_id: UUID) -> None:
         """Delete a request and its metadata after a storage rollback."""
+        ...
+
+    async def save_request_type(self, request_type: RequestType) -> RequestType:
+        """Persist the follow-up settings of a request type."""
+        ...
+
+
+class CaseOpener(Protocol):
+    """Open the follow-up case of a public request (implemented by tracking)."""
+
+    async def open_for_request(self, request: PqrsfRequest) -> TrackingCase:
+        """Create the case for a request, or return the existing one."""
+        ...
+
+    async def code_for_request(self, request_id: UUID) -> str | None:
+        """Return the consecutive of the request's case, if any."""
+        ...
+
+
+class CaseRepository(Protocol):
+    """Store follow-up catalogs, cases, items and their timeline.
+
+    Every mutation receives the timeline events it produces so both are
+    written in the same transaction.
+    """
+
+    async def list_statuses(self, include_inactive: bool = False) -> list[CaseStatus]:
+        """List statuses in display order."""
+        ...
+
+    async def get_status(self, status_id: UUID) -> CaseStatus | None:
+        """Find a status by identifier."""
+        ...
+
+    async def get_status_by_code(self, code: str) -> CaseStatus | None:
+        """Find a status by code."""
+        ...
+
+    async def save_status(self, status: CaseStatus) -> CaseStatus:
+        """Insert or update a status; an initial one clears the flag on the rest."""
+        ...
+
+    async def list_dependencies(self, include_inactive: bool = False) -> list[Dependency]:
+        """List internal dependencies in display order."""
+        ...
+
+    async def get_dependency(self, dependency_id: UUID) -> Dependency | None:
+        """Find a dependency by identifier."""
+        ...
+
+    async def save_dependency(self, dependency: Dependency) -> Dependency:
+        """Insert or update a dependency."""
+        ...
+
+    async def list_document_types(self, include_inactive: bool = False) -> list[DocumentType]:
+        """List document types by name."""
+        ...
+
+    async def get_document_type(self, document_type_id: UUID) -> DocumentType | None:
+        """Find a document type by identifier."""
+        ...
+
+    async def save_document_type(self, document_type: DocumentType) -> DocumentType:
+        """Insert or update a document type."""
+        ...
+
+    async def create_case(
+        self, case: TrackingCase, event: CaseEvent, number: int | None = None
+    ) -> TrackingCase:
+        """Insert a case with its items, allocating the next consecutive.
+
+        ``number`` keeps a historical consecutive (imports) and moves the
+        counter past it.
+        """
+        ...
+
+    async def get_case(self, case_id: UUID) -> TrackingCase | None:
+        """Find a case with its items."""
+        ...
+
+    async def get_case_by_request(self, request_id: UUID) -> TrackingCase | None:
+        """Find the case opened for a public request."""
+        ...
+
+    async def legacy_key_exists(self, source_key: str) -> bool:
+        """Whether an imported row was already loaded."""
+        ...
+
+    async def list_cases(self, filters: CaseFilters, page: int, size: int, today: date) -> CasePage:
+        """Return one page of cases with their items."""
+        ...
+
+    async def summarize(self, filters: CaseFilters, today: date) -> CaseSummary:
+        """Count the cases matching the filters."""
+        ...
+
+    async def save_case(self, case: TrackingCase, events: list[CaseEvent]) -> TrackingCase:
+        """Save the header and make the stored items match ``case.items``.
+
+        Items missing from the list are deleted and new ones inserted, all in
+        one transaction with the events.
+        """
+        ...
+
+    async def add_event(self, event: CaseEvent) -> None:
+        """Append a timeline entry that changes nothing else (a comment)."""
+        ...
+
+    async def list_events(self, case_id: UUID) -> list[CaseEvent]:
+        """List the timeline oldest first."""
+        ...
+
+    async def suggest(self, field: str, query: str, limit: int) -> list[str]:
+        """Distinct values previously typed in a free-text field."""
+        ...
+
+
+class PeopleDirectory(Protocol):
+    """Platform users, read through the identity module."""
+
+    async def require_user(self, email: str) -> DirectoryUser:
+        """Return the user with this email or raise not found."""
+        ...
+
+    async def get_users(self, user_ids: Iterable[UUID]) -> dict[UUID, DirectoryUser]:
+        """Load several users at once."""
+        ...
+
+    async def search_users(self, query: str, limit: int = 20) -> list[DirectoryUser]:
+        """Find active users by name or email."""
+        ...
+
+
+class ManagerPolicy(Protocol):
+    """Decide who manages PQRSF: assigns cases, sees them all and edits catalogs."""
+
+    async def is_manager(self, principal: Principal) -> bool:
+        """Whether the caller manages PQRSF."""
+        ...
+
+
+class BusinessCalendar(Protocol):
+    """Local dates and non-working days used for due dates."""
+
+    def today(self) -> date:
+        """Current date in the business time zone."""
+        ...
+
+    def local_date(self, moment: datetime) -> date:
+        """Date of an instant in the business time zone."""
+        ...
+
+    def holidays(self, start: date, end: date) -> Container[date]:
+        """Holidays that may fall between two dates (inclusive)."""
         ...
 
 

@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     PQRSF_CLAMAV_HOST: str = "clamav"
     PQRSF_CLAMAV_PORT: int = 3310
     PQRSF_CLAMAV_TIMEOUT_SECONDS: float = 10.0
+    # Members of this area (plus platform admins) manage PQRSF follow-up.
+    PQRSF_MANAGER_AREA_SLUG: str = "calidad"
+    PQRSF_TIMEZONE: str = "America/Bogota"
+    PQRSF_HOLIDAYS_COUNTRY: str = "CO"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -268,6 +272,9 @@ class Settings(BaseSettings):
                 "clamav_host": self.PQRSF_CLAMAV_HOST,
                 "clamav_port": self.PQRSF_CLAMAV_PORT,
                 "clamav_timeout": self.PQRSF_CLAMAV_TIMEOUT_SECONDS,
+                "manager_area_slug": self.PQRSF_MANAGER_AREA_SLUG,
+                "timezone": self.PQRSF_TIMEZONE,
+                "holidays_country": self.PQRSF_HOLIDAYS_COUNTRY,
             },
             "identity": {
                 "tenant_id": self.ENTRA_TENANT_ID,

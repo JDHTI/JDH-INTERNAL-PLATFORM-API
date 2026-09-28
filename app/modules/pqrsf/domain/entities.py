@@ -28,6 +28,11 @@ class RequestType:
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Follow-up settings: consecutive prefix (P-2026-00001), whether cases of
+    # this type are tracked against a due date, and that default due time.
+    prefix: str = ""
+    requires_follow_up: bool = True
+    sla_days: int | None = None
 
 
 @dataclass
@@ -113,6 +118,8 @@ class CreateResult:
 
     request: PqrsfRequest
     replayed: bool
+    # Consecutive of the follow-up case (P-2026-00012) when it could be opened.
+    tracking_code: str | None = None
 
 
 def clean_required(value: str, field: str, max_length: int) -> str:

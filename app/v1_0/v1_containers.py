@@ -20,8 +20,11 @@ from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.pqrsf.application.service import PqrsfService
+from app.modules.pqrsf.application.tracking import CaseTrackingService
+from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, HolidayCalendar
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
+from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 
@@ -116,6 +119,24 @@ class V1Container(containers.DeclarativeContainer):
     site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
     site_service = providers.Factory(SiteService, repository=site_repository)
     pqrsf_repository = providers.Factory(SqlAlchemyPqrsfRepository, database=database)
+    pqrsf_case_repository = providers.Factory(SqlAlchemyCaseRepository, database=database)
+    pqrsf_calendar = providers.Singleton(
+        HolidayCalendar,
+        timezone=config.pqrsf.timezone,
+        country=config.pqrsf.holidays_country,
+    )
+    pqrsf_manager_policy = providers.Factory(
+        AreaManagerPolicy, areas=area_service, area_slug=config.pqrsf.manager_area_slug
+    )
+    pqrsf_tracking_service = providers.Factory(
+        CaseTrackingService,
+        repository=pqrsf_case_repository,
+        requests=pqrsf_repository,
+        sites=site_service,
+        people=user_directory,
+        managers=pqrsf_manager_policy,
+        calendar=pqrsf_calendar,
+    )
     pqrsf_image_processor = providers.Singleton(
         PillowImageProcessor,
         max_bytes=config.pqrsf.max_attachment_bytes,
@@ -134,6 +155,7 @@ class V1Container(containers.DeclarativeContainer):
         storage=storage,
         image_processor=pqrsf_image_processor,
         malware_scanner=pqrsf_malware_scanner,
+        cases=pqrsf_tracking_service,
         max_attachments=config.pqrsf.max_attachments,
         max_attachment_bytes=config.pqrsf.max_attachment_bytes,
         max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,

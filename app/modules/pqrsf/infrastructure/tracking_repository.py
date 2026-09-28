@@ -1,0 +1,837 @@
+"""PostgreSQL repository for PQRSF follow-up cases and their catalogs."""
+
+from __future__ import annotations
+
+from datetime import date
+from uuid import UUID
+
+from sqlalchemy import Select, and_, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.errors import ConflictError
+from app.infrastructure.database import Database
+from app.modules.pqrsf.domain.tracking import (
+    CaseEvent,
+    CaseFilters,
+    CaseItem,
+    CasePage,
+    CaseStatus,
+    CaseSummary,
+    CountBucket,
+    Dependency,
+    DocumentType,
+    TrackingCase,
+    case_code,
+)
+from app.modules.pqrsf.infrastructure.models import (
+    CaseEventModel,
+    CaseItemModel,
+    CaseModel,
+    CaseSequenceModel,
+    CaseStatusModel,
+    DependencyModel,
+    DocumentTypeModel,
+    RequestTypeModel,
+)
+from app.modules.pqrsf.infrastructure.repository import request_type_from_model
+from app.modules.sites.domain.entities import Site
+from app.modules.sites.infrastructure.models import SiteModel
+
+_SUGGESTION_COLUMNS = {
+    "customer": CaseModel.customer_name,
+    "supplier": CaseModel.supplier_name,
+    "sales_executive": CaseModel.sales_executive_name,
+    "requester": CaseModel.requester_name,
+}
+_SORTS = {
+    "received_on": (CaseModel.received_on.asc(), CaseModel.number.asc()),
+    "-received_on": (CaseModel.received_on.desc(), CaseModel.number.desc()),
+    "due_on": (CaseModel.due_on.asc().nulls_last(), CaseModel.received_on.asc()),
+    "-due_on": (CaseModel.due_on.desc().nulls_last(), CaseModel.received_on.desc()),
+    "code": (CaseModel.code.asc(),),
+    "-code": (CaseModel.code.desc(),),
+    "updated_at": (CaseModel.updated_at.asc(),),
+    "-updated_at": (CaseModel.updated_at.desc(),),
+}
+_HEADER_FIELDS = (
+    "subject",
+    "description",
+    "received_on",
+    "due_on",
+    "assignee_user_id",
+    "customer_name",
+    "customer_nit",
+    "supplier_name",
+    "sales_executive_name",
+    "requester_name",
+    "requester_email",
+    "first_read_at",
+    "closed_at",
+    "legacy",
+)
+_ITEM_FIELDS = (
+    "description",
+    "quantity",
+    "sla_days",
+    "due_on",
+    "responded_on",
+    "response_days",
+    "delay_cause",
+    "delay_detail",
+    "sort_order",
+)
+
+
+def _status(model: CaseStatusModel) -> CaseStatus:
+    return CaseStatus(
+        id=model.id,
+        code=model.code,
+        name=model.name,
+        color=model.color,
+        sort_order=model.sort_order,
+        is_initial=model.is_initial,
+        is_terminal=model.is_terminal,
+        is_active=model.is_active,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _dependency(model: DependencyModel) -> Dependency:
+    return Dependency(
+        id=model.id,
+        code=model.code,
+        name=model.name,
+        sort_order=model.sort_order,
+        is_active=model.is_active,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _document_type(model: DocumentTypeModel) -> DocumentType:
+    return DocumentType(
+        id=model.id,
+        name=model.name,
+        sla_days=model.sla_days,
+        is_active=model.is_active,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _site(model: SiteModel) -> Site:
+    return Site(
+        id=model.id,
+        code=model.code,
+        name=model.name,
+        is_active=model.is_active,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _item(model: CaseItemModel, document_type: DocumentTypeModel | None) -> CaseItem:
+    return CaseItem(
+        id=model.id,
+        case_id=model.case_id,
+        document_type=_document_type(document_type) if document_type else None,
+        description=model.description,
+        quantity=model.quantity,
+        sla_days=model.sla_days,
+        due_on=model.due_on,
+        responded_on=model.responded_on,
+        response_days=model.response_days,
+        delay_cause=model.delay_cause,
+        delay_detail=model.delay_detail,
+        sort_order=model.sort_order,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _event(model: CaseEventModel) -> CaseEvent:
+    return CaseEvent(
+        id=model.id,
+        case_id=model.case_id,
+        event_type=model.event_type,
+        actor_user_id=model.actor_user_id,
+        from_status_id=model.from_status_id,
+        to_status_id=model.to_status_id,
+        note=model.note,
+        data=dict(model.data or {}),
+        created_at=model.created_at,
+    )
+
+
+def _case(
+    model: CaseModel,
+    request_type: RequestTypeModel,
+    status: CaseStatusModel,
+    site: SiteModel | None,
+    dependency: DependencyModel | None,
+) -> TrackingCase:
+    return TrackingCase(
+        id=model.id,
+        code=model.code,
+        number=model.number,
+        year=model.year,
+        request_type=request_type_from_model(request_type),
+        status=_status(status),
+        origin=model.origin,
+        subject=model.subject,
+        description=model.description,
+        received_on=model.received_on,
+        due_on=model.due_on,
+        site=_site(site) if site else None,
+        dependency=_dependency(dependency) if dependency else None,
+        assignee_user_id=model.assignee_user_id,
+        customer_name=model.customer_name,
+        customer_nit=model.customer_nit,
+        supplier_name=model.supplier_name,
+        sales_executive_name=model.sales_executive_name,
+        requester_name=model.requester_name,
+        requester_email=model.requester_email,
+        request_id=model.request_id,
+        created_by_user_id=model.created_by_user_id,
+        first_read_at=model.first_read_at,
+        closed_at=model.closed_at,
+        legacy=dict(model.legacy) if model.legacy is not None else None,
+        created_at=model.created_at,
+        updated_at=model.updated_at,
+    )
+
+
+def _event_model(event: CaseEvent) -> CaseEventModel:
+    return CaseEventModel(
+        id=event.id,
+        case_id=event.case_id,
+        event_type=event.event_type,
+        actor_user_id=event.actor_user_id,
+        from_status_id=event.from_status_id,
+        to_status_id=event.to_status_id,
+        note=event.note,
+        data=event.data,
+        created_at=event.created_at,
+    )
+
+
+def _item_model(item: CaseItem) -> CaseItemModel:
+    model = CaseItemModel(
+        id=item.id,
+        case_id=item.case_id,
+        document_type_id=item.document_type.id if item.document_type else None,
+    )
+    for name in _ITEM_FIELDS:
+        setattr(model, name, getattr(item, name))
+    return model
+
+
+_CASE_QUERY: Select = (
+    select(CaseModel, RequestTypeModel, CaseStatusModel, SiteModel, DependencyModel)
+    .join(RequestTypeModel, CaseModel.request_type_id == RequestTypeModel.id)
+    .join(CaseStatusModel, CaseModel.status_id == CaseStatusModel.id)
+    .outerjoin(SiteModel, CaseModel.site_id == SiteModel.id)
+    .outerjoin(DependencyModel, CaseModel.dependency_id == DependencyModel.id)
+)
+
+
+def _conditions(filters: CaseFilters, today: date) -> list:
+    conditions: list = []
+    if filters.status_ids:
+        conditions.append(CaseModel.status_id.in_(filters.status_ids))
+    if filters.request_type_id:
+        conditions.append(CaseModel.request_type_id == filters.request_type_id)
+    if filters.unassigned:
+        conditions.append(CaseModel.assignee_user_id.is_(None))
+    elif filters.assignee_user_id:
+        conditions.append(CaseModel.assignee_user_id == filters.assignee_user_id)
+    if filters.dependency_id:
+        conditions.append(CaseModel.dependency_id == filters.dependency_id)
+    if filters.site_id:
+        conditions.append(CaseModel.site_id == filters.site_id)
+    if filters.open_only or filters.overdue:
+        conditions.append(CaseStatusModel.is_terminal.is_(False))
+    if filters.overdue:
+        conditions.append(CaseModel.due_on < today)
+    if filters.received_from:
+        conditions.append(CaseModel.received_on >= filters.received_from)
+    if filters.received_to:
+        conditions.append(CaseModel.received_on <= filters.received_to)
+    if filters.query:
+        pattern = f"%{filters.query.strip()}%"
+        conditions.append(
+            or_(
+                CaseModel.code.ilike(pattern),
+                CaseModel.customer_name.ilike(pattern),
+                CaseModel.customer_nit.ilike(pattern),
+                CaseModel.supplier_name.ilike(pattern),
+                CaseModel.sales_executive_name.ilike(pattern),
+                CaseModel.requester_name.ilike(pattern),
+                CaseModel.subject.ilike(pattern),
+            )
+        )
+    if filters.visible_to:
+        conditions.append(
+            or_(
+                CaseModel.assignee_user_id == filters.visible_to,
+                CaseModel.created_by_user_id == filters.visible_to,
+            )
+        )
+    return conditions
+
+
+class SqlAlchemyCaseRepository:
+    """Persist cases, items and timeline with short-lived transactions."""
+
+    def __init__(self, database: Database) -> None:
+        """Create the repository.
+
+        Args:
+            database (Database): Shared database resource.
+        """
+
+        self.database = database
+
+    # --- Catalogs ---
+
+    async def list_statuses(self, include_inactive: bool = False) -> list[CaseStatus]:
+        """List statuses in display order.
+
+        Args:
+            include_inactive (bool): Include disabled statuses.
+
+        Returns:
+            list[CaseStatus]: Statuses ordered by position and name.
+        """
+
+        query = select(CaseStatusModel).order_by(CaseStatusModel.sort_order, CaseStatusModel.name)
+        if not include_inactive:
+            query = query.where(CaseStatusModel.is_active.is_(True))
+        async with self.database.session_factory() as session:
+            return [_status(m) for m in (await session.scalars(query)).all()]
+
+    async def get_status(self, status_id: UUID) -> CaseStatus | None:
+        """Find a status by identifier.
+
+        Args:
+            status_id (UUID): Status identifier.
+
+        Returns:
+            CaseStatus | None: The status when it exists.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(CaseStatusModel, status_id)
+            return _status(model) if model else None
+
+    async def get_status_by_code(self, code: str) -> CaseStatus | None:
+        """Find a status by code.
+
+        Args:
+            code (str): Status code.
+
+        Returns:
+            CaseStatus | None: The status when it exists.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.scalar(
+                select(CaseStatusModel).where(CaseStatusModel.code == code)
+            )
+            return _status(model) if model else None
+
+    async def save_status(self, status: CaseStatus) -> CaseStatus:
+        """Insert or update a status; an initial one clears the flag on the rest.
+
+        Args:
+            status (CaseStatus): Status to store.
+
+        Returns:
+            CaseStatus: The stored status.
+        """
+
+        async with self.database.session_factory() as session:
+            if status.is_initial:
+                await session.execute(
+                    update(CaseStatusModel)
+                    .where(CaseStatusModel.id != status.id)
+                    .values(is_initial=False)
+                )
+            model = await session.get(CaseStatusModel, status.id)
+            if model is None:
+                model = CaseStatusModel(id=status.id, code=status.code)
+                session.add(model)
+            model.name = status.name
+            model.color = status.color
+            model.sort_order = status.sort_order
+            model.is_initial = status.is_initial
+            model.is_terminal = status.is_terminal
+            model.is_active = status.is_active
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar el estado") from exc
+            await session.refresh(model)
+            return _status(model)
+
+    async def list_dependencies(self, include_inactive: bool = False) -> list[Dependency]:
+        """List internal dependencies in display order.
+
+        Args:
+            include_inactive (bool): Include disabled dependencies.
+
+        Returns:
+            list[Dependency]: Dependencies ordered by position and name.
+        """
+
+        query = select(DependencyModel).order_by(DependencyModel.sort_order, DependencyModel.name)
+        if not include_inactive:
+            query = query.where(DependencyModel.is_active.is_(True))
+        async with self.database.session_factory() as session:
+            return [_dependency(m) for m in (await session.scalars(query)).all()]
+
+    async def get_dependency(self, dependency_id: UUID) -> Dependency | None:
+        """Find a dependency by identifier.
+
+        Args:
+            dependency_id (UUID): Dependency identifier.
+
+        Returns:
+            Dependency | None: The dependency when it exists.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(DependencyModel, dependency_id)
+            return _dependency(model) if model else None
+
+    async def save_dependency(self, dependency: Dependency) -> Dependency:
+        """Insert or update a dependency.
+
+        Args:
+            dependency (Dependency): Dependency to store.
+
+        Returns:
+            Dependency: The stored dependency.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(DependencyModel, dependency.id)
+            if model is None:
+                model = DependencyModel(id=dependency.id, code=dependency.code)
+                session.add(model)
+            model.name = dependency.name
+            model.sort_order = dependency.sort_order
+            model.is_active = dependency.is_active
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("Ya existe una dependencia con ese código") from exc
+            await session.refresh(model)
+            return _dependency(model)
+
+    async def list_document_types(self, include_inactive: bool = False) -> list[DocumentType]:
+        """List document types by name.
+
+        Args:
+            include_inactive (bool): Include disabled types.
+
+        Returns:
+            list[DocumentType]: Document types ordered by name.
+        """
+
+        query = select(DocumentTypeModel).order_by(DocumentTypeModel.name)
+        if not include_inactive:
+            query = query.where(DocumentTypeModel.is_active.is_(True))
+        async with self.database.session_factory() as session:
+            return [_document_type(m) for m in (await session.scalars(query)).all()]
+
+    async def get_document_type(self, document_type_id: UUID) -> DocumentType | None:
+        """Find a document type by identifier.
+
+        Args:
+            document_type_id (UUID): Document type identifier.
+
+        Returns:
+            DocumentType | None: The type when it exists.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(DocumentTypeModel, document_type_id)
+            return _document_type(model) if model else None
+
+    async def save_document_type(self, document_type: DocumentType) -> DocumentType:
+        """Insert or update a document type.
+
+        Args:
+            document_type (DocumentType): Type to store.
+
+        Returns:
+            DocumentType: The stored type.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(DocumentTypeModel, document_type.id)
+            if model is None:
+                model = DocumentTypeModel(id=document_type.id)
+                session.add(model)
+            model.name = document_type.name
+            model.sla_days = document_type.sla_days
+            model.is_active = document_type.is_active
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("Ya existe un tipo de documento con ese nombre") from exc
+            await session.refresh(model)
+            return _document_type(model)
+
+    # --- Cases ---
+
+    async def _next_number(
+        self, session: AsyncSession, request_type_id: UUID, year: int, number: int | None
+    ) -> int:
+        """Reserve the consecutive inside the case transaction (row-locked upsert)."""
+
+        table = CaseSequenceModel.__table__
+        statement = insert(table).values(
+            request_type_id=request_type_id, year=year, last_value=number or 1
+        )
+        if number is None:
+            statement = statement.on_conflict_do_update(
+                index_elements=[table.c.request_type_id, table.c.year],
+                set_={"last_value": table.c.last_value + 1},
+            )
+        else:
+            statement = statement.on_conflict_do_update(
+                index_elements=[table.c.request_type_id, table.c.year],
+                set_={
+                    "last_value": func.greatest(table.c.last_value, statement.excluded.last_value)
+                },
+            )
+        allocated = await session.scalar(statement.returning(table.c.last_value))
+        return number if number is not None else int(allocated)
+
+    async def create_case(
+        self, case: TrackingCase, event: CaseEvent, number: int | None = None
+    ) -> TrackingCase:
+        """Insert a case with its items, allocating the next consecutive.
+
+        Args:
+            case (TrackingCase): Case to insert; its code and number are assigned here.
+            event (CaseEvent): The creation event.
+            number (int | None): Historical consecutive to keep (imports).
+
+        Returns:
+            TrackingCase: The stored case.
+        """
+
+        async with self.database.session_factory() as session:
+            allocated = await self._next_number(session, case.request_type.id, case.year, number)
+            model = CaseModel(
+                id=case.id,
+                code=case_code(case.request_type.prefix, case.year, allocated),
+                number=allocated,
+                year=case.year,
+                request_type_id=case.request_type.id,
+                status_id=case.status.id,
+                origin=case.origin,
+                site_id=case.site.id if case.site else None,
+                dependency_id=case.dependency.id if case.dependency else None,
+                request_id=case.request_id,
+                created_by_user_id=case.created_by_user_id,
+            )
+            for name in _HEADER_FIELDS:
+                setattr(model, name, getattr(case, name))
+            session.add(model)
+            await session.flush()
+            session.add_all([_item_model(item) for item in case.items])
+            session.add(_event_model(event))
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("El caso ya existe o su consecutivo está en uso") from exc
+        stored = await self.get_case(case.id)
+        if stored is None:
+            raise ConflictError("El caso no quedó disponible después de guardarlo")
+        return stored
+
+    async def _load_items(
+        self, session: AsyncSession, case_ids: list[UUID]
+    ) -> dict[UUID, list[CaseItem]]:
+        if not case_ids:
+            return {}
+        rows = (
+            await session.execute(
+                select(CaseItemModel, DocumentTypeModel)
+                .outerjoin(
+                    DocumentTypeModel, CaseItemModel.document_type_id == DocumentTypeModel.id
+                )
+                .where(CaseItemModel.case_id.in_(case_ids))
+                .order_by(CaseItemModel.case_id, CaseItemModel.sort_order, CaseItemModel.id)
+            )
+        ).all()
+        items: dict[UUID, list[CaseItem]] = {case_id: [] for case_id in case_ids}
+        for model, document_type in rows:
+            items[model.case_id].append(_item(model, document_type))
+        return items
+
+    async def _one(self, condition) -> TrackingCase | None:
+        async with self.database.session_factory() as session:
+            row = (await session.execute(_CASE_QUERY.where(condition))).one_or_none()
+            if row is None:
+                return None
+            case = _case(*row)
+            case.items = (await self._load_items(session, [case.id]))[case.id]
+            return case
+
+    async def get_case(self, case_id: UUID) -> TrackingCase | None:
+        """Find a case with its items.
+
+        Args:
+            case_id (UUID): Case identifier.
+
+        Returns:
+            TrackingCase | None: The case when it exists.
+        """
+
+        return await self._one(CaseModel.id == case_id)
+
+    async def get_case_by_request(self, request_id: UUID) -> TrackingCase | None:
+        """Find the case opened for a public request.
+
+        Args:
+            request_id (UUID): Public request identifier.
+
+        Returns:
+            TrackingCase | None: The case when it exists.
+        """
+
+        return await self._one(CaseModel.request_id == request_id)
+
+    async def legacy_key_exists(self, source_key: str) -> bool:
+        """Whether an imported row was already loaded.
+
+        Args:
+            source_key (str): Key the import stored in ``legacy.source_key``.
+
+        Returns:
+            bool: ``True`` when a case carries that key.
+        """
+
+        async with self.database.session_factory() as session:
+            found = await session.scalar(
+                select(CaseModel.id)
+                .where(
+                    CaseModel.legacy.is_not(None),
+                    CaseModel.legacy["source_key"].astext == source_key,
+                )
+                .limit(1)
+            )
+            return found is not None
+
+    async def list_cases(self, filters: CaseFilters, page: int, size: int, today: date) -> CasePage:
+        """Return one page of cases with their items.
+
+        Args:
+            filters (CaseFilters): Inbox filters.
+            page (int): 1-based page.
+            size (int): Page size.
+            today (date): Local date used by the overdue filter.
+
+        Returns:
+            CasePage: The page.
+        """
+
+        conditions = _conditions(filters, today)
+        count_query = (
+            select(func.count())
+            .select_from(CaseModel)
+            .join(CaseStatusModel, CaseModel.status_id == CaseStatusModel.id)
+            .where(*conditions)
+        )
+        query = (
+            _CASE_QUERY.where(*conditions)
+            .order_by(*_SORTS[filters.sort], CaseModel.id)
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        async with self.database.session_factory() as session:
+            total = int(await session.scalar(count_query) or 0)
+            cases = [_case(*row) for row in (await session.execute(query)).all()]
+            items = await self._load_items(session, [c.id for c in cases])
+            for case in cases:
+                case.items = items[case.id]
+            return CasePage(items=cases, total=total, page=page, size=size)
+
+    async def summarize(self, filters: CaseFilters, today: date) -> CaseSummary:
+        """Count the cases matching the filters.
+
+        Args:
+            filters (CaseFilters): Inbox filters.
+            today (date): Local date for overdue and due-today counts.
+
+        Returns:
+            CaseSummary: Totals, overdue, due today, unassigned and breakdowns.
+        """
+
+        conditions = _conditions(filters, today)
+        is_open = CaseStatusModel.is_terminal.is_(False)
+        base = (
+            select()
+            .select_from(CaseModel)
+            .join(CaseStatusModel, CaseModel.status_id == CaseStatusModel.id)
+            .where(*conditions)
+        )
+        totals_query = base.add_columns(
+            func.count(),
+            func.count().filter(is_open),
+            func.count().filter(and_(is_open, CaseModel.due_on < today)),
+            func.count().filter(and_(is_open, CaseModel.due_on == today)),
+            func.count().filter(and_(is_open, CaseModel.assignee_user_id.is_(None))),
+        )
+        by_status_query = base.add_columns(CaseModel.status_id, func.count()).group_by(
+            CaseModel.status_id
+        )
+        by_type_query = base.add_columns(CaseModel.request_type_id, func.count()).group_by(
+            CaseModel.request_type_id
+        )
+        async with self.database.session_factory() as session:
+            total, open_count, overdue, due_today, unassigned = (
+                await session.execute(totals_query)
+            ).one()
+            status_counts = dict((await session.execute(by_status_query)).tuples().all())
+            type_counts = dict((await session.execute(by_type_query)).tuples().all())
+            statuses = (
+                await session.scalars(
+                    select(CaseStatusModel).order_by(
+                        CaseStatusModel.sort_order, CaseStatusModel.name
+                    )
+                )
+            ).all()
+            types = (await session.scalars(select(RequestTypeModel))).all()
+        return CaseSummary(
+            total=int(total),
+            open=int(open_count),
+            overdue=int(overdue),
+            due_today=int(due_today),
+            unassigned=int(unassigned),
+            by_status=[
+                CountBucket(s.id, s.code, s.name, int(status_counts.get(s.id, 0)), s.color)
+                for s in statuses
+                if s.is_active or s.id in status_counts
+            ],
+            by_type=[
+                CountBucket(t.id, t.code, t.name, int(type_counts.get(t.id, 0)))
+                for t in sorted(types, key=lambda t: t.prefix)
+                if t.is_active or t.id in type_counts
+            ],
+        )
+
+    async def save_case(self, case: TrackingCase, events: list[CaseEvent]) -> TrackingCase:
+        """Save the header and make the stored items match ``case.items``.
+
+        Args:
+            case (TrackingCase): Case in its new state.
+            events (list[CaseEvent]): Timeline entries produced by the change.
+
+        Returns:
+            TrackingCase: The stored case.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(CaseModel, case.id)
+            if model is None:
+                raise ConflictError("El caso ya no existe")
+            for name in _HEADER_FIELDS:
+                setattr(model, name, getattr(case, name))
+            model.status_id = case.status.id
+            model.site_id = case.site.id if case.site else None
+            model.dependency_id = case.dependency.id if case.dependency else None
+
+            stored = {
+                m.id: m
+                for m in (
+                    await session.scalars(
+                        select(CaseItemModel).where(CaseItemModel.case_id == case.id)
+                    )
+                ).all()
+            }
+            keep = {item.id for item in case.items}
+            removed = [item_id for item_id in stored if item_id not in keep]
+            if removed:
+                await session.execute(delete(CaseItemModel).where(CaseItemModel.id.in_(removed)))
+            for item in case.items:
+                item_model = stored.get(item.id)
+                if item_model is None:
+                    session.add(_item_model(item))
+                    continue
+                item_model.document_type_id = item.document_type.id if item.document_type else None
+                for name in _ITEM_FIELDS:
+                    setattr(item_model, name, getattr(item, name))
+            session.add_all([_event_model(event) for event in events])
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar el caso") from exc
+        result = await self.get_case(case.id)
+        if result is None:
+            raise ConflictError("El caso ya no existe")
+        return result
+
+    async def add_event(self, event: CaseEvent) -> None:
+        """Append a timeline entry.
+
+        Args:
+            event (CaseEvent): Entry to store.
+        """
+
+        async with self.database.session_factory() as session:
+            session.add(_event_model(event))
+            await session.execute(
+                update(CaseModel).where(CaseModel.id == event.case_id).values(updated_at=func.now())
+            )
+            await session.commit()
+
+    async def list_events(self, case_id: UUID) -> list[CaseEvent]:
+        """List the timeline oldest first.
+
+        Args:
+            case_id (UUID): Case identifier.
+
+        Returns:
+            list[CaseEvent]: Timeline entries.
+        """
+
+        query = (
+            select(CaseEventModel)
+            .where(CaseEventModel.case_id == case_id)
+            .order_by(CaseEventModel.created_at, CaseEventModel.id)
+        )
+        async with self.database.session_factory() as session:
+            return [_event(m) for m in (await session.scalars(query)).all()]
+
+    async def suggest(self, field: str, query: str, limit: int) -> list[str]:
+        """Distinct values previously typed in a free-text field.
+
+        Args:
+            field (str): customer, supplier, sales_executive or requester.
+            query (str): Text the value contains.
+            limit (int): Maximum number of values.
+
+        Returns:
+            list[str]: Values ordered alphabetically.
+        """
+
+        column = _SUGGESTION_COLUMNS[field]
+        statement = select(column).where(column.is_not(None)).distinct().order_by(column)
+        if query:
+            statement = statement.where(column.ilike(f"%{query}%"))
+        async with self.database.session_factory() as session:
+            return list((await session.scalars(statement.limit(limit))).all())
