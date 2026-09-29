@@ -18,6 +18,23 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# 0014_masters builds its search indexes with pg_trgm when the extension is
+# available and falls back to lower() btree indexes otherwise, so the models
+# cannot declare them. Without this, autogenerate and ``alembic check`` would
+# ask to drop whichever pair the database ended up with.
+_ENVIRONMENT_DEPENDENT_INDEXES = frozenset(
+    {
+        "ix_master_records_code_trgm",
+        "ix_master_records_name_trgm",
+        "ix_master_records_code_lower",
+        "ix_master_records_name_lower",
+    }
+)
+
+
+def include_object(object_, name, type_, reflected, compare_to) -> bool:  # noqa: ANN001
+    return not (type_ == "index" and reflected and name in _ENVIRONMENT_DEPENDENT_INDEXES)
+
 
 def run_migrations_offline() -> None:
     """Run migrations without creating a database connection."""
@@ -28,13 +45,19 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        include_object=include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
