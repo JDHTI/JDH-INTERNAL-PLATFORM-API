@@ -19,6 +19,8 @@ from app.modules.identity.application.directory import UserDirectory
 from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
+from app.modules.masters.application.service import MasterService
+from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, HolidayCalendar
@@ -118,6 +120,8 @@ class V1Container(containers.DeclarativeContainer):
     )
     site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
     site_service = providers.Factory(SiteService, repository=site_repository)
+    master_repository = providers.Factory(SqlAlchemyMasterRepository, database=database)
+    master_service = providers.Factory(MasterService, repository=master_repository)
     pqrsf_repository = providers.Factory(SqlAlchemyPqrsfRepository, database=database)
     pqrsf_case_repository = providers.Factory(SqlAlchemyCaseRepository, database=database)
     pqrsf_calendar = providers.Singleton(
