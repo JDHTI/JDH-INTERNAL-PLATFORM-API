@@ -8,13 +8,19 @@ from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.pqrsf.application.dto import ImportedCase, ImportedItem, ItemChanges
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
-from app.modules.pqrsf.domain.entities import CreateResult, PqrsfRequest, RequestType
+from app.modules.pqrsf.domain.entities import (
+    CreateResult,
+    PqrsfRequest,
+    RequestedDocument,
+    RequestType,
+)
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_EVENT_TYPES,
     ActivityFilters,
     CaseFilters,
     CasePage,
     CaseStatus,
+    Dependency,
     DocumentType,
     EventType,
     ItemInput,
@@ -41,7 +47,7 @@ def _request_type(code: str, prefix: str, follow_up: bool = True, sla: int | Non
         id=uuid.uuid4(),
         code=code,
         name=code.title(),
-        allows_reason=follow_up,
+        allows_document_request=follow_up,
         allows_attachments=follow_up,
         is_active=True,
         created_at=NOW,
@@ -94,6 +100,7 @@ class FakeCases:
     def __init__(self, statuses, document_types) -> None:
         self.statuses = {s.id: s for s in statuses}
         self.document_types = {d.id: d for d in document_types}
+        self.dependencies = {}
         self.cases = {}
         self.events = []
         self.sequences: dict[tuple, int] = {}
@@ -108,7 +115,7 @@ class FakeCases:
         return next((s for s in self.statuses.values() if s.code == code), None)
 
     async def get_dependency(self, dependency_id):
-        return None
+        return self.dependencies.get(dependency_id)
 
     async def get_document_type(self, document_type_id):
         return self.document_types.get(document_type_id)
@@ -483,7 +490,7 @@ def _public_request(request_type: RequestType) -> PqrsfRequest:
         department="Antioquia",
         city="Medellín",
         email="ana@example.com",
-        reason="Pedido incompleto",
+        subject="Pedido incompleto",
         description="Faltaron dos cajas",
         idempotency_key=str(uuid.uuid4()),
         idempotency_hash="h",
@@ -508,6 +515,56 @@ async def test_public_request_opens_one_case_and_congratulations_have_no_due_dat
     congratulation = await s.service.open_for_request(_public_request(s.felicitacion))
     assert congratulation.code == "F26MD0001"
     assert congratulation.due_on is None
+
+
+@pytest.mark.asyncio
+async def test_a_document_request_opens_the_case_with_its_documents_and_dependency() -> None:
+    s = Setup()
+    calidad = Dependency(uuid.uuid4(), "calidad", "Calidad", 1, True, NOW, NOW)
+    s.cases.dependencies[calidad.id] = calidad
+    request = replace(
+        _public_request(s.peticion),
+        document_request=True,
+        documents=[
+            RequestedDocument(s.certificado.id),
+            RequestedDocument(s.ficha.id),
+            RequestedDocument(None, "Carta de referencia"),
+        ],
+        document_dependency_id=calidad.id,
+    )
+
+    case = await s.service.open_for_request(request)
+
+    assert case.dependency == calidad
+    assert [
+        (item.document_type and item.document_type.name, item.description) for item in case.items
+    ] == [
+        ("Certificado Calidad", None),
+        ("Ficha Técnica", None),
+        (None, "Carta de referencia"),
+    ]
+    # The slowest document (Ficha Técnica, 5 days) sets when the case is due.
+    item_dues = [item.due_on for item in case.items if item.due_on]
+    assert len(item_dues) == 2
+    assert case.due_on == max(item_dues)
+
+
+@pytest.mark.asyncio
+async def test_a_document_request_without_an_active_dependency_opens_unassigned() -> None:
+    s = Setup()
+    inactive = Dependency(uuid.uuid4(), "calidad", "Calidad", 1, False, NOW, NOW)
+    s.cases.dependencies[inactive.id] = inactive
+    request = replace(
+        _public_request(s.peticion),
+        document_request=True,
+        documents=[RequestedDocument(s.certificado.id)],
+        document_dependency_id=inactive.id,
+    )
+
+    case = await s.service.open_for_request(request)
+
+    assert case.dependency is None
+    assert len(case.items) == 1
 
 
 @pytest.mark.asyncio

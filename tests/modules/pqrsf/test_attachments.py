@@ -129,7 +129,7 @@ def _fixtures():
         id=uuid4(),
         code="peticion",
         name="Petición",
-        allows_reason=True,
+        allows_document_request=True,
         allows_attachments=True,
         is_active=True,
         created_at=NOW,
@@ -158,7 +158,7 @@ def _values(request_type: RequestType, site: Site, key: str):
         "department": "Antioquia",
         "city": "Medellín",
         "email": "ana@example.com",
-        "reason": "Necesito información",
+        "subject": "Necesito información",
         "description": "Descripción de prueba",
         "idempotency_key": key,
     }

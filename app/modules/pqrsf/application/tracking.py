@@ -669,12 +669,27 @@ class CaseTrackingService:
         )
         case.request_id = request.id
         case.site = request.site
-        case.subject = request.reason
+        case.subject = request.subject
         case.description = request.description
         case.customer_name = request.business_name
         case.customer_nit = request.nit
         case.requester_name = request.full_name
         case.requester_email = request.email
+        if request.document_request:
+            # The customer already said what they need: the documents become
+            # items, with their response times, and the category's scope owns it.
+            dependency = (
+                await self.repository.get_dependency(request.document_dependency_id)
+                if request.document_dependency_id
+                else None
+            )
+            case.dependency = dependency if dependency and dependency.is_active else None
+            case.items = [
+                await self._new_item(
+                    case.id, ItemInput(item.document_type_id, item.description), position
+                )
+                for position, item in enumerate(request.documents)
+            ]
         self._refresh_dates(case)
         event = self._event(case.id, EventType.CREATED, None, data={"origin": case.origin})
         try:

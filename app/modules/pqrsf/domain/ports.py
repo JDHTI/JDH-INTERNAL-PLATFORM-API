@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.pqrsf.domain.entities import (
+    DocumentCategory,
     PqrsfAttachment,
     PqrsfFilters,
     PqrsfPage,
@@ -39,6 +40,10 @@ class PqrsfRepository(Protocol):
 
     async def get_request_type(self, request_type_id: UUID) -> RequestType | None:
         """Find one request type by UUID."""
+        ...
+
+    async def list_document_categories(self) -> list[DocumentCategory]:
+        """List the categories, with their documents, offered on the public form."""
         ...
 
     async def get_by_idempotency_key(self, key: str) -> PqrsfRequest | None:

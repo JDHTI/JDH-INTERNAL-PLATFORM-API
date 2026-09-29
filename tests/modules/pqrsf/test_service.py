@@ -5,19 +5,42 @@ from uuid import uuid4
 import pytest
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.pqrsf.application.service import PqrsfService
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import (
+    DocumentCategory,
+    DocumentOption,
+    ImageUpload,
+    RequestType,
+)
 from app.modules.sites.domain.entities import Site
 
 NOW = datetime(2026, 9, 25, tzinfo=UTC)
 
+CATEGORY = DocumentCategory(
+    id=uuid4(),
+    code="producto",
+    name="Producto y fabricante",
+    dependency_id=uuid4(),
+    documents=[
+        DocumentOption(uuid4(), "Ficha Técnica"),
+        DocumentOption(uuid4(), "Hoja de Seguridad"),
+    ],
+)
+OTHER_CATEGORY = DocumentCategory(
+    id=uuid4(),
+    code="personal",
+    name="Personal y capacitación",
+    dependency_id=None,
+    documents=[DocumentOption(uuid4(), "Copia Registro de Capacitaciones")],
+)
 
-def _type(allows_reason: bool = True) -> RequestType:
+
+def _type(petition: bool = True) -> RequestType:
     return RequestType(
         id=uuid4(),
-        code="peticion" if allows_reason else "sugerencia",
-        name="Petición" if allows_reason else "Sugerencia",
-        allows_reason=allows_reason,
-        allows_attachments=allows_reason,
+        code="peticion" if petition else "sugerencia",
+        name="Petición" if petition else "Sugerencia",
+        allows_document_request=petition,
+        allows_attachments=petition,
         is_active=True,
         created_at=NOW,
         updated_at=NOW,
@@ -31,6 +54,9 @@ class FakePqrsfRepository:
 
     async def list_request_types(self, active_only=True):
         return [self.request_type]
+
+    async def list_document_categories(self):
+        return [CATEGORY, OTHER_CATEGORY]
 
     async def get_request_type(self, request_type_id):
         return self.request_type if request_type_id == self.request_type.id else None
@@ -75,8 +101,8 @@ class FakeSiteRepository:
         raise NotImplementedError
 
 
-def _service(allows_reason: bool = True) -> tuple[PqrsfService, RequestType, Site]:
-    request_type = _type(allows_reason)
+def _service(petition: bool = True) -> tuple[PqrsfService, RequestType, Site]:
+    request_type = _type(petition)
     site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
     from app.modules.sites.application.service import SiteService
 
@@ -98,7 +124,7 @@ def _payload(request_type: RequestType, site: Site, key: str) -> dict[str, objec
         "department": "Antioquia",
         "city": "Medellín",
         "email": "ana@example.com",
-        "reason": "Necesito información",
+        "subject": "Necesito información",
         "description": "Descripción de prueba",
         "idempotency_key": key,
     }
@@ -113,6 +139,16 @@ def _create(service: PqrsfService, request_type: RequestType, site: Site, values
         },
         idempotency_payload=values,
     )
+
+
+def _document_values(request_type: RequestType, site: Site, **overrides):
+    return {
+        **_payload(request_type, site, str(uuid4())),
+        "document_request": True,
+        "document_category_id": CATEGORY.id,
+        "document_type_ids": [CATEGORY.documents[0].id],
+        **overrides,
+    }
 
 
 @pytest.mark.asyncio
@@ -143,14 +179,110 @@ async def test_same_idempotency_key_with_other_values_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reason_is_required_only_for_types_that_allow_it() -> None:
-    service, request_type, site = _service()
+@pytest.mark.parametrize("petition", [True, False])
+async def test_subject_is_required_for_every_type(petition: bool) -> None:
+    service, request_type, site = _service(petition)
     values = _payload(request_type, site, str(uuid4()))
-    with pytest.raises(InvalidInputError, match="motivo es obligatorio"):
-        await _create(service, request_type, site, {**values, "reason": None})
 
-    suggestion_service, suggestion_type, suggestion_site = _service(False)
-    suggestion_values = _payload(suggestion_type, suggestion_site, str(uuid4()))
-    suggestion_values["reason"] = None
-    created = await _create(suggestion_service, suggestion_type, suggestion_site, suggestion_values)
-    assert created.request.reason is None
+    with pytest.raises(InvalidInputError, match="asunto"):
+        await _create(service, request_type, site, {**values, "subject": "   "})
+
+    created = await _create(service, request_type, site, values)
+    assert created.request.subject == "Necesito información"
+
+
+@pytest.mark.asyncio
+async def test_catalog_offers_the_document_categories() -> None:
+    service, _, _ = _service()
+
+    _, _, categories = await service.catalog()
+
+    assert [category.code for category in categories] == ["producto", "personal"]
+
+
+@pytest.mark.asyncio
+async def test_a_document_request_stores_the_documents_asked_for() -> None:
+    service, request_type, site = _service()
+    other = "Certificado de la planta de Cali"
+    values = _document_values(request_type, site, document_other=other)
+
+    created = await _create(service, request_type, site, values)
+
+    request = created.request
+    assert request.document_request is True
+    assert request.document_category_id == CATEGORY.id
+    assert [(item.document_type_id, item.description) for item in request.documents] == [
+        (CATEGORY.documents[0].id, None),
+        (None, other),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_document_request_accepts_only_free_text() -> None:
+    service, request_type, site = _service()
+    values = _document_values(
+        request_type, site, document_type_ids=[], document_other="Carta de referencia"
+    )
+
+    created = await _create(service, request_type, site, values)
+
+    assert [item.description for item in created.request.documents] == ["Carta de referencia"]
+
+
+@pytest.mark.asyncio
+async def test_a_document_request_takes_no_evidence() -> None:
+    service, request_type, site = _service()
+    values = _document_values(request_type, site)
+    image = ImageUpload(filename="foto.png", content_type="image/png", content=b"x")
+
+    with pytest.raises(InvalidInputError, match="no admite evidencias"):
+        await service.create_request(
+            request_type_id=request_type.id,
+            site_id=site.id,
+            **{k: v for k, v in values.items() if k not in {"request_type_id", "site_id"}},
+            idempotency_payload=values,
+            images=[image],
+        )
+
+
+@pytest.mark.asyncio
+async def test_only_types_that_allow_it_take_a_document_request() -> None:
+    service, request_type, site = _service(petition=False)
+    values = _document_values(request_type, site)
+
+    with pytest.raises(InvalidInputError, match="no admite solicitud de documentos"):
+        await _create(service, request_type, site, values)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"document_category_id": None}, "categoría"),
+        ({"document_category_id": uuid4()}, "no está disponible"),
+        ({"document_type_ids": [], "document_other": None}, "qué documento"),
+        ({"document_type_ids": [OTHER_CATEGORY.documents[0].id]}, "no pertenece"),
+        (
+            {"document_type_ids": [CATEGORY.documents[0].id, CATEGORY.documents[0].id]},
+            "no puede repetirse",
+        ),
+    ],
+)
+async def test_a_document_request_is_validated_against_the_catalog(overrides, message) -> None:
+    service, request_type, site = _service()
+    values = _document_values(request_type, site, **overrides)
+
+    with pytest.raises(InvalidInputError, match=message):
+        await _create(service, request_type, site, values)
+
+
+@pytest.mark.asyncio
+async def test_documents_are_rejected_when_the_request_is_not_for_documents() -> None:
+    service, request_type, site = _service()
+    values = {
+        **_payload(request_type, site, str(uuid4())),
+        "document_category_id": CATEGORY.id,
+    }
+
+    with pytest.raises(InvalidInputError, match="solo se indican"):
+        await _create(service, request_type, site, values)

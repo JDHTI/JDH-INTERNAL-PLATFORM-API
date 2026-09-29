@@ -35,7 +35,7 @@ class RequestTypeResponse(BaseModel):
     id: UUID
     code: str
     name: str
-    allows_reason: bool
+    allows_document_request: bool
     allows_attachments: bool
 
 
@@ -47,11 +47,28 @@ class PqrsfSiteResponse(BaseModel):
     name: str
 
 
+class DocumentOptionResponse(BaseModel):
+    """A document the customer can ask for."""
+
+    id: UUID
+    name: str
+
+
+class DocumentCategoryResponse(BaseModel):
+    """A group of documents offered together."""
+
+    id: UUID
+    code: str
+    name: str
+    documents: list[DocumentOptionResponse]
+
+
 class PqrsfCatalogResponse(BaseModel):
     """Catalog payload used by the isolated public form."""
 
     request_types: list[RequestTypeResponse]
     sites: list[PqrsfSiteResponse]
+    document_categories: list[DocumentCategoryResponse]
 
 
 class PqrsfReceiptResponse(BaseModel):
@@ -85,8 +102,9 @@ class PqrsfRequestResponse(BaseModel):
     department: str
     city: str
     email: EmailStr
-    reason: str | None
+    subject: str | None
     description: str
+    document_request: bool
     attachments: list[PqrsfAttachmentResponse]
     created_at: datetime
     updated_at: datetime
@@ -137,8 +155,9 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
         department=value.department,
         city=value.city,
         email=value.email,
-        reason=value.reason,
+        subject=value.subject,
         description=value.description,
+        document_request=value.document_request,
         attachments=[
             PqrsfAttachmentResponse.model_validate(attachment, from_attributes=True)
             for attachment in value.attachments
@@ -158,10 +177,14 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
 async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogResponse:
     """Return active types and sites for the public form."""
 
-    request_types, sites = await service.catalog()
+    request_types, sites, categories = await service.catalog()
     return PqrsfCatalogResponse(
         request_types=[_type(value) for value in request_types],
         sites=[_site(value) for value in sites],
+        document_categories=[
+            DocumentCategoryResponse.model_validate(value, from_attributes=True)
+            for value in categories
+        ],
     )
 
 
@@ -183,8 +206,12 @@ async def create_public_request(
     department: str = Form(...),  # noqa: B008
     city: str = Form(...),  # noqa: B008
     email: EmailStr = Form(...),  # noqa: B008
+    subject: str = Form(...),  # noqa: B008
     description: str = Form(...),  # noqa: B008
-    reason: str | None = Form(default=None),  # noqa: B008
+    document_request: bool = Form(default=False),  # noqa: B008
+    document_category_id: UUID | None = Form(default=None),  # noqa: B008
+    document_type_ids: list[UUID] = Form(default=[]),  # noqa: B008
+    document_other: str | None = Form(default=None),  # noqa: B008
     images: list[UploadFile] = File(default=[]),  # noqa: B008
     idempotency_key: str = Header(alias="Idempotency-Key"),
     service: PqrsfService = _service,
@@ -204,8 +231,12 @@ async def create_public_request(
         "department": department,
         "city": city,
         "email": str(email),
-        "reason": reason,
+        "subject": subject,
         "description": description,
+        "document_request": document_request,
+        "document_category_id": str(document_category_id) if document_category_id else None,
+        "document_type_ids": sorted(str(value) for value in document_type_ids),
+        "document_other": document_other,
     }
     result = await service.create_request(
         request_type_id=request_type_id,
@@ -217,8 +248,12 @@ async def create_public_request(
         department=department,
         city=city,
         email=str(email),
-        reason=reason,
+        subject=subject,
         description=description,
+        document_request=document_request,
+        document_category_id=document_category_id,
+        document_type_ids=document_type_ids,
+        document_other=document_other,
         idempotency_key=idempotency_key,
         idempotency_payload=values,
         images=[

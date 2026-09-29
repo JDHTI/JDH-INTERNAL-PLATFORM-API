@@ -35,7 +35,7 @@ class RequestTypeModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     code: Mapped[str] = mapped_column(String(30), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
-    allows_reason: Mapped[bool] = mapped_column(nullable=False)
+    allows_document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_attachments: Mapped[bool] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true")
     prefix: Mapped[str] = mapped_column(String(5), nullable=False, unique=True)
@@ -78,8 +78,14 @@ class PqrsfRequestModel(Base):
     department: Mapped[str] = mapped_column(String(100), nullable=False)
     city: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
-    reason: Mapped[str | None] = mapped_column(String(200))
+    subject: Mapped[str | None] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    document_category_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
+    )
+    # [{"document_type_id": "<uuid>" | null, "description": "<text>" | null}, ...]
+    document_items: Mapped[list | None] = mapped_column(JSONB)
     idempotency_key: Mapped[str] = mapped_column(String(36), nullable=False)
     idempotency_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -161,18 +167,47 @@ class DependencyModel(Base):
     )
 
 
+class DocumentCategoryModel(Base):
+    """Group of document types offered together on the public form.
+
+    ``dependency_id`` is the scope a case opens with when a customer asks for
+    documents of this group.
+    """
+
+    __tablename__ = "pqrsf_document_categories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class DocumentTypeModel(Base):
     """Document a case can request, with its agreed response time."""
 
     __tablename__ = "pqrsf_document_types"
     __table_args__ = (
         Index("uq_pqrsf_document_types_name", func.lower(text("name")), unique=True),
+        Index("ix_pqrsf_document_types_category", "category_id"),
         CheckConstraint("sla_days >= 0", name="ck_pqrsf_document_types_sla_days"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     sla_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
