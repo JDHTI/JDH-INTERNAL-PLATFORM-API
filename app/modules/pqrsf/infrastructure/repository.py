@@ -10,13 +10,18 @@ from sqlalchemy.exc import IntegrityError
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.entities import (
+    DocumentCategory,
+    DocumentOption,
     PqrsfAttachment,
     PqrsfFilters,
     PqrsfPage,
     PqrsfRequest,
+    RequestedDocument,
     RequestType,
 )
 from app.modules.pqrsf.infrastructure.models import (
+    DocumentCategoryModel,
+    DocumentTypeModel,
     PqrsfAttachmentModel,
     PqrsfRequestModel,
     RequestTypeModel,
@@ -30,7 +35,7 @@ def _type(model: RequestTypeModel) -> RequestType:
         id=model.id,
         code=model.code,
         name=model.name,
-        allows_reason=model.allows_reason,
+        allows_document_request=model.allows_document_request,
         allows_attachments=model.allows_attachments,
         is_active=model.is_active,
         created_at=model.created_at,
@@ -73,8 +78,23 @@ def _attachment(model: PqrsfAttachmentModel) -> PqrsfAttachment:
     )
 
 
+def _documents(items: list | None) -> list[RequestedDocument]:
+    return [
+        RequestedDocument(
+            document_type_id=UUID(item["document_type_id"])
+            if item.get("document_type_id")
+            else None,
+            description=item.get("description"),
+        )
+        for item in items or []
+    ]
+
+
 def _request(
-    model: PqrsfRequestModel, request_type: RequestTypeModel, site: SiteModel
+    model: PqrsfRequestModel,
+    request_type: RequestTypeModel,
+    site: SiteModel,
+    document_dependency_id: UUID | None = None,
 ) -> PqrsfRequest:
     return PqrsfRequest(
         id=model.id,
@@ -88,20 +108,27 @@ def _request(
         department=model.department,
         city=model.city,
         email=model.email,
-        reason=model.reason,
+        subject=model.subject,
         description=model.description,
         idempotency_key=model.idempotency_key,
         idempotency_hash=model.idempotency_hash,
         created_at=model.created_at,
         updated_at=model.updated_at,
         attachments=[],
+        document_request=model.document_request,
+        document_category_id=model.document_category_id,
+        documents=_documents(model.document_items),
+        document_dependency_id=document_dependency_id,
     )
 
 
 _REQUEST_QUERY = (
-    select(PqrsfRequestModel, RequestTypeModel, SiteModel)
+    select(PqrsfRequestModel, RequestTypeModel, SiteModel, DocumentCategoryModel.dependency_id)
     .join(RequestTypeModel, PqrsfRequestModel.request_type_id == RequestTypeModel.id)
     .join(SiteModel, PqrsfRequestModel.site_id == SiteModel.id)
+    .outerjoin(
+        DocumentCategoryModel, PqrsfRequestModel.document_category_id == DocumentCategoryModel.id
+    )
 )
 _REQUEST_TYPE_ORDER = case(
     {
@@ -137,6 +164,39 @@ class SqlAlchemyPqrsfRepository:
         async with self.database.session_factory() as session:
             result = await session.execute(query)
             return [_type(model) for model in result.scalars()]
+
+    async def list_document_categories(self) -> list[DocumentCategory]:
+        """List the active categories that offer at least one active document.
+
+        Document types without a category are left out: they are not offered
+        to customers.
+        """
+
+        query = (
+            select(DocumentCategoryModel, DocumentTypeModel)
+            .join(DocumentTypeModel, DocumentTypeModel.category_id == DocumentCategoryModel.id)
+            .where(DocumentCategoryModel.is_active.is_(True), DocumentTypeModel.is_active.is_(True))
+            .order_by(
+                DocumentCategoryModel.sort_order,
+                DocumentCategoryModel.name,
+                DocumentTypeModel.name,
+            )
+        )
+        categories: dict[UUID, DocumentCategory] = {}
+        async with self.database.session_factory() as session:
+            for category, document in (await session.execute(query)).all():
+                entry = categories.setdefault(
+                    category.id,
+                    DocumentCategory(
+                        id=category.id,
+                        code=category.code,
+                        name=category.name,
+                        dependency_id=category.dependency_id,
+                        documents=[],
+                    ),
+                )
+                entry.documents.append(DocumentOption(id=document.id, name=document.name))
+        return list(categories.values())
 
     async def get_request_type(self, request_type_id: UUID) -> RequestType | None:
         """Find one request type."""
@@ -193,8 +253,20 @@ class SqlAlchemyPqrsfRepository:
             department=request.department,
             city=request.city,
             email=request.email,
-            reason=request.reason,
+            subject=request.subject,
             description=request.description,
+            document_request=request.document_request,
+            document_category_id=request.document_category_id,
+            document_items=[
+                {
+                    "document_type_id": str(item.document_type_id)
+                    if item.document_type_id
+                    else None,
+                    "description": item.description,
+                }
+                for item in request.documents
+            ]
+            or None,
             idempotency_key=request.idempotency_key,
             idempotency_hash=request.idempotency_hash,
         )

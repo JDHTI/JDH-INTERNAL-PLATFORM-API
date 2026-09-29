@@ -25,10 +25,11 @@ El seguimiento interno de los casos (bandeja, estados, responsables,
 documentos y SLA) está documentado en
 [`docs/pqrsf-seguimiento.md`](pqrsf-seguimiento.md).
 
-El catálogo devuelve `request_types` y `sites`. Cada tipo contiene `id`,
-`code`, `name`, `allows_reason` y `allows_attachments`; la interfaz debe usar
-esas dos banderas para mostrar u ocultar campos y no hardcodear la lógica
-condicional.
+El catálogo devuelve `request_types`, `sites` y `document_categories`. Cada tipo
+contiene `id`, `code`, `name`, `allows_document_request` y `allows_attachments`;
+la interfaz debe usar esas dos banderas para mostrar u ocultar campos y no
+hardcodear la lógica condicional. Cada categoría trae `id`, `code`, `name` y sus
+`documents` (`id`, `name`): sólo los tipos de documento con categoría se ofrecen.
 
 Los cinco tipos iniciales son `peticion`, `queja`, `reclamo`, `sugerencia` y
 `felicitacion`. El catálogo de sedes inicial contiene Aco, Apartadó,
@@ -48,9 +49,17 @@ Campos de formulario:
 - `full_name`, `business_name`, `nit`, `address`, `department`, `city` y
   `email`: obligatorios.
 - `description`: obligatoria para todos los tipos.
-- `reason`: obligatoria para petición, queja y reclamo; no debe enviarse para
-  sugerencia o felicitación.
-- `images`: cero o más archivos sólo para petición, queja y reclamo.
+- `subject`: asunto, obligatorio para todos los tipos (máximo 200 caracteres).
+  Es el asunto del caso.
+- `document_request`: `true` cuando la petición es una solicitud de documentos
+  (sólo tipos con `allows_document_request`). Entonces se exige
+  `document_category_id` y al menos un `document_type_ids` de esa categoría o un
+  `document_other` (texto libre, máximo 300). El caso nace con esos documentos
+  como ítems, con su plazo, y con la dependencia de la categoría. Una solicitud
+  de documentos no admite `images`. Sin `document_request`, ninguno de esos
+  campos debe enviarse.
+- `images`: cero o más archivos sólo para petición, queja y reclamo, y nunca en
+  una solicitud de documentos.
 
 El servidor devuelve `201` con `{ "id", "reference", "tracking_code",
 "created_at" }`. `tracking_code` es el consecutivo del caso de seguimiento

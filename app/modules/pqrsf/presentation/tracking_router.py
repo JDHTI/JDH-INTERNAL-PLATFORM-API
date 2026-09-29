@@ -64,7 +64,7 @@ class TrackingRequestTypeResponse(BaseModel):
     prefix: str
     requires_follow_up: bool
     sla_days: int | None
-    allows_reason: bool
+    allows_document_request: bool
     allows_attachments: bool
     is_active: bool
 

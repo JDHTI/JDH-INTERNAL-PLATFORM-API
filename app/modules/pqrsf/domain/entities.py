@@ -23,7 +23,7 @@ class RequestType:
     id: UUID
     code: str
     name: str
-    allows_reason: bool
+    allows_document_request: bool
     allows_attachments: bool
     is_active: bool
     created_at: datetime
@@ -50,13 +50,46 @@ class PqrsfRequest:
     department: str
     city: str
     email: str
-    reason: str | None
+    subject: str | None
     description: str
     idempotency_key: str
     idempotency_hash: str
     created_at: datetime
     updated_at: datetime
     attachments: list[PqrsfAttachment] = field(default_factory=list)
+    # A petition for documents: the category picked and the documents asked for.
+    document_request: bool = False
+    document_category_id: UUID | None = None
+    documents: list[RequestedDocument] = field(default_factory=list)
+    # Dependency of that category, read when the request is loaded.
+    document_dependency_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class RequestedDocument:
+    """One document a customer asks for: a catalog type, or free text for anything else."""
+
+    document_type_id: UUID | None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class DocumentOption:
+    """A catalog document offered on the public form."""
+
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True)
+class DocumentCategory:
+    """A group of documents offered together, and who attends requests for them."""
+
+    id: UUID
+    code: str
+    name: str
+    dependency_id: UUID | None
+    documents: list[DocumentOption]
 
 
 @dataclass

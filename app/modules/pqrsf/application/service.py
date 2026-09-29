@@ -23,6 +23,8 @@ from app.modules.pqrsf.domain.entities import (
     PqrsfFilters,
     PqrsfPage,
     PqrsfRequest,
+    RequestedDocument,
+    RequestType,
     SanitizedImage,
     clean_optional,
     clean_required,
@@ -39,6 +41,9 @@ from app.modules.pqrsf.domain.ports import (
 from app.modules.sites.application.service import SiteService
 
 logger = logging.getLogger(__name__)
+
+# Documents one public request can ask for; a case itself admits many more.
+_MAX_DOCUMENTS = 30
 
 
 class PqrsfService:
@@ -80,10 +85,14 @@ class PqrsfService:
         self.max_attachment_bytes = max_attachment_bytes
         self.max_total_attachment_bytes = max_total_attachment_bytes
 
-    async def catalog(self) -> tuple[list, list]:
-        """Return active request types and sites for the public form."""
+    async def catalog(self) -> tuple[list, list, list]:
+        """Return active request types, sites and document categories for the public form."""
 
-        return await self.repository.list_request_types(), await self.sites.list_sites()
+        return (
+            await self.repository.list_request_types(),
+            await self.sites.list_sites(),
+            await self.repository.list_document_categories(),
+        )
 
     async def create_request(
         self,
@@ -97,11 +106,15 @@ class PqrsfService:
         department: str,
         city: str,
         email: str,
-        reason: str | None,
+        subject: str,
         description: str,
         idempotency_key: str,
         idempotency_payload: Mapping[str, object],
         images: Sequence[ImageUpload] = (),
+        document_request: bool = False,
+        document_category_id: UUID | None = None,
+        document_type_ids: Sequence[UUID] = (),
+        document_other: str | None = None,
     ) -> CreateResult:
         """Validate and persist an idempotent public request.
 
@@ -115,11 +128,16 @@ class PqrsfService:
             department (str): Required department text.
             city (str): Required city text.
             email (str): Required requester email.
-            reason (str | None): Required only for the first three types.
+            subject (str): Required one-line summary of what is needed.
             description (str): Required request detail.
             idempotency_key (str): UUID used to make retries safe.
             idempotency_payload (Mapping[str, object]): Canonical hash input.
-            images (Sequence[ImageUpload]): Optional public image uploads.
+            images (Sequence[ImageUpload]): Optional public image uploads; not
+                accepted on a document request.
+            document_request (bool): Whether the customer asks for documents.
+            document_category_id (UUID | None): Category of the documents asked for.
+            document_type_ids (Sequence[UUID]): Catalog documents asked for.
+            document_other (str | None): Free-text document not in the catalog.
 
         Returns:
             CreateResult: The stored request and whether it was replayed.
@@ -135,11 +153,15 @@ class PqrsfService:
             department=department,
             city=city,
             email=email,
-            reason=reason,
+            subject=subject,
             description=description,
             idempotency_key=idempotency_key,
             idempotency_payload=idempotency_payload,
             images=images,
+            document_request=document_request,
+            document_category_id=document_category_id,
+            document_type_ids=document_type_ids,
+            document_other=document_other,
         )
         return await self._with_case(result)
 
@@ -190,11 +212,15 @@ class PqrsfService:
         department: str,
         city: str,
         email: str,
-        reason: str | None,
+        subject: str,
         description: str,
         idempotency_key: str,
         idempotency_payload: Mapping[str, object],
         images: Sequence[ImageUpload],
+        document_request: bool,
+        document_category_id: UUID | None,
+        document_type_ids: Sequence[UUID],
+        document_other: str | None,
     ) -> CreateResult:
         key = validate_idempotency_key(idempotency_key)
         request_type = await self.repository.get_request_type(request_type_id)
@@ -204,11 +230,15 @@ class PqrsfService:
         if not site.is_active:
             raise InvalidInputError("La sede seleccionada no está disponible")
 
-        reason_value = clean_optional(reason, "motivo", 200)
-        if request_type.allows_reason and reason_value is None:
-            raise InvalidInputError("El motivo es obligatorio para este tipo de solicitud")
-        if not request_type.allows_reason and reason_value is not None:
-            raise InvalidInputError("Este tipo de solicitud no admite motivo")
+        subject_value = clean_required(subject, "asunto", 200)
+        documents = await self._requested_documents(
+            request_type,
+            images,
+            document_request,
+            document_category_id,
+            document_type_ids,
+            document_other,
+        )
 
         processed_images = await self._process_images(request_type.allows_attachments, images)
         payload = dict(idempotency_payload)
@@ -240,12 +270,15 @@ class PqrsfService:
             department=clean_required(department, "departamento", 100),
             city=clean_required(city, "ciudad", 100),
             email=clean_required(email, "correo", 320).lower(),
-            reason=reason_value,
+            subject=subject_value,
             description=clean_required(description, "descripción", 10_000),
             idempotency_key=key,
             idempotency_hash=payload_hash,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
+            document_request=document_request,
+            document_category_id=document_category_id if document_request else None,
+            documents=documents,
         )
         try:
             stored = await self.repository.create_request(request)
@@ -300,6 +333,54 @@ class PqrsfService:
             raise DependencyUnavailableError("No se pudieron guardar las imágenes") from exc
         stored.attachments = attachments
         return CreateResult(stored, replayed=False)
+
+    async def _requested_documents(
+        self,
+        request_type: RequestType,
+        images: Sequence[ImageUpload],
+        document_request: bool,
+        category_id: UUID | None,
+        type_ids: Sequence[UUID],
+        other: str | None,
+    ) -> list[RequestedDocument]:
+        """Validate the documents of a document request against the public catalog."""
+
+        other_value = clean_optional(other, "otro documento", 300)
+        if not document_request:
+            if category_id is not None or type_ids or other_value is not None:
+                raise InvalidInputError(
+                    "Los documentos solo se indican en una solicitud de documentos"
+                )
+            return []
+        if not request_type.allows_document_request:
+            raise InvalidInputError("Este tipo de solicitud no admite solicitud de documentos")
+        if images:
+            raise InvalidInputError("Una solicitud de documentos no admite evidencias")
+        if category_id is None:
+            raise InvalidInputError("Selecciona la categoría del documento")
+        category = next(
+            (
+                item
+                for item in await self.repository.list_document_categories()
+                if item.id == category_id
+            ),
+            None,
+        )
+        if category is None:
+            raise InvalidInputError("La categoría del documento no está disponible")
+        if len(set(type_ids)) != len(type_ids):
+            raise InvalidInputError("Un documento no puede repetirse")
+        offered = {document.id for document in category.documents}
+        if any(type_id not in offered for type_id in type_ids):
+            raise InvalidInputError("Un documento no pertenece a la categoría seleccionada")
+        documents = [RequestedDocument(document_type_id=type_id) for type_id in type_ids]
+        if other_value is not None:
+            documents.append(RequestedDocument(document_type_id=None, description=other_value))
+        if not documents:
+            raise InvalidInputError("Indica qué documento necesitas")
+        if len(documents) > _MAX_DOCUMENTS:
+            raise InvalidInputError(f"Máximo {_MAX_DOCUMENTS} documentos por solicitud")
+        return documents
 
     async def _process_images(
         self, allows_attachments: bool, images: Sequence[ImageUpload]
