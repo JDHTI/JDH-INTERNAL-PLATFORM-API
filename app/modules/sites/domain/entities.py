@@ -10,11 +10,18 @@ from uuid import UUID
 from app.core.errors import InvalidInputError
 
 _CODE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_ABBREVIATION_PATTERN = re.compile(r"^[A-Z]{2,4}$")
+
+# Series of PQRSF cases filed without a site (P26GN0001); no site may take it.
+GENERIC_SITE_ABBREVIATION = "GN"
 
 
 @dataclass
 class Site:
-    """A PQRSF submission site."""
+    """A PQRSF submission site.
+
+    ``abbreviation`` is the site's part of every PQRSF consecutive (P26AC0001).
+    """
 
     id: UUID
     code: str
@@ -22,6 +29,7 @@ class Site:
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    abbreviation: str = ""
 
 
 def clean_site_code(value: str) -> str:
@@ -33,6 +41,19 @@ def clean_site_code(value: str) -> str:
             "El código de la sede debe usar minúsculas, números y guiones (máximo 80 caracteres)"
         )
     return code
+
+
+def clean_site_abbreviation(value: str) -> str:
+    """Normalize and validate the letters a site puts in PQRSF consecutives."""
+
+    abbreviation = value.strip().upper()
+    if not _ABBREVIATION_PATTERN.fullmatch(abbreviation):
+        raise InvalidInputError("La sigla de la sede debe tener de 2 a 4 letras, sin tildes")
+    if abbreviation == GENERIC_SITE_ABBREVIATION:
+        raise InvalidInputError(
+            f"La sigla {GENERIC_SITE_ABBREVIATION} está reservada para casos sin sede"
+        )
+    return abbreviation
 
 
 def clean_site_name(value: str) -> str:

@@ -22,6 +22,7 @@ def _site(model: SiteModel) -> Site:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        abbreviation=model.abbreviation,
     )
 
 
@@ -62,17 +63,23 @@ class SqlAlchemySiteRepository:
             model = result.scalar_one_or_none()
             return _site(model) if model else None
 
-    async def create_site(self, code: str, name: str, is_active: bool) -> Site:
+    async def create_site(self, code: str, name: str, abbreviation: str, is_active: bool) -> Site:
         """Insert a site and translate a concurrent duplicate into conflict."""
 
-        model = SiteModel(id=uuid.uuid4(), code=code, name=name, is_active=is_active)
+        model = SiteModel(
+            id=uuid.uuid4(),
+            code=code,
+            name=name,
+            abbreviation=abbreviation,
+            is_active=is_active,
+        )
         async with self.database.session_factory() as session:
             session.add(model)
             try:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
-                raise ConflictError("Ya existe una sede con ese código") from exc
+                raise ConflictError("Ya existe una sede con ese código o esa sigla") from exc
             await session.refresh(model)
             return _site(model)
 
@@ -84,8 +91,13 @@ class SqlAlchemySiteRepository:
             if model is None:
                 raise ConflictError("La sede ya no existe")
             model.name = site.name
+            model.abbreviation = site.abbreviation
             model.is_active = site.is_active
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("Otra sede ya usa esa sigla") from exc
             await session.refresh(model)
             return _site(model)
 

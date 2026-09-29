@@ -26,6 +26,8 @@ class SiteResponse(BaseModel):
     id: UUID
     code: str
     name: str
+    # Letters the site puts in PQRSF consecutives (P26AC0001).
+    abbreviation: str
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -36,6 +38,7 @@ class SiteCreateRequest(BaseModel):
 
     code: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=150)
+    abbreviation: str = Field(min_length=2, max_length=4)
     is_active: bool = True
 
 
@@ -43,6 +46,7 @@ class SiteUpdateRequest(BaseModel):
     """Administrator site update payload."""
 
     name: str | None = Field(default=None, min_length=1, max_length=150)
+    abbreviation: str | None = Field(default=None, min_length=2, max_length=4)
     is_active: bool | None = None
 
 
@@ -88,7 +92,11 @@ async def create_site(
 ) -> SiteResponse:
     """Create a site."""
 
-    return _response(await service.create_site(payload.code, payload.name, payload.is_active))
+    return _response(
+        await service.create_site(
+            payload.code, payload.name, payload.abbreviation, payload.is_active
+        )
+    )
 
 
 @router.patch("/{site_id}", response_model=SiteResponse, summary="Update PQRSF site")
@@ -99,7 +107,7 @@ async def update_site(
     _: UserModel = Depends(require_admin),  # noqa: B008
     service: SiteService = _service,
 ) -> SiteResponse:
-    """Change a site's display name or active state."""
+    """Change a site's display name, abbreviation or active state."""
 
     return _response(
         await service.update_site(
@@ -107,6 +115,7 @@ async def update_site(
             payload.name,
             payload.is_active,
             frozenset(payload.model_fields_set),
+            abbreviation=payload.abbreviation,
         )
     )
 

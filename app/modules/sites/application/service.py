@@ -5,7 +5,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.errors import ConflictError, NotFoundError
-from app.modules.sites.domain.entities import Site, clean_site_code, clean_site_name
+from app.modules.sites.domain.entities import (
+    Site,
+    clean_site_abbreviation,
+    clean_site_code,
+    clean_site_name,
+)
 from app.modules.sites.domain.ports import SiteRepository
 
 
@@ -41,14 +46,17 @@ class SiteService:
             raise NotFoundError("Sede no encontrada")
         return site
 
-    async def create_site(self, code: str, name: str, is_active: bool = True) -> Site:
-        """Create a site with a stable code."""
+    async def create_site(
+        self, code: str, name: str, abbreviation: str, is_active: bool = True
+    ) -> Site:
+        """Create a site with a stable code and its consecutive letters."""
 
         code = clean_site_code(code)
         name = clean_site_name(name)
+        abbreviation = clean_site_abbreviation(abbreviation)
         if await self.repository.get_by_code(code):
             raise ConflictError("Ya existe una sede con ese código")
-        return await self.repository.create_site(code, name, is_active)
+        return await self.repository.create_site(code, name, abbreviation, is_active)
 
     async def update_site(
         self,
@@ -56,12 +64,19 @@ class SiteService:
         name: str | None,
         is_active: bool | None,
         fields: frozenset[str],
+        abbreviation: str | None = None,
     ) -> Site:
-        """Update a site's display fields while keeping its code immutable."""
+        """Update a site's display fields while keeping its code immutable.
+
+        A new abbreviation applies to the next PQRSF consecutives of the site;
+        existing cases keep the code they were given.
+        """
 
         site = await self.get_site(site_id)
         if "name" in fields and name is not None:
             site.name = clean_site_name(name)
+        if "abbreviation" in fields and abbreviation is not None:
+            site.abbreviation = clean_site_abbreviation(abbreviation)
         if "is_active" in fields and is_active is not None:
             site.is_active = is_active
         return await self.repository.save_site(site)

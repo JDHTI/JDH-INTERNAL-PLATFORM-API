@@ -55,6 +55,7 @@ def _site(model: SiteModel) -> Site:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        abbreviation=model.abbreviation,
     )
 
 

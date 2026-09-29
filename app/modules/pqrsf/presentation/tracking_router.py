@@ -28,6 +28,7 @@ from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import RequestType
 from app.modules.pqrsf.domain.tracking import (
+    ActivityFilters,
     CaseFilters,
     CaseInput,
     CaseItem,
@@ -106,6 +107,8 @@ class TrackingSiteResponse(BaseModel):
     id: UUID
     code: str
     name: str
+    # Site part of the consecutive (P26AC0001).
+    abbreviation: str
     is_active: bool
 
 
@@ -161,6 +164,7 @@ class CasePermissionsResponse(BaseModel):
 
     can_work: bool
     can_assign: bool
+    can_delete: bool
 
 
 class CaseResponse(BaseModel):
@@ -209,6 +213,27 @@ class CaseEventResponse(BaseModel):
     note: str | None
     data: dict
     created_at: datetime
+
+
+class ActivityEventResponse(CaseEventResponse):
+    """History entry of the whole module; ``case_id`` is empty once deleted."""
+
+    case_id: UUID | None
+    case_code: str | None
+
+
+class ActivityPageResponse(BaseModel):
+    """A page of the module history; pass ``next_before`` to get the next one."""
+
+    items: list[ActivityEventResponse]
+    next_before: datetime | None
+
+
+class LastSeenResponse(BaseModel):
+    """When a person last opened the PQRSF inbox."""
+
+    user: PersonResponse
+    last_seen_at: datetime
 
 
 class CaseDetailResponse(BaseModel):
@@ -308,6 +333,12 @@ class StatusChangeRequest(BaseModel):
 
     status_id: UUID
     note: str | None = Field(default=None, max_length=2_000)
+
+
+class DeleteCaseRequest(BaseModel):
+    """Why the case is deleted; it stays in the history."""
+
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class CommentRequest(BaseModel):
@@ -471,7 +502,9 @@ def _case(view: CaseView) -> CaseResponse:
         item_count=len(case.items),
         responded_count=sum(1 for item in case.items if item.responded_on is not None),
         permissions=CasePermissionsResponse(
-            can_work=view.access.can_work, can_assign=view.access.can_assign
+            can_work=view.access.can_work,
+            can_assign=view.access.can_assign,
+            can_delete=view.access.can_delete,
         ),
         created_at=case.created_at,
         updated_at=case.updated_at,
@@ -489,6 +522,14 @@ def _event(value: EventView) -> CaseEventResponse:
         note=event.note,
         data=event.data,
         created_at=event.created_at,
+    )
+
+
+def _activity(value: EventView) -> ActivityEventResponse:
+    return ActivityEventResponse(
+        **_event(value).model_dump(),
+        case_id=value.event.case_id,
+        case_code=value.event.case_code,
     )
 
 
@@ -895,9 +936,88 @@ async def mark_case_read(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> CaseResponse:
-    """Call when the responsible opens the case; the first time it becomes «Leída»."""
+    """Call whenever someone opens the case.
+
+    The responsible's first opening moves it to «Leída»; every opening is
+    recorded in the history (once per person every 30 minutes).
+    """
 
     return _case(await service.mark_read(case_id, principal))
+
+
+@router.delete("/cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete case")
+@inject
+async def delete_case(
+    case_id: UUID,
+    body: DeleteCaseRequest | None = None,
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> None:
+    """Delete a case and its documents (managers). Its history is kept."""
+
+    await service.delete_case(case_id, body.reason if body else None, principal)
+
+
+@router.post(
+    "/activity/visits", status_code=status.HTTP_204_NO_CONTENT, summary="Record inbox visit"
+)
+@inject
+async def record_inbox_visit(
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> None:
+    """Call when the inbox opens; repeats within 30 minutes are not recorded."""
+
+    await service.record_inbox_visit(principal)
+
+
+@router.get("/activity", response_model=ActivityPageResponse, summary="Module history")
+@inject
+async def list_activity(
+    before: datetime | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    event_type: list[str] = Query(default=[]),  # noqa: B008
+    actor_user_id: UUID | None = None,
+    case_code: str | None = Query(default=None, max_length=30),
+    include_access: bool = True,
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> ActivityPageResponse:
+    """Every recorded action, newest first (managers)."""
+
+    page = await service.list_activity(
+        ActivityFilters(
+            before=before,
+            limit=limit,
+            event_types=tuple(event_type),
+            actor_user_id=actor_user_id,
+            case_code=case_code.strip() if case_code else None,
+            include_access=include_access,
+        ),
+        principal,
+    )
+    return ActivityPageResponse(
+        items=[_activity(item) for item in page.items], next_before=page.next_before
+    )
+
+
+@router.get(
+    "/activity/last-seen", response_model=list[LastSeenResponse], summary="Last inbox visits"
+)
+@inject
+async def last_seen(
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> list[LastSeenResponse]:
+    """Who opened the inbox in the last 90 days, and when (managers)."""
+
+    return [
+        LastSeenResponse(
+            user=_person(row.user) or PersonResponse(id=row.user_id, display_name=None, email=None),
+            last_seen_at=row.last_seen_at,
+        )
+        for row in await service.last_seen(principal)
+    ]
 
 
 @router.post(

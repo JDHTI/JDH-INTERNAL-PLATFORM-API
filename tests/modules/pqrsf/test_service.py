@@ -77,7 +77,7 @@ class FakeSiteRepository:
 
 def _service(allows_reason: bool = True) -> tuple[PqrsfService, RequestType, Site]:
     request_type = _type(allows_reason)
-    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW)
+    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
     from app.modules.sites.application.service import SiteService
 
     return (

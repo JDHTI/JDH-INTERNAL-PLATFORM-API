@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from app.modules.identity.domain.principal import DirectoryUser
@@ -25,6 +25,7 @@ class CaseAccess:
     can_view: bool
     can_work: bool
     can_assign: bool
+    can_delete: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,23 @@ class EventView:
 
     event: CaseEvent
     actor: DirectoryUser | None
+
+
+@dataclass(frozen=True)
+class ActivityPage:
+    """One page of the module history; ``next_before`` continues it."""
+
+    items: list[EventView]
+    next_before: datetime | None
+
+
+@dataclass(frozen=True)
+class LastSeenView:
+    """A person and when they last opened the inbox."""
+
+    user: DirectoryUser | None
+    user_id: UUID
+    last_seen_at: datetime
 
 
 @dataclass(frozen=True)
