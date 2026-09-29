@@ -23,7 +23,7 @@ class SiteRepository(Protocol):
         """Return one site by its stable code."""
         ...
 
-    async def create_site(self, code: str, name: str, is_active: bool) -> Site:
+    async def create_site(self, code: str, name: str, abbreviation: str, is_active: bool) -> Site:
         """Persist a site."""
         ...
 

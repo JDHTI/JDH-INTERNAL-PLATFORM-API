@@ -135,7 +135,7 @@ def _fixtures():
         created_at=NOW,
         updated_at=NOW,
     )
-    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW)
+    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
     repository = FakeRequestRepository(request_type, site)
     service = PqrsfService(
         repository,

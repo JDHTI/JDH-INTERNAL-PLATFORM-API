@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import Select, and_, delete, func, or_, select, update
@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.tracking import (
+    ACCESS_EVENT_TYPES,
+    ActivityFilters,
     CaseEvent,
     CaseFilters,
     CaseItem,
@@ -22,8 +24,11 @@ from app.modules.pqrsf.domain.tracking import (
     CountBucket,
     Dependency,
     DocumentType,
+    EventType,
+    LastSeen,
     TrackingCase,
     case_code,
+    case_series,
 )
 from app.modules.pqrsf.infrastructure.models import (
     CaseEventModel,
@@ -130,6 +135,7 @@ def _site(model: SiteModel) -> Site:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        abbreviation=model.abbreviation,
     )
 
 
@@ -163,6 +169,7 @@ def _event(model: CaseEventModel) -> CaseEvent:
         note=model.note,
         data=dict(model.data or {}),
         created_at=model.created_at,
+        case_code=model.case_code,
     )
 
 
@@ -178,6 +185,7 @@ def _case(
         code=model.code,
         number=model.number,
         year=model.year,
+        series=model.series,
         request_type=request_type_from_model(request_type),
         status=_status(status),
         origin=model.origin,
@@ -205,9 +213,15 @@ def _case(
 
 
 def _event_model(event: CaseEvent) -> CaseEventModel:
+    # The consecutive is copied in so the entry still reads after a deletion;
+    # when the caller did not give it, it is taken from the case at insert.
+    case_code = event.case_code
+    if case_code is None and event.case_id is not None:
+        case_code = select(CaseModel.code).where(CaseModel.id == event.case_id).scalar_subquery()
     return CaseEventModel(
         id=event.id,
         case_id=event.case_id,
+        case_code=case_code,
         event_type=event.event_type,
         actor_user_id=event.actor_user_id,
         from_status_id=event.from_status_id,
@@ -263,10 +277,21 @@ def _conditions(filters: CaseFilters, today: date) -> list:
     if filters.received_to:
         conditions.append(CaseModel.received_on <= filters.received_to)
     if filters.query:
-        pattern = f"%{filters.query.strip()}%"
+        query = filters.query.strip()
+        pattern = f"%{query}%"
+        # Quality still quotes the P.13.F.01 number (2718); only a whole-number
+        # match, so "27" does not bring every case whose sheet number has it.
+        excel_number = (
+            [CaseModel.legacy["original_consecutive"].astext == str(int(query))]
+            if query.isdigit()
+            else []
+        )
         conditions.append(
             or_(
+                *excel_number,
                 CaseModel.code.ilike(pattern),
+                # The code a case had before the per-site renumbering.
+                CaseModel.legacy["previous_code"].astext.ilike(pattern),
                 CaseModel.customer_name.ilike(pattern),
                 CaseModel.customer_nit.ilike(pattern),
                 CaseModel.supplier_name.ilike(pattern),
@@ -495,22 +520,28 @@ class SqlAlchemyCaseRepository:
     # --- Cases ---
 
     async def _next_number(
-        self, session: AsyncSession, request_type_id: UUID, year: int, number: int | None
+        self,
+        session: AsyncSession,
+        request_type_id: UUID,
+        year: int,
+        series: str,
+        number: int | None,
     ) -> int:
         """Reserve the consecutive inside the case transaction (row-locked upsert)."""
 
         table = CaseSequenceModel.__table__
         statement = insert(table).values(
-            request_type_id=request_type_id, year=year, last_value=number or 1
+            request_type_id=request_type_id, year=year, series=series, last_value=number or 1
         )
+        key = [table.c.request_type_id, table.c.year, table.c.series]
         if number is None:
             statement = statement.on_conflict_do_update(
-                index_elements=[table.c.request_type_id, table.c.year],
+                index_elements=key,
                 set_={"last_value": table.c.last_value + 1},
             )
         else:
             statement = statement.on_conflict_do_update(
-                index_elements=[table.c.request_type_id, table.c.year],
+                index_elements=key,
                 set_={
                     "last_value": func.greatest(table.c.last_value, statement.excluded.last_value)
                 },
@@ -533,12 +564,16 @@ class SqlAlchemyCaseRepository:
         """
 
         async with self.database.session_factory() as session:
-            allocated = await self._next_number(session, case.request_type.id, case.year, number)
+            series = case_series(case.site)
+            allocated = await self._next_number(
+                session, case.request_type.id, case.year, series, number
+            )
             model = CaseModel(
                 id=case.id,
-                code=case_code(case.request_type.prefix, case.year, allocated),
+                code=case_code(case.request_type.prefix, case.year, series, allocated),
                 number=allocated,
                 year=case.year,
+                series=series,
                 request_type_id=case.request_type.id,
                 status_id=case.status.id,
                 origin=case.origin,
@@ -796,9 +831,14 @@ class SqlAlchemyCaseRepository:
 
         async with self.database.session_factory() as session:
             session.add(_event_model(event))
-            await session.execute(
-                update(CaseModel).where(CaseModel.id == event.case_id).values(updated_at=func.now())
-            )
+            # Looking at a case is not a change to it: access records leave
+            # «updated_at» (and the sort by it) alone.
+            if event.case_id is not None and event.event_type not in ACCESS_EVENT_TYPES:
+                await session.execute(
+                    update(CaseModel)
+                    .where(CaseModel.id == event.case_id)
+                    .values(updated_at=func.now())
+                )
             await session.commit()
 
     async def list_events(self, case_id: UUID) -> list[CaseEvent]:
@@ -818,6 +858,99 @@ class SqlAlchemyCaseRepository:
         )
         async with self.database.session_factory() as session:
             return [_event(m) for m in (await session.scalars(query)).all()]
+
+    async def delete_case(self, case_id: UUID, event: CaseEvent) -> None:
+        """Delete a case and its documents in one transaction with its record.
+
+        The history rows keep their consecutive and lose only the link.
+
+        Args:
+            case_id (UUID): Case to delete.
+            event (CaseEvent): The deletion entry, with ``case_code`` set.
+        """
+
+        async with self.database.session_factory() as session:
+            session.add(_event_model(event))
+            await session.flush()
+            await session.execute(delete(CaseModel).where(CaseModel.id == case_id))
+            await session.commit()
+
+    async def list_activity(self, filters: ActivityFilters) -> list[CaseEvent]:
+        """History of the whole module, newest first.
+
+        Args:
+            filters (ActivityFilters): Cursor, size and filters.
+
+        Returns:
+            list[CaseEvent]: Up to ``filters.limit`` entries.
+        """
+
+        query = select(CaseEventModel)
+        if filters.before is not None:
+            query = query.where(CaseEventModel.created_at < filters.before)
+        if filters.event_types:
+            query = query.where(CaseEventModel.event_type.in_(filters.event_types))
+        if not filters.include_access:
+            query = query.where(CaseEventModel.event_type.not_in(ACCESS_EVENT_TYPES))
+        if filters.actor_user_id is not None:
+            query = query.where(CaseEventModel.actor_user_id == filters.actor_user_id)
+        if filters.case_code:
+            query = query.where(CaseEventModel.case_code.ilike(f"%{filters.case_code}%"))
+        query = query.order_by(CaseEventModel.created_at.desc(), CaseEventModel.id.desc()).limit(
+            filters.limit
+        )
+        async with self.database.session_factory() as session:
+            return [_event(m) for m in (await session.scalars(query)).all()]
+
+    async def has_recent_access(
+        self, event_type: str, actor_user_id: UUID, case_id: UUID | None, since: datetime
+    ) -> bool:
+        """Whether the person left this access record after ``since``."""
+
+        query = select(CaseEventModel.id).where(
+            CaseEventModel.event_type == event_type,
+            CaseEventModel.actor_user_id == actor_user_id,
+            CaseEventModel.created_at >= since,
+            CaseEventModel.case_id.is_(None)
+            if case_id is None
+            else CaseEventModel.case_id == case_id,
+        )
+        async with self.database.session_factory() as session:
+            return await session.scalar(query.limit(1)) is not None
+
+    async def purge_access_events(self, before: datetime) -> int:
+        """Delete access records older than ``before``.
+
+        Returns:
+            int: How many rows went.
+        """
+
+        statement = delete(CaseEventModel).where(
+            CaseEventModel.event_type.in_(ACCESS_EVENT_TYPES),
+            CaseEventModel.created_at < before,
+        )
+        async with self.database.session_factory() as session:
+            result = await session.execute(statement)
+            await session.commit()
+            return result.rowcount or 0
+
+    async def last_seen(self, since: datetime) -> list[LastSeen]:
+        """Last inbox opening per person since ``since``, most recent first."""
+
+        last = func.max(CaseEventModel.created_at)
+        query = (
+            select(CaseEventModel.actor_user_id, last)
+            .where(
+                CaseEventModel.event_type == EventType.INBOX_OPENED,
+                CaseEventModel.actor_user_id.is_not(None),
+                CaseEventModel.created_at >= since,
+            )
+            .group_by(CaseEventModel.actor_user_id)
+            .order_by(last.desc())
+        )
+        async with self.database.session_factory() as session:
+            rows = (await session.execute(query)).all()
+        return [LastSeen(user_id, seen_at) for user_id, seen_at in rows]
 
     async def suggest(self, field: str, query: str, limit: int) -> list[str]:
         """Distinct values previously typed in a free-text field.

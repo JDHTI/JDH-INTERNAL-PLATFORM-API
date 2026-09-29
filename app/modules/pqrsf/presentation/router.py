@@ -59,7 +59,7 @@ class PqrsfReceiptResponse(BaseModel):
 
     id: UUID
     reference: str
-    # Consecutive the customer can quote (P-2026-00012); null if the case
+    # Consecutive the customer can quote (P26AC0012); null if the case
     # could not be opened at submission time.
     tracking_code: str | None = None
     created_at: datetime

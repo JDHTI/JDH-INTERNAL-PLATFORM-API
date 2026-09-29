@@ -1,9 +1,9 @@
 """Import the P.13.F.01 "Seguimiento Peticiones" spreadsheet into PQRSF cases.
 
 Rows that share a consecutive become one case; rows with an empty consecutive
-are more documents of the case above. The original consecutive is kept
-(P-2026-02718). A consecutive repeated further down the sheet gets a new number
-and keeps the original in ``legacy.original_consecutive``.
+are more documents of the case above. Cases are numbered per site like any
+other (P26AC0001), in order of reception; the sheet's consecutive stays in
+``legacy.original_consecutive``.
 
 Runs as a dry run unless ``--apply`` is given, and reruns skip rows already
 loaded (each case remembers its source line).
@@ -270,7 +270,7 @@ async def run(args: argparse.Namespace) -> int:
                 ImportedCase(
                     source_key=f"{SOURCE}:{group.line}",
                     request_type_id=request_type.id,
-                    number=group.number if received_on.year == args.year else None,
+                    number=None,
                     received_on=received_on,
                     status_code=status_code,
                     assignee_user_id=await resolve_person(responsible),
@@ -295,7 +295,7 @@ async def run(args: argparse.Namespace) -> int:
 
         print(f"Filas con datos: {stats['rows']}")
         print(f"Casos: {len(commands)} | documentos: {stats['items']}")
-        print(f"Consecutivos repetidos (reciben número nuevo): {stats['repeated_consecutives']}")
+        print(f"Consecutivos repetidos en la hoja: {stats['repeated_consecutives']}")
         print(f"Casos sin fecha (toman la del anterior): {stats['cases_without_date']}")
         print(f"Estados: {dict(Counter(c.status_code for c in commands))}")
         for kind, values in missing.items():
@@ -308,11 +308,8 @@ async def run(args: argparse.Namespace) -> int:
         if not args.apply:
             print("\nSimulación: no se guardó nada. Usa --apply para importar.")
             return 0
-        # Cases that keep their original consecutive go first, so the ones that
-        # need a new number are numbered after the highest consecutive of the sheet.
-        ordered = [c for c in commands if c.number is not None] + [
-            c for c in commands if c.number is None
-        ]
+        # Oldest first, so each site's numbers follow the order of reception.
+        ordered = sorted(commands, key=lambda c: c.received_on)
         created = skipped = 0
         failed: list[str] = []
         for command in ordered:

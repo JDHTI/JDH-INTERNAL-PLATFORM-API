@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.pqrsf.application.dto import (
+    ActivityPage,
     CaseAccess,
     CaseChanges,
     CaseDetail,
@@ -18,6 +19,7 @@ from app.modules.pqrsf.application.dto import (
     EventView,
     ImportedCase,
     ItemChanges,
+    LastSeenView,
     TrackingCatalog,
 )
 from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType, clean_optional
@@ -29,9 +31,12 @@ from app.modules.pqrsf.domain.ports import (
     PqrsfRepository,
 )
 from app.modules.pqrsf.domain.tracking import (
+    ACCESS_REPEAT_WINDOW,
+    ACCESS_RETENTION,
     CASE_SORTS,
     IN_PROGRESS_STATUS_CODE,
     READ_STATUS_CODE,
+    ActivityFilters,
     CaseEvent,
     CaseFilters,
     CaseInput,
@@ -122,7 +127,7 @@ class CaseTrackingService:
 
     def _access(self, case: TrackingCase, principal: Principal, is_manager: bool) -> CaseAccess:
         if is_manager:
-            return CaseAccess(can_view=True, can_work=True, can_assign=True)
+            return CaseAccess(can_view=True, can_work=True, can_assign=True, can_delete=True)
         if case.assignee_user_id == principal.user_id:
             return CaseAccess(can_view=True, can_work=True, can_assign=False)
         if case.created_by_user_id == principal.user_id:
@@ -593,6 +598,7 @@ class CaseTrackingService:
             code="",
             number=0,
             year=received_on.year,
+            series="",
             request_type=request_type,
             status=status,
             origin=origin,
@@ -620,7 +626,7 @@ class CaseTrackingService:
 
     def _event(
         self,
-        case_id: UUID,
+        case_id: UUID | None,
         event_type: str,
         actor: UUID | None,
         *,
@@ -1088,10 +1094,12 @@ class CaseTrackingService:
         return await self._view(stored, principal, await self.managers.is_manager(principal))
 
     async def mark_read(self, case_id: UUID, principal: Principal) -> CaseView:
-        """Record that the responsible opened the case.
+        """Record that someone opened the case.
 
-        The first time, an initial case moves to the ``leida`` status when that
-        status exists and is active. Anyone else opening the case changes nothing.
+        The responsible's first opening moves an initial case to the ``leida``
+        status when that status exists and is active. Every other opening, by
+        anyone, leaves a ``viewed`` access record (one per person and case every
+        30 minutes) so the history shows who saw the case and when.
 
         Args:
             case_id (UUID): Case identifier.
@@ -1103,6 +1111,7 @@ class CaseTrackingService:
 
         case, _, is_manager = await self._load(case_id, principal)
         if case.assignee_user_id != principal.user_id or case.first_read_at is not None:
+            await self._record_access(EventType.VIEWED, principal, case.id)
             return await self._view(case, principal, is_manager)
         case.first_read_at = datetime.now(UTC)
         events = []
@@ -1145,6 +1154,98 @@ class CaseTrackingService:
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor)
+
+    # --- History ---
+
+    async def _record_access(
+        self, event_type: str, principal: Principal, case_id: UUID | None
+    ) -> None:
+        now = datetime.now(UTC)
+        if await self.repository.has_recent_access(
+            event_type, principal.user_id, case_id, now - ACCESS_REPEAT_WINDOW
+        ):
+            return
+        await self.repository.add_event(self._event(case_id, event_type, principal.user_id))
+
+    async def record_inbox_visit(self, principal: Principal) -> None:
+        """Record that the person opened the PQRSF inbox.
+
+        One record per person every 30 minutes; each one also purges the access
+        records past the 90-day retention, so the table stays bounded without a
+        scheduler. Only access records are ever purged.
+
+        Args:
+            principal (Principal): The caller.
+        """
+
+        await self._record_access(EventType.INBOX_OPENED, principal, None)
+        await self.repository.purge_access_events(datetime.now(UTC) - ACCESS_RETENTION)
+
+    async def delete_case(self, case_id: UUID, reason: str | None, principal: Principal) -> None:
+        """Delete a case (managers). Its history stays, with who deleted it and why.
+
+        Args:
+            case_id (UUID): Case identifier.
+            reason (str | None): Why it is deleted, kept in the history.
+            principal (Principal): The caller.
+        """
+
+        await self._require_manager(principal)
+        case, _, _ = await self._load(case_id, principal)
+        event = self._event(
+            case.id,
+            EventType.DELETED,
+            principal.user_id,
+            note=clean_optional(reason, "motivo", 2_000),
+            data={
+                "request_type": case.request_type.name,
+                "status": case.status.name,
+                "customer_name": case.customer_name,
+                "received_on": case.received_on.isoformat(),
+            },
+        )
+        event.case_code = case.code
+        await self.repository.delete_case(case.id, event)
+
+    async def list_activity(self, filters: ActivityFilters, principal: Principal) -> ActivityPage:
+        """History of the whole module, newest first (managers).
+
+        Args:
+            filters (ActivityFilters): Cursor, size and filters.
+            principal (Principal): The caller.
+
+        Returns:
+            ActivityPage: The entries and the cursor of the next page.
+        """
+
+        await self._require_manager(principal)
+        limit = max(1, min(filters.limit, 100))
+        events = await self.repository.list_activity(replace(filters, limit=limit + 1))
+        page, more = events[:limit], len(events) > limit
+        actors = await self.people.get_users(
+            {e.actor_user_id for e in page if e.actor_user_id is not None}
+        )
+        return ActivityPage(
+            items=[
+                EventView(e, actors.get(e.actor_user_id) if e.actor_user_id else None) for e in page
+            ],
+            next_before=page[-1].created_at if more and page else None,
+        )
+
+    async def last_seen(self, principal: Principal) -> list[LastSeenView]:
+        """Who opened the inbox within the retention window, and when (managers).
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            list[LastSeenView]: One row per person, most recent first.
+        """
+
+        await self._require_manager(principal)
+        rows = await self.repository.last_seen(datetime.now(UTC) - ACCESS_RETENTION)
+        users = await self.people.get_users(row.user_id for row in rows)
+        return [LastSeenView(users.get(row.user_id), row.user_id, row.last_seen_at) for row in rows]
 
     async def _start_progress(self, case: TrackingCase, actor: UUID, events: list) -> None:
         """Move a case that is still received/read to ``en_curso`` on first work."""

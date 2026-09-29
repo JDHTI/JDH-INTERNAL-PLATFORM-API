@@ -17,6 +17,7 @@ from app.modules.pqrsf.domain.entities import (
     SanitizedImage,
 )
 from app.modules.pqrsf.domain.tracking import (
+    ActivityFilters,
     CaseEvent,
     CaseFilters,
     CasePage,
@@ -24,6 +25,7 @@ from app.modules.pqrsf.domain.tracking import (
     CaseSummary,
     Dependency,
     DocumentType,
+    LastSeen,
     TrackingCase,
 )
 
@@ -179,6 +181,28 @@ class CaseRepository(Protocol):
 
     async def list_events(self, case_id: UUID) -> list[CaseEvent]:
         """List the timeline oldest first."""
+        ...
+
+    async def delete_case(self, case_id: UUID, event: CaseEvent) -> None:
+        """Delete a case and its documents; its history stays, with the event given."""
+        ...
+
+    async def list_activity(self, filters: ActivityFilters) -> list[CaseEvent]:
+        """History of the whole module, newest first, at most ``filters.limit``."""
+        ...
+
+    async def has_recent_access(
+        self, event_type: str, actor_user_id: UUID, case_id: UUID | None, since: datetime
+    ) -> bool:
+        """Whether the person already left this access record after ``since``."""
+        ...
+
+    async def purge_access_events(self, before: datetime) -> int:
+        """Delete access records older than ``before``; the rest is never purged."""
+        ...
+
+    async def last_seen(self, since: datetime) -> list[LastSeen]:
+        """Last inbox opening of each person, most recent first."""
         ...
 
     async def suggest(self, field: str, query: str, limit: int) -> list[str]:

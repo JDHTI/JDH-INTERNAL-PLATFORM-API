@@ -26,11 +26,25 @@ Si la apertura falla, la solicitud igual queda guardada, el recibo sale sin
 
 ## Consecutivos
 
-`{prefijo}-{año}-{contador:05d}`, por ejemplo `P-2026-00012`.
+`{prefijo}{año:2 dígitos}{sigla de sede}{contador:04d}`, por ejemplo
+`P26AC0012` (petición de 2026 en Aco).
 
-- Un contador por **tipo y año** (`pqrsf_case_sequences`), reservado con un
-  upsert que bloquea la fila dentro de la misma transacción del caso: sin
+- Un contador por **tipo, año y sede** (`pqrsf_case_sequences`), reservado con
+  un upsert que bloquea la fila dentro de la misma transacción del caso: sin
   duplicados bajo concurrencia y sin huecos si la inserción falla.
+- La sigla es `pqrsf_sites.abbreviation` (2 a 4 letras, única, editable con
+  `PATCH /sites/{id}`). Los casos sin sede usan la serie `GN`, reservada.
+  Queda fija en `pqrsf_cases.series` al abrir el caso: cambiar la sede o la
+  sigla después no renumera nada.
+- La migración `0011` renumeró todos los casos existentes por fecha de
+  recepción; el código y el número anteriores quedan en
+  `legacy.previous_code` / `legacy.previous_number`, y la búsqueda de la
+  bandeja también encuentra por el código anterior y, en los importados, por
+  el número del Excel (`legacy.original_consecutive`, coincidencia exacta).
+- **Desplegar 0010 y 0011 juntas.** El recibo público entrega `tracking_code`
+  desde la 0010; si ambas salen a la vez ningún cliente recibe un código con el
+  formato anterior, y solo se renumeran los casos del backfill y los
+  importados, que nunca se entregaron a un cliente.
 - El año evita un contador infinito y replica la práctica del formato (que se
   reinicia por vigencia). El prefijo P/Q/R/S/F se configura por tipo
   (`PATCH /pqrsf/request-types/{id}`); cambiarlo no reescribe códigos emitidos.
@@ -125,9 +139,30 @@ reemplazan por identificadores sin cambiar el caso de uso.
 | Quien creó el caso | Verlo y comentar |
 | Cualquier usuario autenticado | Crear casos internos (sin asignar responsable) |
 
-Cada caso trae `permissions.can_work` y `permissions.can_assign` para que la UI
-no duplique estas reglas. El responsable debe haber iniciado sesión una vez
+Cada caso trae `permissions.can_work`, `permissions.can_assign` y
+`permissions.can_delete` (gestores) para que la UI no duplique estas reglas. El responsable debe haber iniciado sesión una vez
 (igual que en áreas).
+
+## Historial
+
+`pqrsf_case_events` es el historial del módulo, no solo la línea de tiempo de
+cada caso. Es de solo inserción: la API no expone edición ni borrado de
+eventos.
+
+- Cada evento guarda el consecutivo (`case_code`). Al eliminar un caso
+  (`deleted`, con quién, cuándo y el motivo) sus eventos pierden solo el
+  vínculo (`case_id` pasa a `NULL`) y siguen en el historial.
+- Registros de acceso: `viewed` (alguien abrió el caso) e `inbox_opened`
+  (alguien abrió la bandeja; sin caso). Se registra uno por persona y caso
+  cada 30 minutos, y no mueven `updated_at` del caso.
+- **Retención**: solo los registros de acceso se purgan, a los **90 días**; la
+  purga corre al registrar cada visita a la bandeja, sin tareas programadas.
+  Asignaciones, estados, comentarios, documentos y eliminaciones no se borran
+  nunca.
+- `GET /pqrsf/activity` lista todo, lo más reciente primero, paginado por
+  `before` (`next_before` de la respuesta). `GET /pqrsf/activity/last-seen`
+  devuelve la última visita a la bandeja de cada persona en la ventana de
+  retención.
 
 ## Endpoints (`/api/v1`, sesión Entra)
 
@@ -147,7 +182,11 @@ no duplique estas reglas. El responsable debe haber iniciado sesión una vez
 | GET / PATCH | `/pqrsf/cases/{id}` | visible / responsable o gestor |
 | POST | `/pqrsf/cases/{id}/assignment` (`assignee_user_id` o `null`) | gestor |
 | POST | `/pqrsf/cases/{id}/status` (`status_id`, `note`) | responsable o gestor |
-| POST | `/pqrsf/cases/{id}/read` | visible (efecto solo para el responsable) |
+| POST | `/pqrsf/cases/{id}/read` | visible (pasa a «Leída» con el responsable; siempre deja registro de acceso) |
+| DELETE | `/pqrsf/cases/{id}` (`reason` opcional) | gestor |
+| POST | `/pqrsf/activity/visits` | autenticado |
+| GET | `/pqrsf/activity?before=&limit=&event_type=&actor_user_id=&case_code=&include_access=` | gestor |
+| GET | `/pqrsf/activity/last-seen` | gestor |
 | POST | `/pqrsf/cases/{id}/comments` | visible |
 | POST | `/pqrsf/cases/{id}/items` | responsable o gestor |
 | PATCH / DELETE | `/pqrsf/cases/{id}/items/{item_id}` | responsable o gestor |
@@ -189,9 +228,8 @@ documentos**. Todos los tipos de documento y dependencias coinciden con los
 catálogos. Decisiones:
 
 - Filas sin consecutivo = más documentos del caso anterior.
-- Se conserva el consecutivo original. Los 26 consecutivos repetidos más abajo
-  reciben un número nuevo después del mayor, con el original en
-  `legacy.original_consecutive`.
+- Cada caso recibe el consecutivo de su sede como cualquier otro, en orden de
+  recepción; el consecutivo de la hoja queda en `legacy.original_consecutive`.
 - `TERMINADO` → `finalizada`, `EN PROCESO` → `en_curso`; sin estado se infiere
   de las fechas de respuesta.
 - Se respetan los tiempos del Excel por fila y no se exige causal a retrasos

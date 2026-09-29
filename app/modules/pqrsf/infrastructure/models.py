@@ -183,11 +183,11 @@ class DocumentTypeModel(Base):
 
 
 class CaseSequenceModel(Base):
-    """Last consecutive used per request type and year."""
+    """Last consecutive used per request type, year and site series."""
 
     __tablename__ = "pqrsf_case_sequences"
     __table_args__ = (
-        PrimaryKeyConstraint("request_type_id", "year", name="pk_pqrsf_case_sequences"),
+        PrimaryKeyConstraint("request_type_id", "year", "series", name="pk_pqrsf_case_sequences"),
     )
 
     request_type_id: Mapped[uuid.UUID] = mapped_column(
@@ -196,6 +196,7 @@ class CaseSequenceModel(Base):
         nullable=False,
     )
     year: Mapped[int] = mapped_column(Integer, nullable=False)
+    series: Mapped[str] = mapped_column(String(4), nullable=False)
     last_value: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
@@ -207,7 +208,11 @@ class CaseModel(Base):
         UniqueConstraint("code", name="pqrsf_cases_code_key"),
         UniqueConstraint("request_id", name="pqrsf_cases_request_id_key"),
         UniqueConstraint(
-            "request_type_id", "year", "number", name="pqrsf_cases_type_year_number_key"
+            "request_type_id",
+            "year",
+            "series",
+            "number",
+            name="pqrsf_cases_type_year_series_number_key",
         ),
         CheckConstraint(
             "origin IN ('public_form', 'internal', 'import')", name="ck_pqrsf_cases_origin"
@@ -229,6 +234,7 @@ class CaseModel(Base):
     code: Mapped[str] = mapped_column(String(30), nullable=False)
     number: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
+    series: Mapped[str] = mapped_column(String(4), nullable=False)
     request_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("pqrsf_request_types.id", ondelete="RESTRICT"),
@@ -307,15 +313,22 @@ class CaseItemModel(Base):
 
 
 class CaseEventModel(Base):
-    """Immutable timeline entry of a case."""
+    """Immutable entry of the PQRSF history; it outlives the case it tells about."""
 
     __tablename__ = "pqrsf_case_events"
-    __table_args__ = (Index("ix_pqrsf_case_events_case_created", "case_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_pqrsf_case_events_case_created", "case_id", "created_at"),
+        Index("ix_pqrsf_case_events_created", "created_at"),
+        Index(
+            "ix_pqrsf_case_events_type_actor_created", "event_type", "actor_user_id", "created_at"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    case_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="SET NULL")
     )
+    case_code: Mapped[str | None] = mapped_column(String(30))
     event_type: Mapped[str] = mapped_column(String(30), nullable=False)
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     from_status_id: Mapped[uuid.UUID | None] = mapped_column(

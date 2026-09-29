@@ -16,7 +16,7 @@ from uuid import UUID
 
 from app.core.errors import InvalidInputError
 from app.modules.pqrsf.domain.entities import RequestType
-from app.modules.sites.domain.entities import Site
+from app.modules.sites.domain.entities import GENERIC_SITE_ABBREVIATION, Site
 
 CASE_ORIGINS = frozenset({"public_form", "internal", "import"})
 _CODE_PATTERN = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
@@ -30,17 +30,29 @@ IN_PROGRESS_STATUS_CODE = "en_curso"
 
 
 class EventType:
-    """Kinds of entries in a case timeline."""
+    """Kinds of entries in the PQRSF history."""
 
     CREATED = "created"
     UPDATED = "updated"
     ASSIGNED = "assigned"
     STATUS_CHANGED = "status_changed"
+    # The responsible's first opening, which moves the case to «Leída».
     READ = "read"
     COMMENT = "comment"
     ITEM_ADDED = "item_added"
     ITEM_UPDATED = "item_updated"
     ITEM_REMOVED = "item_removed"
+    DELETED = "deleted"
+    # Access records: anyone opening a case, anyone opening the inbox.
+    VIEWED = "viewed"
+    INBOX_OPENED = "inbox_opened"
+
+
+# Access records say who looked, not what changed: they are the only history
+# that is purged, and a repeat within the window is not recorded again.
+ACCESS_EVENT_TYPES = frozenset({EventType.VIEWED, EventType.INBOX_OPENED})
+ACCESS_RETENTION = timedelta(days=90)
+ACCESS_REPEAT_WINDOW = timedelta(minutes=30)
 
 
 @dataclass
@@ -121,10 +133,14 @@ class CaseItem:
 
 @dataclass
 class CaseEvent:
-    """An immutable entry of the case timeline."""
+    """An immutable entry of the PQRSF history.
+
+    ``case_id`` is empty for module events (the inbox was opened) and once the
+    case is deleted; ``case_code`` keeps the consecutive readable either way.
+    """
 
     id: UUID
-    case_id: UUID
+    case_id: UUID | None
     event_type: str
     actor_user_id: UUID | None
     from_status_id: UUID | None
@@ -132,16 +148,42 @@ class CaseEvent:
     note: str | None
     data: dict
     created_at: datetime
+    case_code: str | None = None
+
+
+@dataclass(frozen=True)
+class ActivityFilters:
+    """Filters of the module-wide history, newest first, paged by ``before``."""
+
+    before: datetime | None = None
+    limit: int = 50
+    event_types: tuple[str, ...] = ()
+    actor_user_id: UUID | None = None
+    case_code: str | None = None
+    include_access: bool = True
+
+
+@dataclass(frozen=True)
+class LastSeen:
+    """When a person last opened the PQRSF inbox."""
+
+    user_id: UUID
+    last_seen_at: datetime
 
 
 @dataclass
 class TrackingCase:
-    """The follow-up of one PQRSF, identified by a consecutive such as P-2026-00012."""
+    """The follow-up of one PQRSF, identified by a consecutive such as P26AC0012.
+
+    ``series`` is the site part of the code (``AC``), fixed when the case is
+    opened: moving the case to another site later does not renumber it.
+    """
 
     id: UUID
     code: str
     number: int
     year: int
+    series: str
     request_type: RequestType
     status: CaseStatus
     origin: str
@@ -276,21 +318,29 @@ class CaseInput:
     items: tuple[ItemInput, ...] = ()
 
 
-def case_code(prefix: str, year: int, number: int) -> str:
-    """Format the consecutive: prefix, year and a zero-padded counter.
+def case_series(site: Site | None) -> str:
+    """The site part of a consecutive; cases without a site share ``GN``."""
 
-    The counter restarts every year per request type, as the paper format did.
+    return site.abbreviation if site and site.abbreviation else GENERIC_SITE_ABBREVIATION
+
+
+def case_code(prefix: str, year: int, series: str, number: int) -> str:
+    """Format the consecutive: prefix, two-digit year, site series and counter.
+
+    The counter restarts every year for each request type and site, so every
+    site keeps its own run of numbers.
 
     Args:
         prefix (str): Request type prefix, e.g. ``P``.
         year (int): Year of reception.
-        number (int): Counter within the type and year.
+        series (str): Site abbreviation, e.g. ``AC``.
+        number (int): Counter within the type, year and site.
 
     Returns:
-        str: Code such as ``P-2026-00012``.
+        str: Code such as ``P26AC0012``.
     """
 
-    return f"{prefix}-{year}-{number:05d}"
+    return f"{prefix}{year % 100:02d}{series}{number:04d}"
 
 
 def is_business_day(day: date, holidays: Container[date]) -> bool:
