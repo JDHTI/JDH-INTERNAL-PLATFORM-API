@@ -9,6 +9,7 @@ from dependency_injector import containers, providers
 from app.core.config import Settings
 from app.infrastructure.data_provider import DataProviderConnection
 from app.infrastructure.database import Database
+from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
 from app.v1_0.v1_containers import V1Container
@@ -35,6 +36,8 @@ class ApplicationContainer(containers.DeclarativeContainer):
         default_ttl=config.redis.default_ttl,
         connect_timeout=config.redis.connect_timeout,
     )
+    # One Redis pub/sub reader per process, shared by every live connection.
+    realtime = providers.Singleton(RealtimeBroker, redis=redis)
     storage = providers.Singleton(
         S3Storage,
         endpoint_url=config.s3.endpoint_url,
@@ -65,6 +68,7 @@ class ApplicationContainer(containers.DeclarativeContainer):
         config=config,
         database=database,
         redis=redis,
+        realtime=realtime,
         storage=storage,
         data_provider=data_provider,
         settings=settings,
@@ -79,6 +83,7 @@ class GlobalResources:
     redis: RedisClient
     storage: S3Storage
     data_provider: DataProviderConnection
+    realtime: RealtimeBroker
 
 
 def build_application_container(app_settings: Settings) -> ApplicationContainer:
@@ -92,6 +97,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     from app.modules.masters.presentation import router as masters_router_module
     from app.modules.pqrsf.presentation import router as pqrsf_router_module
     from app.modules.pqrsf.presentation import tracking_router as pqrsf_tracking_router_module
+    from app.modules.projects.presentation import router as projects_router_module
     from app.modules.sites.presentation import router as sites_router_module
 
     container = ApplicationContainer()
@@ -108,6 +114,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             masters_router_module,
             pqrsf_router_module,
             pqrsf_tracking_router_module,
+            projects_router_module,
         ]
     )
     return container
@@ -130,6 +137,7 @@ async def initialize_global_resources(container: ApplicationContainer) -> Global
             redis=redis,
             storage=storage,
             data_provider=data_provider,
+            realtime=container.realtime(),
         )
     except BaseException:
         if redis is not None:
@@ -146,6 +154,7 @@ async def initialize_global_resources(container: ApplicationContainer) -> Global
 async def shutdown_global_resources(resources: GlobalResources) -> None:
     """Close global clients in dependency-safe order."""
 
+    await resources.realtime.close()
     await resources.redis.close()
     await resources.database.dispose()
     resources.storage.close()

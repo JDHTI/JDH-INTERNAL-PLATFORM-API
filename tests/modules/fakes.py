@@ -54,6 +54,11 @@ class FakeDirectory:
     async def get_users(self, user_ids):
         return {i: self.users[i] for i in user_ids if i in self.users}
 
+    async def search_users(self, query, limit=20):
+        query = query.lower()
+        found = [u for u in self.users.values() if u.is_active and query in (u.email or "")]
+        return sorted(found, key=lambda u: u.email)[:limit]
+
 
 class FakeAreaRepository:
     def __init__(self) -> None:
@@ -101,7 +106,7 @@ class FakeAreaRepository:
     async def delete_area(self, area_id):
         if area_id in self.areas_with_folders:
             raise ConflictError(
-                "El área tiene carpetas de documentos: elimínalas antes de borrarla"
+                "El área tiene carpetas de documentos o de proyectos: elimínalas antes de borrarla"
             )
         self.areas.pop(area_id)
         self.roles = {k: r for k, r in self.roles.items() if r.area_id != area_id}

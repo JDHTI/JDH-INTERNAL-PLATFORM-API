@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     PQRSF_TIMEZONE: str = "America/Bogota"
     PQRSF_HOLIDAYS_COUNTRY: str = "CO"
 
+    # Areas where the project manager is switched on (comma-separated slugs).
+    PROJECTS_AREA_SLUGS: str = "ti"
+    # A live connection without a ping for this long leaves the presence list.
+    PROJECTS_PRESENCE_TTL_SECONDS: int = 45
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def APP_ENV(self) -> str:
@@ -275,6 +280,10 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.PQRSF_MANAGER_AREA_SLUG,
                 "timezone": self.PQRSF_TIMEZONE,
                 "holidays_country": self.PQRSF_HOLIDAYS_COUNTRY,
+            },
+            "projects": {
+                "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
+                "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
             },
             "identity": {
                 "tenant_id": self.ENTRA_TENANT_ID,
