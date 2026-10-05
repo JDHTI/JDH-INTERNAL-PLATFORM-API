@@ -5,6 +5,7 @@ from dependency_injector import containers, providers
 from app.core.config import Settings
 from app.infrastructure.data_provider import DataProviderConnection
 from app.infrastructure.database import Database
+from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
 from app.modules.areas.application.service import AreaService
@@ -27,6 +28,9 @@ from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, Holiday
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
+from app.modules.projects.application.live import ProjectLiveService
+from app.modules.projects.application.service import ProjectService
+from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 
@@ -38,6 +42,7 @@ class V1Container(containers.DeclarativeContainer):
 
     database = providers.Dependency(instance_of=Database)
     redis = providers.Dependency(instance_of=RedisClient)
+    realtime = providers.Dependency(instance_of=RealtimeBroker)
     storage = providers.Dependency(instance_of=S3Storage)
     data_provider = providers.Dependency(instance_of=DataProviderConnection)
     settings = providers.Dependency(instance_of=Settings)
@@ -118,6 +123,20 @@ class V1Container(containers.DeclarativeContainer):
         allowed_extensions=config.documents.allowed_extensions,
         download_url_ttl=config.documents.download_url_ttl,
     )
+    # --- Projects (segmented by area, live over Redis) ---
+    project_live_service = providers.Factory(
+        ProjectLiveService, channel=realtime, presence_ttl=config.projects.presence_ttl
+    )
+    project_repository = providers.Factory(SqlAlchemyProjectRepository, database=database)
+    project_service = providers.Factory(
+        ProjectService,
+        repository=project_repository,
+        areas=area_service,
+        people=user_directory,
+        events=project_live_service,
+        enabled_area_slugs=config.projects.area_slugs,
+    )
+
     site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
     site_service = providers.Factory(SiteService, repository=site_repository)
     master_repository = providers.Factory(SqlAlchemyMasterRepository, database=database)

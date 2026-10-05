@@ -249,7 +249,7 @@ class SqlAlchemyAreaRepository:
             await self._delete(delete(AreaModel).where(AreaModel.id == area_id))
         except ConflictError as exc:
             raise ConflictError(
-                "El área tiene carpetas de documentos: elimínalas antes de borrarla"
+                "El área tiene carpetas de documentos o de proyectos: elimínalas antes de borrarla"
             ) from exc
 
     # --- Roles ---

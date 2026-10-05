@@ -10,6 +10,7 @@ from app.modules.documents.infrastructure import models as documents_models
 from app.modules.identity.infrastructure import models as identity_models
 from app.modules.masters.infrastructure import models as masters_models
 from app.modules.pqrsf.infrastructure import models as pqrsf_models
+from app.modules.projects.infrastructure import models as projects_models
 from app.modules.sites.infrastructure import models as sites_models
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "identity_models",
     "masters_models",
     "pqrsf_models",
+    "projects_models",
     "sites_models",
 ]
