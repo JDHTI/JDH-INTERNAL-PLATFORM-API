@@ -76,3 +76,7 @@ class MailGateway(Protocol):
     async def mark_processed(self, mailbox: str, graph_id: str, category: str | None) -> None:
         """Mark the message as read and tag it, so people see it was handled."""
         ...
+
+    async def send(self, mailbox: str, to: str, subject: str, text: str) -> None:
+        """Send a plain-text message from the mailbox to one recipient."""
+        ...

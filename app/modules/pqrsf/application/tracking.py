@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Container
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -25,6 +26,7 @@ from app.modules.pqrsf.application.dto import (
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
 from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType, clean_optional
 from app.modules.pqrsf.domain.ports import (
+    AssignmentNotifier,
     BusinessCalendar,
     CaseRepository,
     ManagerPolicy,
@@ -59,6 +61,8 @@ from app.modules.pqrsf.domain.tracking import (
 )
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
+
+logger = logging.getLogger(__name__)
 
 SUGGESTION_FIELDS = frozenset({"customer", "supplier", "sales_executive", "requester"})
 EXPORT_LIMIT = 20_000
@@ -105,6 +109,7 @@ class CaseTrackingService:
         people: PeopleDirectory,
         managers: ManagerPolicy,
         calendar: BusinessCalendar,
+        notifier: AssignmentNotifier | None = None,
     ) -> None:
         """Create the service.
 
@@ -115,8 +120,10 @@ class CaseTrackingService:
             people (PeopleDirectory): Platform users.
             managers (ManagerPolicy): Decides who manages PQRSF.
             calendar (BusinessCalendar): Local dates and holidays.
+            notifier (AssignmentNotifier | None): Emails the new responsible of a case.
         """
 
+        self.notifier = notifier
         self.repository = repository
         self.requests = requests
         self.sites = sites
@@ -832,6 +839,11 @@ class CaseTrackingService:
             data={"origin": case.origin, "assignee_user_id": _str(case.assignee_user_id)},
         )
         stored = await self.repository.create_case(case, event)
+        if stored.assignee_user_id is not None:
+            people = await self.people.get_users([stored.assignee_user_id])
+            await self._notify_assigned(
+                stored, people.get(stored.assignee_user_id), principal, None
+            )
         return await self._view(stored, principal, is_manager)
 
     # --- Reading ---
@@ -1122,7 +1134,31 @@ class CaseTrackingService:
             },
         )
         stored = await self.repository.save_case(case, [event])
+        if assignee_user_id is not None:
+            await self._notify_assigned(stored, people.get(assignee_user_id), principal, note)
         return await self._view(stored, principal, True)
+
+    async def _notify_assigned(
+        self,
+        case: TrackingCase,
+        assignee: DirectoryUser | None,
+        actor: Principal,
+        note: str | None,
+    ) -> None:
+        """Tell the new responsible, unless they assigned the case to themselves.
+
+        The case is already saved: a failure to queue the email is logged and never
+        undoes or blocks the assignment.
+        """
+
+        if self.notifier is None or assignee is None or assignee.id == actor.user_id:
+            return
+        try:
+            await self.notifier.case_assigned(
+                case, assignee, actor, clean_optional(note, "nota", 2_000)
+            )
+        except Exception:
+            logger.exception("Could not queue the assignment notice of case %s", case.code)
 
     async def change_status(
         self, case_id: UUID, status_id: UUID, note: str | None, principal: Principal

@@ -25,9 +25,11 @@ from app.modules.pqrsf.application.dto import (
     EventView,
     ItemChanges,
 )
+from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.notifications import JobSchedule, NotificationSettings, parse_time
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
     CaseFilters,
@@ -48,6 +50,7 @@ router = APIRouter(prefix="/pqrsf", dependencies=[Depends(rate_limit("relaxed"))
 _tracking = Depends(Provide[ApplicationContainer.v1_container.pqrsf_tracking_service])
 _pqrsf = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 _case_files = Depends(Provide[ApplicationContainer.v1_container.pqrsf_case_attachment_service])
+_notifications = Depends(Provide[ApplicationContainer.v1_container.pqrsf_notification_service])
 _principal = Depends(get_current_principal)
 
 SortOption = Literal[
@@ -1181,6 +1184,75 @@ async def download_case_file(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+class JobScheduleModel(BaseModel):
+    """One timer: whether it runs and at what local time (24 hours, HH:MM)."""
+
+    enabled: bool
+    time: str = Field(pattern=r"^\d{2}:\d{2}$", examples=["17:30"])
+
+
+class NotificationSettingsModel(BaseModel):
+    """The organization-wide timers."""
+
+    daily_summary: JobScheduleModel
+    overdue_reminder: JobScheduleModel
+
+
+class NotificationSettingsResponse(NotificationSettingsModel):
+    """The timers plus the rules the UI should show next to them."""
+
+    timezone: str
+    business_days_only: bool = True
+
+
+def _settings_response(
+    settings: NotificationSettings, service: NotificationService
+) -> NotificationSettingsResponse:
+    stored = settings.to_json()
+    return NotificationSettingsResponse(
+        daily_summary=JobScheduleModel(**stored["daily_summary"]),
+        overdue_reminder=JobScheduleModel(**stored["overdue_reminder"]),
+        timezone=service.zone.key,
+    )
+
+
+@router.get(
+    "/settings/notifications",
+    response_model=NotificationSettingsResponse,
+    summary="Get the notification timers",
+)
+@inject
+async def get_notification_settings(
+    principal: Principal = _principal,
+    service: NotificationService = _notifications,
+) -> NotificationSettingsResponse:
+    """The organization timers: end-of-day summary and overdue reminder."""
+
+    return _settings_response(await service.get_settings(principal), service)
+
+
+@router.put(
+    "/settings/notifications",
+    response_model=NotificationSettingsResponse,
+    summary="Change the notification timers",
+)
+@inject
+async def update_notification_settings(
+    body: NotificationSettingsModel,
+    principal: Principal = _principal,
+    service: NotificationService = _notifications,
+) -> NotificationSettingsResponse:
+    """Replace the timers for the whole organization (whoever works PQRSF)."""
+
+    settings = NotificationSettings(
+        daily_summary=JobSchedule(body.daily_summary.enabled, parse_time(body.daily_summary.time)),
+        overdue_reminder=JobSchedule(
+            body.overdue_reminder.enabled, parse_time(body.overdue_reminder.time)
+        ),
+    )
+    return _settings_response(await service.update_settings(settings, principal), service)
 
 
 __all__ = ["router"]

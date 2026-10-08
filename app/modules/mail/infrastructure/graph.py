@@ -256,3 +256,19 @@ class GraphMailClient:
             f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}",
             json=payload,
         )
+
+    async def send(self, mailbox: str, to: str, subject: str, text: str) -> None:
+        """Send a plain-text message from the mailbox; it is kept in its Sent Items."""
+
+        await self._request(
+            "POST",
+            f"{GRAPH_URL}/users/{_segment(mailbox)}/sendMail",
+            json={
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "Text", "content": text},
+                    "toRecipients": [{"emailAddress": {"address": to}}],
+                },
+                "saveToSentItems": True,
+            },
+        )

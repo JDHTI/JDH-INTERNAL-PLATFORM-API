@@ -189,3 +189,23 @@ async def test_server_errors_are_dependency_errors() -> None:
 
     with pytest.raises(DependencyUnavailableError):
         await api.reply(MAILBOX, "g1", "x")
+
+
+@pytest.mark.asyncio
+async def test_send_posts_a_plain_text_message_from_the_mailbox() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+
+    await api.send(MAILBOX, "carla@jdh.com.co", "Nuevo caso asignado", "Hola Carla")
+
+    (request,) = graph.requests
+    assert request.method == "POST" and str(request.url).endswith(
+        "/users/pqrsf%40jdh.com.co/sendMail"
+    )
+    assert json.loads(request.content) == {
+        "message": {
+            "subject": "Nuevo caso asignado",
+            "body": {"contentType": "Text", "content": "Hola Carla"},
+            "toRecipients": [{"emailAddress": {"address": "carla@jdh.com.co"}}],
+        },
+        "saveToSentItems": True,
+    }

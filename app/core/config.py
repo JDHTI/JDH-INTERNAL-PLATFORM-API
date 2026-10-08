@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     PQRSF_MANAGER_AREA_SLUG: str = "calidad"
     PQRSF_TIMEZONE: str = "America/Bogota"
     PQRSF_HOLIDAYS_COUNTRY: str = "CO"
+    # Public holidays API for the business-day check of the timers (Nager.Date, no key).
+    PQRSF_HOLIDAYS_API_URL: str = "https://date.nager.at/api/v3"
+    # Emails sent from the PQRSF mailbox: assignment notices and the two timers.
+    PQRSF_NOTIFICATIONS_ENABLED: bool = False
+    # Frontend root used for links in the emails (blank leaves the links out).
+    PQRSF_UI_BASE_URL: str = ""
+    # Testing: send every PQRSF email to this address instead of its recipient.
+    PQRSF_NOTIFY_REDIRECT: str = ""
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -219,14 +227,14 @@ class Settings(BaseSettings):
                 datetime.fromisoformat(self.MAIL_INTAKE_SINCE.strip())
             except ValueError as exc:
                 raise ValueError("MAIL_INTAKE_SINCE must be an ISO date-time") from exc
-        if self.MAIL_INTAKE_ENABLED and not (
+        if (self.MAIL_INTAKE_ENABLED or self.PQRSF_NOTIFICATIONS_ENABLED) and not (
             (self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID)
             and self.MAIL_GRAPH_CLIENT_ID
             and self.MAIL_GRAPH_CLIENT_SECRET.get_secret_value()
         ):
             raise ValueError(
-                "MAIL_INTAKE_ENABLED needs a tenant, MAIL_GRAPH_CLIENT_ID "
-                "and MAIL_GRAPH_CLIENT_SECRET"
+                "MAIL_INTAKE_ENABLED and PQRSF_NOTIFICATIONS_ENABLED need a tenant, "
+                "MAIL_GRAPH_CLIENT_ID and MAIL_GRAPH_CLIENT_SECRET"
             )
         return self
 
@@ -334,6 +342,10 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.PQRSF_MANAGER_AREA_SLUG,
                 "timezone": self.PQRSF_TIMEZONE,
                 "holidays_country": self.PQRSF_HOLIDAYS_COUNTRY,
+                "holidays_api_url": self.PQRSF_HOLIDAYS_API_URL,
+                "notifications_enabled": self.PQRSF_NOTIFICATIONS_ENABLED,
+                "ui_base_url": self.PQRSF_UI_BASE_URL,
+                "notify_redirect": self.PQRSF_NOTIFY_REDIRECT,
             },
             "mail": {
                 "tenant_id": self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,

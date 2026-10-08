@@ -18,6 +18,7 @@ from app.modules.pqrsf.domain.entities import (
     RequestType,
     SanitizedImage,
 )
+from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
     CaseEvent,
@@ -279,6 +280,64 @@ class EmailRepository(Protocol):
 
     async def get_attachment(self, case_id: UUID, attachment_id: UUID) -> CaseAttachment | None:
         """One attachment owned by the case."""
+        ...
+
+
+class NotificationRepository(Protocol):
+    """Store the email outbox, the organization timers and which jobs ran each day."""
+
+    async def enqueue(self, notification: Notification) -> bool:
+        """Queue an email; ``False`` when its dedupe key was already queued."""
+        ...
+
+    async def claim_due(self, now: datetime, limit: int) -> list[Notification]:
+        """Pending emails whose next attempt is due, oldest first."""
+        ...
+
+    async def save_notification(self, notification: Notification) -> None:
+        """Persist the status, attempts and error of a queued email."""
+        ...
+
+    async def get_settings(self) -> dict | None:
+        """The stored timers, or ``None`` before anyone changed them."""
+        ...
+
+    async def save_settings(self, value: dict, user_id: UUID) -> None:
+        """Replace the timers."""
+        ...
+
+    async def claim_job_run(self, job: str, run_date: date) -> bool:
+        """Record that a job runs on a date; ``False`` when it already did."""
+        ...
+
+    async def release_job_run(self, job: str, run_date: date) -> None:
+        """Forget a run that failed so the next tick can try again."""
+        ...
+
+
+class AssignmentNotifier(Protocol):
+    """Tell someone a case was handed to them (implemented by the notification service)."""
+
+    async def case_assigned(
+        self, case: TrackingCase, assignee: DirectoryUser, actor: Principal, note: str | None
+    ) -> None:
+        """Queue the «you have a new case» email."""
+        ...
+
+
+class RecipientDirectory(Protocol):
+    """Who receives the area-wide emails."""
+
+    async def team_user_ids(self) -> list[UUID]:
+        """Active members of the area that manages PQRSF."""
+        ...
+
+
+class HolidayProvider(Protocol):
+    """Decide whether a date is a working day."""
+
+    async def is_business_day(self, day: date) -> bool:
+        """Monday to Friday and not a public holiday."""
         ...
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Container
 from datetime import date, datetime
 from functools import lru_cache
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import holidays
@@ -66,6 +67,31 @@ class HolidayCalendar:
         """
 
         return _country_holidays(self.country, start.year, max(start.year, end.year))
+
+
+class AreaTeamDirectory:
+    """The members of the managing area: who receives the team-wide emails."""
+
+    def __init__(self, areas: AreaService, area_slug: str | None) -> None:
+        """Create the directory.
+
+        Args:
+            areas (AreaService): Area use cases.
+            area_slug (str | None): Area whose members form the team; blank means nobody.
+        """
+
+        self.areas = areas
+        self.area_slug = (area_slug or "").strip() or None
+
+    async def team_user_ids(self) -> list[UUID]:
+        """User identifiers of the area's members (empty when the area does not exist)."""
+
+        if self.area_slug is None:
+            return []
+        try:
+            return await self.areas.member_user_ids(self.area_slug)
+        except NotFoundError:
+            return []
 
 
 class AreaManagerPolicy:
