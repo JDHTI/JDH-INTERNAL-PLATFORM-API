@@ -22,6 +22,10 @@ Descripción:
 
 - Las claves no distinguen mayúsculas ni tildes y admiten sinónimos
   (`Razón social`/`Empresa`, `Descripción`/`Detalle`, `Motivo`/`Asunto`…).
+- **El asunto del caso es el Asunto del correo** (sin `RE:`/`[etiquetas]`), el mismo texto que ve el
+  equipo en el buzón. La línea `Motivo:` es opcional: si dice lo mismo no cambia nada; si
+  es distinta, se conserva como primera línea de la descripción (`Motivo: …`). Si el correo
+  no tiene un asunto útil, el Motivo pasa a ser el asunto.
 - Solo la descripción es necesaria. Un correo sin plantilla **igual abre el caso**
   (tipo Petición, descripción = cuerpo, motivo = asunto) y queda marcado
   `needs_review` para que un gestor lo revise; el acuse incluye la plantilla.
