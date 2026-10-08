@@ -328,12 +328,58 @@ async def test_responsible_opening_the_case_marks_it_read() -> None:
     view = await s.service.create_case(s.command(), s.seller)
     await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
 
-    untouched = await s.service.mark_read(view.case.id, s.admin)
-    assert untouched.case.status.code == "recibida"
-
     read = await s.service.mark_read(view.case.id, s.responsible)
+
     assert read.case.status.code == "leida"
     assert read.case.first_read_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_manager_opening_a_received_case_marks_it_read_but_not_for_the_responsible() -> (
+    None
+):
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+
+    by_manager = await s.service.mark_read(view.case.id, s.admin)
+
+    assert by_manager.case.status.code == "leida"
+    assert by_manager.case.first_read_at is None  # that is the responsible's own reading
+    read = [e for e in s.cases.events if e.event_type == EventType.READ]
+    assert [(e.actor_user_id, e.to_status_id) for e in read] == [(s.admin.user_id, s.leida.id)]
+
+    by_responsible = await s.service.mark_read(view.case.id, s.responsible)
+
+    assert by_responsible.case.status.code == "leida" and by_responsible.case.first_read_at
+    read = [e for e in s.cases.events if e.event_type == EventType.READ]
+    assert [e.actor_user_id for e in read] == [s.admin.user_id, s.responsible.user_id]
+    assert read[1].to_status_id is None  # the status was already moved
+
+
+@pytest.mark.asyncio
+async def test_opening_a_case_that_is_not_received_never_changes_its_status() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.change_status(view.case.id, s.en_curso.id, None, s.admin)
+
+    opened = await s.service.mark_read(view.case.id, s.admin)
+
+    assert opened.case.status.code == "en_curso"
+    assert not [e for e in s.cases.events if e.event_type == EventType.READ]
+
+
+@pytest.mark.asyncio
+async def test_someone_who_can_only_see_the_case_does_not_move_its_status() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)  # the seller raised it: view only
+
+    opened = await s.service.mark_read(view.case.id, s.seller)
+
+    assert opened.case.status.code == "recibida"
+    assert [e.event_type for e in s.cases.events if e.actor_user_id == s.seller.user_id][-1] == (
+        EventType.VIEWED
+    )
 
 
 def _types(s: "Setup") -> list[str]:
@@ -345,6 +391,8 @@ async def test_every_opening_is_recorded_once_per_window() -> None:
     s = Setup()
     view = await s.service.create_case(s.command(), s.seller)
 
+    # The first opening by a manager moves the case to read; the next ones are access records.
+    await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.seller)

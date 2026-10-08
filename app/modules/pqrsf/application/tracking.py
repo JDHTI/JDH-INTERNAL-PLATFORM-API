@@ -1219,10 +1219,13 @@ class CaseTrackingService:
     async def mark_read(self, case_id: UUID, principal: Principal) -> CaseView:
         """Record that someone opened the case.
 
-        The responsible's first opening moves an initial case to the ``leida``
-        status when that status exists and is active. Every other opening, by
-        anyone, leaves a ``viewed`` access record (one per person and case every
-        30 minutes) so the history shows who saw the case and when.
+        Opening the case moves it from the initial status to ``leida`` (when that status
+        exists and is active) if the caller can work it: its responsible or a manager.
+        Someone who can only see the case (who raised it) does not change its status,
+        and every other status change stays manual. ``first_read_at`` is the
+        responsible's own first opening, so a manager reading it first does not take it
+        over. Any opening that changes nothing leaves a ``viewed`` access record (one per
+        person and case every 30 minutes) so the history shows who saw the case and when.
 
         Args:
             case_id (UUID): Case identifier.
@@ -1232,29 +1235,32 @@ class CaseTrackingService:
             CaseView: The case after the change.
         """
 
-        case, _, is_manager = await self._load(case_id, principal)
-        if case.assignee_user_id != principal.user_id or case.first_read_at is not None:
+        case, access, is_manager = await self._load(case_id, principal)
+        first_by_responsible = (
+            case.assignee_user_id == principal.user_id and case.first_read_at is None
+        )
+        read_status = (
+            await self._active_status_by_code(READ_STATUS_CODE)
+            if case.status.is_initial and access.can_work
+            else None
+        )
+        if not first_by_responsible and read_status is None:
             await self._record_access(EventType.VIEWED, principal, case.id)
             return await self._view(case, principal, is_manager)
-        case.first_read_at = datetime.now(UTC)
-        events = []
-        read_status = (
-            await self._active_status_by_code(READ_STATUS_CODE) if case.status.is_initial else None
-        )
+        if first_by_responsible:
+            case.first_read_at = datetime.now(UTC)
         if read_status is not None:
-            events.append(
-                self._event(
-                    case.id,
-                    EventType.READ,
-                    principal.user_id,
-                    from_status=case.status.id,
-                    to_status=read_status.id,
-                )
+            event = self._event(
+                case.id,
+                EventType.READ,
+                principal.user_id,
+                from_status=case.status.id,
+                to_status=read_status.id,
             )
             case.status = read_status
         else:
-            events.append(self._event(case.id, EventType.READ, principal.user_id))
-        stored = await self.repository.save_case(case, events)
+            event = self._event(case.id, EventType.READ, principal.user_id)
+        stored = await self.repository.save_case(case, [event])
         return await self._view(stored, principal, is_manager)
 
     async def require_work(self, case_id: UUID, principal: Principal) -> TrackingCase:
