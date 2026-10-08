@@ -104,6 +104,9 @@ class FakeEmails:
     async def add_attachments(self, attachments):
         self.attachments.extend(attachments)
 
+    async def list_attachments(self, case_id):
+        return [a for a in self.attachments if a.case_id == case_id]
+
 
 class FakeSites:
     def __init__(self, sites) -> None:
@@ -383,7 +386,7 @@ async def test_files_are_cleaned_scanned_and_stored_under_the_case() -> None:
         {
             file("soporte.pdf"): PDF,
             file("foto.png"): b"imagen",
-            file("logo.png", inline=True): b"firma",
+            file("captura.png", inline=True): b"pegada en el cuerpo",
         },
     )
 
@@ -391,7 +394,8 @@ async def test_files_are_cleaned_scanned_and_stored_under_the_case() -> None:
 
     (case,) = t.cases()
     saved = t.emails.attachments
-    assert sorted(a.original_filename for a in saved) == ["foto.png", "soporte.pdf"]
+    # A picture pasted into the body is evidence too: inline images are kept.
+    assert sorted(a.original_filename for a in saved) == ["captura.png", "foto.png", "soporte.pdf"]
     assert all(a.case_id == case.id for a in saved)
     assert all(a.storage_key.startswith(f"pqrsf/cases/{case.id}/") for a in saved)
     assert {a.storage_key for a in saved} == set(t.storage.objects)
@@ -483,7 +487,10 @@ async def test_a_scanner_outage_is_retried_without_a_second_case_or_answer() -> 
 async def test_a_bucket_outage_leaves_no_orphan_objects_and_stops_after_the_attempts() -> None:
     t = Intake(max_attempts=2)
     t.storage.fail_after = 1  # the first file is stored, the second one fails
-    t.mail.add(t.message(TEMPLATE, has_attachments=True), {file("a.pdf"): PDF, file("b.pdf"): PDF})
+    t.mail.add(
+        t.message(TEMPLATE, has_attachments=True),
+        {file("a.pdf"): PDF, file("b.pdf"): PDF + b" distinto"},
+    )
 
     await t.service.sync()
     await t.service.sync()
@@ -514,3 +521,62 @@ def test_the_cases_table_accepts_the_email_origin() -> None:
     check = next(c for c in CaseModel.__table__.constraints if c.name == "ck_pqrsf_cases_origin")
 
     assert "'email'" in str(check.sqltext)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "content", "expected"),
+    [
+        ("seguimiento.csv", b"a;b\n1;2\n", "text/csv"),
+        (
+            "hoja.xlsx",
+            b"PK\x03\x04 hoja",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        ("antiguo.xls", b"\xd0\xcf\x11\xe0 hoja", "application/vnd.ms-excel"),
+        ("nota.txt", b"hola", "text/plain"),
+    ],
+)
+async def test_content_types_come_from_a_fixed_table_not_the_operating_system(
+    name, content, expected
+) -> None:
+    t = Intake(allowed_extensions=["csv", "xlsx", "xls", "txt"])
+    t.mail.add(t.message(TEMPLATE, has_attachments=True), {file(name): content})
+
+    await t.service.sync()
+
+    assert [a.content_type for a in t.emails.attachments] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_a_signature_logo_repeated_in_every_reply_is_kept_once() -> None:
+    t = Intake()
+    t.mail.add(
+        t.message(TEMPLATE, has_attachments=True, conversation_id="thread"),
+        {file("logo.png", inline=True, ident="a1"): b"logo de firma"},
+    )
+    await t.service.sync()
+    t.mail.add(
+        t.message("Adjunto otro dato", has_attachments=True, conversation_id="thread"),
+        {
+            file("image001.png", inline=True, ident="a2"): b"logo de firma",
+            file("extra.pdf", ident="a3"): PDF,
+        },
+    )
+
+    await t.service.sync()
+
+    assert sorted(a.original_filename for a in t.emails.attachments) == ["extra.pdf", "logo.png"]
+
+
+@pytest.mark.asyncio
+async def test_inline_objects_that_are_not_pictures_are_skipped() -> None:
+    t = Intake()
+    t.mail.add(
+        t.message(TEMPLATE, has_attachments=True),
+        {file("firma.pdf", inline=True): PDF, file("foto.png", inline=True): b"imagen"},
+    )
+
+    await t.service.sync()
+
+    assert [a.original_filename for a in t.emails.attachments] == ["foto.png"]
