@@ -7,11 +7,16 @@ import logging
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
 from app.core.errors import DependencyUnavailableError, InvalidInputError
-from app.modules.mail.domain import InboundMessage, MailAttachment, MailGateway
+from app.modules.mail.domain import InboundMessage, MailGateway
+from app.modules.pqrsf.application.attachment_guard import (
+    IMAGE_EXTENSIONS,
+    AttachmentGuard,
+    extension_of,
+    safe_filename,
+)
 from app.modules.pqrsf.domain.email import (
     CREATED,
     FAILED,
@@ -47,38 +52,6 @@ from app.modules.sites.domain.entities import Site
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUEST_TYPE = "peticion"
-_IMAGE_EXTENSIONS = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "webp": "image/webp",
-}
-# Fixed, so a file is labeled the same on every machine (``mimetypes`` reads the OS
-# registry: on Windows it calls a CSV ``application/vnd.ms-excel``).
-_DOCUMENT_TYPES = {
-    "pdf": "application/pdf",
-    "doc": "application/msword",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "xls": "application/vnd.ms-excel",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "ppt": "application/vnd.ms-powerpoint",
-    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "csv": "text/csv",
-    "txt": "text/plain",
-}
-_OLE = b"\xd0\xcf\x11\xe0"
-_ZIP = b"PK\x03\x04"
-# What a file of each type must start with; plain text only has to be free of NUL bytes.
-_SIGNATURES = {
-    "pdf": (b"%PDF-",),
-    "doc": (_OLE,),
-    "xls": (_OLE,),
-    "ppt": (_OLE,),
-    "docx": (_ZIP,),
-    "xlsx": (_ZIP,),
-    "pptx": (_ZIP,),
-}
-_TEXT_EXTENSIONS = {"txt", "csv"}
 _EXCERPT = 500
 
 
@@ -103,22 +76,6 @@ class _Stored:
 def _trim(value: str | None, size: int) -> str | None:
     cleaned = " ".join((value or "").split())
     return cleaned[:size] or None
-
-
-def _filename(name: str) -> str:
-    base = PurePosixPath(name.replace("\\", "/")).name
-    cleaned = "".join(c for c in base if c.isprintable() and c not in '<>:"|?*').strip()
-    return cleaned[:255]
-
-
-def _extension(name: str) -> str:
-    return name.rsplit(".", 1)[1].lower() if "." in name else ""
-
-
-def _signature_ok(extension: str, content: bytes) -> bool:
-    if extension in _TEXT_EXTENSIONS:
-        return b"\x00" not in content[:8192]
-    return any(content.startswith(prefix) for prefix in _SIGNATURES.get(extension, ()))
 
 
 class EmailIntakeService:
@@ -177,16 +134,18 @@ class EmailIntakeService:
         self.requests = requests
         self.sites = sites
         self.storage = storage
-        self.image_processor = image_processor
-        self.malware_scanner = malware_scanner
+        self.guard = AttachmentGuard(
+            image_processor,
+            malware_scanner,
+            allowed_extensions,
+            max_attachments,
+            max_attachment_bytes,
+            max_total_attachment_bytes,
+        )
         self.mailbox = mailbox.lower()
         self.own_addresses = {self.mailbox, *(a.lower() for a in ignored_senders)}
         self.since = since
         self.max_attempts = max_attempts
-        self.max_attachments = max_attachments
-        self.max_attachment_bytes = max_attachment_bytes
-        self.max_total_attachment_bytes = max_total_attachment_bytes
-        self.allowed_extensions = {e.lower() for e in allowed_extensions}
         self.clock = clock
 
     # --- Sync ---
@@ -427,9 +386,12 @@ class EmailIntakeService:
         known = {a.checksum_sha256 for a in await self.emails.list_attachments(row.case_id)}
         try:
             for file in files:
-                if file.is_inline and _extension(_filename(file.name)) not in _IMAGE_EXTENSIONS:
+                if (
+                    file.is_inline
+                    and extension_of(safe_filename(file.name)) not in IMAGE_EXTENSIONS
+                ):
                     continue  # embedded objects that are not pictures
-                reason = self._refuse(file, len(saved), total)
+                reason = self.guard.refuse(file.name, file.size, len(saved), total)
                 if reason:
                     rejected.append({"name": file.name, "reason": reason})
                     continue
@@ -437,7 +399,7 @@ class EmailIntakeService:
                     self.mailbox, message.graph_id, file.id
                 )
                 try:
-                    clean = await self._clean(file, content)
+                    clean = await self.guard.clean(file.name, content)
                 except InvalidInputError as exc:
                     rejected.append({"name": file.name, "reason": str(exc)})
                     continue
@@ -482,41 +444,3 @@ class EmailIntakeService:
                 {"rejected_files": rejected},
             )
         return _Stored(saved, rejected)
-
-    def _refuse(self, file: MailAttachment, count: int, total: int) -> str | None:
-        extension = _extension(_filename(file.name))
-        if extension not in self.allowed_extensions:
-            return "tipo de archivo no permitido"
-        if count >= self.max_attachments:
-            return "supera el máximo de adjuntos por correo"
-        if file.size > self.max_attachment_bytes:
-            return "supera el tamaño máximo por archivo"
-        if total + file.size > self.max_total_attachment_bytes:
-            return "supera el tamaño máximo total"
-        return None
-
-    async def _clean(self, file: MailAttachment, content: bytes) -> tuple[str, str, str, bytes]:
-        """Return (name, extension, content type, bytes) ready to store.
-
-        Raises:
-            InvalidInputError: The file is not what its extension says, or the antivirus refused it.
-        """
-
-        name = _filename(file.name)
-        extension = _extension(name)
-        if not content or len(content) > self.max_attachment_bytes:
-            raise InvalidInputError("archivo vacío o demasiado grande")
-        if extension in _IMAGE_EXTENSIONS:
-            # Re-encoding strips metadata and anything appended after the image.
-            image = await self.image_processor.sanitize(name, _IMAGE_EXTENSIONS[extension], content)
-            data, extension, content_type = image.content, image.extension, image.content_type
-        else:
-            if not _signature_ok(extension, content):
-                raise InvalidInputError("el contenido no corresponde a su extensión")
-            data = content
-            content_type = _DOCUMENT_TYPES.get(extension, "application/octet-stream")
-        try:
-            await self.malware_scanner.scan(data)
-        except InvalidInputError as exc:
-            raise InvalidInputError("rechazado por el antivirus") from exc
-        return name, extension, content_type, data

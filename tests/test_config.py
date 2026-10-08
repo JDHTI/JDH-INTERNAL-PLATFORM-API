@@ -44,3 +44,22 @@ def test_mail_intake_start_date_is_an_aware_datetime() -> None:
     assert naive.mail_intake_since == datetime(2026, 10, 8, 9, tzinfo=UTC)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, MAIL_INTAKE_SINCE="ayer")
+
+
+def test_pqrsf_notifications_need_graph_credentials_to_be_switched_on() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, PQRSF_NOTIFICATIONS_ENABLED=True)
+
+    ready = Settings(
+        _env_file=None,
+        PQRSF_NOTIFICATIONS_ENABLED=True,
+        PQRSF_UI_BASE_URL="http://localhost:3000",
+        PQRSF_NOTIFY_REDIRECT="analista.ti@jdh.com.co",
+        ENTRA_TENANT_ID="tenant",
+        MAIL_GRAPH_CLIENT_ID="app",
+        MAIL_GRAPH_CLIENT_SECRET="secret",
+    )
+    config = ready.container_config()["pqrsf"]
+    assert config["notifications_enabled"] is True
+    assert config["notify_redirect"] == "analista.ti@jdh.com.co"
+    assert config["holidays_api_url"] == "https://date.nager.at/api/v3"

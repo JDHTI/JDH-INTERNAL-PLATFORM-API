@@ -23,12 +23,23 @@ from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
+from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
+from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
-from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, HolidayCalendar
+from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
+from app.modules.pqrsf.infrastructure.notification_repository import (
+    SqlAlchemyNotificationRepository,
+)
+from app.modules.pqrsf.infrastructure.policies import (
+    AreaManagerPolicy,
+    AreaTeamDirectory,
+    HolidayCalendar,
+)
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
@@ -155,6 +166,44 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_manager_policy = providers.Factory(
         AreaManagerPolicy, areas=area_service, area_slug=config.pqrsf.manager_area_slug
     )
+    # --- PQRSF emails sent from the mailbox (Microsoft Graph) ---
+    mail_client = providers.Singleton(
+        GraphMailClient,
+        tenant_id=config.mail.tenant_id,
+        client_id=config.mail.client_id,
+        client_secret=config.mail.client_secret,
+    )
+    pqrsf_team = providers.Factory(
+        AreaTeamDirectory, areas=area_service, area_slug=config.pqrsf.manager_area_slug
+    )
+    pqrsf_holidays = providers.Singleton(
+        NagerHolidayProvider,
+        country=config.pqrsf.holidays_country,
+        fallback=pqrsf_calendar,
+        base_url=config.pqrsf.holidays_api_url,
+    )
+    pqrsf_notification_repository = providers.Factory(
+        SqlAlchemyNotificationRepository, database=database
+    )
+    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
+    pqrsf_notification_service = providers.Factory(
+        NotificationService,
+        repository=pqrsf_notification_repository,
+        cases=pqrsf_case_repository,
+        people=user_directory,
+        team=pqrsf_team,
+        mail=mail_client,
+        managers=pqrsf_manager_policy,
+        holidays=pqrsf_holidays,
+        mailbox=config.mail.pqrsf_inbox,
+        area_slug=config.pqrsf.manager_area_slug,
+        ui_base_url=config.pqrsf.ui_base_url,
+        timezone=config.pqrsf.timezone,
+        redirect_to=config.pqrsf.notify_redirect,
+        enabled=config.pqrsf.notifications_enabled,
+        emails=pqrsf_email_repository,
+        storage=storage,
+    )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
         repository=pqrsf_case_repository,
@@ -163,6 +212,7 @@ class V1Container(containers.DeclarativeContainer):
         people=user_directory,
         managers=pqrsf_manager_policy,
         calendar=pqrsf_calendar,
+        notifier=pqrsf_notification_service,
     )
     pqrsf_image_processor = providers.Singleton(
         PillowImageProcessor,
@@ -175,19 +225,12 @@ class V1Container(containers.DeclarativeContainer):
         port=config.pqrsf.clamav_port,
         timeout=config.pqrsf.clamav_timeout,
     )
-    # --- PQRSF by email (Microsoft Graph) ---
-    mail_client = providers.Singleton(
-        GraphMailClient,
-        tenant_id=config.mail.tenant_id,
-        client_id=config.mail.client_id,
-        client_secret=config.mail.client_secret,
-    )
+    # --- PQRSF by email: reading the mailbox ---
     mail_image_processor = providers.Singleton(
         PillowImageProcessor,
         max_bytes=config.mail.max_attachment_bytes,
         max_pixels=config.pqrsf.max_image_pixels,
     )
-    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
     pqrsf_email_intake_service = providers.Factory(
         EmailIntakeService,
         mail=mail_client,
@@ -206,6 +249,23 @@ class V1Container(containers.DeclarativeContainer):
         max_attachment_bytes=config.mail.max_attachment_bytes,
         max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
         allowed_extensions=config.mail.attachment_extensions,
+    )
+    pqrsf_comment_guard = providers.Factory(
+        AttachmentGuard,
+        image_processor=mail_image_processor,
+        malware_scanner=pqrsf_malware_scanner,
+        allowed_extensions=config.mail.attachment_extensions,
+        max_attachments=config.mail.max_attachments,
+        max_attachment_bytes=config.mail.max_attachment_bytes,
+        max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
+    )
+    pqrsf_comment_service = providers.Factory(
+        CaseCommentService,
+        tracking=pqrsf_tracking_service,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
     )
     pqrsf_case_attachment_service = providers.Factory(
         CaseAttachmentService,

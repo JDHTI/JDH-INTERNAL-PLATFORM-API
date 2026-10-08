@@ -426,6 +426,7 @@ class CaseAttachmentModel(Base):
     __table_args__ = (
         UniqueConstraint("storage_key", name="pqrsf_case_attachments_storage_key_key"),
         Index("ix_pqrsf_case_attachments_case", "case_id", "created_at"),
+        Index("ix_pqrsf_case_attachments_comment", "comment_event_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -441,6 +442,9 @@ class CaseAttachmentModel(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    comment_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_events.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -454,5 +458,64 @@ class MailSyncStateModel(Base):
     mailbox: Mapped[str] = mapped_column(String(320), primary_key=True)
     delta_link: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class NotificationModel(Base):
+    """An email queued from the PQRSF mailbox; a retry never creates a second row."""
+
+    __tablename__ = "pqrsf_notifications"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="pqrsf_notifications_dedupe_key_key"),
+        Index("ix_pqrsf_notifications_due", "status", "next_attempt_at"),
+        Index("ix_pqrsf_notifications_case", "case_id", "kind"),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed')", name="ck_pqrsf_notifications_status"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subject: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="SET NULL")
+    )
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SettingModel(Base):
+    """A module-wide setting kept as JSON (the notification timers)."""
+
+    __tablename__ = "pqrsf_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class JobRunModel(Base):
+    """One row per scheduled job and day: the key that stops it from running twice."""
+
+    __tablename__ = "pqrsf_job_runs"
+
+    job: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

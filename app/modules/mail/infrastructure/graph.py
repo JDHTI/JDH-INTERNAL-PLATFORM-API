@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import html
 import logging
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -12,7 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from app.core.errors import DependencyUnavailableError
-from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment
+from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment, OutgoingFile
 
 logger = logging.getLogger(__name__)
 
@@ -236,14 +239,34 @@ class GraphMailClient:
         assert response is not None
         return response.content
 
-    async def reply(self, mailbox: str, graph_id: str, text: str) -> None:
-        """Reply in the same conversation; Graph quotes the original and keeps the thread."""
+    async def reply(
+        self, mailbox: str, graph_id: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> bool:
+        """Reply in the same conversation; Graph quotes the original and keeps the thread.
 
-        await self._request(
-            "POST",
-            f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}/reply",
-            json={"comment": text},
+        With files the reply goes through a draft (Graph's plain reply takes no
+        attachments): create it, attach each file, send it.
+
+        Returns:
+            bool: ``False`` when the message to answer no longer exists.
+        """
+
+        message = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}"
+        if not files:
+            response = await self._request(
+                "POST", f"{message}/reply", json={"comment": _html(text)}, missing=(404,)
+            )
+            return response is not None
+        draft = await self._request(
+            "POST", f"{message}/createReply", json={"comment": _html(text)}, missing=(404,)
         )
+        if draft is None:
+            return False
+        draft_url = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(draft.json()['id'])}"
+        for file in files:
+            await self._request("POST", f"{draft_url}/attachments", json=_file_attachment(file))
+        await self._request("POST", f"{draft_url}/send")
+        return True
 
     async def mark_processed(self, mailbox: str, graph_id: str, category: str | None) -> None:
         """Mark as read and tag the message with the case code."""
@@ -256,3 +279,36 @@ class GraphMailClient:
             f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}",
             json=payload,
         )
+
+    async def send(
+        self, mailbox: str, to: str, subject: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> None:
+        """Send a plain-text message from the mailbox; it is kept in its Sent Items."""
+
+        message: dict[str, Any] = {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": text},
+            "toRecipients": [{"emailAddress": {"address": to}}],
+        }
+        if files:
+            message["attachments"] = [_file_attachment(file) for file in files]
+        await self._request(
+            "POST",
+            f"{GRAPH_URL}/users/{_segment(mailbox)}/sendMail",
+            json={"message": message, "saveToSentItems": True},
+        )
+
+
+def _html(text: str) -> str:
+    """Plain text as the HTML Graph puts a reply comment into: lines stay lines."""
+
+    return html.escape(text.replace("\r\n", "\n"), quote=False).replace("\n", "<br>")
+
+
+def _file_attachment(file: OutgoingFile) -> dict[str, Any]:
+    return {
+        "@odata.type": _FILE_ATTACHMENT,
+        "name": file.name,
+        "contentType": file.content_type,
+        "contentBytes": base64.b64encode(file.content).decode("ascii"),
+    }
