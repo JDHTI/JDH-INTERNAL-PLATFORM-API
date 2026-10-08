@@ -221,11 +221,12 @@ async def test_a_template_email_opens_a_case_and_is_answered() -> None:
     assert case.origin == "email"
     assert case.request_type.code == "felicitacion"
     assert case.site == t.medellin
-    assert case.subject == "Buen servicio"
+    # The subject is the email's Subject header; a different Motivo opens the description.
+    assert case.subject == "Una solicitud"
     assert case.requester_name == "Ana Pérez"
     assert case.requester_email == "ana@cliente.com"
     assert (case.customer_name, case.customer_nit) == ("XYZ SAS", "900123456-7")
-    assert case.description == "Gracias por la entrega."
+    assert case.description == "Motivo: Buen servicio\n\nGracias por la entrega."
     assert case.code == "F26MD0001"
     assert case.received_on == NOW.date()
     ((graph_id, text),) = t.mail.replies
@@ -580,3 +581,35 @@ async def test_inline_objects_that_are_not_pictures_are_skipped() -> None:
     await t.service.sync()
 
     assert [a.original_filename for a in t.emails.attachments] == ["foto.png"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("subject", "motivo", "expected_subject", "expected_description"),
+    [
+        # Same text in both places: nothing to add to the description.
+        (
+            "RE: Nota crédito factura FV-1234",
+            "nota credito factura fv-1234",
+            "Nota crédito factura FV-1234",
+            "Detalle.",
+        ),
+        # Different Motivo: the header wins and the Motivo is kept.
+        ("Factura", "Cambio de factura", "Factura", "Motivo: Cambio de factura\n\nDetalle."),
+        # No usable header (only a tag): the Motivo becomes the subject.
+        ("[PQRSF]", "Cambio de factura", "Cambio de factura", "Detalle."),
+        # No Motivo at all.
+        ("Factura", None, "Factura", "Detalle."),
+    ],
+)
+async def test_the_case_subject_is_the_email_subject_and_the_motivo_is_kept_if_it_differs(
+    subject, motivo, expected_subject, expected_description
+) -> None:
+    t = Intake()
+    body = "Tipo: Petición\n" + (f"Motivo: {motivo}\n" if motivo else "") + "Descripción:\nDetalle."
+    t.mail.add(t.message(body, subject=subject))
+
+    await t.service.sync()
+
+    (case,) = t.cases()
+    assert (case.subject, case.description) == (expected_subject, expected_description)

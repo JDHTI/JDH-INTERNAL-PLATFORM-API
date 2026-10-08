@@ -31,6 +31,7 @@ from app.modules.pqrsf.domain.email import (
     case_attachment_key,
     clean_subject,
     find_case_code,
+    fold,
     is_automatic,
     match_name,
     parse_request,
@@ -314,12 +315,19 @@ class EmailIntakeService:
         )
         chosen = request_type or await self._default_type()
         description = parsed.description or message.body_text.strip() or "(sin contenido)"
+        # The case subject is what the client wrote in the Subject of the email, the same
+        # text the team sees in the mailbox. A different «Motivo:» line is not lost: it
+        # opens the description.
+        header = _trim(clean_subject(message.subject), 200)
+        reason = _trim(parsed.subject, 200)
+        if reason and header and fold(reason) != fold(header):
+            description = f"Motivo: {reason}\n\n{description}"
         case = await self.cases.open_from_email(
             EmailCaseInput(
                 request_type=chosen,
                 site=site,
                 received_at=message.received_at,
-                subject=_trim(parsed.subject or clean_subject(message.subject), 200),
+                subject=header or reason,
                 description=description,
                 requester_name=_trim(parsed.requester_name or message.sender_name, 200),
                 requester_email=message.sender_address,
