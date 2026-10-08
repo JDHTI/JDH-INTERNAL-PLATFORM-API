@@ -250,7 +250,7 @@ class CaseModel(Base):
             name="pqrsf_cases_type_year_series_number_key",
         ),
         CheckConstraint(
-            "origin IN ('public_form', 'internal', 'import')", name="ck_pqrsf_cases_origin"
+            "origin IN ('public_form', 'internal', 'import', 'email')", name="ck_pqrsf_cases_origin"
         ),
         Index("ix_pqrsf_cases_status", "status_id"),
         Index("ix_pqrsf_cases_assignee_status", "assignee_user_id", "status_id"),

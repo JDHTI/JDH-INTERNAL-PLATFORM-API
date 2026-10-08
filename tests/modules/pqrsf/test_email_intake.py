@@ -505,3 +505,12 @@ async def test_a_message_deleted_before_a_retry_is_dropped() -> None:
     await t.service.sync()
 
     assert t.emails.messages["<m1@x>"].status == "ignored"
+
+
+def test_the_cases_table_accepts_the_email_origin() -> None:
+    # The fakes accept any origin; the database does not, so the schema must list it.
+    from app.modules.pqrsf.infrastructure.models import CaseModel
+
+    check = next(c for c in CaseModel.__table__.constraints if c.name == "ck_pqrsf_cases_origin")
+
+    assert "'email'" in str(check.sqltext)

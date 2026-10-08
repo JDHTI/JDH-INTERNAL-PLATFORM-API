@@ -19,7 +19,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create the email intake tables."""
+    """Allow the ``email`` origin and create the email intake tables."""
+
+    op.drop_constraint("ck_pqrsf_cases_origin", "pqrsf_cases", type_="check")
+    op.create_check_constraint(
+        "ck_pqrsf_cases_origin",
+        "pqrsf_cases",
+        "origin IN ('public_form', 'internal', 'import', 'email')",
+    )
 
     op.create_table(
         "pqrsf_email_messages",
@@ -57,7 +64,9 @@ def upgrade() -> None:
     op.create_index(
         "ix_pqrsf_email_messages_conversation", "pqrsf_email_messages", ["conversation_id"]
     )
-    op.create_index("ix_pqrsf_email_messages_case", "pqrsf_email_messages", ["case_id", "received_at"])
+    op.create_index(
+        "ix_pqrsf_email_messages_case", "pqrsf_email_messages", ["case_id", "received_at"]
+    )
     op.create_index("ix_pqrsf_email_messages_status", "pqrsf_email_messages", ["status"])
 
     op.create_table(
@@ -100,8 +109,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop the email intake tables."""
+    """Drop the email intake tables; cases opened by email become internal ones."""
 
+    op.execute("UPDATE pqrsf_cases SET origin = 'internal' WHERE origin = 'email'")
+    op.drop_constraint("ck_pqrsf_cases_origin", "pqrsf_cases", type_="check")
+    op.create_check_constraint(
+        "ck_pqrsf_cases_origin", "pqrsf_cases", "origin IN ('public_form', 'internal', 'import')"
+    )
     op.drop_table("pqrsf_mail_sync_state")
     op.drop_index("ix_pqrsf_case_attachments_case", table_name="pqrsf_case_attachments")
     op.drop_table("pqrsf_case_attachments")
