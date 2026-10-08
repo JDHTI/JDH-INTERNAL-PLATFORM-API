@@ -282,6 +282,14 @@ class EmailRepository(Protocol):
         """One attachment owned by the case."""
         ...
 
+    async def get_attachments(self, case_id: UUID, ids: list[UUID]) -> list[CaseAttachment]:
+        """Several attachments of one case, in the order asked."""
+        ...
+
+    async def latest_inbound_graph_id(self, case_id: UUID) -> str | None:
+        """The newest message the client sent for the case, to answer inside its thread."""
+        ...
+
 
 class NotificationRepository(Protocol):
     """Store the email outbox, the organization timers and which jobs ran each day."""
@@ -296,6 +304,14 @@ class NotificationRepository(Protocol):
 
     async def save_notification(self, notification: Notification) -> None:
         """Persist the status, attempts and error of a queued email."""
+        ...
+
+    async def get_notification(self, notification_id: UUID) -> Notification | None:
+        """One queued email by identifier."""
+        ...
+
+    async def list_for_case(self, case_id: UUID, kind: str) -> list[Notification]:
+        """The emails of one kind queued for a case, oldest first."""
         ...
 
     async def get_settings(self) -> dict | None:

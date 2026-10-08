@@ -166,6 +166,24 @@ def clean_required(value: str, field: str, max_length: int) -> str:
     return cleaned
 
 
+def clean_multiline(value: str | None, field: str, max_length: int) -> str | None:
+    """Normalize free text that keeps its lines: a comment, a reply.
+
+    Spaces collapse inside each line, line breaks stay, and a run of blank lines becomes
+    one. Returns ``None`` when nothing is left.
+    """
+
+    if value is None:
+        return None
+    lines = [" ".join(line.split()) for line in value.replace("\r\n", "\n").split("\n")]
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_length:
+        raise InvalidInputError(f"El campo {field} admite máximo {max_length} caracteres")
+    return cleaned
+
+
 def clean_optional(value: str | None, field: str, max_length: int) -> str | None:
     """Normalize an optional text value and return ``None`` when blank."""
 

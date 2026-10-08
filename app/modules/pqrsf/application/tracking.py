@@ -24,7 +24,12 @@ from app.modules.pqrsf.application.dto import (
     TrackingCatalog,
 )
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
-from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType, clean_optional
+from app.modules.pqrsf.domain.entities import (
+    PqrsfRequest,
+    RequestType,
+    clean_multiline,
+    clean_optional,
+)
 from app.modules.pqrsf.domain.ports import (
     AssignmentNotifier,
     BusinessCalendar,
@@ -1252,23 +1257,31 @@ class CaseTrackingService:
         stored = await self.repository.save_case(case, events)
         return await self._view(stored, principal, is_manager)
 
-    async def add_comment(self, case_id: UUID, body: str, principal: Principal) -> EventView:
+    async def require_work(self, case_id: UUID, principal: Principal) -> TrackingCase:
+        """Return the case when the caller may work it (its responsible or a manager)."""
+
+        return await self._load_for_work(case_id, principal)
+
+    async def add_comment(
+        self, case_id: UUID, body: str, principal: Principal, data: dict | None = None
+    ) -> EventView:
         """Write in the case timeline.
 
         Args:
             case_id (UUID): Case identifier.
             body (str): Comment text.
             principal (Principal): Anyone who can see the case.
+            data (dict | None): Extra detail kept with the entry (files, client reply).
 
         Returns:
             EventView: The new timeline entry.
         """
 
         case, _, _ = await self._load(case_id, principal)
-        text = clean_optional(body, "comentario", 5_000)
+        text = clean_multiline(body, "comentario", 5_000)
         if text is None:
             raise InvalidInputError("El comentario no puede estar vacío")
-        event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text)
+        event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor)

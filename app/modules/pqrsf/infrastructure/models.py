@@ -426,6 +426,7 @@ class CaseAttachmentModel(Base):
     __table_args__ = (
         UniqueConstraint("storage_key", name="pqrsf_case_attachments_storage_key_key"),
         Index("ix_pqrsf_case_attachments_case", "case_id", "created_at"),
+        Index("ix_pqrsf_case_attachments_comment", "comment_event_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -441,6 +442,9 @@ class CaseAttachmentModel(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    comment_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_events.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -465,6 +469,7 @@ class NotificationModel(Base):
     __table_args__ = (
         UniqueConstraint("dedupe_key", name="pqrsf_notifications_dedupe_key_key"),
         Index("ix_pqrsf_notifications_due", "status", "next_attempt_at"),
+        Index("ix_pqrsf_notifications_case", "case_id", "kind"),
         CheckConstraint(
             "status IN ('pending', 'sent', 'failed')", name="ck_pqrsf_notifications_status"
         ),
@@ -485,6 +490,7 @@ class NotificationModel(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

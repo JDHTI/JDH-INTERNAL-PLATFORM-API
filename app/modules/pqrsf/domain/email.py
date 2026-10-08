@@ -272,6 +272,8 @@ class CaseAttachment:
     checksum_sha256: str
     storage_key: str
     created_at: datetime
+    # The timeline comment the file was attached to; empty for files that came by email.
+    comment_event_id: UUID | None = None
 
 
 def case_attachment_key(case_id: UUID, attachment_id: UUID, extension: str) -> str:

@@ -8,12 +8,13 @@ from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from app.core.errors import ForbiddenError
+from app.core.errors import DependencyUnavailableError, ForbiddenError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
-from app.modules.mail.domain import MailGateway
+from app.modules.mail.domain import MailGateway, OutgoingFile
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
+    CLIENT_REPLY,
     DAILY_SUMMARY,
     FAILED,
     GRACE,
@@ -25,7 +26,9 @@ from app.modules.pqrsf.domain.notifications import (
     retry_after,
 )
 from app.modules.pqrsf.domain.ports import (
+    BinaryStorage,
     CaseRepository,
+    EmailRepository,
     HolidayProvider,
     ManagerPolicy,
     NotificationRepository,
@@ -58,6 +61,8 @@ class NotificationService:
         timezone: str = "America/Bogota",
         redirect_to: str | None = None,
         enabled: bool = True,
+        emails: EmailRepository | None = None,
+        storage: BinaryStorage | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         """Create the service.
@@ -76,6 +81,8 @@ class NotificationService:
             timezone (str): IANA zone of the timers.
             redirect_to (str | None): Sends every email here instead (testing).
             enabled (bool): When off, nothing is queued (assignment notices are skipped).
+            emails (EmailRepository | None): Case files, to attach them to client replies.
+            storage (BinaryStorage | None): Private bucket the case files are read from.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
         """
 
@@ -92,6 +99,8 @@ class NotificationService:
         self.zone = ZoneInfo(timezone)
         self.redirect_to = (redirect_to or "").strip() or None
         self.enabled = enabled
+        self.emails = emails
+        self.storage = storage
         self.clock = clock
 
     # --- Timers ---
@@ -263,7 +272,7 @@ class NotificationService:
                 to, subject = self.redirect_to, f"[PRUEBA para {item.recipient_email}] {subject}"
             now = self.clock()
             try:
-                await self.mail.send(self.mailbox, to, subject, body)
+                await self._deliver(item, to, subject, body)
             except Exception as exc:
                 item.attempts += 1
                 item.error = str(exc)[:500]
@@ -275,6 +284,36 @@ class NotificationService:
                 sent += 1
             await self.repository.save_notification(item)
         return sent
+
+    async def _deliver(self, item: Notification, to: str, subject: str, body: str) -> None:
+        """Send one email; a client reply goes inside the client's conversation when it can."""
+
+        if item.kind != CLIENT_REPLY:
+            await self.mail.send(self.mailbox, to, subject, body)
+            return
+        files = await self._reply_files(item)
+        graph_id = item.payload.get("graph_id")
+        # With a testing redirect the reply must not reach the real client, so it is a
+        # new email to the redirect address instead of an answer inside their thread.
+        if graph_id and not self.redirect_to:
+            if await self.mail.reply(self.mailbox, graph_id, body, files) is not False:
+                return
+            # The message to answer was deleted from the mailbox: write a new email instead.
+        await self.mail.send(self.mailbox, to, subject, body, files)
+
+    async def _reply_files(self, item: Notification) -> list[OutgoingFile]:
+        ids = [UUID(value) for value in item.payload.get("file_ids", [])]
+        if not ids:
+            return []
+        if self.emails is None or self.storage is None or item.case_id is None:
+            raise DependencyUnavailableError("Los adjuntos de la respuesta no están disponibles")
+        found = await self.emails.get_attachments(item.case_id, ids)
+        return [
+            OutgoingFile(
+                a.original_filename, a.content_type, await self.storage.get_object(a.storage_key)
+            )
+            for a in found
+        ]
 
     # --- Helpers ---
 

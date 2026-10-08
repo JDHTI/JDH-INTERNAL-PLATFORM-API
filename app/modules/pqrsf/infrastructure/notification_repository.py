@@ -31,6 +31,7 @@ def _notification(model: NotificationModel) -> Notification:
         sent_at=model.sent_at,
         error=model.error,
         created_at=model.created_at,
+        payload=dict(model.payload or {}),
     )
 
 
@@ -67,6 +68,7 @@ class SqlAlchemyNotificationRepository:
                 status=notification.status,
                 attempts=notification.attempts,
                 next_attempt_at=notification.next_attempt_at,
+                payload=notification.payload,
             )
             .on_conflict_do_nothing(constraint="pqrsf_notifications_dedupe_key_key")
             .returning(NotificationModel.id)
@@ -88,6 +90,24 @@ class SqlAlchemyNotificationRepository:
                 )
                 .order_by(NotificationModel.created_at)
                 .limit(limit)
+            )
+            return [_notification(model) for model in rows]
+
+    async def get_notification(self, notification_id: UUID) -> Notification | None:
+        """One queued email by identifier."""
+
+        async with self.database.session_factory() as session:
+            model = await session.get(NotificationModel, notification_id)
+            return _notification(model) if model else None
+
+    async def list_for_case(self, case_id: UUID, kind: str) -> list[Notification]:
+        """The emails of one kind queued for a case, oldest first."""
+
+        async with self.database.session_factory() as session:
+            rows = await session.scalars(
+                select(NotificationModel)
+                .where(NotificationModel.case_id == case_id, NotificationModel.kind == kind)
+                .order_by(NotificationModel.created_at)
             )
             return [_notification(model) for model in rows]
 

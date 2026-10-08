@@ -23,7 +23,9 @@ from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
+from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
@@ -183,6 +185,7 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_notification_repository = providers.Factory(
         SqlAlchemyNotificationRepository, database=database
     )
+    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
     pqrsf_notification_service = providers.Factory(
         NotificationService,
         repository=pqrsf_notification_repository,
@@ -198,6 +201,8 @@ class V1Container(containers.DeclarativeContainer):
         timezone=config.pqrsf.timezone,
         redirect_to=config.pqrsf.notify_redirect,
         enabled=config.pqrsf.notifications_enabled,
+        emails=pqrsf_email_repository,
+        storage=storage,
     )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
@@ -226,7 +231,6 @@ class V1Container(containers.DeclarativeContainer):
         max_bytes=config.mail.max_attachment_bytes,
         max_pixels=config.pqrsf.max_image_pixels,
     )
-    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
     pqrsf_email_intake_service = providers.Factory(
         EmailIntakeService,
         mail=mail_client,
@@ -245,6 +249,23 @@ class V1Container(containers.DeclarativeContainer):
         max_attachment_bytes=config.mail.max_attachment_bytes,
         max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
         allowed_extensions=config.mail.attachment_extensions,
+    )
+    pqrsf_comment_guard = providers.Factory(
+        AttachmentGuard,
+        image_processor=mail_image_processor,
+        malware_scanner=pqrsf_malware_scanner,
+        allowed_extensions=config.mail.attachment_extensions,
+        max_attachments=config.mail.max_attachments,
+        max_attachment_bytes=config.mail.max_attachment_bytes,
+        max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
+    )
+    pqrsf_comment_service = providers.Factory(
+        CaseCommentService,
+        tracking=pqrsf_tracking_service,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
     )
     pqrsf_case_attachment_service = providers.Factory(
         CaseAttachmentService,

@@ -86,6 +86,26 @@ def assignment(
     return f"Nuevo caso asignado: {case.code}", "\n".join(lines) + "\n" + _link(url) + _FOOTER
 
 
+SIGNATURE = "PQRSF JDH"
+
+
+def client_reply(case: TrackingCase, text: str) -> tuple[str, str]:
+    """A partial reply to the client, written by the team from a case comment.
+
+    The subject carries the consecutive, so the client's answer finds its case even when
+    the conversation is lost; a reply sent inside a thread keeps the original subject.
+    """
+
+    greeting = f"Hola {case.requester_name}," if case.requester_name else "Hola,"
+    subject = f"Respuesta a tu solicitud {case.code}"
+    if case.subject:
+        subject += f": {case.subject[:80]}"
+    body = (
+        f"{greeting}\n\n{text.strip()}\n\nConsecutivo de tu solicitud: {case.code}\n\n{SIGNATURE}"
+    )
+    return subject, body
+
+
 def daily_summary(
     name: str | None, lines: Sequence[str], total: int, overdue: int, today: date, url: str | None
 ) -> tuple[str, str]:

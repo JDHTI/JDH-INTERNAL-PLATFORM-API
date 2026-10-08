@@ -12,6 +12,8 @@ from app.core.errors import InvalidInputError
 ASSIGNMENT = "assignment"
 DAILY_SUMMARY = "daily_summary"
 OVERDUE_REMINDER = "overdue_reminder"
+# A partial reply to the client written from a case comment.
+CLIENT_REPLY = "client_reply"
 
 # Statuses of a queued email.
 PENDING = "pending"
@@ -52,6 +54,9 @@ class Notification:
     sent_at: datetime | None = None
     error: str | None = None
     created_at: datetime | None = None
+    # What a client reply needs beyond text: the comment event, the files to attach and
+    # the message of the client's conversation to answer inside of.
+    payload: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -69,6 +69,12 @@ class FakeOutbox:
     async def save_notification(self, notification):
         pass  # the service mutates the stored object itself
 
+    async def get_notification(self, notification_id):
+        return next((i for i in self.items if i.id == notification_id), None)
+
+    async def list_for_case(self, case_id, kind):
+        return [i for i in self.items if i.case_id == case_id and i.kind == kind]
+
     async def get_settings(self):
         return self.settings
 
