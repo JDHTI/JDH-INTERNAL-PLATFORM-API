@@ -377,3 +377,82 @@ class CaseEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class EmailMessageModel(Base):
+    """An email received at the PQRSF mailbox; its Internet message id deduplicates it."""
+
+    __tablename__ = "pqrsf_email_messages"
+    __table_args__ = (
+        UniqueConstraint("internet_message_id", name="pqrsf_email_messages_internet_id_key"),
+        Index("ix_pqrsf_email_messages_conversation", "conversation_id"),
+        Index("ix_pqrsf_email_messages_case", "case_id", "received_at"),
+        Index("ix_pqrsf_email_messages_status", "status"),
+        CheckConstraint(
+            "status IN ('received', 'created', 'threaded', 'ignored', 'failed')",
+            name="ck_pqrsf_email_messages_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    internet_message_id: Mapped[str] = mapped_column(String(998), nullable=False)
+    graph_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(String(512))
+    mailbox: Mapped[str] = mapped_column(String(320), nullable=False)
+    sender_address: Mapped[str] = mapped_column(String(320), nullable=False)
+    sender_name: Mapped[str | None] = mapped_column(String(320))
+    subject: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    body_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="SET NULL")
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CaseAttachmentModel(Base):
+    """File metadata of an attachment stored in the bucket under its case."""
+
+    __tablename__ = "pqrsf_case_attachments"
+    __table_args__ = (
+        UniqueConstraint("storage_key", name="pqrsf_case_attachments_storage_key_key"),
+        Index("ix_pqrsf_case_attachments_case", "case_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_email_messages.id", ondelete="SET NULL")
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(10), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MailSyncStateModel(Base):
+    """Where the next delta sync of a mailbox starts."""
+
+    __tablename__ = "pqrsf_mail_sync_state"
+
+    mailbox: Mapped[str] = mapped_column(String(320), primary_key=True)
+    delta_link: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

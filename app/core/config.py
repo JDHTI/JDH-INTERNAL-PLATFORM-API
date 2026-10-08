@@ -1,6 +1,7 @@
 """Typed application configuration loaded from environment variables."""
 
 import re
+from datetime import UTC, datetime
 from enum import StrEnum
 from functools import lru_cache
 
@@ -138,6 +139,28 @@ class Settings(BaseSettings):
     PQRSF_TIMEZONE: str = "America/Bogota"
     PQRSF_HOLIDAYS_COUNTRY: str = "CO"
 
+    # Microsoft Graph mail (application permissions, no mailbox passwords). The
+    # app registration is separate from the SSO one; scope it to the mailboxes
+    # with an Exchange Application Access Policy.
+    MAIL_INTAKE_ENABLED: bool = False
+    # Empty falls back to ENTRA_TENANT_ID.
+    MAIL_GRAPH_TENANT_ID: str = ""
+    MAIL_GRAPH_CLIENT_ID: str = ""
+    MAIL_GRAPH_CLIENT_SECRET: SecretStr = SecretStr("")
+    # Mailbox whose inbox becomes PQRSF cases; its replies leave from it too.
+    MAIL_PQRSF_INBOX: str = "pqrsf@jdh.com.co"
+    # Extra addresses (comma-separated) whose mail never opens a case.
+    MAIL_IGNORED_SENDERS: str = "info@jdh.com.co"
+    # ISO date-time. On the first sync only mail received from then on opens cases;
+    # empty means "from the moment it is switched on" (the old inbox is left alone).
+    MAIL_INTAKE_SINCE: str = ""
+    MAIL_POLL_INTERVAL_SECONDS: int = 120
+    MAIL_MAX_ATTEMPTS: int = 5
+    MAIL_MAX_ATTACHMENTS: int = 10
+    MAIL_MAX_ATTACHMENT_MB: int = 10
+    MAIL_MAX_TOTAL_ATTACHMENT_MB: int = 25
+    MAIL_ATTACHMENT_EXTENSIONS: str = "pdf,doc,docx,xls,xlsx,csv,txt,ppt,pptx,png,jpg,jpeg,webp"
+
     # Areas where the project manager is switched on (comma-separated slugs).
     PROJECTS_AREA_SLUGS: str = "ti"
     # A live connection without a ping for this long leaves the presence list.
@@ -186,6 +209,37 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT is Environment.PROD and self.AUTH_COOKIE_SECURE is False:
             raise ValueError("AUTH_COOKIE_SECURE=false is not allowed in production")
         return self
+
+    @model_validator(mode="after")
+    def validate_mail_settings(self) -> "Settings":
+        """Reject a switched-on mail intake that cannot authenticate or has a bad start date."""
+
+        if self.MAIL_INTAKE_SINCE.strip():
+            try:
+                datetime.fromisoformat(self.MAIL_INTAKE_SINCE.strip())
+            except ValueError as exc:
+                raise ValueError("MAIL_INTAKE_SINCE must be an ISO date-time") from exc
+        if self.MAIL_INTAKE_ENABLED and not (
+            (self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID)
+            and self.MAIL_GRAPH_CLIENT_ID
+            and self.MAIL_GRAPH_CLIENT_SECRET.get_secret_value()
+        ):
+            raise ValueError(
+                "MAIL_INTAKE_ENABLED needs a tenant, MAIL_GRAPH_CLIENT_ID "
+                "and MAIL_GRAPH_CLIENT_SECRET"
+            )
+        return self
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def mail_intake_since(self) -> datetime | None:
+        """First-sync cutoff as an aware datetime (UTC when written without offset)."""
+
+        text = self.MAIL_INTAKE_SINCE.strip()
+        if not text:
+            return None
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -280,6 +334,19 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.PQRSF_MANAGER_AREA_SLUG,
                 "timezone": self.PQRSF_TIMEZONE,
                 "holidays_country": self.PQRSF_HOLIDAYS_COUNTRY,
+            },
+            "mail": {
+                "tenant_id": self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,
+                "client_id": self.MAIL_GRAPH_CLIENT_ID,
+                "client_secret": self.MAIL_GRAPH_CLIENT_SECRET.get_secret_value(),
+                "pqrsf_inbox": self.MAIL_PQRSF_INBOX,
+                "since": self.mail_intake_since,
+                "ignored_senders": _split_lower(self.MAIL_IGNORED_SENDERS),
+                "max_attempts": self.MAIL_MAX_ATTEMPTS,
+                "max_attachments": self.MAIL_MAX_ATTACHMENTS,
+                "max_attachment_bytes": self.MAIL_MAX_ATTACHMENT_MB * 1024 * 1024,
+                "max_total_attachment_bytes": self.MAIL_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
+                "attachment_extensions": _split_lower(self.MAIL_ATTACHMENT_EXTENSIONS),
             },
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),

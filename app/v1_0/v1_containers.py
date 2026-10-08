@@ -20,10 +20,14 @@ from app.modules.identity.application.directory import UserDirectory
 from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
+from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
+from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
+from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
 from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, HolidayCalendar
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
@@ -170,6 +174,44 @@ class V1Container(containers.DeclarativeContainer):
         host=config.pqrsf.clamav_host,
         port=config.pqrsf.clamav_port,
         timeout=config.pqrsf.clamav_timeout,
+    )
+    # --- PQRSF by email (Microsoft Graph) ---
+    mail_client = providers.Singleton(
+        GraphMailClient,
+        tenant_id=config.mail.tenant_id,
+        client_id=config.mail.client_id,
+        client_secret=config.mail.client_secret,
+    )
+    mail_image_processor = providers.Singleton(
+        PillowImageProcessor,
+        max_bytes=config.mail.max_attachment_bytes,
+        max_pixels=config.pqrsf.max_image_pixels,
+    )
+    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
+    pqrsf_email_intake_service = providers.Factory(
+        EmailIntakeService,
+        mail=mail_client,
+        emails=pqrsf_email_repository,
+        cases=pqrsf_tracking_service,
+        requests=pqrsf_repository,
+        sites=site_service,
+        storage=storage,
+        image_processor=mail_image_processor,
+        malware_scanner=pqrsf_malware_scanner,
+        mailbox=config.mail.pqrsf_inbox,
+        ignored_senders=config.mail.ignored_senders,
+        since=config.mail.since,
+        max_attempts=config.mail.max_attempts,
+        max_attachments=config.mail.max_attachments,
+        max_attachment_bytes=config.mail.max_attachment_bytes,
+        max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
+        allowed_extensions=config.mail.attachment_extensions,
+    )
+    pqrsf_case_attachment_service = providers.Factory(
+        CaseAttachmentService,
+        emails=pqrsf_email_repository,
+        access=pqrsf_tracking_service,
+        storage=storage,
     )
     pqrsf_service = providers.Factory(
         PqrsfService,

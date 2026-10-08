@@ -19,6 +19,7 @@ from app.core.config import Settings, settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
+from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 
 
 def create_app(app_settings: Settings | None = None) -> FastAPI:
@@ -31,9 +32,17 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         resources: GlobalResources | None = None
+        mail_worker: EmailIntakeWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
+            if runtime_settings.MAIL_INTAKE_ENABLED:
+                v1 = container.v1_container
+                mail_worker = EmailIntakeWorker(
+                    v1.pqrsf_email_intake_service, runtime_settings.MAIL_POLL_INTERVAL_SECONDS
+                )
+                mail_worker.start()
+                logger.info(f"PQRSF email intake reading {runtime_settings.MAIL_PQRSF_INBOX}")
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -48,6 +57,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if mail_worker is not None:
+                await mail_worker.stop()
+                await container.v1_container.mail_client().close()
             if resources is not None:
                 await shutdown_global_resources(resources)
 

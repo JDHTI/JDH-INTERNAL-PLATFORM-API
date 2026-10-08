@@ -17,6 +17,7 @@ from app.app_container import ApplicationContainer
 from app.core.rate_limit import rate_limit
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
 from app.modules.pqrsf.application.dto import (
     CaseChanges,
     CaseDetail,
@@ -46,6 +47,7 @@ from app.modules.sites.domain.entities import Site
 router = APIRouter(prefix="/pqrsf", dependencies=[Depends(rate_limit("relaxed"))])
 _tracking = Depends(Provide[ApplicationContainer.v1_container.pqrsf_tracking_service])
 _pqrsf = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
+_case_files = Depends(Provide[ApplicationContainer.v1_container.pqrsf_case_attachment_service])
 _principal = Depends(get_current_principal)
 
 SortOption = Literal[
@@ -1105,6 +1107,69 @@ async def download_case_attachment(
 
     request_id = await service.request_for_download(case_id, principal)
     attachment, content = await pqrsf.download_attachment(request_id, attachment_id)
+    return Response(
+        content=content,
+        media_type=attachment.content_type,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(attachment.original_filename)}"
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+class CaseFileResponse(BaseModel):
+    """A file that arrived by email, stored under the case."""
+
+    id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+@router.get(
+    "/cases/{case_id}/files",
+    response_model=list[CaseFileResponse],
+    summary="List files received by email",
+)
+@inject
+async def list_case_files(
+    case_id: UUID,
+    principal: Principal = _principal,
+    service: CaseAttachmentService = _case_files,
+) -> list[CaseFileResponse]:
+    """Files that came with the case's emails, for anyone who can see the case."""
+
+    return [
+        CaseFileResponse(
+            id=item.id,
+            filename=item.original_filename,
+            content_type=item.content_type,
+            size_bytes=item.size_bytes,
+            created_at=item.created_at,
+        )
+        for item in await service.list_attachments(case_id, principal)
+    ]
+
+
+@router.get(
+    "/cases/{case_id}/files/{file_id}/download",
+    summary="Download a file received by email",
+    response_class=Response,
+)
+@inject
+async def download_case_file(
+    case_id: UUID,
+    file_id: UUID,
+    principal: Principal = _principal,
+    service: CaseAttachmentService = _case_files,
+) -> Response:
+    """Return one stored file; it is always sent as a download, never rendered."""
+
+    attachment, content = await service.download(case_id, file_id, principal)
     return Response(
         content=content,
         media_type=attachment.content_type,

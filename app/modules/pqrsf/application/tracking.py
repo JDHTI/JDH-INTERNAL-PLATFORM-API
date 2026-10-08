@@ -22,6 +22,7 @@ from app.modules.pqrsf.application.dto import (
     LastSeenView,
     TrackingCatalog,
 )
+from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
 from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType, clean_optional
 from app.modules.pqrsf.domain.ports import (
     BusinessCalendar,
@@ -712,6 +713,72 @@ class CaseTrackingService:
 
         case = await self.repository.get_case_by_request(request_id)
         return case.code if case else None
+
+    async def open_from_email(self, command: EmailCaseInput) -> TrackingCase:
+        """Open the case of an email that matched no open one.
+
+        Args:
+            command (EmailCaseInput): Sender, parsed template fields and the stored message.
+
+        Returns:
+            TrackingCase: The new case, with ``origin`` ``email``.
+        """
+
+        case = self._blank_case(
+            command.request_type,
+            await self._initial_status(),
+            self.calendar.local_date(command.received_at),
+            "email",
+            None,
+        )
+        case.site = command.site
+        case.subject = command.subject
+        case.description = command.description
+        case.customer_name = command.business_name
+        case.customer_nit = command.nit
+        case.requester_name = command.requester_name
+        case.requester_email = command.requester_email
+        self._refresh_dates(case)
+        data: dict = {"origin": "email", "message_id": str(command.message_id)}
+        if command.related_code:
+            data["related_case"] = command.related_code
+        return await self.repository.create_case(
+            case, self._event(case.id, EventType.CREATED, None, data=data)
+        )
+
+    async def record_email(
+        self, case_id: UUID, message_id: UUID, sender: str, note: str, data: dict
+    ) -> None:
+        """Add a received email to the timeline of a case.
+
+        Args:
+            case_id (UUID): The case the message joined.
+            message_id (UUID): Stored message identifier.
+            sender (str): Sender address.
+            note (str): Short excerpt of the message.
+            data (dict): Extra detail (rejected attachments, stored files).
+        """
+
+        await self.repository.add_event(
+            self._event(
+                case_id,
+                EVENT_EMAIL_RECEIVED,
+                None,
+                note=note,
+                data={"message_id": str(message_id), "from": sender, **data},
+            )
+        )
+
+    async def find_case(self, case_id: UUID) -> TrackingCase | None:
+        """Load a case without checking access (system use)."""
+
+        return await self.repository.get_case(case_id)
+
+    async def require_view(self, case_id: UUID, principal: Principal) -> TrackingCase:
+        """Return the case when the caller may see it; used before serving its files."""
+
+        case, _, _ = await self._load(case_id, principal)
+        return case
 
     async def create_case(self, command: CaseInput, principal: Principal) -> CaseView:
         """Raise a case internally (the spreadsheet flow).
