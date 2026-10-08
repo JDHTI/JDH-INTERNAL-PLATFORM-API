@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import mimetypes
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -52,6 +51,19 @@ _IMAGE_EXTENSIONS = {
     "jpeg": "image/jpeg",
     "png": "image/png",
     "webp": "image/webp",
+}
+# Fixed, so a file is labeled the same on every machine (``mimetypes`` reads the OS
+# registry: on Windows it calls a CSV ``application/vnd.ms-excel``).
+_DOCUMENT_TYPES = {
+    "pdf": "application/pdf",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "csv": "text/csv",
+    "txt": "text/plain",
 }
 _OLE = b"\xd0\xcf\x11\xe0"
 _ZIP = b"PK\x03\x04"
@@ -402,10 +414,13 @@ class EmailIntakeService:
         rejected: list[dict] = []
         keys: list[str] = []
         total = 0
+        # What the case already holds: a signature logo repeated in every reply, or a
+        # file sent twice, is kept once.
+        known = {a.checksum_sha256 for a in await self.emails.list_attachments(row.case_id)}
         try:
             for file in files:
-                if file.is_inline:
-                    continue  # signature logos and embedded pictures, not documents
+                if file.is_inline and _extension(_filename(file.name)) not in _IMAGE_EXTENSIONS:
+                    continue  # embedded objects that are not pictures
                 reason = self._refuse(file, len(saved), total)
                 if reason:
                     rejected.append({"name": file.name, "reason": reason})
@@ -419,6 +434,10 @@ class EmailIntakeService:
                     rejected.append({"name": file.name, "reason": str(exc)})
                     continue
                 name, extension, content_type, data = clean
+                checksum = hashlib.sha256(data).hexdigest()
+                if checksum in known:
+                    continue
+                known.add(checksum)
                 attachment_id = uuid4()
                 key = case_attachment_key(row.case_id, attachment_id, extension)
                 await self.storage.put_object(key, data, content_type)
@@ -433,7 +452,7 @@ class EmailIntakeService:
                         extension=extension,
                         content_type=content_type,
                         size_bytes=len(data),
-                        checksum_sha256=hashlib.sha256(data).hexdigest(),
+                        checksum_sha256=checksum,
                         storage_key=key,
                         created_at=self.clock(),
                     )
@@ -487,7 +506,7 @@ class EmailIntakeService:
             if not _signature_ok(extension, content):
                 raise InvalidInputError("el contenido no corresponde a su extensión")
             data = content
-            content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            content_type = _DOCUMENT_TYPES.get(extension, "application/octet-stream")
         try:
             await self.malware_scanner.scan(data)
         except InvalidInputError as exc:
