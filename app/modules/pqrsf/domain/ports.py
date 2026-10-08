@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.principal import DirectoryUser, Principal
+from app.modules.pqrsf.domain.email import CaseAttachment, EmailCaseInput, EmailMessage
 from app.modules.pqrsf.domain.entities import (
     DocumentCategory,
     PqrsfAttachment,
@@ -212,6 +213,72 @@ class CaseRepository(Protocol):
 
     async def suggest(self, field: str, query: str, limit: int) -> list[str]:
         """Distinct values previously typed in a free-text field."""
+        ...
+
+
+class EmailCases(Protocol):
+    """The follow-up cases an email can open or join (implemented by tracking)."""
+
+    async def open_from_email(self, command: EmailCaseInput) -> TrackingCase:
+        """Create the case of a message that matched none."""
+        ...
+
+    async def record_email(
+        self, case_id: UUID, message_id: UUID, sender: str, note: str, data: dict
+    ) -> None:
+        """Add a received email to the case timeline."""
+        ...
+
+    async def find_case(self, case_id: UUID) -> TrackingCase | None:
+        """Load a case, or ``None`` when it was deleted."""
+        ...
+
+
+class EmailRepository(Protocol):
+    """Store the emails received for PQRSF, their attachments and the sync cursor."""
+
+    async def add_message(self, message: EmailMessage) -> bool:
+        """Store a message once; ``False`` means its Internet message id was already there."""
+        ...
+
+    async def get_message(self, internet_message_id: str) -> EmailMessage | None:
+        """Find a stored message by its Internet message id."""
+        ...
+
+    async def save_message(self, message: EmailMessage) -> None:
+        """Update the status, case, attempts and detail of a stored message."""
+        ...
+
+    async def list_retryable(self, max_attempts: int) -> list[EmailMessage]:
+        """Messages claimed or failed that have not used up their attempts."""
+        ...
+
+    async def find_case_by_conversation(self, conversation_id: str) -> UUID | None:
+        """The case a conversation already belongs to."""
+        ...
+
+    async def find_case_by_code(self, code: str) -> UUID | None:
+        """The case with this consecutive."""
+        ...
+
+    async def get_delta_link(self, mailbox: str) -> str | None:
+        """The cursor of the last sync, or ``None`` before the first one."""
+        ...
+
+    async def save_delta_link(self, mailbox: str, delta_link: str) -> None:
+        """Remember where the next sync starts."""
+        ...
+
+    async def add_attachments(self, attachments: list[CaseAttachment]) -> None:
+        """Persist attachment metadata."""
+        ...
+
+    async def list_attachments(self, case_id: UUID) -> list[CaseAttachment]:
+        """A case's attachments, oldest first."""
+        ...
+
+    async def get_attachment(self, case_id: UUID, attachment_id: UUID) -> CaseAttachment | None:
+        """One attachment owned by the case."""
         ...
 
 
