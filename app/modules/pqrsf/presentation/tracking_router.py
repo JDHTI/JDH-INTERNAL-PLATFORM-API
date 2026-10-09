@@ -77,6 +77,7 @@ class TrackingRequestTypeResponse(BaseModel):
     prefix: str
     requires_follow_up: bool
     sla_days: int | None
+    handling: Literal["case", "acknowledge"]
     allows_document_request: bool
     allows_attachments: bool
     is_active: bool
@@ -378,6 +379,7 @@ class UpdateRequestTypeRequest(BaseModel):
     prefix: str | None = Field(default=None, max_length=5)
     requires_follow_up: bool | None = None
     sla_days: int | None = Field(default=None, ge=0, le=365)
+    handling: Literal["case", "acknowledge"] | None = None
 
 
 class CreateStatusRequest(BaseModel):
@@ -661,6 +663,7 @@ async def update_request_type(
             prefix=body.prefix,
             requires_follow_up=body.requires_follow_up,
             sla_days=body.sla_days,
+            handling=body.handling,
         )
     )
 

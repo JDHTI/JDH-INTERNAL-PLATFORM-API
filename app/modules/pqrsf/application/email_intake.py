@@ -17,6 +17,7 @@ from app.modules.pqrsf.application.attachment_guard import (
     extension_of,
     safe_filename,
 )
+from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.email import (
     CREATED,
     FAILED,
@@ -37,7 +38,8 @@ from app.modules.pqrsf.domain.email import (
     parse_request,
     strip_quoted_reply,
 )
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import HANDLING_ACKNOWLEDGE, RequestType
+from app.modules.pqrsf.domain.feedback import ORIGIN_EMAIL, FeedbackFile, feedback_file_key
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
     EmailCases,
@@ -69,7 +71,7 @@ class SyncReport:
 class _Stored:
     """Attachments saved for a message and those that were turned away."""
 
-    saved: list[CaseAttachment]
+    saved: list[CaseAttachment | FeedbackFile]
     rejected: list[dict]
 
 
@@ -105,6 +107,7 @@ class EmailIntakeService:
         max_total_attachment_bytes: int = 25 * 1024 * 1024,
         allowed_extensions: Collection[str] = (),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        feedback: FeedbackService | None = None,
     ) -> None:
         """Create the service.
 
@@ -126,8 +129,11 @@ class EmailIntakeService:
             max_total_attachment_bytes (int): Largest sum of files per message.
             allowed_extensions (Collection[str]): Lower-case extensions accepted.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
+            feedback (FeedbackService | None): Stores and thanks suggestions and compliments;
+                without it they open cases like any other message.
         """
 
+        self.feedback = feedback
         self.mail = mail
         self.emails = emails
         self.cases = cases
@@ -234,7 +240,8 @@ class EmailIntakeService:
     # --- Routing ---
 
     async def _route(self, message: InboundMessage, row: EmailMessage) -> None:
-        if row.case_id is None:
+        feedback_id = row.detail.get("feedback_id")
+        if row.case_id is None and not feedback_id:
             reason = is_automatic(message.headers, message.sender_address, self.own_addresses)
             if reason:
                 row.status, row.detail = IGNORED, {**row.detail, "reason": reason}
@@ -244,7 +251,9 @@ class EmailIntakeService:
                 await self._join(message, row, existing)
             else:
                 await self._open(message, row, None)
-        # Past this point the case exists: each step is flagged so a retry resumes.
+            feedback_id = row.detail.get("feedback_id")
+        # Past this point the case (or the stored message) exists: each step is flagged so
+        # a retry resumes.
         if not row.detail.get("files_done"):
             stored = await self._store_attachments(message, row)
             row.detail = {
@@ -254,7 +263,13 @@ class EmailIntakeService:
                 "rejected_files": stored.rejected,
             }
             await self.emails.save_message(row)
-        code = row.detail.get("code")
+        code = row.detail.get("code") or row.detail.get("category")
+        if feedback_id and self.feedback is not None and not row.detail.get("ack_sent"):
+            await self.feedback.acknowledge_by_id(
+                UUID(feedback_id), message.graph_id, message.conversation_id
+            )
+            row.detail = {**row.detail, "ack_sent": True}
+            await self.emails.save_message(row)
         if row.detail.get("opened") and not row.detail.get("ack_sent"):
             await self.mail.reply(
                 self.mailbox,
@@ -268,7 +283,7 @@ class EmailIntakeService:
         except DependencyUnavailableError:
             logger.warning("Could not mark email %s as processed", message.internet_message_id)
         # A retried message comes back as ``failed``: settle it by what it did.
-        row.status = CREATED if row.detail.get("opened") else THREADED
+        row.status = CREATED if row.detail.get("opened") or feedback_id else THREADED
 
     async def _open_case_of(self, message: InboundMessage):
         """The open case this message continues, found by conversation then by subject code."""
@@ -313,8 +328,12 @@ class EmailIntakeService:
             or (parsed.request_type is not None and request_type is None)
             or (parsed.site is not None and site is None)
         )
-        chosen = request_type or await self._default_type()
+        chosen = request_type or await self._type_of_thread(message)
+        chosen = chosen or await self._default_type()
         description = parsed.description or message.body_text.strip() or "(sin contenido)"
+        if chosen.handling == HANDLING_ACKNOWLEDGE and self.feedback is not None:
+            await self._store_feedback(message, row, parsed, chosen, site, description)
+            return
         # The case subject is what the client wrote in the Subject of the email, the same
         # text the team sees in the mailbox. A different «Motivo:» line is not lost: it
         # opens the description.
@@ -341,6 +360,45 @@ class EmailIntakeService:
         row.detail = {**row.detail, "code": case.code, "needs_review": review, "opened": True}
         if related:
             row.detail["related_case"] = related
+        await self.emails.save_message(row)
+
+    async def _type_of_thread(self, message: InboundMessage) -> RequestType | None:
+        """The type of the suggestion or compliment this conversation began.
+
+        A person who answers the thank-you ("gracias") without the template is still
+        talking about their suggestion: it must not open a petition.
+        """
+
+        if self.feedback is None or not message.conversation_id:
+            return None
+        found = await self.emails.find_feedback_by_conversation(message.conversation_id)
+        return await self.feedback.kind_of(found) if found else None
+
+    async def _store_feedback(
+        self,
+        message: InboundMessage,
+        row: EmailMessage,
+        parsed: ParsedRequest,
+        kind: RequestType,
+        site: Site | None,
+        description: str,
+    ) -> None:
+        """A suggestion or compliment: kept apart from the cases and thanked, no case opened."""
+
+        assert self.feedback is not None
+        feedback = await self.feedback.record(
+            request_type=kind,
+            origin=ORIGIN_EMAIL,
+            full_name=parsed.requester_name or message.sender_name or message.sender_address,
+            email=message.sender_address,
+            body=description,
+            subject=_trim(clean_subject(message.subject), 200) or _trim(parsed.subject, 200),
+            business_name=_trim(parsed.business_name, 200),
+            site=site,
+            email_message_id=row.id,
+        )
+        row.status = CREATED
+        row.detail = {**row.detail, "feedback_id": str(feedback.id), "category": kind.name}
         await self.emails.save_message(row)
 
     async def _request_type(self, parsed: ParsedRequest) -> RequestType | None:
@@ -374,16 +432,22 @@ class EmailIntakeService:
         until every object is stored, and stored objects are removed on failure.
         """
 
-        if not message.has_attachments or row.case_id is None:
+        feedback_id = UUID(row.detail["feedback_id"]) if row.detail.get("feedback_id") else None
+        if not message.has_attachments or (row.case_id is None and feedback_id is None):
             return _Stored([], [])
         files = await self.mail.list_attachments(self.mailbox, message.graph_id)
-        saved: list[CaseAttachment] = []
+        saved: list[CaseAttachment | FeedbackFile] = []
         rejected: list[dict] = []
         keys: list[str] = []
         total = 0
         # What the case already holds: a signature logo repeated in every reply, or a
         # file sent twice, is kept once.
-        known = {a.checksum_sha256 for a in await self.emails.list_attachments(row.case_id)}
+        if feedback_id is not None:
+            assert self.feedback is not None
+            held = await self.feedback.files_of(feedback_id)
+        else:
+            held = await self.emails.list_attachments(row.case_id)
+        known = {a.checksum_sha256 for a in held}
         try:
             for file in files:
                 if (
@@ -409,25 +473,34 @@ class EmailIntakeService:
                     continue
                 known.add(checksum)
                 attachment_id = uuid4()
-                key = case_attachment_key(row.case_id, attachment_id, extension)
+                if feedback_id is not None:
+                    key = feedback_file_key(feedback_id, attachment_id, extension)
+                else:
+                    key = case_attachment_key(row.case_id, attachment_id, extension)
                 await self.storage.put_object(key, data, content_type)
                 keys.append(key)
                 total += len(data)
-                saved.append(
-                    CaseAttachment(
-                        id=attachment_id,
-                        case_id=row.case_id,
-                        message_id=row.id,
-                        original_filename=name,
-                        extension=extension,
-                        content_type=content_type,
-                        size_bytes=len(data),
-                        checksum_sha256=checksum,
-                        storage_key=key,
-                        created_at=self.clock(),
-                    )
+                details = {
+                    "id": attachment_id,
+                    "original_filename": name,
+                    "extension": extension,
+                    "content_type": content_type,
+                    "size_bytes": len(data),
+                    "checksum_sha256": checksum,
+                    "storage_key": key,
+                    "created_at": self.clock(),
+                }
+                if feedback_id is not None:
+                    saved.append(FeedbackFile(feedback_id=feedback_id, **details))
+                else:
+                    saved.append(CaseAttachment(case_id=row.case_id, message_id=row.id, **details))
+            if feedback_id is not None:
+                assert self.feedback is not None
+                await self.feedback.add_files([f for f in saved if isinstance(f, FeedbackFile)])
+            else:
+                await self.emails.add_attachments(
+                    [a for a in saved if isinstance(a, CaseAttachment)]
                 )
-            await self.emails.add_attachments(saved)
         except Exception:
             for key in keys:
                 try:
@@ -435,7 +508,7 @@ class EmailIntakeService:
                 except Exception:
                     logger.warning("Could not remove orphan object %s", key)
             raise
-        if rejected:
+        if rejected and row.case_id is not None:
             await self.cases.record_email(
                 row.case_id,
                 row.id,

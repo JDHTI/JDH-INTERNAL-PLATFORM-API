@@ -27,14 +27,17 @@ from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
 from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
+from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
+from app.modules.pqrsf.infrastructure.feedback_repository import SqlAlchemyFeedbackRepository
 from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
 from app.modules.pqrsf.infrastructure.notification_repository import (
     SqlAlchemyNotificationRepository,
 )
+from app.modules.pqrsf.infrastructure.notification_worker import Wakeup
 from app.modules.pqrsf.infrastructure.policies import (
     AreaManagerPolicy,
     AreaTeamDirectory,
@@ -186,6 +189,20 @@ class V1Container(containers.DeclarativeContainer):
         SqlAlchemyNotificationRepository, database=database
     )
     pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
+    pqrsf_feedback_repository = providers.Factory(SqlAlchemyFeedbackRepository, database=database)
+    # Wakes the email sender so a thank-you leaves right after it is queued.
+    pqrsf_wakeup = providers.Singleton(Wakeup)
+    pqrsf_feedback_service = providers.Factory(
+        FeedbackService,
+        repository=pqrsf_feedback_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        managers=pqrsf_manager_policy,
+        people=user_directory,
+        replies_enabled=config.pqrsf.notifications_enabled,
+        max_replies_per_email=config.pqrsf.feedback_replies_per_email,
+        wake=pqrsf_wakeup.provided.set,
+    )
     pqrsf_notification_service = providers.Factory(
         NotificationService,
         repository=pqrsf_notification_repository,
@@ -249,6 +266,7 @@ class V1Container(containers.DeclarativeContainer):
         max_attachment_bytes=config.mail.max_attachment_bytes,
         max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
         allowed_extensions=config.mail.attachment_extensions,
+        feedback=pqrsf_feedback_service,
     )
     pqrsf_comment_guard = providers.Factory(
         AttachmentGuard,
@@ -284,4 +302,5 @@ class V1Container(containers.DeclarativeContainer):
         max_attachments=config.pqrsf.max_attachments,
         max_attachment_bytes=config.pqrsf.max_attachment_bytes,
         max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,
+        feedback=pqrsf_feedback_service,
     )

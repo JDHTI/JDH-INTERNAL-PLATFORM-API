@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     RATE_LIMIT_RELAXED_REQUESTS: int = 120
     RATE_LIMIT_RELAXED_WINDOW_SECONDS: int = 60
     RATE_LIMIT_TRUSTED_PROXY_IPS: str = ""
+    # Public forms (POST /public/*): one budget for every visitor together, so a flood from
+    # many addresses cannot get past the per-address limit; and a cap on the request body,
+    # checked before it is read.
+    RATE_LIMIT_PUBLIC_GLOBAL_REQUESTS: int = 100
+    RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS: int = 3600
+    PUBLIC_MAX_BODY_MB: int = 28
+    # Cloudflare Turnstile secret; empty leaves the CAPTCHA off. When set, public POSTs must
+    # carry a valid token in the X-Captcha-Token header.
+    PUBLIC_CAPTCHA_SECRET: SecretStr = SecretStr("")
+    PUBLIC_CAPTCHA_VERIFY_URL: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
     S3_ENDPOINT_URL: str = "http://127.0.0.1:9000"
     S3_REGION: str = "us-east-1"
@@ -146,6 +156,8 @@ class Settings(BaseSettings):
     PQRSF_UI_BASE_URL: str = ""
     # Testing: send every PQRSF email to this address instead of its recipient.
     PQRSF_NOTIFY_REDIRECT: str = ""
+    # Automatic thank-yous one address can get per 24 hours (suggestions and compliments).
+    PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY: int = 3
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -346,6 +358,7 @@ class Settings(BaseSettings):
                 "notifications_enabled": self.PQRSF_NOTIFICATIONS_ENABLED,
                 "ui_base_url": self.PQRSF_UI_BASE_URL,
                 "notify_redirect": self.PQRSF_NOTIFY_REDIRECT,
+                "feedback_replies_per_email": self.PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY,
             },
             "mail": {
                 "tenant_id": self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,
@@ -407,6 +420,10 @@ class Settings(BaseSettings):
         """
 
         policies = {
+            "public_global": (
+                self.RATE_LIMIT_PUBLIC_GLOBAL_REQUESTS,
+                self.RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS,
+            ),
             "strict": (self.RATE_LIMIT_STRICT_REQUESTS, self.RATE_LIMIT_STRICT_WINDOW_SECONDS),
             "medium": (self.RATE_LIMIT_MEDIUM_REQUESTS, self.RATE_LIMIT_MEDIUM_WINDOW_SECONDS),
             "relaxed": (

@@ -25,6 +25,8 @@ from app.modules.pqrsf.application.dto import (
 )
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
 from app.modules.pqrsf.domain.entities import (
+    HANDLING_ACKNOWLEDGE,
+    HANDLING_CASE,
     PqrsfRequest,
     RequestType,
     clean_multiline,
@@ -265,6 +267,7 @@ class CaseTrackingService:
         prefix: str | None = None,
         requires_follow_up: bool | None = None,
         sla_days: int | None = None,
+        handling: str | None = None,
     ) -> RequestType:
         """Change the follow-up settings of a request type.
 
@@ -275,6 +278,7 @@ class CaseTrackingService:
             prefix (str | None): Consecutive prefix.
             requires_follow_up (bool | None): Whether cases get a due date.
             sla_days (int | None): Default response time in business days.
+            handling (str | None): ``case`` opens cases, ``acknowledge`` only thanks.
 
         Returns:
             RequestType: The updated type.
@@ -290,6 +294,10 @@ class CaseTrackingService:
             request_type.requires_follow_up = requires_follow_up
         if "sla_days" in fields:
             request_type.sla_days = validate_sla_days(sla_days)
+        if "handling" in fields and handling is not None:
+            if handling not in (HANDLING_CASE, HANDLING_ACKNOWLEDGE):
+                raise InvalidInputError("El manejo debe ser 'case' o 'acknowledge'")
+            request_type.handling = handling
         return await self.requests.save_request_type(request_type)
 
     async def create_status(

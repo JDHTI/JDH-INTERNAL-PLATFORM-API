@@ -17,6 +17,7 @@ from app.modules.pqrsf.domain.notifications import (
     CLIENT_REPLY,
     DAILY_SUMMARY,
     FAILED,
+    FEEDBACK_ACK,
     GRACE,
     OVERDUE_REMINDER,
     PENDING,
@@ -288,7 +289,7 @@ class NotificationService:
     async def _deliver(self, item: Notification, to: str, subject: str, body: str) -> None:
         """Send one email; a client reply goes inside the client's conversation when it can."""
 
-        if item.kind != CLIENT_REPLY:
+        if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
             await self.mail.send(self.mailbox, to, subject, body)
             return
         files = await self._reply_files(item)

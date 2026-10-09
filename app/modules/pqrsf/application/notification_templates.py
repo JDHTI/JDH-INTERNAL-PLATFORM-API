@@ -106,6 +106,26 @@ def client_reply(case: TrackingCase, text: str) -> tuple[str, str]:
     return subject, body
 
 
+def feedback_ack(kind_code: str, name: str | None) -> tuple[str, str]:
+    """The generic thank-you for a suggestion or a compliment, signed PQRSF JDH."""
+
+    first = (name or "").strip().split(" ")[0] if (name or "").strip() else ""
+    greeting = f"Hola {first}," if first else "Hola,"
+    if kind_code == "felicitacion":
+        title = "Recibimos tu felicitación"
+        text = (
+            "Recibimos tu felicitación. Gracias por tomarte el tiempo de escribirnos: "
+            "tus palabras nos motivan a seguir mejorando cada día."
+        )
+    else:
+        title = "Recibimos tu sugerencia"
+        text = (
+            "Recibimos tu sugerencia. Agradecemos tu mensaje: nos ayuda a mejorar "
+            "nuestro servicio y la tendremos en cuenta."
+        )
+    return title, f"{greeting}\n\n{text}\n\n{SIGNATURE}"
+
+
 def daily_summary(
     name: str | None, lines: Sequence[str], total: int, overdue: int, today: date, url: str | None
 ) -> tuple[str, str]:

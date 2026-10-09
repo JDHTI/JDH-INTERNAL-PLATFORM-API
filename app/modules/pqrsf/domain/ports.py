@@ -18,6 +18,13 @@ from app.modules.pqrsf.domain.entities import (
     RequestType,
     SanitizedImage,
 )
+from app.modules.pqrsf.domain.feedback import (
+    Feedback,
+    FeedbackFile,
+    FeedbackFilters,
+    FeedbackPage,
+    FeedbackSummary,
+)
 from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
@@ -258,6 +265,10 @@ class EmailRepository(Protocol):
         """The case a conversation already belongs to."""
         ...
 
+    async def find_feedback_by_conversation(self, conversation_id: str) -> UUID | None:
+        """The suggestion or compliment a conversation started."""
+        ...
+
     async def find_case_by_code(self, code: str) -> UUID | None:
         """The case with this consecutive."""
         ...
@@ -314,6 +325,10 @@ class NotificationRepository(Protocol):
         """The emails of one kind queued for a case, oldest first."""
         ...
 
+    async def count_recent(self, kind: str, recipient_email: str, since: datetime) -> int:
+        """Emails of one kind queued for an address since an instant."""
+        ...
+
     async def get_settings(self) -> dict | None:
         """The stored timers, or ``None`` before anyone changed them."""
         ...
@@ -328,6 +343,51 @@ class NotificationRepository(Protocol):
 
     async def release_job_run(self, job: str, run_date: date) -> None:
         """Forget a run that failed so the next tick can try again."""
+        ...
+
+
+class FeedbackRepository(Protocol):
+    """Store suggestions and compliments, their files and the state of their thank-you."""
+
+    async def add(self, feedback: Feedback) -> tuple[Feedback, bool]:
+        """Store a message once; the second value is ``False`` when it already existed.
+
+        A message is the same one when it has the same request or the same email.
+        """
+        ...
+
+    async def get(self, feedback_id: UUID) -> Feedback | None:
+        """One message with its files and the state of its reply."""
+        ...
+
+    async def list_feedback(self, filters: FeedbackFilters, page: int, size: int) -> FeedbackPage:
+        """One page of messages, newest first, without their files."""
+        ...
+
+    async def summarize(self) -> FeedbackSummary:
+        """Totals and unread counts per type."""
+        ...
+
+    async def mark_read(self, feedback_id: UUID, user_id: UUID, at: datetime) -> None:
+        """Record who opened the message first; a later opening changes nothing."""
+        ...
+
+    async def set_reply(
+        self, feedback_id: UUID, notification_id: UUID | None, skipped_reason: str | None
+    ) -> None:
+        """Remember that the thank-you was queued, or why it was not."""
+        ...
+
+    async def add_files(self, files: list[FeedbackFile]) -> None:
+        """Persist file metadata."""
+        ...
+
+    async def list_files(self, feedback_id: UUID) -> list[FeedbackFile]:
+        """The files of a message, oldest first."""
+        ...
+
+    async def get_file(self, feedback_id: UUID, file_id: UUID) -> FeedbackFile | None:
+        """One file owned by the message."""
         ...
 
 

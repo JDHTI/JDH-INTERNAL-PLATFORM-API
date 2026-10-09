@@ -10,6 +10,8 @@ from uuid import UUID
 from app.core.errors import InvalidInputError
 from app.modules.sites.domain.entities import Site
 
+HANDLING_CASE = "case"
+HANDLING_ACKNOWLEDGE = "acknowledge"
 REQUEST_TYPE_CODES = frozenset({"peticion", "queja", "reclamo", "sugerencia", "felicitacion"})
 _IDEMPOTENCY_KEY_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
@@ -33,6 +35,9 @@ class RequestType:
     prefix: str = ""
     requires_follow_up: bool = True
     sla_days: int | None = None
+    # What a request of this type becomes: a follow-up case, or a stored message that is
+    # thanked at once (suggestions and compliments).
+    handling: str = HANDLING_CASE
 
 
 @dataclass
@@ -153,6 +158,8 @@ class CreateResult:
     replayed: bool
     # Consecutive of the follow-up case (P26AC0012) when it could be opened.
     tracking_code: str | None = None
+    # ``feedback`` for a suggestion or compliment: stored apart, no case, no consecutive.
+    handled_as: str = "case"
 
 
 def clean_required(value: str, field: str, max_length: int) -> str:

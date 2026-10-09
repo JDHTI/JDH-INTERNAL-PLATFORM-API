@@ -19,6 +19,7 @@ from app.core.config import Settings, settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
+from app.core.public_guard import PublicIntakeGuard
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
 
@@ -47,7 +48,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 logger.info(f"PQRSF email intake reading {runtime_settings.MAIL_PQRSF_INBOX}")
             if runtime_settings.PQRSF_NOTIFICATIONS_ENABLED:
                 notification_worker = NotificationWorker(
-                    container.v1_container.pqrsf_notification_service
+                    container.v1_container.pqrsf_notification_service,
+                    wakeup=container.v1_container.pqrsf_wakeup(),
                 )
                 notification_worker.start()
                 logger.info(f"PQRSF notifications sending from {runtime_settings.MAIL_PQRSF_INBOX}")
@@ -91,6 +93,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     )
     app.state.container = container
     app.state.settings = runtime_settings
+    # Added before CORS, so CORS wraps it: a 413 or 429 still reaches the browser readable.
+    app.add_middleware(PublicIntakeGuard)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_origins,

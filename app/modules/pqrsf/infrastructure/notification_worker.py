@@ -12,6 +12,33 @@ from app.modules.pqrsf.application.notifications import NotificationService
 logger = logging.getLogger(__name__)
 
 
+class Wakeup:
+    """Lets the code that queues an email cut the worker's wait short.
+
+    Used where a reply should leave right away (the thank-you to a suggestion) instead of
+    waiting for the next pass.
+    """
+
+    def __init__(self) -> None:
+        """Create it unset."""
+
+        self._event = asyncio.Event()
+
+    def set(self) -> None:
+        """Ask the worker to run now."""
+
+        self._event.set()
+
+    async def wait(self, timeout: float) -> None:
+        """Sleep up to ``timeout`` seconds, or until ``set`` is called."""
+
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout)
+        except TimeoutError:
+            pass
+        self._event.clear()
+
+
 class NotificationWorker:
     """Every ``interval`` seconds: start the timers that are due, then send what is queued.
 
@@ -20,16 +47,23 @@ class NotificationWorker:
     a report. A failed pass is logged and tried again on the next tick.
     """
 
-    def __init__(self, service: Callable[[], NotificationService], interval: float = 30.0) -> None:
+    def __init__(
+        self,
+        service: Callable[[], NotificationService],
+        interval: float = 30.0,
+        wakeup: Wakeup | None = None,
+    ) -> None:
         """Create the worker.
 
         Args:
             service (Callable[[], NotificationService]): Builds the service for each pass.
             interval (float): Seconds between passes.
+            wakeup (Wakeup | None): Runs a pass at once when set by whoever queued an email.
         """
 
         self._service = service
         self._interval = interval
+        self._wakeup = wakeup
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -60,4 +94,7 @@ class NotificationWorker:
                     logger.exception(
                         "PQRSF notifications: %s failed; it will run again", step.__name__
                     )
-            await asyncio.sleep(self._interval)
+            if self._wakeup is None:
+                await asyncio.sleep(self._interval)
+            else:
+                await self._wakeup.wait(self._interval)

@@ -153,6 +153,21 @@ class SqlAlchemyEmailRepository:
             )
             return [_message(model) for model in rows]
 
+    async def find_feedback_by_conversation(self, conversation_id: str) -> UUID | None:
+        """The suggestion or compliment a conversation started, if it started one."""
+
+        async with self.database.session_factory() as session:
+            found = await session.scalar(
+                select(EmailMessageModel.detail["feedback_id"].astext)
+                .where(
+                    EmailMessageModel.conversation_id == conversation_id,
+                    EmailMessageModel.detail.has_key("feedback_id"),
+                )
+                .order_by(EmailMessageModel.received_at.desc())
+                .limit(1)
+            )
+        return UUID(found) if found else None
+
     async def find_case_by_conversation(self, conversation_id: str) -> UUID | None:
         """The case of the latest message of a conversation that opened or joined one.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -37,6 +38,8 @@ class RequestTypeResponse(BaseModel):
     name: str
     allows_document_request: bool
     allows_attachments: bool
+    # ``acknowledge``: a suggestion or compliment, answered with thanks and no case.
+    handling: Literal["case", "acknowledge"] = "case"
 
 
 class PqrsfSiteResponse(BaseModel):
@@ -79,6 +82,8 @@ class PqrsfReceiptResponse(BaseModel):
     # Consecutive the customer can quote (P26AC0012); null if the case
     # could not be opened at submission time.
     tracking_code: str | None = None
+    # ``feedback`` for a suggestion or compliment: no case and no consecutive, only thanks.
+    handled_as: Literal["case", "feedback"] = "case"
     created_at: datetime
 
 
@@ -193,7 +198,8 @@ async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogRespon
     response_model=PqrsfReceiptResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit a public PQRSF request",
-    dependencies=[Depends(rate_limit("strict"))],
+    # Limits (per address, global, size, CAPTCHA) are enforced before the body is read by
+    # PublicIntakeGuard, see app/core/public_guard.py.
 )
 @inject
 async def create_public_request(
@@ -269,6 +275,7 @@ async def create_public_request(
         id=result.request.id,
         reference=result.request.reference,
         tracking_code=result.tracking_code,
+        handled_as="feedback" if result.handled_as == "feedback" else "case",
         created_at=result.request.created_at,
     )
 

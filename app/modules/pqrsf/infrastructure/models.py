@@ -41,6 +41,8 @@ class RequestTypeModel(Base):
     prefix: Mapped[str] = mapped_column(String(5), nullable=False, unique=True)
     requires_follow_up: Mapped[bool] = mapped_column(nullable=False, server_default="true")
     sla_days: Mapped[int | None] = mapped_column(Integer)
+    # ``case`` opens a follow-up case; ``acknowledge`` is stored apart and thanked.
+    handling: Mapped[str] = mapped_column(String(12), nullable=False, server_default="case")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -450,6 +452,70 @@ class CaseAttachmentModel(Base):
     )
 
 
+class FeedbackModel(Base):
+    """A suggestion or compliment, kept apart from the cases."""
+
+    __tablename__ = "pqrsf_feedback"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="pqrsf_feedback_request_id_key"),
+        UniqueConstraint("email_message_id", name="pqrsf_feedback_email_message_id_key"),
+        Index("ix_pqrsf_feedback_type_created", "request_type_id", "created_at"),
+        Index("ix_pqrsf_feedback_created", "created_at"),
+        Index("ix_pqrsf_feedback_email", "email"),
+        CheckConstraint("origin IN ('public_form', 'email')", name="ck_pqrsf_feedback_origin"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pqrsf_request_types.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    origin: Mapped[str] = mapped_column(String(12), nullable=False)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
+    )
+    email_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_email_messages.id", ondelete="SET NULL")
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_name: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    reply_notification_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reply_skipped_reason: Mapped[str | None] = mapped_column(String(40))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FeedbackFileModel(Base):
+    """File metadata of an attachment of a suggestion or compliment."""
+
+    __tablename__ = "pqrsf_feedback_files"
+    __table_args__ = (Index("ix_pqrsf_feedback_files_feedback", "feedback_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    feedback_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_feedback.id", ondelete="CASCADE"), nullable=False
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(10), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MailSyncStateModel(Base):
     """Where the next delta sync of a mailbox starts."""
 
@@ -470,6 +536,7 @@ class NotificationModel(Base):
         UniqueConstraint("dedupe_key", name="pqrsf_notifications_dedupe_key_key"),
         Index("ix_pqrsf_notifications_due", "status", "next_attempt_at"),
         Index("ix_pqrsf_notifications_case", "case_id", "kind"),
+        Index("ix_pqrsf_notifications_recipient", "kind", "recipient_email", "created_at"),
         CheckConstraint(
             "status IN ('pending', 'sent', 'failed')", name="ck_pqrsf_notifications_status"
         ),
