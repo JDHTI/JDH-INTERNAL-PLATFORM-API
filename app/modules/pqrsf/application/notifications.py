@@ -16,6 +16,7 @@ from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
     CLIENT_REPLY,
     DAILY_SUMMARY,
+    DOCUMENT_DELIVERY,
     FAILED,
     FEEDBACK_ACK,
     GRACE,
@@ -29,6 +30,7 @@ from app.modules.pqrsf.domain.notifications import (
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
     CaseRepository,
+    DocumentFileSource,
     EmailRepository,
     HolidayProvider,
     ManagerPolicy,
@@ -64,6 +66,7 @@ class NotificationService:
         enabled: bool = True,
         emails: EmailRepository | None = None,
         storage: BinaryStorage | None = None,
+        documents: DocumentFileSource | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         """Create the service.
@@ -84,6 +87,7 @@ class NotificationService:
             enabled (bool): When off, nothing is queued (assignment notices are skipped).
             emails (EmailRepository | None): Case files, to attach them to client replies.
             storage (BinaryStorage | None): Private bucket the case files are read from.
+            documents (DocumentFileSource | None): The document manager, to attach certificates.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
         """
 
@@ -102,6 +106,7 @@ class NotificationService:
         self.enabled = enabled
         self.emails = emails
         self.storage = storage
+        self.documents = documents
         self.clock = clock
 
     # --- Timers ---
@@ -289,6 +294,9 @@ class NotificationService:
     async def _deliver(self, item: Notification, to: str, subject: str, body: str) -> None:
         """Send one email; a client reply goes inside the client's conversation when it can."""
 
+        if item.kind == DOCUMENT_DELIVERY:
+            await self.mail.send(self.mailbox, to, subject, body, await self._certificates(item))
+            return
         if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
             await self.mail.send(self.mailbox, to, subject, body)
             return
@@ -301,6 +309,21 @@ class NotificationService:
                 return
             # The message to answer was deleted from the mailbox: write a new email instead.
         await self.mail.send(self.mailbox, to, subject, body, files)
+
+    async def _certificates(self, item: Notification) -> list[OutgoingFile]:
+        """The certificates of a delivery, read from the manager as they are right now."""
+
+        if self.documents is None:
+            raise DependencyUnavailableError("El gestor documental no está disponible")
+        files: list[OutgoingFile] = []
+        for value in item.payload.get("document_ids", []):
+            found = await self.documents.get_file(UUID(value))
+            if found is None:
+                raise DependencyUnavailableError(
+                    "Un documento ya no existe en el gestor documental"
+                )
+            files.append(found)
+        return files
 
     async def _reply_files(self, item: Notification) -> list[OutgoingFile]:
         ids = [UUID(value) for value in item.payload.get("file_ids", [])]

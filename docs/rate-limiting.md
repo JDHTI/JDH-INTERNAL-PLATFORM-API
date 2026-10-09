@@ -46,7 +46,7 @@ siguen respondiendo).
 ## Cambiar el nivel de un endpoint
 
 Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo con
-`python -m app.core.rate_policy` (una prueba falla si la tabla no coincide con la API).
+`python -m app.core.rate_policy --write` (una prueba falla si la tabla no coincide con la API).
 
 ## Nivel de cada endpoint
 
@@ -138,8 +138,16 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `PATCH` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/read` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/status` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/certificates` | `read` |  |
+| `GET` | `/v1/pqrsf/certificates/documents` | `read` |  |
+| `DELETE` | `/v1/pqrsf/certificates/{document_type_id}` | `relaxed` |  |
+| `PUT` | `/v1/pqrsf/certificates/{document_type_id}` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/dependencies` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/dependencies/{dependency_id}` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/document-deliveries` | `read` |  |
+| `GET` | `/v1/pqrsf/document-deliveries/summary` | `read` |  |
+| `GET` | `/v1/pqrsf/document-deliveries/{delivery_id}` | `read` |  |
+| `POST` | `/v1/pqrsf/document-deliveries/{delivery_id}/retry` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/document-types` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/document-types/{document_type_id}` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/feedback` | `read` |  |

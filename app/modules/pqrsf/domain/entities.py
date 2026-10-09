@@ -84,6 +84,8 @@ class DocumentOption:
 
     id: UUID
     name: str
+    # A certificate answers it automatically: no case and no waiting.
+    automatic: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,8 @@ class CreateResult:
     tracking_code: str | None = None
     # ``feedback`` for a suggestion or compliment: stored apart, no case, no consecutive.
     handled_as: str = "case"
+    # Names of the certificates sent to the requester without a case.
+    delivered: list[str] = field(default_factory=list)
 
 
 def clean_required(value: str, field: str, max_length: int) -> str:

@@ -54,6 +54,8 @@ class DocumentOptionResponse(BaseModel):
 
     id: UUID
     name: str
+    # A certificate answers it at once by email: no case and no waiting.
+    automatic: bool = False
 
 
 class DocumentCategoryResponse(BaseModel):
@@ -82,7 +84,9 @@ class PqrsfReceiptResponse(BaseModel):
     # could not be opened at submission time.
     tracking_code: str | None = None
     # ``feedback`` for a suggestion or compliment: no case and no consecutive, only thanks.
-    handled_as: Literal["case", "feedback"] = "case"
+    handled_as: Literal["case", "feedback", "documents"] = "case"
+    # With `documents` (and on a mixed request) the certificates already sent to the email.
+    delivered_documents: list[str] = []
     created_at: datetime
 
 
@@ -273,7 +277,8 @@ async def create_public_request(
         id=result.request.id,
         reference=result.request.reference,
         tracking_code=result.tracking_code,
-        handled_as="feedback" if result.handled_as == "feedback" else "case",
+        handled_as=result.handled_as if result.handled_as in ("feedback", "documents") else "case",
+        delivered_documents=result.delivered,
         created_at=result.request.created_at,
     )
 

@@ -105,7 +105,7 @@ def test_the_document_lists_the_level_of_every_endpoint() -> None:
     start, end = text.index(TABLE_START) + len(TABLE_START), text.index(TABLE_END)
 
     assert text[start:end].strip() == describe(PREFIX, _operations(app)).strip(), (
-        "docs/rate-limiting.md is out of date: run `python -m app.core.rate_policy`"
+        "docs/rate-limiting.md is out of date: run `python -m app.core.rate_policy --write`"
     )
 
 

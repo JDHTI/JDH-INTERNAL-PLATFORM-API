@@ -126,6 +126,44 @@ def feedback_ack(kind_code: str, name: str | None) -> tuple[str, str]:
     return title, f"{greeting}\n\n{text}\n\n{SIGNATURE}"
 
 
+def document_delivery(
+    name: str | None,
+    documents: Sequence[str],
+    part: int,
+    parts: int,
+    case_code: str | None,
+    manual: Sequence[str],
+) -> tuple[str, str]:
+    """The certificates asked for on the public form, sent without anyone writing to them.
+
+    A request too big for one email goes in several (``part`` of ``parts``); what a person
+    still has to answer (``manual``) is told in the first one, with its case.
+    """
+
+    first = (name or "").strip().split(" ")[0] if (name or "").strip() else ""
+    lines = [f"Hola {first}," if first else "Hola,", ""]
+    one = len(documents) == 1
+    lines.append(
+        "Adjuntamos el documento que solicitaste:"
+        if one
+        else "Adjuntamos los documentos que solicitaste:"
+    )
+    lines += [f"- {document}" for document in documents]
+    if part == 1 and (manual or case_code):
+        lines.append("")
+        if case_code:
+            lines.append(
+                f"El resto de tu solicitud ({', '.join(manual)}) quedó registrada con el "
+                f"consecutivo {case_code}; te responderemos por este medio."
+                if manual
+                else f"El resto de tu solicitud quedó registrada con el consecutivo {case_code}."
+            )
+    subject = "Documentos solicitados a JDH"
+    if parts > 1:
+        subject += f" ({part} de {parts})"
+    return subject, "\n".join(lines) + f"\n\n{SIGNATURE}"
+
+
 def daily_summary(
     name: str | None, lines: Sequence[str], total: int, overdue: int, today: date, url: str | None
 ) -> tuple[str, str]:

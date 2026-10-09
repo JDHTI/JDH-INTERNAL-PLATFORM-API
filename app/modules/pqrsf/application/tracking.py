@@ -249,8 +249,14 @@ class CaseTrackingService:
 
         is_manager = await self.managers.is_manager(principal)
         inactive = include_inactive and is_manager
+        # Suggestions and compliments have their own section: they are not types of cases.
+        request_types = [
+            kind
+            for kind in await self.requests.list_request_types(active_only=not inactive)
+            if kind.handling == HANDLING_CASE
+        ]
         return TrackingCatalog(
-            request_types=await self.requests.list_request_types(active_only=not inactive),
+            request_types=request_types,
             statuses=await self.repository.list_statuses(inactive),
             dependencies=await self.repository.list_dependencies(inactive),
             document_types=await self.repository.list_document_types(inactive),
@@ -817,6 +823,10 @@ class CaseTrackingService:
         request_type = await self.requests.get_request_type(command.request_type_id)
         if request_type is None or not request_type.is_active:
             raise NotFoundError("Tipo de solicitud no encontrado")
+        if request_type.handling != HANDLING_CASE:
+            raise InvalidInputError(
+                f"{request_type.name} no abre casos: se guarda en su propia sección"
+            )
         if len(command.items) > _ITEM_LIMIT:
             raise InvalidInputError(f"Un caso admite máximo {_ITEM_LIMIT} documentos")
         received_on = command.received_on or self.calendar.today()

@@ -516,6 +516,65 @@ class FeedbackFileModel(Base):
     )
 
 
+class CertificateModel(Base):
+    """A document type of the public form answered automatically with a file of the manager."""
+
+    __tablename__ = "pqrsf_certificates"
+    __table_args__ = (
+        UniqueConstraint("document_type_id", name="pqrsf_certificates_document_type_id_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    document_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pqrsf_document_types.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DocumentDeliveryModel(Base):
+    """The log of a request answered automatically with certificates."""
+
+    __tablename__ = "pqrsf_document_deliveries"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="pqrsf_document_deliveries_request_id_key"),
+        Index("ix_pqrsf_document_deliveries_created", "created_at"),
+        Index("ix_pqrsf_document_deliveries_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_name: Mapped[str | None] = mapped_column(String(200))
+    nit: Mapped[str | None] = mapped_column(String(30))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    manual_items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    case_code: Mapped[str | None] = mapped_column(String(20))
+    notification_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MailSyncStateModel(Base):
     """Where the next delta sync of a mailbox starts."""
 
