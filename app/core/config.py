@@ -96,12 +96,14 @@ class Settings(BaseSettings):
 
     # Public and administrative API protection. Values are intentionally
     # separate so each module can choose a tolerance profile without code edits.
-    RATE_LIMIT_STRICT_REQUESTS: int = 5
-    RATE_LIMIT_STRICT_WINDOW_SECONDS: int = 600
-    RATE_LIMIT_MEDIUM_REQUESTS: int = 30
-    RATE_LIMIT_MEDIUM_WINDOW_SECONDS: int = 60
+    # Three levels per client address, applied to every endpoint by app/core/rate_policy.py:
+    # read (queries), relaxed (changes) and strict (costly or open to the public).
+    RATE_LIMIT_READ_REQUESTS: int = 600
+    RATE_LIMIT_READ_WINDOW_SECONDS: int = 60
     RATE_LIMIT_RELAXED_REQUESTS: int = 120
     RATE_LIMIT_RELAXED_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_STRICT_REQUESTS: int = 5
+    RATE_LIMIT_STRICT_WINDOW_SECONDS: int = 600
     RATE_LIMIT_TRUSTED_PROXY_IPS: str = ""
     # Public forms (POST /public/*): one budget for every visitor together, so a flood from
     # many addresses cannot get past the per-address limit; and a cap on the request body,
@@ -410,7 +412,7 @@ class Settings(BaseSettings):
         """Return the configured ``(limit, window_seconds)`` for a profile.
 
         Args:
-            profile (str): One of ``strict``, ``medium`` or ``relaxed``.
+            profile (str): One of ``read``, ``relaxed``, ``strict`` or ``public_global``.
 
         Returns:
             tuple[int, int]: Maximum requests and window duration.
@@ -425,7 +427,7 @@ class Settings(BaseSettings):
                 self.RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS,
             ),
             "strict": (self.RATE_LIMIT_STRICT_REQUESTS, self.RATE_LIMIT_STRICT_WINDOW_SECONDS),
-            "medium": (self.RATE_LIMIT_MEDIUM_REQUESTS, self.RATE_LIMIT_MEDIUM_WINDOW_SECONDS),
+            "read": (self.RATE_LIMIT_READ_REQUESTS, self.RATE_LIMIT_READ_WINDOW_SECONDS),
             "relaxed": (
                 self.RATE_LIMIT_RELAXED_REQUESTS,
                 self.RATE_LIMIT_RELAXED_WINDOW_SECONDS,

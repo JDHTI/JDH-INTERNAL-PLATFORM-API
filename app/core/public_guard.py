@@ -24,6 +24,15 @@ CAPTCHA_HEADER = "X-Captcha-Token"
 _CAPTCHA_TIMEOUT_SECONDS = 5.0
 
 
+def is_public_post(scope: Scope) -> bool:
+    """Whether the request is a ``POST`` to a public form (``{API_PREFIX}/v1/public/*``)."""
+
+    if scope["type"] != "http" or scope["method"] != "POST":
+        return False
+    prefix = scope["app"].state.settings.API_PREFIX
+    return re.match(rf"{re.escape(prefix)}/(v\d+/)?public/", scope["path"]) is not None
+
+
 class PublicIntakeGuard:
     """Pure ASGI middleware: cheap checks first, and nothing reads the body before they pass."""
 
@@ -35,7 +44,7 @@ class PublicIntakeGuard:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Admit or turn away a public POST; everything else passes untouched."""
 
-        if scope["type"] != "http" or scope["method"] != "POST" or not self._is_public(scope):
+        if not is_public_post(scope):
             await self.app(scope, receive, send)
             return
         request = Request(scope, receive)
@@ -44,11 +53,6 @@ class PublicIntakeGuard:
             await rejection(scope, receive, send)
             return
         await self.app(scope, receive, send)
-
-    @staticmethod
-    def _is_public(scope: Scope) -> bool:
-        prefix = scope["app"].state.settings.API_PREFIX
-        return re.match(rf"{re.escape(prefix)}/(v\d+/)?public/", scope["path"]) is not None
 
     async def _rejection(self, request: Request) -> JSONResponse | None:
         settings = request.app.state.settings
@@ -107,4 +111,4 @@ def _reply(status_code: int, detail: str, headers: dict[str, str] | None = None)
     return JSONResponse({"detail": detail}, status_code=status_code, headers=headers)
 
 
-__all__ = ["CAPTCHA_HEADER", "PublicIntakeGuard"]
+__all__ = ["CAPTCHA_HEADER", "PublicIntakeGuard", "is_public_post"]

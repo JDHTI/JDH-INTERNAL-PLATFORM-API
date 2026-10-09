@@ -20,6 +20,7 @@ from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
 from app.core.public_guard import PublicIntakeGuard
+from app.core.rate_limit_middleware import RateLimitMiddleware
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
 
@@ -93,7 +94,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     )
     app.state.container = container
     app.state.settings = runtime_settings
-    # Added before CORS, so CORS wraps it: a 413 or 429 still reaches the browser readable.
+    # Added before CORS, so CORS wraps them: a 413 or 429 still reaches the browser readable.
+    # Requests go through the public guard first, then the limit of the endpoint's level.
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(PublicIntakeGuard)
     app.add_middleware(
         CORSMiddleware,

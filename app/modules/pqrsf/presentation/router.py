@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, Upl
 from pydantic import BaseModel, EmailStr
 
 from app.app_container import ApplicationContainer
-from app.core.rate_limit import rate_limit
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.presentation.router import require_admin
 from app.modules.pqrsf.application.service import PqrsfService
@@ -26,7 +25,7 @@ from app.modules.pqrsf.domain.entities import (
 from app.modules.sites.domain.entities import Site
 
 public_router = APIRouter(prefix="/public/pqrsf")
-admin_router = APIRouter(prefix="/pqrsf", dependencies=[Depends(rate_limit("medium"))])
+admin_router = APIRouter(prefix="/pqrsf")
 _service = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 
 
@@ -176,7 +175,6 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
     "/catalogs",
     response_model=PqrsfCatalogResponse,
     summary="Public PQRSF catalogs",
-    dependencies=[Depends(rate_limit("relaxed"))],
 )
 @inject
 async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogResponse:

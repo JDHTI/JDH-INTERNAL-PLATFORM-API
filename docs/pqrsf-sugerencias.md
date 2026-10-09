@@ -75,8 +75,8 @@ FastAPI leía el cuerpo completo (hasta decenas de MB de imágenes). Ahora todo 
    verificación no responde, no se admite el envío (`503`).
 
 Si Redis no responde, se responde `503` y nada se admite. Las respuestas `413`/`429`/`403` llevan
-las cabeceras CORS para que el navegador pueda leerlas. Lo demás de la API conserva sus límites
-por ruta (`medium` y `relaxed`).
+las cabeceras CORS para que el navegador pueda leerlas. El resto de la API tiene sus propios
+niveles (`read`, `relaxed`, `strict`), ver [`rate-limiting.md`](rate-limiting.md).
 
 ### Para el despliegue
 
