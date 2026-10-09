@@ -25,15 +25,26 @@ from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
 from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.certificates import CertificateService
 from app.modules.pqrsf.application.comments import CaseCommentService
+from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.feedback import FeedbackService
+from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
+from app.modules.pqrsf.infrastructure.certificate_repository import (
+    ManagerDocumentFiles,
+    SqlAlchemyCertificateRepository,
+)
+from app.modules.pqrsf.infrastructure.delivery_repository import SqlAlchemyDeliveryRepository
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
 from app.modules.pqrsf.infrastructure.feedback_repository import SqlAlchemyFeedbackRepository
 from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
+from app.modules.pqrsf.infrastructure.item_delivery_repository import (
+    SqlAlchemyItemDeliveryRepository,
+)
 from app.modules.pqrsf.infrastructure.notification_repository import (
     SqlAlchemyNotificationRepository,
 )
@@ -203,6 +214,13 @@ class V1Container(containers.DeclarativeContainer):
         max_replies_per_email=config.pqrsf.feedback_replies_per_email,
         wake=pqrsf_wakeup.provided.set,
     )
+    pqrsf_certificate_repository = providers.Factory(
+        SqlAlchemyCertificateRepository, database=database
+    )
+    pqrsf_delivery_repository = providers.Factory(SqlAlchemyDeliveryRepository, database=database)
+    pqrsf_manager_files = providers.Factory(
+        ManagerDocumentFiles, database=database, storage=storage
+    )
     pqrsf_notification_service = providers.Factory(
         NotificationService,
         repository=pqrsf_notification_repository,
@@ -220,6 +238,7 @@ class V1Container(containers.DeclarativeContainer):
         enabled=config.pqrsf.notifications_enabled,
         emails=pqrsf_email_repository,
         storage=storage,
+        documents=pqrsf_manager_files,
     )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
@@ -291,6 +310,39 @@ class V1Container(containers.DeclarativeContainer):
         access=pqrsf_tracking_service,
         storage=storage,
     )
+    pqrsf_item_delivery_repository = providers.Factory(
+        SqlAlchemyItemDeliveryRepository, database=database
+    )
+    pqrsf_item_delivery_service = providers.Factory(
+        ItemDeliveryService,
+        tracking=pqrsf_tracking_service,
+        deliveries=pqrsf_item_delivery_repository,
+        certificates=pqrsf_certificate_repository,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
+        area_slug=config.pqrsf.certificates_area_slug,
+        wake=pqrsf_wakeup.provided.set,
+    )
+    pqrsf_certificate_service = providers.Factory(
+        CertificateService,
+        repository=pqrsf_certificate_repository,
+        managers=pqrsf_manager_policy,
+        area_slug=config.pqrsf.certificates_area_slug,
+    )
+    pqrsf_delivery_service = providers.Factory(
+        DocumentDeliveryService,
+        deliveries=pqrsf_delivery_repository,
+        certificates=pqrsf_certificate_repository,
+        notifications=pqrsf_notification_repository,
+        managers=pqrsf_manager_policy,
+        people=user_directory,
+        enabled=config.pqrsf.notifications_enabled,
+        max_emails_per_address=config.pqrsf.document_emails_per_address,
+        max_email_bytes=config.pqrsf.document_email_max_bytes,
+        wake=pqrsf_wakeup.provided.set,
+    )
     pqrsf_service = providers.Factory(
         PqrsfService,
         repository=pqrsf_repository,
@@ -303,4 +355,5 @@ class V1Container(containers.DeclarativeContainer):
         max_attachment_bytes=config.pqrsf.max_attachment_bytes,
         max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,
         feedback=pqrsf_feedback_service,
+        deliveries=pqrsf_delivery_service,
     )

@@ -160,6 +160,11 @@ class Settings(BaseSettings):
     PQRSF_NOTIFY_REDIRECT: str = ""
     # Automatic thank-yous one address can get per 24 hours (suggestions and compliments).
     PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY: int = 3
+    # Certificates answered automatically come from files of this area of the document manager.
+    PQRSF_CERTIFICATES_AREA_SLUG: str = "calidad"
+    # Emails with certificates one address receives per 24 hours, and attachments per email.
+    PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY: int = 5
+    PQRSF_DOCUMENT_EMAIL_MAX_MB: int = 15
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -361,6 +366,9 @@ class Settings(BaseSettings):
                 "ui_base_url": self.PQRSF_UI_BASE_URL,
                 "notify_redirect": self.PQRSF_NOTIFY_REDIRECT,
                 "feedback_replies_per_email": self.PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY,
+                "certificates_area_slug": self.PQRSF_CERTIFICATES_AREA_SLUG,
+                "document_emails_per_address": self.PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY,
+                "document_email_max_bytes": self.PQRSF_DOCUMENT_EMAIL_MAX_MB * 1024 * 1024,
             },
             "mail": {
                 "tenant_id": self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,

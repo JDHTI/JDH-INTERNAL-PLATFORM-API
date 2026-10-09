@@ -112,6 +112,8 @@ class DocumentTypeResponse(BaseModel):
     name: str
     sla_days: int
     is_active: bool
+    # The answer can be uploaded straight to the case, without the document manager.
+    allows_direct_upload: bool = False
 
 
 class TrackingSiteResponse(BaseModel):
@@ -432,6 +434,7 @@ class UpdateDocumentTypeRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     sla_days: int | None = Field(default=None, ge=0, le=365)
     is_active: bool | None = None
+    allows_direct_upload: bool | None = None
 
 
 # --- Mappers ---

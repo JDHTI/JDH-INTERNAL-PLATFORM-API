@@ -1,9 +1,10 @@
 import copy
 import uuid
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
-from app.core.errors import ForbiddenError, NotFoundError
+from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import HANDLING_ACKNOWLEDGE
@@ -95,6 +96,12 @@ class FakeOutbox:
             return False
         self.items.append(notification)
         return True
+
+    async def get_notification(self, notification_id):
+        return next((n for n in self.items if n.id == notification_id), None)
+
+    async def save_notification(self, notification):
+        pass  # the service changes the stored object itself
 
     async def count_recent(self, kind, recipient_email, since):
         return sum(1 for n in self.items if n.kind == kind and n.recipient_email == recipient_email)
@@ -391,3 +398,27 @@ async def test_only_managers_read_and_the_first_opening_marks_it_read() -> None:
     first = await feedback.open(stored.id, admin)
     assert first.read_by_user_id == admin.user_id and first.read_at == NOW
     assert (await feedback.reader(first)).email == "calidad@jdh.com.co"
+
+
+# --- Not a type of case ---
+
+
+@pytest.mark.asyncio
+async def test_suggestions_and_compliments_are_not_types_of_the_case_screens() -> None:
+    t = Intake()
+    t.setup.felicitacion.handling = HANDLING_ACKNOWLEDGE
+
+    async def nothing(*args, **kwargs):
+        return []
+
+    for name in ("list_statuses", "list_dependencies", "list_document_types"):
+        setattr(t.setup.cases, name, nothing)
+    t.setup.service.sites = SimpleNamespace(list_sites=nothing)
+
+    catalog = await t.setup.service.catalog(t.setup.admin)
+
+    assert [kind.code for kind in catalog.request_types] == ["peticion"]
+    with pytest.raises(InvalidInputError, match="propia sección"):
+        await t.setup.service.create_case(
+            t.setup.command(request_type_id=t.setup.felicitacion.id), t.setup.admin
+        )

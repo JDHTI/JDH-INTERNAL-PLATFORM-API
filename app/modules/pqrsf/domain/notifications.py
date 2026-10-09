@@ -16,6 +16,8 @@ OVERDUE_REMINDER = "overdue_reminder"
 CLIENT_REPLY = "client_reply"
 # The automatic thank-you to whoever sent a suggestion or a compliment.
 FEEDBACK_ACK = "feedback_ack"
+# The certificates a customer asked for on the public form, attached from the document manager.
+DOCUMENT_DELIVERY = "document_delivery"
 
 # Statuses of a queued email.
 PENDING = "pending"

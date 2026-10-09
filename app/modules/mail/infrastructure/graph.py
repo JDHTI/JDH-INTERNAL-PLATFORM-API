@@ -27,6 +27,12 @@ _MESSAGE_FIELDS = (
 )
 _FILE_ATTACHMENT = "#microsoft.graph.fileAttachment"
 _PAGE_LIMIT = 200
+# A file attachment sent as JSON must stay well under 3 MB (base64 adds a third and the whole
+# request is capped near 4 MB): above this a message goes through a draft, and a single
+# file of 3 MB or more through an upload session, sent in chunks that are multiples of 320 KiB.
+_INLINE_LIMIT = 3 * 1024 * 1024
+_DRAFT_THRESHOLD = 2 * 1024 * 1024
+_UPLOAD_CHUNK = 320 * 1024 * 10
 
 
 def _segment(value: str) -> str:
@@ -264,7 +270,7 @@ class GraphMailClient:
             return False
         draft_url = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(draft.json()['id'])}"
         for file in files:
-            await self._request("POST", f"{draft_url}/attachments", json=_file_attachment(file))
+            await self._attach(draft_url, file)
         await self._request("POST", f"{draft_url}/send")
         return True
 
@@ -290,13 +296,64 @@ class GraphMailClient:
             "body": {"contentType": "Text", "content": text},
             "toRecipients": [{"emailAddress": {"address": to}}],
         }
+        user = f"{GRAPH_URL}/users/{_segment(mailbox)}"
+        if sum(len(file.content) for file in files) >= _DRAFT_THRESHOLD:
+            # Too big for one JSON request: create a draft, attach each file, send it.
+            draft = await self._request("POST", f"{user}/messages", json=message)
+            assert draft is not None
+            draft_url = f"{user}/messages/{_segment(draft.json()['id'])}"
+            for file in files:
+                await self._attach(draft_url, file)
+            await self._request("POST", f"{draft_url}/send")
+            return
         if files:
             message["attachments"] = [_file_attachment(file) for file in files]
         await self._request(
-            "POST",
-            f"{GRAPH_URL}/users/{_segment(mailbox)}/sendMail",
-            json={"message": message, "saveToSentItems": True},
+            "POST", f"{user}/sendMail", json={"message": message, "saveToSentItems": True}
         )
+
+    async def _attach(self, draft_url: str, file: OutgoingFile) -> None:
+        """Add a file to a draft: as JSON when small, through an upload session otherwise."""
+
+        if len(file.content) < _INLINE_LIMIT:
+            await self._request("POST", f"{draft_url}/attachments", json=_file_attachment(file))
+            return
+        session = await self._request(
+            "POST",
+            f"{draft_url}/attachments/createUploadSession",
+            json={
+                "AttachmentItem": {
+                    "attachmentType": "file",
+                    "name": file.name,
+                    "size": len(file.content),
+                    "contentType": file.content_type,
+                }
+            },
+        )
+        assert session is not None
+        upload_url = session.json()["uploadUrl"]
+        total = len(file.content)
+        for start in range(0, total, _UPLOAD_CHUNK):
+            chunk = file.content[start : start + _UPLOAD_CHUNK]
+            try:
+                # The upload URL carries its own authorization: no bearer token goes with it.
+                response = await self._http.put(
+                    upload_url,
+                    content=chunk,
+                    headers={
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"bytes {start}-{start + len(chunk) - 1}/{total}",
+                    },
+                )
+            except httpx.HTTPError as exc:
+                raise DependencyUnavailableError(
+                    "No se pudo subir el adjunto a Microsoft Graph"
+                ) from exc
+            if response.status_code >= 400:
+                logger.error("Graph upload session failed: %s", response.status_code)
+                raise DependencyUnavailableError(
+                    f"Microsoft Graph respondió {response.status_code} al subir el adjunto"
+                )
 
 
 def _html(text: str) -> str:

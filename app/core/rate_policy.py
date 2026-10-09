@@ -127,19 +127,37 @@ def describe(prefix: str, operations: list[tuple[str, str]]) -> str:
     return header + "\n" + "\n".join(rows)
 
 
-def _print_table() -> None:
-    """Print the table of ``docs/rate-limiting.md`` for the current API."""
-
+def _table_for_current_api() -> str:
     from app.core.config import settings
     from app.main import create_app
 
     spec = create_app(settings).openapi()
     operations = [(method.upper(), path) for path, ops in spec["paths"].items() for method in ops]
-    print(describe(settings.API_PREFIX, operations))
+    return describe(settings.API_PREFIX, operations)
+
+
+def _main(argv: list[str]) -> None:
+    """Print the table of ``docs/rate-limiting.md``, or with ``--write`` update the file."""
+
+    table = _table_for_current_api()
+    if "--write" not in argv:
+        print(table)
+        return
+    from pathlib import Path
+
+    start, end = "<!-- niveles:inicio -->", "<!-- niveles:fin -->"
+    path = Path(__file__).resolve().parents[2] / "docs" / "rate-limiting.md"
+    text = path.read_text(encoding="utf-8")
+    head, _, rest = text.partition(start)
+    _, _, tail = rest.partition(end)
+    path.write_text(f"{head}{start}\n{table}\n{end}{tail}", encoding="utf-8", newline="\n")
+    print(f"Actualizado {path}")
 
 
 if __name__ == "__main__":
-    _print_table()
+    import sys
+
+    _main(sys.argv[1:])
 
 
 __all__ = [

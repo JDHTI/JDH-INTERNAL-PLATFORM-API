@@ -211,6 +211,9 @@ class DocumentTypeModel(Base):
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    allows_direct_upload: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -511,6 +514,97 @@ class FeedbackFileModel(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CertificateModel(Base):
+    """A document type of the public form answered automatically with a file of the manager."""
+
+    __tablename__ = "pqrsf_certificates"
+    __table_args__ = (
+        UniqueConstraint("document_type_id", name="pqrsf_certificates_document_type_id_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    document_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pqrsf_document_types.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DocumentDeliveryModel(Base):
+    """The log of a request answered automatically with certificates."""
+
+    __tablename__ = "pqrsf_document_deliveries"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="pqrsf_document_deliveries_request_id_key"),
+        Index("ix_pqrsf_document_deliveries_created", "created_at"),
+        Index("ix_pqrsf_document_deliveries_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_name: Mapped[str | None] = mapped_column(String(200))
+    nit: Mapped[str | None] = mapped_column(String(30))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    manual_items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    case_code: Mapped[str | None] = mapped_column(String(20))
+    notification_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ItemDeliveryModel(Base):
+    """A requested document of a case answered with a file (linked from the manager or uploaded)."""
+
+    __tablename__ = "pqrsf_item_deliveries"
+    __table_args__ = (
+        Index("ix_pqrsf_item_deliveries_case", "case_id"),
+        Index("ix_pqrsf_item_deliveries_item", "item_id"),
+        CheckConstraint("source IN ('vault', 'upload')", name="ck_pqrsf_item_deliveries_source"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_items.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_attachments.id", ondelete="SET NULL")
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

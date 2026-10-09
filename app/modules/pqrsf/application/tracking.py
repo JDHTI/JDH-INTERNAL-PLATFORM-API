@@ -249,8 +249,14 @@ class CaseTrackingService:
 
         is_manager = await self.managers.is_manager(principal)
         inactive = include_inactive and is_manager
+        # Suggestions and compliments have their own section: they are not types of cases.
+        request_types = [
+            kind
+            for kind in await self.requests.list_request_types(active_only=not inactive)
+            if kind.handling == HANDLING_CASE
+        ]
         return TrackingCatalog(
-            request_types=await self.requests.list_request_types(active_only=not inactive),
+            request_types=request_types,
             statuses=await self.repository.list_statuses(inactive),
             dependencies=await self.repository.list_dependencies(inactive),
             document_types=await self.repository.list_document_types(inactive),
@@ -495,6 +501,7 @@ class CaseTrackingService:
         name: str | None = None,
         sla_days: int | None = None,
         is_active: bool | None = None,
+        allows_direct_upload: bool | None = None,
     ) -> DocumentType:
         """Edit a document type. Existing items keep the time they were given.
 
@@ -505,6 +512,7 @@ class CaseTrackingService:
             name (str | None): Visible name.
             sla_days (int | None): Response time for new items.
             is_active (bool | None): Offer it in selectors.
+            allows_direct_upload (bool | None): Its answer may skip the document manager.
 
         Returns:
             DocumentType: The updated document type.
@@ -526,6 +534,8 @@ class CaseTrackingService:
             document_type.sla_days = validate_sla_days(sla_days) or 0
         if "is_active" in fields and is_active is not None:
             document_type.is_active = is_active
+        if "allows_direct_upload" in fields and allows_direct_upload is not None:
+            document_type.allows_direct_upload = allows_direct_upload
         document_type.updated_at = datetime.now(UTC)
         return await self.repository.save_document_type(document_type)
 
@@ -817,6 +827,10 @@ class CaseTrackingService:
         request_type = await self.requests.get_request_type(command.request_type_id)
         if request_type is None or not request_type.is_active:
             raise NotFoundError("Tipo de solicitud no encontrado")
+        if request_type.handling != HANDLING_CASE:
+            raise InvalidInputError(
+                f"{request_type.name} no abre casos: se guarda en su propia sección"
+            )
         if len(command.items) > _ITEM_LIMIT:
             raise InvalidInputError(f"Un caso admite máximo {_ITEM_LIMIT} documentos")
         received_on = command.received_on or self.calendar.today()
@@ -1445,6 +1459,11 @@ class CaseTrackingService:
         )
         await self.repository.save_case(case, [event])
         return await self._reload_view(case.id, principal)
+
+    def today(self) -> date:
+        """Today in the business time zone."""
+
+        return self.calendar.today()
 
     async def update_item(
         self, case_id: UUID, item_id: UUID, changes: ItemChanges, principal: Principal

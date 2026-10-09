@@ -8,6 +8,16 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.principal import DirectoryUser, Principal
+from app.modules.mail.domain import OutgoingFile
+from app.modules.pqrsf.domain.certificates import (
+    Certificate,
+    CertificateEntry,
+    DeliveryFilters,
+    DeliveryPage,
+    DeliverySummary,
+    DocumentDelivery,
+    ManagerDocument,
+)
 from app.modules.pqrsf.domain.email import CaseAttachment, EmailCaseInput, EmailMessage
 from app.modules.pqrsf.domain.entities import (
     DocumentCategory,
@@ -25,6 +35,7 @@ from app.modules.pqrsf.domain.feedback import (
     FeedbackPage,
     FeedbackSummary,
 )
+from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
@@ -388,6 +399,102 @@ class FeedbackRepository(Protocol):
 
     async def get_file(self, feedback_id: UUID, file_id: UUID) -> FeedbackFile | None:
         """One file owned by the message."""
+        ...
+
+
+class CertificateRepository(Protocol):
+    """Store which file of the document manager answers each document type."""
+
+    async def list_entries(self) -> list[CertificateEntry]:
+        """Every document type the public form offers, with its certificate if it has one."""
+        ...
+
+    async def get_entry(self, document_type_id: UUID) -> CertificateEntry | None:
+        """One document type with its certificate."""
+        ...
+
+    async def type_names(self, document_type_ids: list[UUID]) -> dict[UUID, str]:
+        """Names of document types, including those of the category answered by a person."""
+        ...
+
+    async def automatic_for(self, document_type_ids: list[UUID]) -> dict[UUID, Certificate]:
+        """The certificates that are on and have a file, by document type."""
+        ...
+
+    async def save(
+        self, document_type_id: UUID, document_id: UUID | None, is_active: bool, user_id: UUID
+    ) -> Certificate:
+        """Create or replace the certificate of a document type."""
+        ...
+
+    async def delete(self, document_type_id: UUID) -> None:
+        """Remove the certificate of a document type."""
+        ...
+
+    async def list_documents(
+        self, area_slug: str, query: str | None, folder_id: UUID | None, limit: int
+    ) -> list[ManagerDocument]:
+        """Files of an area of the manager, to choose a certificate from."""
+        ...
+
+    async def get_document(self, document_id: UUID) -> ManagerDocument | None:
+        """One file of the manager with where it is kept."""
+        ...
+
+
+class DocumentFileSource(Protocol):
+    """Read a file of the document manager at the moment it is attached to an email."""
+
+    async def get_file(self, document_id: UUID) -> OutgoingFile | None:
+        """The current content of the document, or ``None`` when it no longer exists."""
+        ...
+
+
+class DeliveryRepository(Protocol):
+    """Store the requests answered automatically with certificates."""
+
+    async def add(self, delivery: DocumentDelivery) -> tuple[DocumentDelivery, bool]:
+        """Store a delivery once per request; ``False`` when it already existed."""
+        ...
+
+    async def get(self, delivery_id: UUID) -> DocumentDelivery | None:
+        """One delivery with the state of its emails."""
+        ...
+
+    async def get_by_request(self, request_id: UUID) -> DocumentDelivery | None:
+        """The delivery of a public request."""
+        ...
+
+    async def list_deliveries(self, filters: DeliveryFilters, page: int, size: int) -> DeliveryPage:
+        """One page, newest first, with the state of their emails."""
+        ...
+
+    async def summarize(self) -> DeliverySummary:
+        """Totals and unread."""
+        ...
+
+    async def mark_read(self, delivery_id: UUID, user_id: UUID, at: datetime) -> None:
+        """Record who opened it first."""
+        ...
+
+    async def set_notifications(self, delivery_id: UUID, notification_ids: list[UUID]) -> None:
+        """Remember the emails queued for the delivery."""
+        ...
+
+    async def set_case(self, delivery_id: UUID, case_code: str) -> None:
+        """Remember the case opened for what a person answers."""
+        ...
+
+
+class ItemDeliveryRepository(Protocol):
+    """Store the answers given to the requested documents of a case."""
+
+    async def add(self, delivery: ItemDelivery) -> None:
+        """Store an answer."""
+        ...
+
+    async def list_for_case(self, case_id: UUID) -> list[ItemDelivery]:
+        """The answers of a case, oldest first, with where their email stands."""
         ...
 
 
