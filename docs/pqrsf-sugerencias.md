@@ -50,7 +50,7 @@ No se envía (y el mensaje se guarda igual, con `reply.skipped_reason`) cuando:
 | Endpoint | Para qué |
 |---|---|
 | `GET /pqrsf/feedback/summary` | `total`, `unread` y `by_kind` (insignia del menú) |
-| `GET /pqrsf/feedback?kind=&q=&unread=&from=&to=&page=&size=` | Lista, lo más nuevo primero |
+| `GET /pqrsf/feedback?kind=&q=&unread=&from=&to=&page=&size=` | Lista, lo más nuevo primero, de 10 en 10 por defecto (`size`, máximo 100) |
 | `GET /pqrsf/feedback/{id}` | Detalle completo con archivos; la primera apertura lo marca leído |
 | `GET /pqrsf/feedback/{id}/files/{file_id}/download` | Descarga (siempre como adjunto) |
 

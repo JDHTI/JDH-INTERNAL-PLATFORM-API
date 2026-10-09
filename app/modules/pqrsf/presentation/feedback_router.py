@@ -178,7 +178,7 @@ async def list_feedback(
     date_from: date | None = Query(default=None, alias="from"),  # noqa: B008
     date_to: date | None = Query(default=None, alias="to"),  # noqa: B008
     page: int = Query(default=1, ge=1),  # noqa: B008
-    size: int = Query(default=20, ge=1, le=100),  # noqa: B008
+    size: int = Query(default=10, ge=1, le=100),  # noqa: B008
     principal: Principal = _principal,
     service: FeedbackService = _service,
 ) -> FeedbackPageResponse:
