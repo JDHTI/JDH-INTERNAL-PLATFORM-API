@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -11,7 +12,6 @@ from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, Upl
 from pydantic import BaseModel, EmailStr
 
 from app.app_container import ApplicationContainer
-from app.core.rate_limit import rate_limit
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.presentation.router import require_admin
 from app.modules.pqrsf.application.service import PqrsfService
@@ -25,7 +25,7 @@ from app.modules.pqrsf.domain.entities import (
 from app.modules.sites.domain.entities import Site
 
 public_router = APIRouter(prefix="/public/pqrsf")
-admin_router = APIRouter(prefix="/pqrsf", dependencies=[Depends(rate_limit("medium"))])
+admin_router = APIRouter(prefix="/pqrsf")
 _service = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 
 
@@ -37,6 +37,8 @@ class RequestTypeResponse(BaseModel):
     name: str
     allows_document_request: bool
     allows_attachments: bool
+    # ``acknowledge``: a suggestion or compliment, answered with thanks and no case.
+    handling: Literal["case", "acknowledge"] = "case"
 
 
 class PqrsfSiteResponse(BaseModel):
@@ -79,6 +81,8 @@ class PqrsfReceiptResponse(BaseModel):
     # Consecutive the customer can quote (P26AC0012); null if the case
     # could not be opened at submission time.
     tracking_code: str | None = None
+    # ``feedback`` for a suggestion or compliment: no case and no consecutive, only thanks.
+    handled_as: Literal["case", "feedback"] = "case"
     created_at: datetime
 
 
@@ -171,7 +175,6 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
     "/catalogs",
     response_model=PqrsfCatalogResponse,
     summary="Public PQRSF catalogs",
-    dependencies=[Depends(rate_limit("relaxed"))],
 )
 @inject
 async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogResponse:
@@ -193,7 +196,8 @@ async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogRespon
     response_model=PqrsfReceiptResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Submit a public PQRSF request",
-    dependencies=[Depends(rate_limit("strict"))],
+    # Limits (per address, global, size, CAPTCHA) are enforced before the body is read by
+    # PublicIntakeGuard, see app/core/public_guard.py.
 )
 @inject
 async def create_public_request(
@@ -269,6 +273,7 @@ async def create_public_request(
         id=result.request.id,
         reference=result.request.reference,
         tracking_code=result.tracking_code,
+        handled_as="feedback" if result.handled_as == "feedback" else "case",
         created_at=result.request.created_at,
     )
 

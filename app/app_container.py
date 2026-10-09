@@ -95,6 +95,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     from app.modules.health.presentation import router as health_router_module
     from app.modules.identity.presentation import router as identity_router_module
     from app.modules.masters.presentation import router as masters_router_module
+    from app.modules.pqrsf.presentation import feedback_router as pqrsf_feedback_router_module
     from app.modules.pqrsf.presentation import router as pqrsf_router_module
     from app.modules.pqrsf.presentation import tracking_router as pqrsf_tracking_router_module
     from app.modules.projects.presentation import router as projects_router_module
@@ -114,6 +115,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             masters_router_module,
             pqrsf_router_module,
             pqrsf_tracking_router_module,
+            pqrsf_feedback_router_module,
             projects_router_module,
         ]
     )

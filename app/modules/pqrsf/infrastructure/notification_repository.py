@@ -111,6 +111,21 @@ class SqlAlchemyNotificationRepository:
             )
             return [_notification(model) for model in rows]
 
+    async def count_recent(self, kind: str, recipient_email: str, since: datetime) -> int:
+        """Emails of one kind queued for an address since an instant."""
+
+        async with self.database.session_factory() as session:
+            total = await session.scalar(
+                select(func.count())
+                .select_from(NotificationModel)
+                .where(
+                    NotificationModel.kind == kind,
+                    func.lower(NotificationModel.recipient_email) == recipient_email.lower(),
+                    NotificationModel.created_at >= since,
+                )
+            )
+        return int(total or 0)
+
     async def save_notification(self, notification: Notification) -> None:
         """Persist the outcome of a send attempt."""
 

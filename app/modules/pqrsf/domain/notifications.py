@@ -14,6 +14,8 @@ DAILY_SUMMARY = "daily_summary"
 OVERDUE_REMINDER = "overdue_reminder"
 # A partial reply to the client written from a case comment.
 CLIENT_REPLY = "client_reply"
+# The automatic thank-you to whoever sent a suggestion or a compliment.
+FEEDBACK_ACK = "feedback_ack"
 
 # Statuses of a queued email.
 PENDING = "pending"

@@ -8,6 +8,7 @@ from app.modules.documents.presentation.router import area_router as area_docume
 from app.modules.documents.presentation.router import router as documents_router
 from app.modules.identity.presentation.router import router as identity_router
 from app.modules.masters.presentation.router import router as masters_router
+from app.modules.pqrsf.presentation.feedback_router import router as pqrsf_feedback_router
 from app.modules.pqrsf.presentation.router import admin_router as pqrsf_admin_router
 from app.modules.pqrsf.presentation.router import public_router as pqrsf_public_router
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
@@ -26,6 +27,7 @@ v1_router.include_router(masters_router, prefix="/masters", tags=["masters"])
 v1_router.include_router(pqrsf_public_router, tags=["pqrsf-public"])
 v1_router.include_router(pqrsf_admin_router, tags=["pqrsf"])
 v1_router.include_router(pqrsf_tracking_router, tags=["pqrsf-tracking"])
+v1_router.include_router(pqrsf_feedback_router, tags=["pqrsf-feedback"])
 
 # Register every versioned module explicitly here. Example:
 # from app.modules.orders.presentation.router import router as orders_router
