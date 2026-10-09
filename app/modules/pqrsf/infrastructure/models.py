@@ -211,6 +211,9 @@ class DocumentTypeModel(Base):
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    allows_direct_upload: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -570,6 +573,38 @@ class DocumentDeliveryModel(Base):
     notification_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ItemDeliveryModel(Base):
+    """A requested document of a case answered with a file (linked from the manager or uploaded)."""
+
+    __tablename__ = "pqrsf_item_deliveries"
+    __table_args__ = (
+        Index("ix_pqrsf_item_deliveries_case", "case_id"),
+        Index("ix_pqrsf_item_deliveries_item", "item_id"),
+        CheckConstraint("source IN ('vault', 'upload')", name="ck_pqrsf_item_deliveries_source"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_items.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_attachments.id", ondelete="SET NULL")
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

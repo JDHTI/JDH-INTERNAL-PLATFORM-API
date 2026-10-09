@@ -30,6 +30,7 @@ from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.feedback import FeedbackService
+from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
@@ -41,6 +42,9 @@ from app.modules.pqrsf.infrastructure.delivery_repository import SqlAlchemyDeliv
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
 from app.modules.pqrsf.infrastructure.feedback_repository import SqlAlchemyFeedbackRepository
 from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
+from app.modules.pqrsf.infrastructure.item_delivery_repository import (
+    SqlAlchemyItemDeliveryRepository,
+)
 from app.modules.pqrsf.infrastructure.notification_repository import (
     SqlAlchemyNotificationRepository,
 )
@@ -305,6 +309,21 @@ class V1Container(containers.DeclarativeContainer):
         emails=pqrsf_email_repository,
         access=pqrsf_tracking_service,
         storage=storage,
+    )
+    pqrsf_item_delivery_repository = providers.Factory(
+        SqlAlchemyItemDeliveryRepository, database=database
+    )
+    pqrsf_item_delivery_service = providers.Factory(
+        ItemDeliveryService,
+        tracking=pqrsf_tracking_service,
+        deliveries=pqrsf_item_delivery_repository,
+        certificates=pqrsf_certificate_repository,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
+        area_slug=config.pqrsf.certificates_area_slug,
+        wake=pqrsf_wakeup.provided.set,
     )
     pqrsf_certificate_service = providers.Factory(
         CertificateService,

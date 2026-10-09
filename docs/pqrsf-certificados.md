@@ -72,6 +72,48 @@ Cada elemento trae quién pidió (`full_name`, `business_name`, `nit`, `email`, 
 `documents` enviados, los `manual_documents` que fueron a un caso y su `case_code`, y el estado del
 envío: `pending`, `sent` (con `sent_at`) o `failed` (con `error`).
 
+## Responder a mano un documento de un caso
+
+Para los documentos de un caso que nadie respondió automáticamente (sin certificado y «Otro»),
+quien trabaja el caso (su responsable o un gestor) responde cada documento con un archivo, por
+una de dos vías, y el archivo sale al cliente por correo desde `pqrsf@`.
+
+`POST /pqrsf/cases/{case_id}/items/{item_id}/delivery` (`201`)
+
+| Vía | Cuerpo | Qué hace |
+|---|---|---|
+| Vincular un archivo del gestor | JSON `{"source": "vault", "document_id": "…"}` | Se adjunta el archivo del gestor documental **de Calidad** (de otra área se rechaza). No se copia al caso; se lee al enviar |
+| Subirlo «de una sola vez» | `multipart/form-data`: `source=upload`, `file` | Se guarda con el caso (aparece en `GET /cases/{id}/files`) y viaja en el correo; **nunca entra al gestor**. Pasa por las mismas reglas que cualquier archivo (extensiones, tamaño, antivirus) |
+
+Campos comunes: `send_to_client` (por defecto `true`; sin él solo se registra la respuesta),
+`delay_cause` y `delay_detail` (obligatorios si la respuesta llega fuera del tiempo acordado).
+
+- **Cuándo aplica la subida única:** a los documentos libres (sin tipo) y a los tipos con
+  `allows_direct_upload: true`. La migración lo activa en la categoría «Otro»; un gestor lo cambia
+  por tipo con `PATCH /pqrsf/document-types/{id}` (viaja en el catálogo y en el tipo de cada
+  documento del caso). Con otro tipo se responde `422`: debe vincularse un archivo del gestor.
+- **Lo que hace:** marca el documento como respondido hoy (con las mismas reglas del
+  `PATCH` de documentos: el primer documento respondido pasa el caso a «En curso»), guarda el
+  archivo, y encola el correo (asunto «Documento de tu solicitud P26…», firmado «PQRSF JDH»).
+  Si algo falla antes (archivo inválido, falta la causal del retraso) no se guarda ni se envía nada.
+- **Respuesta:** `{case, delivery}`: el caso actualizado y la respuesta con `source`, `filename`,
+  `document_path` (vincular), `case_file_id` (subir) y `email.status` (`not_sent`, `pending`,
+  `sent` o `failed`, con `sent_at` y `error`).
+- **Errores:** `409` si el caso está finalizado o el documento ya tiene respuesta; `422` sin
+  correo del solicitante (con `send_to_client`), archivo inválido o tipo que no admite subida.
+
+Otros endpoints (quien trabaja el caso):
+
+| Endpoint | Para qué |
+|---|---|
+| `GET /pqrsf/cases/{case_id}/documents/search?q=&folder_id=` | Archivos del gestor de Calidad para vincular (máx. 100) |
+| `GET /pqrsf/cases/{case_id}/deliveries` | Respuestas dadas en el caso, con el estado de su correo |
+
+Para **subir un archivo nuevo al gestor y vincularlo**, la interfaz usa el endpoint que ya existe
+del gestor documental, `POST /areas/calidad/folders/{folder_id}/documents` (multipart `file`,
+`name`, `description`, `tags`; requiere ser miembro de Calidad), y luego vincula el `id` que
+devuelve con `source: "vault"`.
+
 ## Sugerencias y felicitaciones ya no son tipos de caso
 
 Sugerencia y Felicitación tienen su propia sección (`docs/pqrsf-sugerencias.md`). Por eso

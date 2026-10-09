@@ -164,6 +164,18 @@ def document_delivery(
     return subject, "\n".join(lines) + f"\n\n{SIGNATURE}"
 
 
+def case_document(name: str | None, case_code: str, document: str) -> tuple[str, str]:
+    """A document the client asked for in a case, answered by the team.
+
+    The subject carries the consecutive, so the client's answer finds its case.
+    """
+
+    first = (name or "").strip().split(" ")[0] if (name or "").strip() else ""
+    lines = [f"Hola {first}," if first else "Hola,", ""]
+    lines.append(f"Adjuntamos el documento «{document}» de tu solicitud {case_code}.")
+    return f"Documento de tu solicitud {case_code}", "\n".join(lines) + f"\n\n{SIGNATURE}"
+
+
 def daily_summary(
     name: str | None, lines: Sequence[str], total: int, overdue: int, today: date, url: str | None
 ) -> tuple[str, str]:

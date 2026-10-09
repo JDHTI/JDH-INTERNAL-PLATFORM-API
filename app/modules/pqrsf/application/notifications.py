@@ -295,7 +295,8 @@ class NotificationService:
         """Send one email; a client reply goes inside the client's conversation when it can."""
 
         if item.kind == DOCUMENT_DELIVERY:
-            await self.mail.send(self.mailbox, to, subject, body, await self._certificates(item))
+            files = [*await self._certificates(item), *await self._reply_files(item)]
+            await self.mail.send(self.mailbox, to, subject, body, files)
             return
         if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
             await self.mail.send(self.mailbox, to, subject, body)

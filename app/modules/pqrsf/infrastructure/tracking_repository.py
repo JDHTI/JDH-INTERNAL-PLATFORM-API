@@ -124,6 +124,7 @@ def _document_type(model: DocumentTypeModel) -> DocumentType:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        allows_direct_upload=model.allows_direct_upload,
     )
 
 
@@ -509,6 +510,7 @@ class SqlAlchemyCaseRepository:
             model.name = document_type.name
             model.sla_days = document_type.sla_days
             model.is_active = document_type.is_active
+            model.allows_direct_upload = document_type.allows_direct_upload
             try:
                 await session.commit()
             except IntegrityError as exc:

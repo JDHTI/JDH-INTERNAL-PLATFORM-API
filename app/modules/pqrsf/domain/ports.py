@@ -35,6 +35,7 @@ from app.modules.pqrsf.domain.feedback import (
     FeedbackPage,
     FeedbackSummary,
 )
+from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
@@ -482,6 +483,18 @@ class DeliveryRepository(Protocol):
 
     async def set_case(self, delivery_id: UUID, case_code: str) -> None:
         """Remember the case opened for what a person answers."""
+        ...
+
+
+class ItemDeliveryRepository(Protocol):
+    """Store the answers given to the requested documents of a case."""
+
+    async def add(self, delivery: ItemDelivery) -> None:
+        """Store an answer."""
+        ...
+
+    async def list_for_case(self, case_id: UUID) -> list[ItemDelivery]:
+        """The answers of a case, oldest first, with where their email stands."""
         ...
 
 

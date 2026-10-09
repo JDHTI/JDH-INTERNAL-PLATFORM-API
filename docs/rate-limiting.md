@@ -131,11 +131,14 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/pqrsf/cases/{case_id}/client-replies` | `read` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/client-replies/{notification_id}/retry` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/comments` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/deliveries` | `read` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/documents/search` | `read` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files` | `read` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files/{file_id}/download` | `read` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/items` | `relaxed` |  |
 | `DELETE` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/items/{item_id}/delivery` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/read` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/status` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/certificates` | `read` |  |
