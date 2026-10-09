@@ -1,0 +1,263 @@
+"""HTTP contract of the supplier supports routes, over the real service and in-memory ports."""
+
+from types import SimpleNamespace
+
+import pytest
+from app.core.config import Environment, Settings
+from app.main import create_app
+from app.modules.identity.presentation.principal import get_current_principal
+from fastapi.testclient import TestClient
+
+from tests.modules.supplier_supports.conftest import person
+
+BASE = "/api/v1/supplier-supports"
+NEW = {
+    "kind": "tactico_cliente",
+    "calc_method": "pct_costo",
+    "supplier_code": "233",
+    "supplier_value": "0.05",
+    "reference_cost": "100000",
+    "customer_nit": "800116299",
+    "product_sku": "1128",
+    "valid_from": "2026-10-01",
+    "valid_to": "2026-12-31",
+    "regionals": ["antioquia"],
+    "program": "PLAN 10X10",
+}
+
+
+class AllowAll:
+    async def allow_sliding_window(self, bucket, limit, window):
+        return SimpleNamespace(allowed=True, count=1, retry_after=0)
+
+    async def close(self):
+        return None
+
+
+@pytest.fixture
+def client(service):
+    app = create_app(Settings(ENVIRONMENT=Environment.TEST))
+    app.dependency_overrides[get_current_principal] = lambda: person("comercial@jdh.com.co")
+    container = app.state.container
+    with (
+        container.redis.override(AllowAll()),
+        container.v1_container.supplier_support_service.override(service),
+        TestClient(app) as test_client,
+    ):
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def outsider(client, service):
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+    return client
+
+
+def test_create_returns_the_support_with_names_validity_and_derived_values(client) -> None:
+    response = client.post(BASE, json=NEW)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "activo" and body["version"] == 1
+    assert body["customer_name"] == "LIMPIEZA Y MANTENIMIENTO DE ANTIOQUIA SAS"
+    assert body["regionals"] == ["ANTIOQUIA"] and body["product_sku"] == "1128"
+    assert body["derived"]["net_cost"] == "95000.00" or float(body["derived"]["net_cost"]) == 95000
+    assert body["validity"] == "vigente" and body["has_conflicts"] is False
+    assert body["state"] == "vigente" and body["needs_review"] is False
+    assert body["created_by"] == "comercial@jdh.com.co" and body["issues"] == []
+
+
+def test_get_and_unknown_id(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+
+    assert client.get(f"{BASE}/{created['id']}").json()["id"] == created["id"]
+    missing = client.get(f"{BASE}/00000000-0000-0000-0000-000000000000")
+    assert missing.status_code == 404 and "no encontrado" in missing.json()["detail"]
+    assert client.get(f"{BASE}/not-a-uuid").status_code == 422
+
+
+def test_validation_errors_are_422_with_a_spanish_detail(client) -> None:
+    for changes, fragment in (
+        ({"product_sku": "999999"}, "Referencia JDH desconocida"),
+        ({"supplier_value": "5"}, "entre 0 y 1"),
+        ({"supplier_code": "nope"}, "Proveedor comercial desconocido"),
+        ({"customer_nit": "123"}, "NIT de cliente desconocido"),
+    ):
+        response = client.post(BASE, json={**NEW, **changes})
+        assert response.status_code == 422 and fragment in response.json()["detail"]
+    assert client.post(BASE, json={**NEW, "kind": "inventado"}).status_code == 422
+
+
+def test_patch_changes_only_what_is_sent_and_enforces_the_version(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+    url = f"{BASE}/{created['id']}"
+
+    updated = client.patch(url, json={"version": 1, "supplier_value": "0.07", "valid_to": None})
+
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["supplier_value"] in ("0.07", "0.070000") or float(body["supplier_value"]) == 0.07
+    assert body["valid_to"] is None  # an explicit null clears the field
+    assert body["customer_nit"] == "800116299" and body["program"] == "PLAN 10X10"
+    assert body["version"] == 2
+    assert client.patch(url, json={"version": 1, "notes": "x"}).status_code == 409
+    assert client.patch(url, json={"notes": "x"}).status_code == 422  # version is required
+
+
+def test_status_can_not_be_set_to_voided_through_patch(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+
+    response = client.patch(f"{BASE}/{created['id']}", json={"version": 1, "status": "anulado"})
+
+    assert response.status_code == 422
+
+
+def test_void_keeps_the_support_but_hides_it_from_default_searches(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+
+    voided = client.post(f"{BASE}/{created['id']}/void", json={"version": 1, "reason": "duplicado"})
+
+    assert voided.status_code == 200 and voided.json()["status"] == "anulado"
+    assert voided.json()["void_reason"] == "duplicado"
+    assert client.post(f"{BASE}/search", json={}).json()["total"] == 0
+    assert client.post(f"{BASE}/search", json={"include_voided": True}).json()["total"] == 1
+    assert (
+        client.patch(f"{BASE}/{created['id']}", json={"version": 2, "notes": "x"}).status_code
+        == 409
+    )
+
+
+def test_search_validates_the_filter_language(client, repo) -> None:
+    client.post(BASE, json=NEW)
+
+    ok = client.post(
+        f"{BASE}/search",
+        json={
+            "match": "all",
+            "conditions": [{"field": "supplier.code", "op": "in", "value": ["233"]}],
+            "validity": "vigente",
+            "sort": ["-valid_from"],
+            "page": 1,
+            "size": 10,
+        },
+    )
+    assert ok.status_code == 200 and ok.json()["total"] == 1
+    assert repo.last_search.sort[0].field == "valid_from"
+
+    for bad in (
+        {"conditions": [{"field": "password", "op": "eq", "value": "x"}]},
+        {"conditions": [{"field": "program", "op": "gt", "value": "x"}]},
+        {"sort": ["nope"]},
+    ):
+        assert client.post(f"{BASE}/search", json=bad).status_code == 422
+    assert client.post(f"{BASE}/search", json={"size": 500}).status_code == 422
+    assert client.post(f"{BASE}/search", json={"validity": "nunca"}).status_code == 422
+
+
+def test_search_fields_and_catalogs_describe_the_language(client) -> None:
+    fields = {item["field"]: item for item in client.get(f"{BASE}/search/fields").json()}
+    catalogs = client.get(f"{BASE}/catalogs").json()
+
+    assert "between" in fields["supplier_value"]["operators"]
+    assert "pct_costo" in catalogs["calc_methods"] and catalogs["regionals"] == ["ANTIOQUIA"]
+
+
+def test_batch_is_all_or_nothing(client) -> None:
+    ok = client.post(f"{BASE}/batch", json={"items": [NEW, {**NEW, "product_sku": "8749"}]})
+    assert ok.status_code == 201 and len(ok.json()) == 2
+
+    bad = client.post(f"{BASE}/batch", json={"items": [NEW, {**NEW, "product_sku": "999999"}]})
+    assert bad.status_code == 422
+    assert client.post(f"{BASE}/search", json={}).json()["total"] == 2  # nothing added
+
+
+def test_only_managers_write_but_anyone_authenticated_reads(outsider) -> None:
+    assert outsider.post(BASE, json=NEW).status_code == 403
+    assert outsider.post(f"{BASE}/search", json={}).status_code == 200
+    assert outsider.get(f"{BASE}/catalogs").status_code == 200
+
+
+def test_routes_are_documented(client) -> None:
+    paths = set(client.app.openapi()["paths"])
+
+    for path in (
+        f"{BASE}",
+        f"{BASE}/search",
+        f"{BASE}/search/fields",
+        f"{BASE}/catalogs",
+        f"{BASE}/batch",
+        f"{BASE}/{{support_id}}",
+        f"{BASE}/{{support_id}}/void",
+        f"{BASE}/{{support_id}}/conflicts",
+    ):
+        assert path in paths, path
+
+
+def test_state_is_one_value_and_voided_wins_over_validity(client, repo) -> None:
+    created = client.post(BASE, json=NEW).json()
+    assert created["state"] == "vigente"
+
+    voided = client.post(f"{BASE}/{created['id']}/void", json={"version": 1, "reason": "duplicado"})
+
+    assert voided.json()["state"] == "anulado" and voided.json()["needs_review"] is False
+    client.post(f"{BASE}/search", json={"state": "anulado", "needs_review": False})
+    assert repo.last_search.state == "anulado" and repo.last_search.needs_review is False
+    assert client.post(f"{BASE}/search", json={"state": "activo"}).status_code == 422
+    assert "states" in client.get(f"{BASE}/catalogs").json()
+
+
+def test_prices_come_per_box_and_per_unit_and_the_unit_is_inferred(client) -> None:
+    # Maizena x720g: 24 per box; the sheet's 13.783 matches the warehouse unit cost.
+    created = client.post(
+        BASE,
+        json={**NEW, "product_sku": "3474", "reference_cost": "13783", "supplier_value": "0.05"},
+    ).json()
+
+    derived = created["derived"]
+    assert (created["value_unit"], created["unit_basis_source"]) == ("unidad", "inferido_dwh")
+    assert created["pack_factor"] in ("24", "24.0000") or float(created["pack_factor"]) == 24
+    assert float(derived["cost"]["unit"]) == 13783 and float(derived["cost"]["box"]) == 330792
+    assert float(derived["net_cost_per"]["unit"]) == pytest.approx(13093.85)
+    assert float(derived["net_cost_per"]["box"]) == pytest.approx(13093.85 * 24)
+
+
+def test_a_support_can_be_switched_off_and_on_from_the_actions_column(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+    url = f"{BASE}/{created['id']}"
+
+    off = client.patch(url, json={"version": 1, "is_enabled": False}).json()
+    on = client.patch(url, json={"version": 2, "is_enabled": True}).json()
+
+    assert (off["state"], off["is_enabled"], off["status"]) == ("inactivo", False, "activo")
+    assert (on["state"], on["is_enabled"]) == ("vigente", True)
+    assert client.patch(url, json={"version": 3, "is_enabled": None}).status_code == 422
+
+
+def test_base_search_accepts_client_supplier_and_reference_independently(client, repo) -> None:
+    client.post(BASE, json=NEW)
+
+    both = client.post(
+        f"{BASE}/search",
+        json={
+            "customer_nits": ["800.116.299"],
+            "supplier_codes": ["233"],
+            "product_skus": ["1128"],
+        },
+    )
+    assert both.status_code == 200
+    base = repo.last_search.group.items[:-1]
+    assert {item.field for item in base} == {"customer_nit", "supplier.code", "product_sku"}
+
+    client.post(f"{BASE}/search", json={"product_skus": ["1128"]})
+    assert [item.field for item in repo.last_search.group.items[:-1]] == ["product_sku"]
+    client.post(f"{BASE}/search", json={"state": "inactivo"})
+    assert repo.last_search.state == "inactivo"
+
+
+def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
+    assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
+
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+
+    assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}

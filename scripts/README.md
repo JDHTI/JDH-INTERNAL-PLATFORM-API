@@ -62,3 +62,15 @@ poetry run python scripts/import-pqrsf-tracking.py P.13.F.csv --year 2026 \
 
 Detalles y decisiones de la importación en
 [`docs/pqrsf-seguimiento.md`](../docs/pqrsf-seguimiento.md#migración-del-excel).
+
+## Apoyos de proveedores
+
+Sincroniza los maestros del datawarehouse y migra el libro de apoyos. Ambos son
+simulaciones salvo `--apply` y se pueden repetir. Detalle en
+[`docs/apoyos-proveedores.md`](../docs/apoyos-proveedores.md).
+
+```bash
+poetry run python scripts/sync-dwh-masters.py --apply
+poetry run python scripts/import-supplier-supports.py "1. MAESTRO APOYOS PROVEEDORES.xlsx" \
+    --report inconsistencias.csv --apply
+```
