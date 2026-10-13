@@ -139,6 +139,11 @@ class Settings(BaseSettings):
     PQRSF_TIMEZONE: str = "America/Bogota"
     PQRSF_HOLIDAYS_COUNTRY: str = "CO"
 
+    # Members of this area (plus platform admins) manage supplier supports.
+    SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
+    # Rows per DWH page and per upsert when syncing the commercial masters.
+    MASTERS_SYNC_BATCH_SIZE: int = 2000
+
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
     # with an Exchange Application Access Policy.
@@ -348,6 +353,10 @@ class Settings(BaseSettings):
                 "max_total_attachment_bytes": self.MAIL_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
                 "attachment_extensions": _split_lower(self.MAIL_ATTACHMENT_EXTENSIONS),
             },
+            "supplier_supports": {
+                "manager_area_slug": self.SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG,
+            },
+            "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,

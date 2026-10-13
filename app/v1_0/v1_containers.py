@@ -9,7 +9,17 @@ from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
 from app.modules.areas.application.service import AreaService
+from app.modules.areas.infrastructure.policies import AreaManagerPolicy
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
+from app.modules.commercial_masters.application.service import (
+    CommercialMasterService,
+    MasterLookup,
+)
+from app.modules.commercial_masters.application.sync import MasterSyncService
+from app.modules.commercial_masters.infrastructure.dwh_source import WarehouseMasterSource
+from app.modules.commercial_masters.infrastructure.repository import (
+    SqlAlchemyCommercialMasterRepository,
+)
 from app.modules.consumption.application.cursor import ClientCursorCodec
 from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
@@ -28,7 +38,7 @@ from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
-from app.modules.pqrsf.infrastructure.policies import AreaManagerPolicy, HolidayCalendar
+from app.modules.pqrsf.infrastructure.policies import HolidayCalendar
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
@@ -37,6 +47,12 @@ from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
+from app.modules.supplier_supports.application.service import SupplierSupportService
+from app.modules.supplier_supports.application.special_cases import SpecialCaseService
+from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
+from app.modules.supplier_supports.infrastructure.special_cases_repository import (
+    SqlAlchemySpecialCaseRepository,
+)
 
 
 class V1Container(containers.DeclarativeContainer):
@@ -162,6 +178,45 @@ class V1Container(containers.DeclarativeContainer):
         sites=site_service,
         people=user_directory,
         managers=pqrsf_manager_policy,
+        calendar=pqrsf_calendar,
+    )
+    # --- Commercial masters (DWH mirror) and supplier supports ---
+    commercial_master_repository = providers.Factory(
+        SqlAlchemyCommercialMasterRepository, database=database
+    )
+    supplier_support_manager_policy = providers.Factory(
+        AreaManagerPolicy,
+        areas=area_service,
+        area_slug=config.supplier_supports.manager_area_slug,
+    )
+    commercial_master_service = providers.Factory(
+        CommercialMasterService,
+        repository=commercial_master_repository,
+        managers=supplier_support_manager_policy,
+    )
+    master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)
+    warehouse_master_source = providers.Factory(
+        WarehouseMasterSource, connection=data_provider, schema=settings.provided.DWH_SCHEMA
+    )
+    master_sync_service = providers.Factory(
+        MasterSyncService,
+        source=warehouse_master_source,
+        repository=commercial_master_repository,
+        batch_size=config.masters_sync.batch_size,
+    )
+    special_case_repository = providers.Factory(SqlAlchemySpecialCaseRepository, database=database)
+    special_case_service = providers.Factory(
+        SpecialCaseService,
+        repository=special_case_repository,
+        masters=master_lookup,
+        managers=supplier_support_manager_policy,
+    )
+    supplier_support_repository = providers.Factory(SqlAlchemySupportRepository, database=database)
+    supplier_support_service = providers.Factory(
+        SupplierSupportService,
+        repository=supplier_support_repository,
+        masters=master_lookup,
+        managers=supplier_support_manager_policy,
         calendar=pqrsf_calendar,
     )
     pqrsf_image_processor = providers.Singleton(
