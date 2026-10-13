@@ -14,9 +14,11 @@ taken inside the support itself are used. Then ``amount / price = share x (1 - m
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
+from app.modules.commercial_masters.domain.margins import channel_field
 from app.modules.order_validation.domain import vocabulary
 from app.modules.order_validation.domain.entities import (
     Agreement,
@@ -24,6 +26,7 @@ from app.modules.order_validation.domain.entities import (
     CustomerScope,
     LineResult,
     OrderLine,
+    ProductInfo,
 )
 from app.modules.supplier_supports.domain.validity import validity_on
 
@@ -37,6 +40,16 @@ APPLIES = "aplica"
 OUT_OF_DATE = "fuera_de_vigencia"
 OUT_OF_SCOPE = "fuera_de_alcance"
 
+_BASIS = {
+    "margin_list": "lista",
+    "margin_wholesale": "mayoristas",
+    "margin_salsamentarias": "salsamentarias",
+}
+_BASIS_LABEL = {
+    "lista": "margen lista",
+    "mayoristas": "margen mayoristas",
+    "salsamentarias": "margen salsamentarias",
+}
 _AMOUNT_METHODS = ("pct_costo", "costo_neto", "valor_unidad", "precio_neto", "pct_precio_lista")
 
 
@@ -144,27 +157,63 @@ def _share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
     return None, f"método {method} sin importe por unidad"
 
 
-def _required(agreement: Agreement, supplier_margin: Decimal | None) -> Decimal | None:
-    """Margin the line must reach with the support: the one agreed, else the list margin."""
+def _required(agreement: Agreement, reference: Decimal | None) -> Decimal | None:
+    """Margin the line must reach with the support: the one agreed, else the product's."""
 
     for value in (
         agreement.target_margin_pct,
         agreement.min_margin_pct,
         agreement.list_margin_pct,
-        supplier_margin,
+        reference,
     ):
         if value is not None:
             return value
     return None
 
 
-def check(agreement: Agreement, line: OrderLine, supplier_margin: Decimal | None) -> AgreementCheck:
+def points(value: Decimal) -> str:
+    """A fraction of margin as Spanish percentage points (0.005 -> ``0,50``)."""
+
+    return f"{value * 100:.2f}".replace(".", ",")
+
+
+def reference_margin(
+    line: OrderLine, customer: CustomerScope | None, product: ProductInfo | None
+) -> tuple[Decimal | None, str | None]:
+    """The product margin for the channel of the order, and its name.
+
+    The channel is the one in the file, else the client's in the master. Wholesale and
+    subdistributor channels use the wholesale margin, salsamentarias their own, and any other
+    channel list margin 1. The mass food and market margins are loaded but not applied yet.
+
+    Returns:
+        tuple[Decimal | None, str | None]: The margin (``None`` when the product has none
+        for that channel) and its basis (``lista``, ``mayoristas`` or ``salsamentarias``).
+    """
+
+    channel = line.channel
+    if not channel and customer and customer.channels:
+        channel = sorted(customer.channels)[0]
+    field_name = channel_field(channel)
+    basis = _BASIS[field_name]
+    if product is None:
+        return None, basis
+    return product.margins.get(field_name), basis
+
+
+def check(
+    agreement: Agreement,
+    line: OrderLine,
+    reference: Decimal | None,
+    tolerance: Decimal = ZERO,
+) -> AgreementCheck:
     """Check one applicable agreement against one line.
 
     Args:
         agreement (Agreement): A support that covers the line on the order day.
         line (OrderLine): The order line; its margin and price are known.
-        supplier_margin (Decimal | None): List margin of the commercial supplier.
+        reference (Decimal | None): The product's margin for the channel of the order.
+        tolerance (Decimal): Margin a line may fall short by and still comply (a fraction).
 
     Returns:
         AgreementCheck: ``cumple``, ``no_cumple`` or ``no_evaluable`` with the margins.
@@ -192,12 +241,17 @@ def check(agreement: Agreement, line: OrderLine, supplier_margin: Decimal | None
                 agreement, "no_evaluable", "La excepción no tiene margen mínimo autorizado"
             )
         return _compare(
-            agreement, margin, agreement.min_margin_pct, "Margen del pedido", "mínimo autorizado"
+            agreement,
+            margin,
+            agreement.min_margin_pct,
+            "Margen del pedido",
+            "mínimo autorizado",
+            tolerance,
         )
     if method == "puntos_margen":
         base = agreement.list_margin_pct
         if base is None:
-            base = supplier_margin
+            base = reference
         if base is None or agreement.supplier_value is None:
             return _outcome(
                 agreement, "no_evaluable", "Sin margen lista para restar los puntos pactados"
@@ -208,6 +262,7 @@ def check(agreement: Agreement, line: OrderLine, supplier_margin: Decimal | None
             base - agreement.supplier_value,
             "Margen del pedido",
             "mínimo pactado",
+            tolerance,
         )
     if method not in _AMOUNT_METHODS:
         return _outcome(agreement, "no_evaluable", f"Método {method} no evaluable por pedido")
@@ -215,7 +270,7 @@ def check(agreement: Agreement, line: OrderLine, supplier_margin: Decimal | None
     share, how = _share_of_cost(agreement)
     if share is None:
         return _outcome(agreement, "no_evaluable", f"No se puede evaluar: {how}")
-    required = _required(agreement, supplier_margin)
+    required = _required(agreement, reference)
     if required is None:
         return _outcome(
             agreement,
@@ -223,7 +278,9 @@ def check(agreement: Agreement, line: OrderLine, supplier_margin: Decimal | None
             f"Apoyo de {how}, pero sin margen objetivo para comparar",
         )
     effective = margin + share * (ONE - margin)
-    return _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
+    return _compare(
+        agreement, effective, required, f"Margen con apoyo ({how})", "objetivo", tolerance
+    )
 
 
 def _outcome(
@@ -232,6 +289,7 @@ def _outcome(
     detail: str,
     effective: Decimal | None = None,
     required: Decimal | None = None,
+    threshold_applied: bool = False,
 ) -> AgreementCheck:
     return AgreementCheck(
         support_id=agreement.id,
@@ -245,20 +303,36 @@ def _outcome(
         detail=detail,
         effective_margin_pct=_round(effective),
         required_margin_pct=_round(required),
+        threshold_applied=threshold_applied,
     )
 
 
 def _compare(
-    agreement: Agreement, effective: Decimal, required: Decimal, what: str, target: str
+    agreement: Agreement,
+    effective: Decimal,
+    required: Decimal,
+    what: str,
+    target: str,
+    tolerance: Decimal = ZERO,
 ) -> AgreementCheck:
-    complies = effective.quantize(QUANTUM) >= required.quantize(QUANTUM)
-    sign = "≥" if complies else "<"
+    exact = effective.quantize(QUANTUM) >= required.quantize(QUANTUM)
+    within = (effective + tolerance).quantize(QUANTUM) >= required.quantize(QUANTUM)
+    if exact:
+        detail = f"{what} {pct(effective)} ≥ {target} {pct(required)}"
+    elif within:
+        detail = (
+            f"{what} {pct(effective)} < {target} {pct(required)}, "
+            f"dentro del umbral de {points(tolerance)} puntos"
+        )
+    else:
+        detail = f"{what} {pct(effective)} < {target} {pct(required)}"
     return _outcome(
         agreement,
-        "cumple" if complies else "no_cumple",
-        f"{what} {pct(effective)} {sign} {target} {pct(required)}",
+        "cumple" if within else "no_cumple",
+        detail,
         effective,
         required,
+        threshold_applied=within and not exact,
     )
 
 
@@ -278,26 +352,50 @@ def decide(
     line: OrderLine,
     agreements: Sequence[Agreement],
     customer: CustomerScope | None,
-    supplier_margin: Decimal | None,
+    product: ProductInfo | None,
     today: date,
+    tolerance: Decimal = ZERO,
 ) -> LineResult:
     """Release decision for one line.
 
-    A line is ready when an active agreement covering it on the order date is met, or
-    when its margin already reaches the supplier's list margin. Anything else is left
-    pending for a person, with the reason.
+    A line is ready when an active agreement covering it on the order date is met, or when
+    its margin already reaches the product's margin for the channel. With a ``tolerance``,
+    a line that falls short by no more than that is released too, as ``cumple_con_umbral``.
+    Anything else is left pending for a person, with the reason. A product with liquor tax
+    is flagged, whatever the decision: the order may have been keyed without the tax.
 
     Args:
         line (OrderLine): The order line.
         agreements (Sequence[Agreement]): Candidate supports of the line's supplier.
         customer (CustomerScope | None): The client in the master, if known.
-        supplier_margin (Decimal | None): List margin of the commercial supplier.
+        product (ProductInfo | None): The product in the master, if known.
         today (date): Day used when the file carries no order date.
+        tolerance (Decimal): Margin points a line may fall short by, as a fraction.
 
     Returns:
         LineResult: Status, reason, the margins of the deciding check and every check.
     """
 
+    reference, basis = reference_margin(line, customer, product)
+    result = _decide(line, agreements, customer, reference, basis, today, tolerance)
+    tax = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
+    return replace(
+        result,
+        margin_basis=basis if reference is not None else None,
+        liquor_tax=tax is not None,
+        liquor_tax_amount=tax,
+    )
+
+
+def _decide(
+    line: OrderLine,
+    agreements: Sequence[Agreement],
+    customer: CustomerScope | None,
+    reference: Decimal | None,
+    basis: str | None,
+    today: date,
+    tolerance: Decimal,
+) -> LineResult:
     if line.supplier_code is None or line.margin_pct is None or line.unit_price is None:
         missing = [
             name
@@ -327,23 +425,43 @@ def decide(
     scopes = [(item, scope_of(item, line, customer, day)) for item in agreements]
     applicable = [item for item, scope in scopes if scope == APPLIES]
     out_of_date = [item for item, scope in scopes if scope == OUT_OF_DATE]
-    checks = tuple(check(item, line, supplier_margin) for item in applicable)
+    checks = tuple(check(item, line, reference, tolerance) for item in applicable)
+    label = _BASIS_LABEL.get(basis or "", "margen del producto")
 
     active_ok = [item for item in checks if item.outcome == "cumple" and not item.needs_review]
-    if active_ok:
-        best = _closest(active_ok)
+    exact_ok = [item for item in active_ok if not item.threshold_applied]
+    if exact_ok:
+        best = _closest(exact_ok)
         return _result(vocabulary.READY, "cumple_con_apoyo", best.detail, best, checks)
 
-    if supplier_margin is not None and line.margin_pct >= supplier_margin:
+    if reference is not None and line.margin_pct.quantize(QUANTUM) >= reference.quantize(QUANTUM):
         return LineResult(
             status=vocabulary.READY,
             reason="cumple_margen_lista",
+            detail=f"Margen del pedido {pct(line.margin_pct)} ≥ {label} {pct(reference)}",
+            effective_margin_pct=_round(line.margin_pct),
+            required_margin_pct=_round(reference),
+            checks=checks,
+        )
+
+    if active_ok:
+        best = _closest(active_ok)
+        return _result(vocabulary.READY, "cumple_con_umbral", best.detail, best, checks)
+
+    if (
+        reference is not None
+        and tolerance > ZERO
+        and (line.margin_pct + tolerance).quantize(QUANTUM) >= reference.quantize(QUANTUM)
+    ):
+        return LineResult(
+            status=vocabulary.READY,
+            reason="cumple_con_umbral",
             detail=(
-                f"Margen del pedido {pct(line.margin_pct)} ≥ margen lista del proveedor "
-                f"{pct(supplier_margin)}"
+                f"Margen del pedido {pct(line.margin_pct)} < {label} {pct(reference)}, "
+                f"dentro del umbral de {points(tolerance)} puntos"
             ),
             effective_margin_pct=_round(line.margin_pct),
-            required_margin_pct=_round(supplier_margin),
+            required_margin_pct=_round(reference),
             checks=checks,
         )
 
@@ -373,16 +491,16 @@ def decide(
         )
 
     detail = "No hay apoyo registrado para este cliente, referencia y proveedor"
-    if supplier_margin is not None:
-        detail += (
-            f"; margen del pedido {pct(line.margin_pct)} < margen lista {pct(supplier_margin)}"
-        )
+    if reference is not None:
+        detail += f"; margen del pedido {pct(line.margin_pct)} < {label} {pct(reference)}"
+    else:
+        detail += "; el producto no tiene margen definido para este canal"
     return LineResult(
         status=vocabulary.PENDING,
         reason="sin_acuerdo",
         detail=detail,
         effective_margin_pct=_round(line.margin_pct),
-        required_margin_pct=_round(supplier_margin),
+        required_margin_pct=_round(reference),
     )
 
 
@@ -401,6 +519,53 @@ def _result(
         effective_margin_pct=best.effective_margin_pct,
         required_margin_pct=best.required_margin_pct,
         checks=checks,
+    )
+
+
+def order_margins(
+    lines: Iterable[tuple[OrderLine, LineResult]],
+) -> tuple[Decimal | None, Decimal | None]:
+    """General margin of an order and its target, weighted by amount.
+
+    ``1 - sum(cost) / sum(sales)`` with each line's cost taken as ``price x quantity x
+    (1 - margin)`` is the amount-weighted average of the line margins. Lines with no price,
+    quantity or margin, and lines that carry no cost (100 % margin), are left out. The target
+    is weighted the same way over the lines that have one.
+
+    Returns:
+        tuple[Decimal | None, Decimal | None]: The order margin and the weighted target;
+        ``None`` when no line allows computing them.
+    """
+
+    sales = weighted = target_sales = target_weighted = ZERO
+    for line, result in lines:
+        if line.unit_price is None or line.quantity is None or line.margin_pct is None:
+            continue
+        amount = line.unit_price * line.quantity
+        if amount <= ZERO or line.margin_pct >= ONE:
+            continue
+        sales += amount
+        weighted += amount * line.margin_pct
+        if result.required_margin_pct is not None:
+            target_sales += amount
+            target_weighted += amount * result.required_margin_pct
+    if sales == ZERO:
+        return None, None
+    return (
+        _round(weighted / sales),
+        _round(target_weighted / target_sales) if target_sales else None,
+    )
+
+
+def line_sort_key(line: OrderLine, result: LineResult) -> tuple[int, int, Decimal, int]:
+    """Lines needing attention first: no support, then margin from lowest to highest."""
+
+    margin = line.margin_pct if line.margin_pct is not None else Decimal("Infinity")
+    return (
+        0 if result.reason == "sin_acuerdo" else 1,
+        0 if line.margin_pct is not None else 1,
+        margin,
+        line.row_number,
     )
 
 

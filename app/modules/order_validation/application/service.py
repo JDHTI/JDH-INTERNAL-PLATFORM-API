@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -31,6 +32,8 @@ from app.modules.order_validation.domain.ports import (
 MAX_PAGE_SIZE = 200
 MAX_NOTE_LENGTH = 500
 MAX_APPROVALS = 1000
+MAX_THRESHOLD_POINTS = Decimal(20)
+SORTS = ("attention", "file")
 
 
 def _matches(order: OrderView, term: str) -> bool:
@@ -51,6 +54,27 @@ def _matches(order: OrderView, term: str) -> bool:
             if value and term in value.lower():
                 return True
     return False
+
+
+def _order_key(order: OrderView) -> tuple[int, int, Decimal, int]:
+    """Orders with a line that has no support first, then margin from lowest to highest."""
+
+    margin = order.margin_pct if order.margin_pct is not None else Decimal("Infinity")
+    return (
+        0 if any(item.result.reason == "sin_acuerdo" for item in order.lines) else 1,
+        0 if order.margin_pct is not None else 1,
+        margin,
+        order.first.row_number,
+    )
+
+
+def _attention_lines(order: OrderView) -> OrderView:
+    """The same order with its lines in attention order (no support first, lowest margin)."""
+
+    return replace(
+        order,
+        lines=sorted(order.lines, key=lambda item: rules.line_sort_key(item.line, item.result)),
+    )
 
 
 def _total(lines: Sequence[StoredLine]) -> Decimal | None:
@@ -106,14 +130,28 @@ class OrderValidationService:
 
     # ------------------------------------------------------------ validation
 
-    async def _validate(self, lines: Sequence[OrderLine]) -> list[LineResult]:
+    @staticmethod
+    def _threshold(points: Decimal | None) -> Decimal | None:
+        """Margin points as the fraction the rules use; `None` when not given."""
+
+        if points is None:
+            return None
+        if not Decimal(0) <= points <= MAX_THRESHOLD_POINTS:
+            raise InvalidInputError(
+                f"El umbral debe estar entre 0 y {MAX_THRESHOLD_POINTS} puntos de margen"
+            )
+        return (points / 100).quantize(Decimal("0.000001"))
+
+    async def _validate(
+        self, lines: Sequence[OrderLine], tolerance: Decimal = Decimal(0)
+    ) -> list[LineResult]:
         """Decide every line against the supports in force on its order date."""
 
         codes = sorted({line.supplier_code for line in lines if line.supplier_code})
         skus = sorted({line.sku for line in lines if line.sku})
         nits = sorted({line.customer_nit for line in lines if line.customer_nit})
         grouped = rules.by_supplier(await self.agreements.agreements(codes, skus, nits))
-        margins = await self.agreements.supplier_margins(codes)
+        products = await self.agreements.products(skus)
         customers = await self.agreements.customers(nits)
         today = self.calendar.today()
         return [
@@ -121,19 +159,28 @@ class OrderValidationService:
                 line,
                 [*grouped.get(line.supplier_code, []), *grouped.get(None, [])],
                 customers.get(line.customer_nit or ""),
-                margins.get(line.supplier_code or ""),
+                products.get(line.sku or ""),
                 today,
+                tolerance,
             )
             for line in lines
         ]
 
-    async def upload(self, principal: Principal, filename: str | None, content: bytes) -> Batch:
+    async def upload(
+        self,
+        principal: Principal,
+        filename: str | None,
+        content: bytes,
+        threshold_points: Decimal | None = None,
+    ) -> Batch:
         """Read a retained orders file, validate every line and keep the result.
 
         Args:
             principal (Principal): The caller; must be a manager.
             filename (str | None): Name of the uploaded file (``.xlsx`` or ``.csv``).
             content (bytes): The file; one byte over the limit is enough to reject it.
+            threshold_points (Decimal | None): Margin points a line may fall short by and still
+                be released (0.5 releases a line at 19,5 % against a 20 % target).
 
         Returns:
             Batch: The stored file with its counts.
@@ -158,33 +205,51 @@ class OrderValidationService:
             raise InvalidInputError("El archivo no tiene líneas de pedido")
         if len(lines) > self.max_lines:
             raise InvalidInputError(f"El archivo supera el máximo de {self.max_lines} líneas")
-        results = await self._validate(lines)
+        tolerance = self._threshold(threshold_points) or Decimal(0)
+        results = await self._validate(lines, tolerance)
         return await self.repository.create(
             uuid4(),
             name[:255],
             principal.email,
             datetime.now(UTC),
             list(zip(lines, results, strict=True)),
+            tolerance,
         )
 
-    async def revalidate(self, principal: Principal, batch_id: UUID) -> Batch:
-        """Check a stored file again against the supports as they are now.
+    async def revalidate(
+        self,
+        principal: Principal,
+        batch_id: UUID,
+        threshold_points: Decimal | None = None,
+    ) -> Batch:
+        """Check a stored file again against the supports and margins as they are now.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            batch_id (UUID): The stored file.
+            threshold_points (Decimal | None): New margin threshold in points; the stored one
+                is kept when omitted. Manual approvals are kept either way.
 
         Raises:
             ForbiddenError: If the caller is not a manager.
             NotFoundError: If the file does not exist.
+            InvalidInputError: If the threshold is out of range.
         """
 
         await self._require_manager(principal)
-        if await self.repository.get(batch_id) is None:
+        batch = await self.repository.get(batch_id)
+        if batch is None:
             raise NotFoundError("Validación no encontrada")
+        given = self._threshold(threshold_points)
+        tolerance = batch.margin_threshold if given is None else given
         stored = await self.repository.lines(batch_id)
-        results = await self._validate([item.line for item in stored])
+        results = await self._validate([item.line for item in stored], tolerance)
         return await self.repository.save_results(
             batch_id,
             [(item.id, result) for item, result in zip(stored, results, strict=True)],
             principal.email,
             datetime.now(UTC),
+            tolerance,
         )
 
     async def approve(
@@ -262,20 +327,26 @@ class OrderValidationService:
         documents: dict[str, list[StoredLine]] = {}
         for item in await self.repository.lines(batch_id):
             documents.setdefault(item.line.document, []).append(item)
-        return [
-            OrderView(
-                document=document,
-                status=(
-                    vocabulary.READY
-                    if document in approvals
-                    else rules.order_status(item.result.status for item in lines)
-                ),
-                lines=lines,
-                total_amount=_total(lines),
-                manual_approval=approvals.get(document),
+        orders = []
+        for document, lines in documents.items():
+            margin, required = rules.order_margins((item.line, item.result) for item in lines)
+            orders.append(
+                OrderView(
+                    document=document,
+                    status=(
+                        vocabulary.READY
+                        if document in approvals
+                        else rules.order_status(item.result.status for item in lines)
+                    ),
+                    lines=lines,
+                    total_amount=_total(lines),
+                    manual_approval=approvals.get(document),
+                    margin_pct=margin,
+                    required_margin_pct=required,
+                    has_liquor_tax=any(item.result.liquor_tax for item in lines),
+                )
             )
-            for document, lines in documents.items()
-        ]
+        return orders
 
     async def list_batches(self, page: int = 1, size: int = 20) -> BatchPage:
         """Uploaded files, newest first."""
@@ -298,16 +369,21 @@ class OrderValidationService:
         status: str | None = None,
         reason: str | None = None,
         q: str | None = None,
+        liquor_tax: bool | None = None,
+        sort: str = "attention",
         page: int = 1,
         size: int = 50,
     ) -> OrderPage:
-        """The orders of a file, each with its lines, in file order.
+        """The orders of a file, each with its lines.
 
         Args:
             batch_id (UUID): The uploaded file.
             status (str | None): Only orders ready for release or pending.
             reason (str | None): Only orders with at least one line for this reason.
             q (str | None): Free text over document, client, supplier and SKU.
+            liquor_tax (bool | None): Only orders with (or without) a liquor-tax product.
+            sort (str): `attention` (default) puts the orders and lines with no support first,
+                then by margin from lowest to highest; `file` keeps the file order.
             page (int): 1-based page.
             size (int): Page size, up to :data:`MAX_PAGE_SIZE`.
 
@@ -320,6 +396,8 @@ class OrderValidationService:
             raise InvalidInputError(f"status debe ser uno de: {', '.join(vocabulary.STATUSES)}")
         if reason is not None and reason not in vocabulary.REASONS:
             raise InvalidInputError(f"reason debe ser uno de: {', '.join(vocabulary.REASONS)}")
+        if sort not in SORTS:
+            raise InvalidInputError(f"sort debe ser uno de: {', '.join(SORTS)}")
         await self.get_batch(batch_id)
 
         orders = await self._orders_of(batch_id)
@@ -332,11 +410,15 @@ class OrderValidationService:
                 for order in orders
                 if any(item.result.reason == reason for item in order.lines)
             ]
+        if liquor_tax is not None:
+            orders = [order for order in orders if order.has_liquor_tax is liquor_tax]
         counts = {value: 0 for value in vocabulary.STATUSES}
         for order in orders:
             counts[order.status] += 1
         if status:
             orders = [order for order in orders if order.status == status]
+        if sort == "attention":
+            orders = [_attention_lines(order) for order in sorted(orders, key=_order_key)]
         start = (page - 1) * size
         return OrderPage(
             items=orders[start : start + size],
@@ -377,4 +459,4 @@ class OrderValidationService:
             raise InvalidInputError(f"El tamaño debe estar entre 1 y {MAX_PAGE_SIZE}")
 
 
-__all__ = ["MAX_PAGE_SIZE", "OrderValidationService"]
+__all__ = ["MAX_PAGE_SIZE", "SORTS", "OrderValidationService"]

@@ -8,7 +8,7 @@ from typing import Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
@@ -37,6 +37,7 @@ LineStatus = Literal["listo_para_liberar", "pendiente_validacion"]
 Reason = Literal[
     "cumple_con_apoyo",
     "cumple_margen_lista",
+    "cumple_con_umbral",
     "acuerdo_en_revision",
     "no_cumple_acuerdo",
     "acuerdo_no_evaluable",
@@ -61,6 +62,7 @@ class BatchResponse(BaseModel):
     pending_line_count: int
     ready_order_count: int
     pending_order_count: int
+    margin_threshold_points: Decimal
 
 
 class BatchPageResponse(BaseModel):
@@ -86,6 +88,7 @@ class CheckResponse(BaseModel):
     detail: str
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
+    threshold_applied: bool
 
 
 class LineResponse(BaseModel):
@@ -111,6 +114,9 @@ class LineResponse(BaseModel):
     support_id: UUID | None
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
+    margin_basis: Literal["lista", "mayoristas", "salsamentarias"] | None
+    liquor_tax: bool
+    liquor_tax_amount: Decimal | None
     checks: list[CheckResponse]
 
 
@@ -127,6 +133,12 @@ class ApprovalRequest(BaseModel):
 
     documents: list[str] = Field(min_length=1, max_length=MAX_APPROVALS)
     note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
+
+
+class RevalidateRequest(BaseModel):
+    """Optional settings of a new validation."""
+
+    margin_threshold_points: Decimal | None = Field(default=None, ge=0, le=20)
 
 
 class OrderResponse(BaseModel):
@@ -146,6 +158,9 @@ class OrderResponse(BaseModel):
     line_count: int
     ready_line_count: int
     total_amount: Decimal | None
+    margin_pct: Decimal | None
+    required_margin_pct: Decimal | None
+    has_liquor_tax: bool
     lines: list[LineResponse]
 
 
@@ -194,6 +209,7 @@ def _batch(batch: Batch) -> BatchResponse:
         pending_line_count=batch.pending_line_count,
         ready_order_count=batch.ready_order_count,
         pending_order_count=batch.pending_order_count,
+        margin_threshold_points=(batch.margin_threshold * 100).quantize(Decimal("0.01")),
     )
 
 
@@ -210,6 +226,7 @@ def _check(item: AgreementCheck) -> CheckResponse:
         detail=item.detail,
         effective_margin_pct=item.effective_margin_pct,
         required_margin_pct=item.required_margin_pct,
+        threshold_applied=item.threshold_applied,
     )
 
 
@@ -236,6 +253,9 @@ def _line(item: StoredLine) -> LineResponse:
         support_id=result.support_id,
         effective_margin_pct=result.effective_margin_pct,
         required_margin_pct=result.required_margin_pct,
+        margin_basis=result.margin_basis,  # type: ignore[arg-type]
+        liquor_tax=result.liquor_tax,
+        liquor_tax_amount=result.liquor_tax_amount,
         checks=[_check(check) for check in result.checks],
     )
 
@@ -256,6 +276,9 @@ def _order(order: OrderView) -> OrderResponse:
         line_count=len(order.lines),
         ready_line_count=order.ready_line_count,
         total_amount=order.total_amount,
+        margin_pct=order.margin_pct,
+        required_margin_pct=order.required_margin_pct,
+        has_liquor_tax=order.has_liquor_tax,
         lines=[_line(item) for item in order.lines],
         manual_approval=(
             None
@@ -298,12 +321,14 @@ async def catalogs(
     summary="Upload a retained orders file",
     description=(
         "multipart/form-data with `file` (.xlsx, .xlsm or .csv, the SIESA retained orders "
-        "report). Every line is checked against the supports master at once."
+        "report). Every line is checked against the supports master at once. Optional form "
+        "field ``margin_threshold_points`` (0.5 releases a line at 19.5 % against a 20 % target)."
     ),
 )
 @inject
 async def upload(
     file: UploadFile = File(...),  # noqa: B008
+    margin_threshold_points: Decimal | None = Form(default=None),  # noqa: B008
     principal: Principal = _principal,
     service: OrderValidationService = _service,
 ) -> BatchResponse:
@@ -311,7 +336,7 @@ async def upload(
 
     # One byte over the limit is enough for the service to reject the file.
     content = await file.read(service.max_upload_bytes + 1)
-    return _batch(await service.upload(principal, file.filename, content))
+    return _batch(await service.upload(principal, file.filename, content, margin_threshold_points))
 
 
 @router.get("", response_model=BatchPageResponse, summary="List uploaded files")
@@ -352,15 +377,28 @@ async def list_orders(
     status_filter: LineStatus | None = Query(default=None, alias="status"),  # noqa: B008
     reason: Reason | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
+    liquor_tax: bool | None = Query(default=None, description="Orders with a liquor-tax product"),
+    sort: Literal["attention", "file"] = Query(default="attention"),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
     _: Principal = _principal,
     service: OrderValidationService = _service,
 ) -> OrderPageResponse:
-    """Orders of a file with every line, its decision and the supports checked."""
+    """Orders of a file with every line, its decision and the supports checked.
+
+    `attention` (default) lists first the orders, and inside each the lines, that have no
+    support, then by margin from lowest to highest; `file` keeps the file order.
+    """
 
     result = await service.orders(
-        batch_id, status=status_filter, reason=reason, q=q, page=page, size=size
+        batch_id,
+        status=status_filter,
+        reason=reason,
+        q=q,
+        liquor_tax=liquor_tax,
+        sort=sort,
+        page=page,
+        size=size,
     )
     return OrderPageResponse(
         items=[_order(item) for item in result.items],
@@ -375,17 +413,23 @@ async def list_orders(
     "/{batch_id}/revalidate",
     response_model=BatchResponse,
     summary="Validate a file again",
-    description="Checks every line again against the supports as they are now.",
+    description=(
+        "Checks every line again against the supports and margins as they are now. The body "
+        "is optional: ``margin_threshold_points`` sets the threshold of the file (the stored one "
+        "is kept when omitted). Manual approvals are kept."
+    ),
 )
 @inject
 async def revalidate(
     batch_id: UUID,
+    body: RevalidateRequest | None = None,
     principal: Principal = _principal,
     service: OrderValidationService = _service,
 ) -> BatchResponse:
-    """Re-run the validation after supports changed. Managers only."""
+    """Re-run the validation, optionally with a new margin threshold. Managers only."""
 
-    return _batch(await service.revalidate(principal, batch_id))
+    points = body.margin_threshold_points if body else None
+    return _batch(await service.revalidate(principal, batch_id, points))
 
 
 @router.post(

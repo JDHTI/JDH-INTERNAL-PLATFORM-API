@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from decimal import Decimal
 
 from sqlalchemy import and_, or_, select
 
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
+    ProductModel,
 )
-from app.modules.order_validation.domain.entities import Agreement, CustomerScope
+from app.modules.order_validation.domain.entities import Agreement, CustomerScope, ProductInfo
 from app.modules.supplier_supports.infrastructure.models import SupplierSupportModel
 
 S = SupplierSupportModel
+# `source` of the supports imported from the workbook's `Condiciones Especiales` table.
+SPECIAL_CONDITIONS_SOURCE = "Condiciones Especiales%"
+_CHUNK = 5000
 
 
 class SqlAlchemyAgreementSource:
-    """Candidate supports, supplier list margins and client scope from PostgreSQL."""
+    """Candidate supports, product margins and client scope from PostgreSQL."""
 
     def __init__(self, database: Database) -> None:
         """Create the source.
@@ -52,6 +56,9 @@ class SqlAlchemyAgreementSource:
             .where(
                 S.status != "anulado",
                 S.is_enabled.is_(True),
+                # The special conditions of the workbook stay documented, not applied: some
+                # cannot be automated (docs/condiciones-especiales.md).
+                or_(S.source.is_(None), ~S.source.ilike(SPECIAL_CONDITIONS_SOURCE)),
                 customer,
                 or_(
                     and_(CommercialSupplierModel.code.in_(list(supplier_codes)), product),
@@ -88,20 +95,30 @@ class SqlAlchemyAgreementSource:
             for model, code in rows
         ]
 
-    async def supplier_margins(self, codes: Sequence[str]) -> dict[str, Decimal | None]:
-        """List margin of each commercial supplier (``None`` when not set)."""
+    async def products(self, skus: Sequence[str]) -> dict[str, ProductInfo]:
+        """Margin by channel and liquor tax of each product."""
 
-        if not codes:
+        if not skus:
             return {}
+        result: dict[str, ProductInfo] = {}
         async with self.database.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(
-                        CommercialSupplierModel.code, CommercialSupplierModel.list_margin_pct
-                    ).where(CommercialSupplierModel.code.in_(list(codes)))
-                )
-            ).all()
-        return {code: margin for code, margin in rows}
+            for start in range(0, len(skus), _CHUNK):
+                rows = (
+                    await session.execute(
+                        select(
+                            ProductModel.sku,
+                            ProductModel.liquor_tax,
+                            *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
+                        ).where(ProductModel.sku.in_(list(skus[start : start + _CHUNK])))
+                    )
+                ).all()
+                for sku, tax, *margins in rows:
+                    result[sku] = ProductInfo(
+                        sku=sku,
+                        margins=dict(zip(MARGIN_FIELDS, margins, strict=True)),
+                        liquor_tax=tax,
+                    )
+        return result
 
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerScope]:
         """Channel, business unit and regional of each client, merged across branches."""

@@ -74,3 +74,13 @@ poetry run python scripts/sync-dwh-masters.py --apply
 poetry run python scripts/import-supplier-supports.py "1. MAESTRO APOYOS PROVEEDORES.xlsx" \
     --report inconsistencias.csv --apply
 ```
+
+Carga el margen por producto y canal y el impuesto al licor desde `Maestro Margen.xlsx` (hoja
+`Margen Producto`). Necesita los productos ya sincronizados; simula salvo `--apply` y se puede
+repetir. El mismo archivo se puede subir desde la app. Detalle en
+[`docs/margenes-productos.md`](../docs/margenes-productos.md).
+
+```bash
+poetry run python scripts/import-product-margins.py "Maestro Margen.xlsx"
+poetry run python scripts/import-product-margins.py "Maestro Margen.xlsx" --apply
+```

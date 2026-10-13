@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     SmallInteger,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -40,8 +41,6 @@ class CommercialSupplierModel(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     product_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     active_product_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    list_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
-    list_margin_notes: Mapped[str | None] = mapped_column(Text)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -185,6 +184,21 @@ class ProductModel(Base):
     # Current average cost of the minimum selling unit, from the warehouse inventory.
     avg_unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     avg_unit_cost_date: Mapped[date | None] = mapped_column(Date)
+    # Margins by channel, loaded from the margin master and edited by hand. The warehouse
+    # sync never writes them. ``None`` means "no margin defined" (the master writes 0).
+    margin_list: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    margin_wholesale: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    margin_mass_food: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    margin_market: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    margin_salsamentarias: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    margin_notes: Mapped[str | None] = mapped_column(Text)
+    margin_source: Mapped[str | None] = mapped_column(String(20))
+    margin_updated_by: Mapped[str | None] = mapped_column(String(320))
+    margin_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Liquor consumption tax per unit (``IMPTOLIC``); orders may be keyed without it.
+    liquor_tax: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    liquor_tax_coast: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    liquor_tax_group: Mapped[str | None] = mapped_column(String(20))
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

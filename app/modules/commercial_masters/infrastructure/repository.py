@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,9 +18,11 @@ from app.modules.commercial_masters.domain.entities import (
     LegalSupplier,
     Page,
     Product,
+    ProductMargins,
     ProductRef,
     SupplierProductCode,
 )
+from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CommercialSupplierNitModel,
@@ -35,6 +36,7 @@ from app.modules.masters.infrastructure.models import MasterDefinitionModel
 
 # Rows of an executemany upsert; SQLAlchemy splits it under asyncpg's parameter cap.
 _UPSERT_CHUNK = 1000
+IMPORT_ACTOR = "importacion"
 _SYNC_TABLES: dict[str, tuple[type[Base], str]] = {
     "commercial_suppliers": (CommercialSupplierModel, "update"),
     "suppliers": (SupplierModel, "update"),
@@ -58,8 +60,6 @@ def _commercial_supplier(
         is_active=model.is_active,
         product_count=model.product_count,
         active_product_count=model.active_product_count,
-        list_margin_pct=model.list_margin_pct,
-        list_margin_notes=model.list_margin_notes,
         synced_at=model.synced_at,
         nits=[
             CommercialSupplierNit(
@@ -129,6 +129,22 @@ def _product(model: ProductModel) -> Product:
         pack_factor=model.pack_factor,
         inventory_unit=model.inventory_unit,
         main_barcode=model.main_barcode,
+        product_subline=model.product_subline,
+        product_group=model.product_group,
+        margins=ProductMargins(
+            list=model.margin_list,
+            wholesale=model.margin_wholesale,
+            mass_food=model.margin_mass_food,
+            market=model.margin_market,
+            salsamentarias=model.margin_salsamentarias,
+            notes=model.margin_notes,
+            source=model.margin_source,
+            updated_by=model.margin_updated_by,
+            updated_at=model.margin_updated_at,
+        ),
+        liquor_tax=model.liquor_tax,
+        liquor_tax_coast=model.liquor_tax_coast,
+        liquor_tax_group=model.liquor_tax_group,
     )
 
 
@@ -220,7 +236,6 @@ class SqlAlchemyCommercialMasterRepository:
             rows,
             ["code"],
             synced_at,
-            keep=("list_margin_pct", "list_margin_notes"),
         )
 
     async def replace_commercial_supplier_nits(self, rows: Sequence[Mapping[str, Any]]) -> int:
@@ -342,7 +357,11 @@ class SqlAlchemyCommercialMasterRepository:
         select_rows = (
             select(CommercialSupplierModel)
             .where(*conditions)
-            .order_by(CommercialSupplierModel.name, CommercialSupplierModel.code)
+            .order_by(
+                CommercialSupplierModel.is_active.desc(),
+                CommercialSupplierModel.name,
+                CommercialSupplierModel.code,
+            )
         )
         count = select(func.count()).select_from(CommercialSupplierModel).where(*conditions)
         rows, total = await self._page(select_rows, count, page, size)
@@ -423,7 +442,12 @@ class SqlAlchemyCommercialMasterRepository:
         return await self.get_commercial_supplier(code)
 
     async def list_legal_suppliers(
-        self, query: str | None, nit: str | None, is_active: bool | None, page: int, size: int
+        self,
+        query: str | None,
+        nit: str | None,
+        is_active: bool | None,
+        page: int,
+        size: int,
     ) -> Page[LegalSupplier]:
         """Page legal suppliers."""
 
@@ -437,7 +461,12 @@ class SqlAlchemyCommercialMasterRepository:
         select_rows = (
             select(SupplierModel)
             .where(*conditions)
-            .order_by(SupplierModel.legal_name, SupplierModel.nit, SupplierModel.branch_id)
+            .order_by(
+                SupplierModel.is_active.desc(),
+                SupplierModel.legal_name,
+                SupplierModel.nit,
+                SupplierModel.branch_id,
+            )
         )
         count = select(func.count()).select_from(SupplierModel).where(*conditions)
         rows, total = await self._page(select_rows, count, page, size)
@@ -478,7 +507,12 @@ class SqlAlchemyCommercialMasterRepository:
         select_rows = (
             select(CustomerModel)
             .where(*conditions)
-            .order_by(CustomerModel.legal_name, CustomerModel.nit, CustomerModel.branch_id)
+            .order_by(
+                CustomerModel.is_active.desc(),
+                CustomerModel.legal_name,
+                CustomerModel.nit,
+                CustomerModel.branch_id,
+            )
         )
         count = select(func.count()).select_from(CustomerModel).where(*conditions)
         rows, total = await self._page(select_rows, count, page, size)
@@ -493,6 +527,7 @@ class SqlAlchemyCommercialMasterRepository:
         is_active: bool | None,
         page: int,
         size: int,
+        has_margin: bool | None = None,
     ) -> Page[Product]:
         """Page products by text/SKU, brand, category and commercial supplier."""
 
@@ -512,8 +547,13 @@ class SqlAlchemyCommercialMasterRepository:
             conditions.append(ProductModel.commercial_supplier_code == commercial_supplier_code)
         if is_active is not None:
             conditions.append(ProductModel.is_active.is_(is_active))
+        if has_margin is not None:
+            defined = or_(*(getattr(ProductModel, name).is_not(None) for name in MARGIN_FIELDS))
+            conditions.append(defined if has_margin else ~defined)
         select_rows = (
-            select(ProductModel).where(*conditions).order_by(ProductModel.sku, ProductModel.id)
+            select(ProductModel)
+            .where(*conditions)
+            .order_by(ProductModel.is_active.desc(), ProductModel.sku, ProductModel.id)
         )
         count = select(func.count()).select_from(ProductModel).where(*conditions)
         rows, total = await self._page(select_rows, count, page, size)
@@ -608,17 +648,96 @@ class SqlAlchemyCommercialMasterRepository:
             )
             return {nit: name or "" for nit, name in rows.all()}
 
-    async def set_list_margin(self, code: str, pct: Decimal | None, notes: str | None) -> bool:
-        """Set a supplier's list margin; ``False`` when the code does not exist."""
+    async def get_product(self, sku: str) -> Product | None:
+        """One product by SKU, with its margins."""
 
         async with self.database.session_factory() as session:
-            result = await session.execute(
-                update(CommercialSupplierModel)
-                .where(CommercialSupplierModel.code == code)
-                .values(list_margin_pct=pct, list_margin_notes=notes)
-            )
+            model = (
+                await session.execute(select(ProductModel).where(ProductModel.sku == sku))
+            ).scalar_one_or_none()
+        return None if model is None else _product(model)
+
+    async def update_product(
+        self, sku: str, changes: Mapping[str, Any], actor: str, now: datetime
+    ) -> Product | None:
+        """Set the given columns of a product; stamps who changed a margin."""
+
+        async with self.database.session_factory() as session:
+            model = (
+                await session.execute(select(ProductModel).where(ProductModel.sku == sku))
+            ).scalar_one_or_none()
+            if model is None:
+                return None
+            for name, value in changes.items():
+                setattr(model, name, value)
+            if any(name in MARGIN_FIELDS or name == "margin_notes" for name in changes):
+                model.margin_source = "manual"
+                model.margin_updated_by = actor
+                model.margin_updated_at = now
             await session.commit()
-        return bool(result.rowcount)
+            return _product(model)
+
+    async def margins_by_sku(self, skus: Sequence[str]) -> dict[str, Product]:
+        """Products by exact SKU, to compare their margins with a file."""
+
+        result: dict[str, Product] = {}
+        async with self.database.session_factory() as session:
+            for start in range(0, len(skus), _UPSERT_CHUNK):
+                chunk = list(skus[start : start + _UPSERT_CHUNK])
+                models = (
+                    (await session.execute(select(ProductModel).where(ProductModel.sku.in_(chunk))))
+                    .scalars()
+                    .all()
+                )
+                result.update({model.sku: _product(model) for model in models})
+        return result
+
+    async def bulk_update_products(
+        self, rows: Sequence[Mapping[str, Any]], actor: str, now: datetime
+    ) -> int:
+        """Set the same columns on many products, each row carrying its ``sku``.
+
+        Every row must carry the same keys. When any of them is a margin, the margin
+        source and author are stamped (``importacion`` when ``actor`` is the importer).
+        """
+
+        if not rows:
+            return 0
+        columns = [name for name in rows[0] if name != "sku"]
+        stamp = any(name in MARGIN_FIELDS or name == "margin_notes" for name in columns)
+        values: dict[str, Any] = {name: bindparam(f"v_{name}") for name in columns}
+        if stamp:
+            source = "importacion" if actor == IMPORT_ACTOR else "manual"
+            values.update(margin_source=source, margin_updated_by=actor, margin_updated_at=now)
+        # Core statement on the table: with the entity, a list of parameters would make the
+        # ORM look for primary keys (its bulk-by-primary-key mode).
+        table = ProductModel.__table__
+        statement = update(table).where(table.c.sku == bindparam("b_sku")).values(**values)
+        payload = [
+            {"b_sku": row["sku"], **{f"v_{name}": row[name] for name in columns}} for row in rows
+        ]
+        async with self.database.session_factory() as session:
+            for start in range(0, len(payload), _UPSERT_CHUNK):
+                await session.execute(statement, payload[start : start + _UPSERT_CHUNK])
+            await session.commit()
+        return len(rows)
+
+    async def products_with_margins(self) -> list[Product]:
+        """Every product, active first, to export the margin template."""
+
+        async with self.database.session_factory() as session:
+            models = (
+                (
+                    await session.execute(
+                        select(ProductModel).order_by(
+                            ProductModel.is_active.desc(), ProductModel.sku
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_product(model) for model in models]
 
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

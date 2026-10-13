@@ -16,7 +16,8 @@ STATUS_LABELS = {
 # Why a line got its status. The first two release it; the rest leave it pending.
 REASONS = (
     "cumple_con_apoyo",  # an active agreement brings the margin to what was agreed
-    "cumple_margen_lista",  # the margin already reaches the supplier's list margin
+    "cumple_margen_lista",  # the margin already reaches the product's margin for the channel
+    "cumple_con_umbral",  # it falls short, but within the threshold the batch allows
     "acuerdo_en_revision",  # it would comply, but the agreement still has data issues
     "no_cumple_acuerdo",  # there is an agreement and the order does not meet it
     "acuerdo_no_evaluable",  # there is an agreement, but it cannot be checked per order
@@ -25,11 +26,12 @@ REASONS = (
     "datos_incompletos",  # the file row lacks the supplier, price or margin
 )
 
-READY_REASONS = ("cumple_con_apoyo", "cumple_margen_lista")
+READY_REASONS = ("cumple_con_apoyo", "cumple_margen_lista", "cumple_con_umbral")
 
 REASON_LABELS = {
     "cumple_con_apoyo": "Cumple con el apoyo pactado",
-    "cumple_margen_lista": "Cumple el margen lista del proveedor",
+    "cumple_margen_lista": "Cumple el margen del producto para el canal",
+    "cumple_con_umbral": "Cumple dentro del umbral de margen",
     "acuerdo_en_revision": "Apoyo pendiente de revisión",
     "no_cumple_acuerdo": "No cumple las condiciones del apoyo",
     "acuerdo_no_evaluable": "Apoyo no evaluable por pedido",

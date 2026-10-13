@@ -7,6 +7,7 @@ import pytest
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.order_validation.domain.entities import ProductInfo
 from fastapi.testclient import TestClient
 
 from tests.modules.order_validation.conftest import MANAGER, agreement
@@ -54,7 +55,7 @@ def test_upload_then_read_orders_with_their_lines(client) -> None:
     assert batch["order_count"] == 2 and batch["ready_order_count"] == 1
     assert batch["pending_order_count"] == 1 and batch["pending_line_count"] == 1
 
-    orders = client.get(f"{BASE}/{batch['id']}/orders").json()
+    orders = client.get(f"{BASE}/{batch['id']}/orders", params={"sort": "file"}).json()
     assert orders["total"] == 2 and orders["counts"]["listo_para_liberar"] == 1
     first = orders["items"][0]
     assert first["document"] == "PV-1" and first["status_label"] == "Listo para liberación"
@@ -91,7 +92,7 @@ def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
 def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
     catalogs = client.get(f"{BASE}/catalogs").json()
-    assert len(catalogs["reasons"]) == 8 and catalogs["statuses"][0]["label"]
+    assert len(catalogs["reasons"]) == 9 and catalogs["statuses"][0]["label"]
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
@@ -112,7 +113,8 @@ def test_approve_unapprove_and_delete(client) -> None:
     assert pv2["status"] == "listo_para_liberar" and pv2["status_label"] == "Listo para liberación"
     assert pv2["manual_approval"]["approved_by"] == MANAGER
     assert pv2["manual_approval"]["note"] == "Gerencia"
-    assert client.get(orders_url).json()["items"][0]["manual_approval"] is None
+    in_file = client.get(orders_url, params={"sort": "file"}).json()["items"]
+    assert in_file[0]["manual_approval"] is None
 
     again = client.post(f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-2"]})
     assert again.status_code == 409
@@ -139,3 +141,58 @@ def test_outsiders_cannot_approve_or_delete(client) -> None:
     )
     assert client.delete(f"{BASE}/{batch['id']}/orders/PV-2/approval").status_code == 403
     assert client.delete(f"{BASE}/{batch['id']}").status_code == 403
+
+
+def test_orders_carry_the_margin_flag_threshold_and_sort(client, source) -> None:
+    source.catalog["1128"] = ProductInfo("1128", {"margin_list": Decimal("0.18")}, Decimal("6911"))
+    batch = upload(client).json()
+    url = f"{BASE}/{batch['id']}/orders"
+
+    default = client.get(url).json()
+    # PV-2 has a line with no support, so it leads; its lines too.
+    assert [item["document"] for item in default["items"]] == ["PV-2", "PV-1"]
+    pv2 = default["items"][0]
+    assert [line["sku"] for line in pv2["lines"]] == ["1128", "28703"]
+    assert pv2["has_liquor_tax"] is True and Decimal(pv2["margin_pct"]) == Decimal("0.075")
+    # The 359 line aims at its support (14 %), the 233 line at the product margin (18 %).
+    assert Decimal(pv2["required_margin_pct"]) == Decimal("0.16")
+    first = pv2["lines"][0]
+    assert first["liquor_tax"] is True and Decimal(first["liquor_tax_amount"]) == 6911
+    assert first["margin_basis"] == "lista" and first["checks"] == []
+    assert batch["margin_threshold_points"] == "0.00"
+
+    taxed = client.get(url, params={"liquor_tax": "true"}).json()
+    assert [item["document"] for item in taxed["items"]] == ["PV-2"]
+    in_file = client.get(url, params={"sort": "file"}).json()["items"]
+    assert [item["document"] for item in in_file] == ["PV-1", "PV-2"]
+    assert client.get(url, params={"sort": "margen"}).status_code == 422
+
+
+def test_threshold_on_upload_and_revalidate(client, source) -> None:
+    source.items.clear()
+    source.catalog["28703"] = ProductInfo("28703", {"margin_list": Decimal("0.105")})
+    files = {"file": ("Pedidos Retenidos.xlsx", report(), XLSX)}
+
+    created = client.post(BASE, files=files, data={"margin_threshold_points": "0.5"})
+
+    assert created.status_code == 201
+    batch = created.json()
+    assert batch["margin_threshold_points"] == "0.50" and batch["ready_line_count"] == 1
+    url = f"{BASE}/{batch['id']}"
+    reasons = {
+        line["reason"]
+        for order in client.get(f"{url}/orders").json()["items"]
+        for line in order["lines"]
+    }
+    assert "cumple_con_umbral" in reasons
+
+    cleared = client.post(f"{url}/revalidate", json={"margin_threshold_points": "0"})
+    assert cleared.status_code == 200 and cleared.json()["margin_threshold_points"] == "0.00"
+    assert cleared.json()["ready_line_count"] == 0
+    kept = client.post(f"{url}/revalidate")
+    assert kept.json()["margin_threshold_points"] == "0.00"
+    assert (
+        client.post(f"{url}/revalidate", json={"margin_threshold_points": "25"}).status_code == 422
+    )
+    bad = client.post(BASE, files=files, data={"margin_threshold_points": "-1"})
+    assert bad.status_code == 422

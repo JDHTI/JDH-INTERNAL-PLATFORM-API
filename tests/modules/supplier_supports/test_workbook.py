@@ -320,13 +320,8 @@ def test_estra_block_without_a_table_skips_the_totals_row(tmp_path) -> None:
     assert data.supplier_value == D("0.1") and data.reference_cost == D("708580")
 
 
-def test_list_margins_and_supplier_codes(tmp_path) -> None:
+def test_supplier_codes(tmp_path) -> None:
     def build(book: Workbook) -> None:
-        add_table(
-            book, "Margenes Lista1", "Margenes_Lista1",
-            ["Cod. Proveedor", "Proveedor", "Margen Lista 1", "Observacion"],
-            [[233, "FAMILIA SANCELA", 0.18, None], [999, "SIN MARGEN", None, "x"]],
-        )  # fmt: skip
         add_table(
             book, "Familia", "Maestro_Sku_Familia",
             ["Ref. JDH", "Ref. Familia", "Desc. item", "Factor U.E"],
@@ -334,9 +329,6 @@ def test_list_margins_and_supplier_codes(tmp_path) -> None:
         )  # fmt: skip
 
     book = open_book(tmp_path, build)
-
-    margins = wb.read_list_margins(book)
-    assert [(m.code, m.pct) for m in margins] == [("233", D("0.18"))]
 
     codes = [c for supplier, c in wb.read_supplier_codes(book, ["Familia"])]
     assert (codes[0].supplier_sku, codes[0].product_sku, codes[0].pack_factor) == (

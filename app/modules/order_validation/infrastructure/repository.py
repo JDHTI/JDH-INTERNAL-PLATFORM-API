@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -49,6 +50,7 @@ def _batch(model: OrderValidationBatchModel) -> Batch:
         order_count=model.order_count,
         ready_line_count=model.ready_line_count,
         ready_order_count=model.ready_order_count,
+        margin_threshold=model.margin_threshold,
     )
 
 
@@ -61,6 +63,9 @@ def _result_columns(result: LineResult) -> dict[str, object]:
         "effective_margin_pct": result.effective_margin_pct,
         "required_margin_pct": result.required_margin_pct,
         "checks": [item.as_dict() for item in result.checks],
+        "margin_basis": result.margin_basis,
+        "liquor_tax": result.liquor_tax,
+        "liquor_tax_amount": result.liquor_tax_amount,
     }
 
 
@@ -77,6 +82,9 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
         effective_margin_pct=model.effective_margin_pct,
         required_margin_pct=model.required_margin_pct,
         checks=tuple(AgreementCheck.from_dict(item) for item in model.checks or ()),
+        margin_basis=model.margin_basis,
+        liquor_tax=model.liquor_tax,
+        liquor_tax_amount=model.liquor_tax_amount,
     )
     return StoredLine(id=model.id, line=line, result=result)
 
@@ -133,6 +141,7 @@ class SqlAlchemyOrderValidationRepository:
         actor: str,
         now: datetime,
         lines: Sequence[tuple[OrderLine, LineResult]],
+        margin_threshold: Decimal,
     ) -> Batch:
         """Insert a file with all its lines and their results in one transaction."""
 
@@ -144,6 +153,7 @@ class SqlAlchemyOrderValidationRepository:
                 uploaded_at=now,
                 validated_by=actor,
                 validated_at=now,
+                margin_threshold=margin_threshold,
             )
             _apply_counts(batch, [(line.document, result.status) for line, result in lines])
             session.add(batch)
@@ -210,8 +220,9 @@ class SqlAlchemyOrderValidationRepository:
         results: Sequence[tuple[UUID, LineResult]],
         actor: str,
         now: datetime,
+        margin_threshold: Decimal,
     ) -> Batch:
-        """Replace the result of each line and the counts of the file."""
+        """Replace the result of each line, the threshold and the counts of the file."""
 
         async with self.database.session_factory() as session:
             batch = (
@@ -229,6 +240,7 @@ class SqlAlchemyOrderValidationRepository:
             await _recount(session, batch)
             batch.validated_by = actor
             batch.validated_at = now
+            batch.margin_threshold = margin_threshold
             await session.commit()
             return _batch(batch)
 

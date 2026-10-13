@@ -17,6 +17,7 @@ from app.modules.order_validation.domain.entities import (
     LineResult,
     ManualApproval,
     OrderLine,
+    ProductInfo,
     StoredLine,
 )
 
@@ -34,7 +35,7 @@ class AgreementSource(Protocol):
         self, supplier_codes: Sequence[str], skus: Sequence[str], nits: Sequence[str]
     ) -> list[Agreement]: ...
 
-    async def supplier_margins(self, codes: Sequence[str]) -> dict[str, Decimal | None]: ...
+    async def products(self, skus: Sequence[str]) -> dict[str, ProductInfo]: ...
 
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerScope]: ...
 
@@ -49,6 +50,7 @@ class BatchRepository(Protocol):
         actor: str,
         now: datetime,
         lines: Sequence[tuple[OrderLine, LineResult]],
+        margin_threshold: Decimal,
     ) -> Batch: ...
 
     async def get(self, batch_id: UUID) -> Batch | None: ...
@@ -63,6 +65,7 @@ class BatchRepository(Protocol):
         results: Sequence[tuple[UUID, LineResult]],
         actor: str,
         now: datetime,
+        margin_threshold: Decimal,
     ) -> Batch: ...
 
     async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]: ...

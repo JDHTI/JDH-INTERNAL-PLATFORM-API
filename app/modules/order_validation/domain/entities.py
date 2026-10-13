@@ -67,6 +67,19 @@ class Agreement:
 
 
 @dataclass(frozen=True)
+class ProductInfo:
+    """What the validator needs from a product: its margin by channel and its liquor tax.
+
+    ``margins`` is keyed by the product margin column (``margin_list``...); a channel with
+    no margin defined is ``None``.
+    """
+
+    sku: str
+    margins: dict[str, Decimal | None] = field(default_factory=dict)
+    liquor_tax: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class CustomerScope:
     """Channel, business unit and regional of a client, across all its branches.
 
@@ -95,6 +108,8 @@ class AgreementCheck:
     detail: str
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
+    # It complies only because of the batch's margin threshold.
+    threshold_applied: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """JSON form stored with the line."""
@@ -111,6 +126,7 @@ class AgreementCheck:
             "detail": self.detail,
             "effective_margin_pct": _text(self.effective_margin_pct),
             "required_margin_pct": _text(self.required_margin_pct),
+            "threshold_applied": self.threshold_applied,
         }
 
     @classmethod
@@ -129,6 +145,7 @@ class AgreementCheck:
             detail=value.get("detail") or "",
             effective_margin_pct=_number(value.get("effective_margin_pct")),
             required_margin_pct=_number(value.get("required_margin_pct")),
+            threshold_applied=bool(value.get("threshold_applied")),
         )
 
 
@@ -143,6 +160,11 @@ class LineResult:
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
     checks: tuple[AgreementCheck, ...] = ()
+    # Which product margin the line was compared with: lista, mayoristas, salsamentarias.
+    margin_basis: str | None = None
+    # The product has liquor tax and the order may have been keyed without it.
+    liquor_tax: bool = False
+    liquor_tax_amount: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +190,8 @@ class Batch:
     order_count: int
     ready_line_count: int
     ready_order_count: int
+    # Margin points a line may fall short by and still be released, as a fraction.
+    margin_threshold: Decimal = Decimal(0)
 
     @property
     def pending_line_count(self) -> int:
@@ -211,6 +235,10 @@ class OrderView:
     lines: list[StoredLine]
     total_amount: Decimal | None = None
     manual_approval: ManualApproval | None = None
+    # Weighted by amount over the lines that carry a cost, and the weighted target.
+    margin_pct: Decimal | None = None
+    required_margin_pct: Decimal | None = None
+    has_liquor_tax: bool = False
 
     @property
     def first(self) -> OrderLine:
