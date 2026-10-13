@@ -1,5 +1,6 @@
 """Release decision of a retained line against the supports master."""
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -350,17 +351,25 @@ def test_a_line_is_never_released_by_the_threshold() -> None:
     assert decide([support]).reason == "no_cumple_acuerdo"
 
 
-def test_a_product_with_liquor_tax_is_flagged_whatever_the_decision() -> None:
+def test_a_line_that_meets_its_margin_but_lacks_the_liquor_tax_is_held_back() -> None:
     taxed = ProductInfo("18294", {"margin_list": D("0.20")}, liquor_tax=D("6911"))
 
+    held = decide(product=taxed, margin_pct=D("0.25"))
     pending = decide(product=taxed, margin_pct=D("0.05"))
-    ready = decide(product=taxed, margin_pct=D("0.25"))
+    carried = decide(product=taxed, margin_pct=D("0.25"), liquor_tax_value=D("6911"))
 
-    assert pending.liquor_tax and pending.liquor_tax_amount == D("6911")
-    assert ready.liquor_tax and ready.status == "listo_para_liberar"
-    assert not decide(product=info(list=D("0.2"))).liquor_tax
-    assert not decide(product=ProductInfo("1", liquor_tax=D("0"))).liquor_tax
-    assert decide(product=taxed, margin_pct=None).liquor_tax
+    # It meets the margin, yet the missing tax holds it back.
+    assert held.status == "pendiente_validacion" and held.reason == "falta_impuesto_licor"
+    assert held.liquor_tax and held.liquor_tax_amount == D("6911")
+    assert "$6.911 por unidad" in held.detail and "≥ margen lista" in held.detail
+    assert held.required_margin_pct == D("0.200000")
+    # A line already pending for another reason keeps that reason, still flagged.
+    assert pending.reason == "sin_acuerdo" and pending.liquor_tax
+    # With the tax in the line it is decided like any other.
+    assert carried.status == "listo_para_liberar" and not carried.liquor_tax
+    assert not decide(product=taxed, margin_pct=D("0.25"), liquor_tax_value=D("0")).status == (
+        "listo_para_liberar"
+    )
 
 
 def test_the_order_margin_is_weighted_by_amount() -> None:
@@ -417,5 +426,18 @@ def test_the_liquor_flag_shows_only_when_the_order_lacks_the_tax() -> None:
     # The order already carries the tax: nothing to flag, and no amount to show.
     assert not carried.liquor_tax and carried.liquor_tax_amount is None
     assert not untaxed.liquor_tax
-    # The flag never changes the decision.
-    assert carried.status == missing_zero.status
+
+
+def test_the_threshold_never_releases_an_order_with_a_line_missing_the_liquor_tax() -> None:
+    short = pair("1000", "1", D("0.199"), D("0.20"))
+    held = pair("1000", "1", D("0.30"), D("0.20"), "falta_impuesto_licor", row=3)
+    held_result = replace(held[1], liquor_tax=True)
+    items = [short, (held[0], held_result)]
+
+    assert not rules.release_by_threshold(items, D("0.05"))
+    assert rules.release_basis(items, False, D("0.05")) is None
+    # A pending line that is short on margin and also lacks the tax blocks the order too.
+    short_taxed = (short[0], replace(short[1], liquor_tax=True))
+    assert not rules.release_by_threshold([short_taxed], D("0.05"))
+    # A manual approval can still release it.
+    assert rules.release_basis(items, True, D("0")) == "manual"

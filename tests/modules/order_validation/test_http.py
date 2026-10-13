@@ -92,7 +92,7 @@ def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
 def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
     catalogs = client.get(f"{BASE}/catalogs").json()
-    assert len(catalogs["reasons"]) == 8 and catalogs["statuses"][0]["label"]
+    assert len(catalogs["reasons"]) == 9 and catalogs["statuses"][0]["label"]
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}

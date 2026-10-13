@@ -357,12 +357,31 @@ def decide(
     owed = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
     carried = line.liquor_tax_value is not None and line.liquor_tax_value > 0
     tax = owed if owed is not None and not carried else None
-    return replace(
+    result = replace(
         result,
         margin_basis=basis if reference is not None else None,
         liquor_tax=tax is not None,
         liquor_tax_amount=tax,
     )
+    if tax is not None and result.status == vocabulary.READY:
+        # A line that meets its margin but lacks the liquor tax is held back: the order cannot
+        # go out without the tax. Lines pending for another reason keep that reason.
+        return replace(
+            result,
+            status=vocabulary.PENDING,
+            reason="falta_impuesto_licor",
+            detail=(
+                f"Falta el impuesto al licor: el producto lo tiene y la línea no lo trae "
+                f"(debería traer {_money(tax)} por unidad). {result.detail}"
+            ),
+        )
+    return result
+
+
+def _money(value: Decimal) -> str:
+    """A Colombian peso amount: 6911 becomes ``$6.911``."""
+
+    return f"${value:,.0f}".replace(",", ".")
 
 
 def _decide(
@@ -579,6 +598,9 @@ def release_by_threshold(items: Iterable[tuple[OrderLine, LineResult]], threshol
     if threshold < ZERO or not pairs:
         return False
     for line, result in pairs:
+        if result.liquor_tax:
+            # Missing liquor tax: no margin makes up for it, only a person can release it.
+            return False
         if result.status == vocabulary.READY:
             continue
         if result.reason not in _SHORT_REASONS or result.required_margin_pct is None:

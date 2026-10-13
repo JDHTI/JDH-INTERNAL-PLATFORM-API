@@ -38,6 +38,7 @@ LineStatus = Literal["listo_para_liberar", "pendiente_validacion"]
 Reason = Literal[
     "cumple_con_apoyo",
     "cumple_margen_lista",
+    "falta_impuesto_licor",
     "acuerdo_en_revision",
     "no_cumple_acuerdo",
     "acuerdo_no_evaluable",

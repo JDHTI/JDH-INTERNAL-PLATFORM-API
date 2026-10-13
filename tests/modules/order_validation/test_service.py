@@ -310,3 +310,32 @@ async def test_lower_margins_come_first_among_orders_with_support(service, sourc
     page = await service.orders(batch.id)
 
     assert [order.document for order in page.items] == ["B", "C", "A"]
+
+
+async def test_a_wine_without_its_tax_is_held_back_and_only_a_person_releases_it(
+    service, source, manager
+) -> None:
+    source.catalog["12013"] = ProductInfo("12013", {"margin_list": D("0.57")}, D("6911"))
+    header = [*HEADER[:16], "Vlr. imp. IMPTOLIC", HEADER[16]]
+
+    def wine(document: str, tax: int) -> list:
+        values = [*ROW[:16], tax, ROW[16]]
+        values[2], values[9], values[13] = document, 12013, 62.8
+        values[14] = "1002 - MCCAIN"
+        return values
+
+    batch = await service.upload(
+        manager, "p.xlsx", workbook(header, wine("WITH-TAX", 6911), wine("NO-TAX", 0)), D("20")
+    )
+
+    page = await service.orders(batch.id, sort="file")
+    with_tax, without_tax = page.items
+    # Both meet the margin; the one without the tax stays pending, whatever the threshold.
+    assert with_tax.status == "listo_para_liberar" and with_tax.release_basis == "lineas"
+    assert without_tax.status == "pendiente_validacion" and without_tax.release_basis is None
+    assert without_tax.lines[0].result.reason == "falta_impuesto_licor"
+    assert without_tax.has_liquor_tax and not with_tax.has_liquor_tax
+    assert (batch.ready_order_count, batch.pending_order_count) == (1, 1)
+    # A person can release it.
+    approved = await service.approve(manager, batch.id, ["NO-TAX"])
+    assert approved.ready_order_count == 2

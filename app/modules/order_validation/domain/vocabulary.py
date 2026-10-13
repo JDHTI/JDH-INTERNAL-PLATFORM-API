@@ -18,6 +18,7 @@ STATUS_LABELS = {
 REASONS = (
     "cumple_con_apoyo",  # an active agreement brings the margin to what was agreed
     "cumple_margen_lista",  # the margin already reaches the product's margin for the channel
+    "falta_impuesto_licor",  # it complies, but the product's liquor tax is missing in the line
     "acuerdo_en_revision",  # it would comply, but the agreement still has data issues
     "no_cumple_acuerdo",  # there is an agreement and the order does not meet it
     "acuerdo_no_evaluable",  # there is an agreement, but it cannot be checked per order
@@ -31,6 +32,7 @@ READY_REASONS = ("cumple_con_apoyo", "cumple_margen_lista")
 REASON_LABELS = {
     "cumple_con_apoyo": "Cumple con el apoyo pactado",
     "cumple_margen_lista": "Cumple el margen del producto para el canal",
+    "falta_impuesto_licor": "Falta el impuesto al licor",
     "acuerdo_en_revision": "Apoyo pendiente de revisión",
     "no_cumple_acuerdo": "No cumple las condiciones del apoyo",
     "acuerdo_no_evaluable": "Apoyo no evaluable por pedido",
