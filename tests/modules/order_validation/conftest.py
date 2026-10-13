@@ -9,6 +9,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, NotFoundError
 from app.modules.order_validation.application.service import OrderValidationService
 from app.modules.order_validation.domain.entities import (
@@ -24,7 +25,6 @@ from app.modules.order_validation.domain.entities import (
 )
 from app.modules.order_validation.domain.rules import summarize_batch
 from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
-
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
 
 MANAGER = "comercial@jdh.com.co"

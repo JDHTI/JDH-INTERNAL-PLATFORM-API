@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site

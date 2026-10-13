@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import openpyxl
 import pytest
+
 from app.core.errors import InvalidInputError
 from app.modules.order_validation.infrastructure.order_file import (
     SpreadsheetOrderReader,

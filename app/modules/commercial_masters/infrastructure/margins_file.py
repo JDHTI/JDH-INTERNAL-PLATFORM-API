@@ -15,6 +15,9 @@ from collections.abc import Iterable, Sequence
 from decimal import Decimal
 from typing import Any
 
+import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
+
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.entities import Product
 from app.modules.commercial_masters.domain.margins import (
@@ -128,8 +131,6 @@ def rows_from_sheet(rows: Iterable[Sequence[Any]]) -> list[MarginRow]:
 
 
 def _xlsx_rows(content: bytes, sheet: str | None) -> list[list[Any]]:
-    import openpyxl
-    from openpyxl.utils.exceptions import InvalidFileException
 
     try:
         book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -193,8 +194,6 @@ class SpreadsheetMarginReader:
 
 def template_workbook(products: Sequence[Product]) -> bytes:
     """The margin template as an ``.xlsx``; with ``products`` it carries the current margins."""
-
-    import openpyxl
 
     book = openpyxl.Workbook(write_only=True)
     sheet = book.create_sheet("Margen Producto")

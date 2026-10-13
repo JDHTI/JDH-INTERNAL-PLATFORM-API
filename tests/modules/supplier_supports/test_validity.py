@@ -3,6 +3,7 @@
 from datetime import date
 
 import pytest
+
 from app.modules.supplier_supports.domain.validity import overlaps, validity_on
 
 DAY = date(2026, 10, 9)

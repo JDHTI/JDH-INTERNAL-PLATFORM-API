@@ -4,12 +4,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.order_validation.domain.entities import ProductInfo
-from fastapi.testclient import TestClient
-
 from tests.modules.order_validation.conftest import MANAGER, agreement
 from tests.modules.order_validation.test_service import report
 from tests.modules.supplier_supports.conftest import person

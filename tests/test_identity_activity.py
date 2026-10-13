@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
 from app.core.config import Environment, Settings
 from app.modules.identity.application.service import IdentityService, ProtectedMutationError
 

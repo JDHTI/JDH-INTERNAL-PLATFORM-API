@@ -2,9 +2,10 @@ import asyncio
 from io import BytesIO
 
 import pytest
+from PIL import Image
+
 from app.core.errors import InvalidInputError, PayloadTooLargeError
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
-from PIL import Image
 
 
 def _image_bytes(image_format: str) -> bytes:

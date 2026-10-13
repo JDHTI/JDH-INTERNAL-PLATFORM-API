@@ -20,6 +20,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import openpyxl
+
 from app.modules.commercial_masters.domain.entities import SupplierProductCode
 from app.modules.supplier_supports.application import normalize as n
 from app.modules.supplier_supports.domain.entities import Issue, SupportData
@@ -847,8 +849,6 @@ class Workbook:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-
-        import openpyxl
 
         if not path.is_file():
             raise FileNotFoundError(path)

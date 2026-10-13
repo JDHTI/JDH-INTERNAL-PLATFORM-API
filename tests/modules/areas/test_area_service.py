@@ -1,4 +1,5 @@
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.areas.application.dto import CreateAreaCommand, UpdateAreaCommand
 

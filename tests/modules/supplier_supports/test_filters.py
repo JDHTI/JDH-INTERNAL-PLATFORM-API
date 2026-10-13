@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+
 from app.core.errors import InvalidInputError
 from app.modules.supplier_supports.domain import filters
 

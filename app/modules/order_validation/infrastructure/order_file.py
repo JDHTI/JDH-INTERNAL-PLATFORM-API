@@ -17,6 +17,9 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
+
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.entities import clean_nit
 from app.modules.order_validation.domain.entities import OrderLine
@@ -264,8 +267,6 @@ def lines_from_rows(rows: Iterable[Sequence[Any]]) -> list[OrderLine]:
 
 
 def _xlsx_rows(content: bytes) -> list[list[Any]]:
-    import openpyxl
-    from openpyxl.utils.exceptions import InvalidFileException
 
     try:
         book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)

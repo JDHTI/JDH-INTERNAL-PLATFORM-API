@@ -14,6 +14,26 @@ from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
 from app.v1_0.v1_containers import V1Container
 
+# Router modules that resolve their services from the container. They are named, not imported:
+# each of them imports ``ApplicationContainer`` from here, so importing them at the top of this
+# file would be circular. ``wire`` imports them when the container is built.
+WIRED_MODULES = (
+    "app.modules.health.presentation.router",
+    "app.modules.identity.presentation.router",
+    "app.modules.consumption.presentation.router",
+    "app.modules.areas.presentation.router",
+    "app.modules.documents.presentation.router",
+    "app.modules.sites.presentation.router",
+    "app.modules.masters.presentation.router",
+    "app.modules.pqrsf.presentation.router",
+    "app.modules.pqrsf.presentation.tracking_router",
+    "app.modules.projects.presentation.router",
+    "app.modules.commercial_masters.presentation.router",
+    "app.modules.supplier_supports.presentation.router",
+    "app.modules.supplier_supports.presentation.special_cases_router",
+    "app.modules.order_validation.presentation.router",
+)
+
 
 class ApplicationContainer(containers.DeclarativeContainer):
     """Global resources plus the versioned service containers."""
@@ -89,44 +109,10 @@ class GlobalResources:
 def build_application_container(app_settings: Settings) -> ApplicationContainer:
     """Configure and wire one container instance for one application instance."""
 
-    from app.modules.areas.presentation import router as areas_router_module
-    from app.modules.commercial_masters.presentation import router as commercial_router_module
-    from app.modules.consumption.presentation import router as consumption_router_module
-    from app.modules.documents.presentation import router as documents_router_module
-    from app.modules.health.presentation import router as health_router_module
-    from app.modules.identity.presentation import router as identity_router_module
-    from app.modules.masters.presentation import router as masters_router_module
-    from app.modules.order_validation.presentation import router as order_validation_router_module
-    from app.modules.pqrsf.presentation import router as pqrsf_router_module
-    from app.modules.pqrsf.presentation import tracking_router as pqrsf_tracking_router_module
-    from app.modules.projects.presentation import router as projects_router_module
-    from app.modules.sites.presentation import router as sites_router_module
-    from app.modules.supplier_supports.presentation import router as supports_router_module
-    from app.modules.supplier_supports.presentation import (
-        special_cases_router as special_cases_router_module,
-    )
-
     container = ApplicationContainer()
     container.settings.override(app_settings)
     container.config.from_dict(app_settings.container_config())
-    container.wire(
-        modules=[
-            health_router_module,
-            identity_router_module,
-            consumption_router_module,
-            areas_router_module,
-            documents_router_module,
-            sites_router_module,
-            masters_router_module,
-            pqrsf_router_module,
-            pqrsf_tracking_router_module,
-            projects_router_module,
-            commercial_router_module,
-            supports_router_module,
-            special_cases_router_module,
-            order_validation_router_module,
-        ]
-    )
+    container.wire(modules=list(WIRED_MODULES))
     return container
 
 

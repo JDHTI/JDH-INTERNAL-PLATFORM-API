@@ -8,6 +8,7 @@ import uuid
 from dataclasses import replace
 
 import pytest
+
 from app.core.errors import ConflictError
 from app.modules.areas.application.dto import CreateAreaCommand
 from app.modules.projects.application.live import ProjectLiveService
@@ -21,7 +22,6 @@ from app.modules.projects.domain.entities import (
     Task,
     TaskCounts,
 )
-
 from tests.modules.fakes import NOW
 
 

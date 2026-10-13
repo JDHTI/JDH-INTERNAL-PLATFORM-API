@@ -1,4 +1,5 @@
 import pytest
+
 from app.core.errors import InvalidInputError, NotFoundError
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.domain.entities import MasterDetail, MasterRecordPage, MasterSummary

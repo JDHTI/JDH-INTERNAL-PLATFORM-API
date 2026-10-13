@@ -3,11 +3,11 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
-from fastapi.testclient import TestClient
-
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/supplier-supports"

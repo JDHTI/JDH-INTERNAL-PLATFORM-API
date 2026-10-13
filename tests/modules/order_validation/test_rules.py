@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from app.modules.order_validation.domain import rules
 from app.modules.order_validation.domain.entities import CustomerScope, ProductInfo
-
 from tests.modules.order_validation.conftest import agreement, line
 
 TODAY = date(2026, 10, 9)

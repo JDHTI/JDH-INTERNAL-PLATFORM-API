@@ -50,10 +50,18 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["app", "tests"]
+src = ["."]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+# PLC0415: every import goes at the top of the file, never inside a function.
+select = ["E", "F", "I", "B", "UP", "PLC0415"]
+
+[tool.ruff.lint.isort]
+# Imports are grouped as: standard library, third-party packages, then our own code
+# (``app`` and ``tests``), each group separated by a blank line.
+known-first-party = ["app", "tests"]
+# The ``alembic/`` folder of this repo shares its name with the migration library.
+known-third-party = ["alembic"]
 
 [tool.ruff.format]
 quote-style = "double"

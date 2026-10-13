@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.commercial_masters.application.service import CommercialMasterService
 from app.modules.commercial_masters.domain.entities import (

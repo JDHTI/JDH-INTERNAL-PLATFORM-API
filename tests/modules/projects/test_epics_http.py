@@ -1,10 +1,10 @@
 """HTTP contract of the epic routes and the task status catalog."""
 
 import pytest
-from app.main import create_app
-from app.modules.projects.application.live import ProjectLiveService
 from fastapi.testclient import TestClient
 
+from app.main import create_app
+from app.modules.projects.application.live import ProjectLiveService
 from tests.modules.projects.conftest import FakeLiveChannel
 from tests.modules.projects.test_live_http import StubIdentity, StubProjects, settings  # noqa: F401
 

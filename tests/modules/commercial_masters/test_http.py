@@ -6,14 +6,14 @@ from uuid import uuid4
 
 import openpyxl
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.commercial_masters.application.service import CommercialMasterService
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
-from fastapi.testclient import TestClient
-
 from tests.modules.commercial_masters.test_service import Managers, Repo
 
 BASE = "/api/v1/commercial"

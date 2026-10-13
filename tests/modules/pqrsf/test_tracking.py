@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.pqrsf.application.dto import ImportedCase, ImportedItem, ItemChanges
 from app.modules.pqrsf.application.service import PqrsfService
@@ -33,7 +34,6 @@ from app.modules.pqrsf.domain.tracking import (
 from app.modules.pqrsf.domain.tracking import CaseInput as Input
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
-
 from tests.modules.fakes import FakeDirectory
 
 NOW = datetime(2026, 9, 25, 15, tzinfo=UTC)

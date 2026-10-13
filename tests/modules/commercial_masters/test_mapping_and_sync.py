@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.application import mapping
 from app.modules.commercial_masters.application.sync import MasterSyncService, _primary_nits

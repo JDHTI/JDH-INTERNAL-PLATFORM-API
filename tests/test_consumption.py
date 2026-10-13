@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.infrastructure.data_provider import DataProviderConnection, DataProviderUnavailable
 from app.main import create_app
@@ -12,7 +14,6 @@ from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.domain.entities import Client, ClientPage
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
 from app.modules.identity.application.service import AuthenticatedUser
-from fastapi.testclient import TestClient
 
 
 def _client(key: str) -> Client:

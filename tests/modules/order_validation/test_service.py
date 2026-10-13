@@ -4,9 +4,9 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.order_validation.domain.entities import ProductInfo
-
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.order_validation.test_order_file import HEADER, ROW, workbook
 from tests.modules.supplier_supports.conftest import person
@@ -106,7 +106,6 @@ async def test_upload_limits(service, manager) -> None:
 
 
 async def test_unknown_batch_and_bad_filters(service, manager) -> None:
-    from uuid import uuid4
 
     with pytest.raises(NotFoundError):
         await service.get_batch(uuid4())

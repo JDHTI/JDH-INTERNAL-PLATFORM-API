@@ -3,10 +3,13 @@
 import uuid
 from types import SimpleNamespace
 
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
-from app.modules.identity.presentation.router import get_current_user
-from fastapi.testclient import TestClient
+from app.modules.areas.application.dto import AreaView
+from app.modules.identity.presentation.router import get_current_user, require_admin
+from tests.modules.fakes import NOW
 
 
 def test_areas_and_documents_require_a_session() -> None:
@@ -18,9 +21,6 @@ def test_areas_and_documents_require_a_session() -> None:
 
 
 def test_areas_see_the_session_user_as_principal() -> None:
-    from app.modules.areas.application.dto import AreaView
-
-    from tests.modules.fakes import NOW
 
     session_user = SimpleNamespace(
         id=uuid.uuid4(),
@@ -67,7 +67,6 @@ def test_areas_see_the_session_user_as_principal() -> None:
 
 
 def test_admin_user_list_forwards_activity_filter_and_pagination() -> None:
-    from app.modules.identity.presentation.router import require_admin
 
     admin = SimpleNamespace(
         id=uuid.uuid4(),

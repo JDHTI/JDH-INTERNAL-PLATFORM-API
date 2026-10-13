@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import openpyxl
 import pytest
+
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.margins import channel_field, parse_margin
 from app.modules.commercial_masters.infrastructure.margins_file import (

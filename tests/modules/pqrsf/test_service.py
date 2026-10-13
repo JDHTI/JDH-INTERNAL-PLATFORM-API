@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import (
@@ -11,6 +12,7 @@ from app.modules.pqrsf.domain.entities import (
     ImageUpload,
     RequestType,
 )
+from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
 
 NOW = datetime(2026, 9, 25, tzinfo=UTC)
@@ -104,7 +106,6 @@ class FakeSiteRepository:
 def _service(petition: bool = True) -> tuple[PqrsfService, RequestType, Site]:
     request_type = _type(petition)
     site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
-    from app.modules.sites.application.service import SiteService
 
     return (
         PqrsfService(FakePqrsfRepository(request_type), SiteService(FakeSiteRepository(site))),

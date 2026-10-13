@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 import pytest
+
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.pricing import derive
 from app.modules.supplier_supports.domain.units import infer_value_unit, to_box_and_unit

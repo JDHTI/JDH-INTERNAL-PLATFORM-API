@@ -2,13 +2,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from app.core.errors import DependencyUnavailableError, InvalidInputError
 from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, CaseAttachment, EmailMessage
 from app.modules.pqrsf.domain.entities import SanitizedImage
+from app.modules.pqrsf.infrastructure.models import CaseModel
 from app.modules.sites.domain.entities import Site
-
 from tests.modules.pqrsf.test_tracking import Setup
 
 NOW = datetime(2026, 9, 28, 15, tzinfo=UTC)
@@ -517,7 +518,6 @@ async def test_a_message_deleted_before_a_retry_is_dropped() -> None:
 
 def test_the_cases_table_accepts_the_email_origin() -> None:
     # The fakes accept any origin; the database does not, so the schema must list it.
-    from app.modules.pqrsf.infrastructure.models import CaseModel
 
     check = next(c for c in CaseModel.__table__.constraints if c.name == "ck_pqrsf_cases_origin")
 

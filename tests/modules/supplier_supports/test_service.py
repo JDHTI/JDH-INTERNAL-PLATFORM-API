@@ -2,11 +2,12 @@
 
 from datetime import date
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.supplier_supports.domain.entities import SupportData, Tier
-
 from tests.modules.supplier_supports.conftest import FAMILIA_ID, SKU_1128, TODAY, person
 
 D = Decimal
@@ -141,7 +142,6 @@ async def test_update_rejects_fields_that_are_not_editable(service, manager) -> 
 
 
 async def test_update_unknown_support_is_not_found(service, manager) -> None:
-    from uuid import uuid4
 
     with pytest.raises(NotFoundError):
         await service.update(manager, uuid4(), expected_version=1, changes={"notes": "x"})

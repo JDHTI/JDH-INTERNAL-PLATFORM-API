@@ -5,10 +5,11 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from app.modules.supplier_supports.infrastructure import workbook as wb
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table
+
+from app.modules.supplier_supports.infrastructure import workbook as wb
 
 D = Decimal
 
