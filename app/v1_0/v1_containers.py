@@ -33,6 +33,12 @@ from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
+from app.modules.order_validation.application.service import OrderValidationService
+from app.modules.order_validation.infrastructure.agreements import SqlAlchemyAgreementSource
+from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
+from app.modules.order_validation.infrastructure.repository import (
+    SqlAlchemyOrderValidationRepository,
+)
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.service import PqrsfService
@@ -218,6 +224,27 @@ class V1Container(containers.DeclarativeContainer):
         masters=master_lookup,
         managers=supplier_support_manager_policy,
         calendar=pqrsf_calendar,
+    )
+    # --- Retained orders validator (reads the supports master) ---
+    order_validation_manager_policy = providers.Factory(
+        AreaManagerPolicy,
+        areas=area_service,
+        area_slug=config.order_validation.manager_area_slug,
+    )
+    order_validation_repository = providers.Factory(
+        SqlAlchemyOrderValidationRepository, database=database
+    )
+    order_validation_agreements = providers.Factory(SqlAlchemyAgreementSource, database=database)
+    order_validation_reader = providers.Singleton(SpreadsheetOrderReader)
+    order_validation_service = providers.Factory(
+        OrderValidationService,
+        repository=order_validation_repository,
+        agreements=order_validation_agreements,
+        reader=order_validation_reader,
+        managers=order_validation_manager_policy,
+        calendar=pqrsf_calendar,
+        max_upload_bytes=config.order_validation.max_upload_bytes,
+        max_lines=config.order_validation.max_lines,
     )
     pqrsf_image_processor = providers.Singleton(
         PillowImageProcessor,

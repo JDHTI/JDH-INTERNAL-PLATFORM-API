@@ -9,6 +9,7 @@ from app.modules.documents.presentation.router import area_router as area_docume
 from app.modules.documents.presentation.router import router as documents_router
 from app.modules.identity.presentation.router import router as identity_router
 from app.modules.masters.presentation.router import router as masters_router
+from app.modules.order_validation.presentation.router import router as order_validation_router
 from app.modules.pqrsf.presentation.router import admin_router as pqrsf_admin_router
 from app.modules.pqrsf.presentation.router import public_router as pqrsf_public_router
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
@@ -32,6 +33,9 @@ v1_router.include_router(commercial_router, prefix="/commercial", tags=["commerc
 v1_router.include_router(supports_router, prefix="/supplier-supports", tags=["supplier-supports"])
 v1_router.include_router(
     special_cases_router, prefix="/supplier-special-cases", tags=["supplier-special-cases"]
+)
+v1_router.include_router(
+    order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
 v1_router.include_router(pqrsf_public_router, tags=["pqrsf-public"])
 v1_router.include_router(pqrsf_admin_router, tags=["pqrsf"])

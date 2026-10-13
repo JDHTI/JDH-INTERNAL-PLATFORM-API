@@ -10,6 +10,7 @@ from app.modules.commercial_masters.infrastructure import models as commercial_m
 from app.modules.documents.infrastructure import models as documents_models
 from app.modules.identity.infrastructure import models as identity_models
 from app.modules.masters.infrastructure import models as masters_models
+from app.modules.order_validation.infrastructure import models as order_validation_models
 from app.modules.pqrsf.infrastructure import models as pqrsf_models
 from app.modules.projects.infrastructure import models as projects_models
 from app.modules.sites.infrastructure import models as sites_models
@@ -22,6 +23,7 @@ __all__ = [
     "documents_models",
     "identity_models",
     "masters_models",
+    "order_validation_models",
     "pqrsf_models",
     "projects_models",
     "sites_models",

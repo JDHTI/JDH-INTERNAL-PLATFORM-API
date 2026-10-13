@@ -1,0 +1,237 @@
+"""Entities of the retained orders validator."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+
+@dataclass(frozen=True)
+class OrderLine:
+    """One row of a retained orders file, already cleaned.
+
+    ``margin_pct`` is a fraction (0.0222 = 2,22 %); the file writes percentage points.
+    ``problems`` lists what could not be read, so a bad cell never drops the row.
+    """
+
+    row_number: int
+    document: str
+    customer_nit: str | None = None
+    sku: str | None = None
+    supplier_code: str | None = None
+    supplier_name: str | None = None
+    unit_price: Decimal | None = None
+    quantity: Decimal | None = None
+    margin_pct: Decimal | None = None
+    order_date: date | None = None
+    operation_center: str | None = None
+    status_text: str | None = None
+    customer_name: str | None = None
+    salesperson: str | None = None
+    channel: str | None = None
+    warehouse: str | None = None
+    description: str | None = None
+    price_list: str | None = None
+    retained: str | None = None
+    problems: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Agreement:
+    """The part of a supplier support the validator needs."""
+
+    id: UUID
+    supplier_code: str | None
+    kind: str
+    calc_method: str
+    status: str
+    program: str | None = None
+    customer_nit: str | None = None
+    product_sku: str | None = None
+    regionals: tuple[str, ...] = ()
+    business_units: tuple[str, ...] = ()
+    channels: tuple[str, ...] = ()
+    warehouse: str | None = None
+    supplier_value: Decimal | None = None
+    target_margin_pct: Decimal | None = None
+    min_margin_pct: Decimal | None = None
+    list_margin_pct: Decimal | None = None
+    reference_cost: Decimal | None = None
+    reference_list_price: Decimal | None = None
+    min_quantity: Decimal | None = None
+    valid_from: date | None = None
+    valid_to: date | None = None
+
+
+@dataclass(frozen=True)
+class CustomerScope:
+    """Channel, business unit and regional of a client, across all its branches.
+
+    The regional of a client is its billing center (``ANTIOQUIA``, ``OCCIDENTE``...), the
+    same vocabulary the supports use.
+    """
+
+    nit: str
+    channels: frozenset[str] = frozenset()
+    business_units: frozenset[str] = frozenset()
+    regionals: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class AgreementCheck:
+    """One agreement checked against one line."""
+
+    support_id: UUID
+    kind: str
+    calc_method: str
+    program: str | None
+    valid_from: date | None
+    valid_to: date | None
+    needs_review: bool
+    outcome: str
+    detail: str
+    effective_margin_pct: Decimal | None = None
+    required_margin_pct: Decimal | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON form stored with the line."""
+
+        return {
+            "support_id": str(self.support_id),
+            "kind": self.kind,
+            "calc_method": self.calc_method,
+            "program": self.program,
+            "valid_from": self.valid_from.isoformat() if self.valid_from else None,
+            "valid_to": self.valid_to.isoformat() if self.valid_to else None,
+            "needs_review": self.needs_review,
+            "outcome": self.outcome,
+            "detail": self.detail,
+            "effective_margin_pct": _text(self.effective_margin_pct),
+            "required_margin_pct": _text(self.required_margin_pct),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> AgreementCheck:
+        """Read the stored JSON form back."""
+
+        return cls(
+            support_id=UUID(value["support_id"]),
+            kind=value["kind"],
+            calc_method=value["calc_method"],
+            program=value.get("program"),
+            valid_from=_day(value.get("valid_from")),
+            valid_to=_day(value.get("valid_to")),
+            needs_review=bool(value.get("needs_review")),
+            outcome=value["outcome"],
+            detail=value.get("detail") or "",
+            effective_margin_pct=_number(value.get("effective_margin_pct")),
+            required_margin_pct=_number(value.get("required_margin_pct")),
+        )
+
+
+@dataclass(frozen=True)
+class LineResult:
+    """The decision on one line and the agreements that led to it."""
+
+    status: str
+    reason: str
+    detail: str
+    support_id: UUID | None = None
+    effective_margin_pct: Decimal | None = None
+    required_margin_pct: Decimal | None = None
+    checks: tuple[AgreementCheck, ...] = ()
+
+
+@dataclass(frozen=True)
+class StoredLine:
+    """A line of a batch with its latest result."""
+
+    id: UUID
+    line: OrderLine
+    result: LineResult
+
+
+@dataclass(frozen=True)
+class Batch:
+    """An uploaded file and the counts of its latest validation."""
+
+    id: UUID
+    file_name: str
+    uploaded_by: str
+    uploaded_at: datetime
+    validated_by: str
+    validated_at: datetime
+    line_count: int
+    order_count: int
+    ready_line_count: int
+    ready_order_count: int
+
+    @property
+    def pending_line_count(self) -> int:
+        """Lines still waiting for a person."""
+
+        return self.line_count - self.ready_line_count
+
+    @property
+    def pending_order_count(self) -> int:
+        """Orders still waiting for a person."""
+
+        return self.order_count - self.ready_order_count
+
+
+@dataclass(frozen=True)
+class BatchPage:
+    """A page of batches, newest first."""
+
+    items: list[Batch]
+    total: int
+    page: int
+    size: int
+
+
+@dataclass(frozen=True)
+class OrderView:
+    """The lines of one document, with the order-level status."""
+
+    document: str
+    status: str
+    lines: list[StoredLine]
+    total_amount: Decimal | None = None
+
+    @property
+    def first(self) -> OrderLine:
+        """The first line, which carries the order header (client, date, channel...)."""
+
+        return self.lines[0].line
+
+    @property
+    def ready_line_count(self) -> int:
+        """Lines ready for release."""
+
+        return sum(1 for item in self.lines if item.result.status == "listo_para_liberar")
+
+
+@dataclass(frozen=True)
+class OrderPage:
+    """A page of orders of one batch."""
+
+    items: list[OrderView]
+    total: int
+    page: int
+    size: int
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+def _text(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _number(value: Any) -> Decimal | None:
+    return None if value is None else Decimal(str(value))
+
+
+def _day(value: Any) -> date | None:
+    return None if not value else date.fromisoformat(value)
