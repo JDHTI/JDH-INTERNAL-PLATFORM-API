@@ -402,3 +402,20 @@ def test_lines_without_support_come_first_then_lower_margins() -> None:
     )
 
     assert [row for row, _ in ordered] == [6, 5, 4, 2, 3]
+
+
+def test_the_liquor_flag_shows_only_when_the_order_lacks_the_tax() -> None:
+    taxed = ProductInfo("12013", {"margin_list": D("0.57")}, liquor_tax=D("6911"))
+
+    missing_zero = decide(product=taxed, liquor_tax_value=D("0"))
+    missing_blank = decide(product=taxed, liquor_tax_value=None)
+    carried = decide(product=taxed, liquor_tax_value=D("6911"))
+    untaxed = decide(product=info(list=D("0.2")), liquor_tax_value=D("0"))
+
+    assert missing_zero.liquor_tax and missing_zero.liquor_tax_amount == D("6911")
+    assert missing_blank.liquor_tax
+    # The order already carries the tax: nothing to flag, and no amount to show.
+    assert not carried.liquor_tax and carried.liquor_tax_amount is None
+    assert not untaxed.liquor_tax
+    # The flag never changes the decision.
+    assert carried.status == missing_zero.status

@@ -22,6 +22,7 @@ por su encabezado, en cualquier orden, y el encabezado puede estar debajo de un 
 | `Margen promedio` | margen de la línea, en puntos (`2.2212` = 2,22 %) | sí |
 | `PROVEEDOR` | `359 - LOCERIA COLOMBIANA S.A.` → código comercial `359` | sí |
 | `Fecha` | fecha del pedido; define la vigencia de los apoyos | no |
+| `Vlr. imp. IMPTOLIC` | impuesto al licor por unidad que ya trae la línea (ver [Impuesto al licor](#impuesto-al-licor)) | no |
 | `Cant. pedida`, `CANAL`, `Bodega`, `Lista de precios fact`, `C.O. factura`, `Estado docto.`, `Razon social cliente factura`, `Nombre vendedor cliente`, `Desc. item`, `Retenido margen` | se guardan y se muestran | no |
 
 Una celda ilegible no descarta la fila: queda vacía, la línea guarda el problema y sale
@@ -111,10 +112,13 @@ resumen en dos grupos: **sin apoyo** (`sin_acuerdo`, `without_support_line_count
 ### Impuesto al licor
 
 Un producto con impuesto al consumo de licor (`IMPTOLIC` del maestro de márgenes) puede
-haberse montado en el pedido sin él. Solo esas líneas salen con `liquor_tax: true` y
-`liquor_tax_amount` (el valor por unidad), y el pedido con `has_liquor_tax`; el resto no
-trae bandera de ningún tipo. El reporte no trae el impuesto, así que «falta» se infiere de que
-el producto lo tiene asignado. Es solo una **bandera**: no cambia la decisión.
+haberse montado en el pedido sin él. El reporte trae el impuesto de cada línea en la columna
+`Vlr. imp. IMPTOLIC` (`liquor_tax_value`, por unidad). La bandera sale **solo cuando falta**: el
+producto tiene el impuesto en el maestro y la línea trae la columna vacía o en 0. Entonces la
+línea sale con `liquor_tax: true` y `liquor_tax_amount` (lo que debería traer, por unidad) y el
+pedido con `has_liquor_tax`. Si la línea ya trae el impuesto, o el producto no lo tiene, no
+hay bandera de ningún tipo. Un archivo sin esa columna (formato anterior) se trata como si el
+impuesto faltara. Es solo una **bandera**: no cambia la decisión.
 
 ### Margen general del pedido
 

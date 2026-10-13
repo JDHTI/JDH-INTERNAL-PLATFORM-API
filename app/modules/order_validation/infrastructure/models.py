@@ -112,6 +112,7 @@ class OrderValidationLineModel(Base):
     margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     price_list: Mapped[str | None] = mapped_column(Text)
     retained: Mapped[str | None] = mapped_column(Text)
+    liquor_tax_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     problems: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     reason: Mapped[str] = mapped_column(String(30), nullable=False)

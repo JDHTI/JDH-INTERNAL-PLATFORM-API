@@ -36,6 +36,9 @@ class OrderLine:
     description: str | None = None
     price_list: str | None = None
     retained: str | None = None
+    # `Vlr. imp. IMPTOLIC`: the liquor tax the order carries per unit; `None` when the file
+    # has no such column or cell.
+    liquor_tax_value: Decimal | None = None
     problems: tuple[str, ...] = ()
 
 

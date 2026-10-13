@@ -338,7 +338,8 @@ def decide(
     its margin already reaches the product's margin for the channel. Anything else is left
     pending for a person, with the reason. The margin threshold does not act on lines: it acts
     on the margin of the whole order (``release_by_threshold``). A product with liquor tax is
-    flagged, whatever the decision: the order may have been keyed without the tax.
+    flagged, whatever the decision, only when the line does not carry the tax: the ``Vlr. imp.
+    IMPTOLIC`` of the file is empty or 0, or the file has no such column.
 
     Args:
         line (OrderLine): The order line.
@@ -353,7 +354,9 @@ def decide(
 
     reference, basis = reference_margin(line, customer, product)
     result = _decide(line, agreements, customer, reference, basis, today)
-    tax = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
+    owed = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
+    carried = line.liquor_tax_value is not None and line.liquor_tax_value > 0
+    tax = owed if owed is not None and not carried else None
     return replace(
         result,
         margin_basis=basis if reference is not None else None,

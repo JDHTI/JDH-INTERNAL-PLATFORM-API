@@ -114,6 +114,7 @@ class LineResponse(BaseModel):
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
     margin_basis: Literal["lista", "mayoristas", "salsamentarias"] | None
+    liquor_tax_value: Decimal | None
     liquor_tax: bool
     liquor_tax_amount: Decimal | None
     checks: list[CheckResponse]
@@ -261,6 +262,7 @@ def _line(item: StoredLine) -> LineResponse:
         effective_margin_pct=result.effective_margin_pct,
         required_margin_pct=result.required_margin_pct,
         margin_basis=result.margin_basis,  # type: ignore[arg-type]
+        liquor_tax_value=line.liquor_tax_value,
         liquor_tax=result.liquor_tax,
         liquor_tax_amount=result.liquor_tax_amount,
         checks=[_check(check) for check in result.checks],
