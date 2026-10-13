@@ -627,6 +627,14 @@ def release_basis(
     return None
 
 
+def needs_threshold(margin: Decimal | None, required: Decimal | None) -> bool:
+    """Whether an order's margin falls short of its target, so only the threshold can release it."""
+
+    if margin is None or required is None:
+        return False
+    return margin.quantize(QUANTUM) < required.quantize(QUANTUM)
+
+
 def summarize_batch(
     items: Iterable[tuple[OrderLine, LineResult]],
     approved: Collection[str] = (),

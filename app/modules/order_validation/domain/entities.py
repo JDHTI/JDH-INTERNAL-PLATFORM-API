@@ -241,6 +241,8 @@ class OrderView:
     margin_with_threshold_pct: Decimal | None = None
     # Why the order is ready: `lineas`, `umbral` or `manual`; `None` while pending.
     release_basis: str | None = None
+    # Released by its margin, but only thanks to the threshold: the margin alone fell short.
+    released_by_threshold: bool = False
     has_liquor_tax: bool = False
 
     @property
@@ -271,6 +273,8 @@ class OrderPage:
     page: int
     size: int
     counts: dict[str, int] = field(default_factory=dict)
+    # Orders of the whole file that the threshold releases and the margin alone would not.
+    threshold_released_count: int = 0
 
 
 def _text(value: Decimal | None) -> str | None:

@@ -169,6 +169,7 @@ class OrderResponse(BaseModel):
     required_margin_pct: Decimal | None
     margin_with_threshold_pct: Decimal | None
     release_basis: Literal["lineas", "margen", "manual"] | None
+    released_by_threshold: bool
     without_support_line_count: int
     has_liquor_tax: bool
     lines: list[LineResponse]
@@ -182,6 +183,7 @@ class OrderPageResponse(BaseModel):
     page: int
     size: int
     counts: dict[str, int]
+    threshold_released_count: int
 
 
 class CatalogItem(BaseModel):
@@ -290,6 +292,7 @@ def _order(order: OrderView) -> OrderResponse:
         required_margin_pct=order.required_margin_pct,
         margin_with_threshold_pct=order.margin_with_threshold_pct,
         release_basis=order.release_basis,  # type: ignore[arg-type]
+        released_by_threshold=order.released_by_threshold,
         without_support_line_count=order.without_support_line_count,
         has_liquor_tax=order.has_liquor_tax,
         lines=[_line(item) for item in order.lines],
@@ -421,6 +424,7 @@ async def list_orders(
         page=result.page,
         size=result.size,
         counts=result.counts,
+        threshold_released_count=result.threshold_released_count,
     )
 
 

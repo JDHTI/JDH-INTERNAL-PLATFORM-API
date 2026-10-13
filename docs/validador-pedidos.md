@@ -164,6 +164,15 @@ pedido al 19,5 % frente a un objetivo de 20 % queda listo. Reglas:
 Un **pedido** está listo para liberación si **todas** sus líneas lo están, si una persona lo
 **aprobó a mano** o si su **margen** (con el umbral) alcanza el objetivo. `release_basis` dice
 cuál: `lineas`, `manual`, `margen`, o `null` mientras está pendiente.
+
+Cuando se libera por `margen`, `released_by_threshold` dice si el margen solo no alcanzaba y lo que
+lo liberó fue el umbral (`margin_pct` por debajo de `required_margin_pct`); marca los pedidos que el umbral libera y el margen
+solo no.
+
+La lista de pedidos trae además 	hreshold_released_count: cuántos pedidos del archivo libera el
+umbral y no liberaría el margen solo. Es un sí/no para una señal visible junto al campo del umbral
+(> 0 = el umbral libera algo): se recalcula al probar otro valor con margin_threshold_points y no
+depende de la búsqueda ni del filtro de estado.
 ## Orden
 
 Por defecto (`sort=attention`) se listan primero los pedidos que tienen alguna línea **sin
@@ -196,7 +205,7 @@ Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: admi
 | `POST /order-validations` | Subir el archivo (`multipart/form-data`, campo `file` y opcional `margin_threshold_points`); valida todo y devuelve el lote con sus conteos y su umbral |
 | `GET /order-validations` | Archivos subidos, más recientes primero (`page`, `size`) |
 | `GET /order-validations/{id}` | Un archivo con sus conteos y `margin_threshold_points` |
-| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
+| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `released_by_threshold`, `threshold_released_count` (de la lista), `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
 | `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos y márgenes como están ahora. Cuerpo opcional `{"margin_threshold_points": 0.5}`; sin valor conserva el umbral guardado. Conserva las aprobaciones manuales |
 | `PUT /order-validations/{id}/margin-threshold` | `{"margin_threshold_points": 0.5}`: guarda el umbral del archivo y recalcula qué pedidos libera, sin revalidar las líneas; conserva las aprobaciones |
 | `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: aprueba a mano pedidos pendientes, todo o nada; devuelve el archivo con sus conteos |

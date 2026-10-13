@@ -339,3 +339,44 @@ async def test_a_wine_without_its_tax_is_held_back_and_only_a_person_releases_it
     # A person can release it.
     approved = await service.approve(manager, batch.id, ["NO-TAX"])
     assert approved.ready_order_count == 2
+
+
+async def test_orders_released_by_margin_say_whether_the_threshold_was_needed(
+    service, source, manager
+) -> None:
+    # PV-1: a 10 % line against 10,5 % (needs the threshold); PV-2 has nothing to compare.
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": D("0.105")})
+    batch = await service.upload(manager, "p.xlsx", report(), D("0.5"))
+
+    page = await service.orders(batch.id, sort="file")
+    by_threshold, other = page.items
+
+    assert by_threshold.release_basis == "margen" and by_threshold.released_by_threshold
+    assert other.release_basis is None and not other.released_by_threshold
+    # Raise the target below the margin: released by margin alone, no threshold needed.
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": D("0.09")})
+    again = await service.revalidate(manager, batch.id)
+    page = await service.orders(again.id, sort="file")
+    # The line now meets the margin, so the order is released by its lines.
+    assert page.items[0].release_basis == "lineas" and not page.items[0].released_by_threshold
+
+
+async def test_the_page_tells_whether_the_threshold_releases_any_order(
+    service, source, manager
+) -> None:
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": D("0.105")})
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    none = await service.orders(batch.id)
+    tried = await service.orders(batch.id, margin_threshold_points=D("0.5"))
+    searched = await service.orders(batch.id, margin_threshold_points=D("0.5"), q="no-such-order")
+
+    assert none.threshold_released_count == 0
+    assert tried.threshold_released_count == 1
+    # A search does not change whether the threshold releases something in the file.
+    assert searched.total == 0 and searched.threshold_released_count == 1
+    await service.set_threshold(manager, batch.id, D("0.5"))
+    assert (await service.orders(batch.id)).threshold_released_count == 1
+    # The orders it releases are the same that carry the per-order mark.
+    page = await service.orders(batch.id, sort="file")
+    assert [order.document for order in page.items if order.released_by_threshold] == ["PV-1"]

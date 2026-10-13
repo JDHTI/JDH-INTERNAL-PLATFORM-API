@@ -441,3 +441,11 @@ def test_the_threshold_never_releases_an_order_with_a_line_missing_the_liquor_ta
     assert not rules.release_by_threshold([short_taxed], D("0.05"))
     # A manual approval can still release it.
     assert rules.release_basis(items, True, D("0")) == "manual"
+
+
+def test_only_the_threshold_can_release_an_order_whose_margin_falls_short() -> None:
+    assert rules.needs_threshold(D("0.195"), D("0.20"))
+    assert not rules.needs_threshold(D("0.20"), D("0.20"))
+    assert not rules.needs_threshold(D("0.25"), D("0.20"))
+    assert not rules.needs_threshold(None, D("0.20"))
+    assert not rules.needs_threshold(D("0.20"), None)

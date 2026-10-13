@@ -370,6 +370,10 @@ class OrderValidationService:
                         margin + threshold if margin is not None and threshold > 0 else None
                     ),
                     release_basis=basis,
+                    released_by_threshold=(
+                        basis == rules.RELEASE_ORDER_MARGIN
+                        and rules.needs_threshold(margin, required)
+                    ),
                     has_liquor_tax=any(item.result.liquor_tax for item in lines),
                 )
             )
@@ -432,6 +436,8 @@ class OrderValidationService:
         threshold = batch.margin_threshold if tried is None else tried
 
         orders = await self._orders_of(batch_id, threshold)
+        # Whether the threshold releases anything is a fact of the file, not of the search.
+        threshold_released = sum(1 for order in orders if order.released_by_threshold)
         term = " ".join((q or "").lower().split())
         if term:
             orders = [order for order in orders if _matches(order, term)]
@@ -455,6 +461,7 @@ class OrderValidationService:
             page=page,
             size=size,
             counts=counts,
+            threshold_released_count=threshold_released,
         )
 
     @staticmethod

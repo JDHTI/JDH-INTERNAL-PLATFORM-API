@@ -183,7 +183,10 @@ def test_threshold_on_upload_try_save_and_revalidate(client, source) -> None:
     assert batch["margin_threshold_points"] == "0.50" and batch["ready_order_count"] == 1
     assert batch["ready_line_count"] == 0  # the threshold acts on orders, not on lines
     url = f"{BASE}/{batch['id']}"
-    pv1 = client.get(f"{url}/orders", params={"sort": "file"}).json()["items"][0]
+    page = client.get(f"{url}/orders", params={"sort": "file"}).json()
+    assert page["threshold_released_count"] == 1
+    pv1 = page["items"][0]
+    assert pv1["released_by_threshold"] is True
     assert pv1["status"] == "listo_para_liberar" and pv1["release_basis"] == "margen"
     assert Decimal(pv1["margin_pct"]) == Decimal("0.1")
     assert Decimal(pv1["margin_with_threshold_pct"]) == Decimal("0.105")
@@ -191,7 +194,7 @@ def test_threshold_on_upload_try_save_and_revalidate(client, source) -> None:
 
     # Trying another value changes the page, not the saved file.
     tried = client.get(f"{url}/orders", params={"margin_threshold_points": "0"}).json()
-    assert tried["counts"]["listo_para_liberar"] == 0
+    assert tried["counts"]["listo_para_liberar"] == 0 and tried["threshold_released_count"] == 0
     assert client.get(url).json()["ready_order_count"] == 1
     assert client.get(f"{url}/orders", params={"margin_threshold_points": "25"}).status_code == 422
 
