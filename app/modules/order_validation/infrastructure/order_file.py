@@ -126,7 +126,8 @@ def parse_decimal(value: Any) -> Decimal | None:
     if isinstance(value, int | float | Decimal):
         return Decimal(str(value))
     text = str(value).strip().replace("$", "").replace("%", "").replace(" ", "")
-    if not text:
+    # A lone dash is how the accounting format writes a zero.
+    if not text or text in ("-", "–", "—"):
         return None
     if "," in text and "." in text:
         # The last separator is the decimal one.
