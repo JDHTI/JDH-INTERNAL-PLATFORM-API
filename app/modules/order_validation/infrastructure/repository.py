@@ -2,29 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.order_validation.domain.entities import (
     AgreementCheck,
     Batch,
     BatchPage,
     LineResult,
+    ManualApproval,
     OrderLine,
     StoredLine,
 )
 from app.modules.order_validation.domain.rules import summarize
 from app.modules.order_validation.infrastructure.models import (
+    OrderValidationApprovalModel,
     OrderValidationBatchModel,
     OrderValidationLineModel,
 )
 
+A = OrderValidationApprovalModel
 B = OrderValidationBatchModel
 L = OrderValidationLineModel
 _LINE_FIELDS = tuple(
@@ -76,12 +81,37 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
     return StoredLine(id=model.id, line=line, result=result)
 
 
-def _apply_counts(model: OrderValidationBatchModel, pairs: Sequence[tuple[str, str]]) -> None:
-    lines, orders, ready_lines, ready_orders = summarize(pairs)
+def _apply_counts(
+    model: OrderValidationBatchModel,
+    pairs: Sequence[tuple[str, str]],
+    approved: Collection[str] = (),
+) -> None:
+    lines, orders, ready_lines, ready_orders = summarize(pairs, approved)
     model.line_count = lines
     model.order_count = orders
     model.ready_line_count = ready_lines
     model.ready_order_count = ready_orders
+
+
+async def _recount(session: Any, batch: OrderValidationBatchModel) -> None:
+    """Counts of a stored file from its lines and its manual approvals."""
+
+    pairs = (
+        await session.execute(select(L.document, L.status).where(L.batch_id == batch.id))
+    ).all()
+    approved = (
+        (await session.execute(select(A.document).where(A.batch_id == batch.id))).scalars().all()
+    )
+    _apply_counts(batch, [(document, status) for document, status in pairs], set(approved))
+
+
+def _approval(model: OrderValidationApprovalModel) -> ManualApproval:
+    return ManualApproval(
+        document=model.document,
+        approved_by=model.approved_by,
+        approved_at=model.approved_at,
+        note=model.note,
+    )
 
 
 class SqlAlchemyOrderValidationRepository:
@@ -195,19 +225,81 @@ class SqlAlchemyOrderValidationRepository:
                     .where(L.id == line_id, L.batch_id == batch_id)
                     .values(**_result_columns(result))
                 )
-            documents = dict(
-                (
-                    await session.execute(select(L.id, L.document).where(L.batch_id == batch_id))
-                ).all()
-            )
-            _apply_counts(
-                batch,
-                [(documents[line_id], result.status) for line_id, result in results],
-            )
+            await session.flush()
+            await _recount(session, batch)
             batch.validated_by = actor
             batch.validated_at = now
             await session.commit()
             return _batch(batch)
+
+    async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]:
+        """Manual approvals of a file, by document."""
+
+        async with self.database.session_factory() as session:
+            models = (
+                (await session.execute(select(A).where(A.batch_id == batch_id))).scalars().all()
+            )
+        return {item.document: _approval(item) for item in models}
+
+    async def approve(self, batch_id: UUID, approvals: Sequence[ManualApproval]) -> Batch:
+        """Store approvals and recount the file, all or nothing.
+
+        Raises:
+            NotFoundError: If the file does not exist.
+            ConflictError: If one of the orders was approved meanwhile.
+        """
+
+        async with self.database.session_factory() as session:
+            batch = (
+                await session.execute(select(B).where(B.id == batch_id).with_for_update())
+            ).scalar_one_or_none()
+            if batch is None:
+                raise NotFoundError("Validación no encontrada")
+            session.add_all(
+                A(
+                    id=uuid4(),
+                    batch_id=batch_id,
+                    document=item.document,
+                    approved_by=item.approved_by,
+                    approved_at=item.approved_at,
+                    note=item.note,
+                )
+                for item in approvals
+            )
+            try:
+                await session.flush()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("Uno de los pedidos ya fue aprobado; recarga la lista") from exc
+            await _recount(session, batch)
+            await session.commit()
+            return _batch(batch)
+
+    async def remove_approval(self, batch_id: UUID, document: str) -> bool:
+        """Drop the manual approval of an order; ``False`` when there was none."""
+
+        async with self.database.session_factory() as session:
+            batch = (
+                await session.execute(select(B).where(B.id == batch_id).with_for_update())
+            ).scalar_one_or_none()
+            if batch is None:
+                return False
+            removed = await session.execute(
+                delete(A).where(A.batch_id == batch_id, A.document == document)
+            )
+            if not removed.rowcount:
+                return False
+            await _recount(session, batch)
+            await session.commit()
+            return True
+
+    async def delete(self, batch_id: UUID) -> bool:
+        """Delete a file with its lines and approvals; ``False`` when it did not exist."""
+
+        async with self.database.session_factory() as session:
+            removed = await session.execute(delete(B).where(B.id == batch_id))
+            await session.commit()
+            return bool(removed.rowcount)
 
 
 __all__ = ["SqlAlchemyOrderValidationRepository"]

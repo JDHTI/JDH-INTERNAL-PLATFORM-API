@@ -97,3 +97,45 @@ def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
     assert upload(client).status_code == 403
     assert client.get(BASE).status_code == 200
+
+
+def test_approve_unapprove_and_delete(client) -> None:
+    batch = upload(client).json()
+    orders_url = f"{BASE}/{batch['id']}/orders"
+
+    approved = client.post(
+        f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-2"], "note": "Gerencia"}
+    )
+    assert approved.status_code == 200
+    assert approved.json()["ready_order_count"] == 2 and approved.json()["pending_line_count"] == 1
+    pv2 = client.get(orders_url, params={"q": "PV-2"}).json()["items"][0]
+    assert pv2["status"] == "listo_para_liberar" and pv2["status_label"] == "Listo para liberación"
+    assert pv2["manual_approval"]["approved_by"] == MANAGER
+    assert pv2["manual_approval"]["note"] == "Gerencia"
+    assert client.get(orders_url).json()["items"][0]["manual_approval"] is None
+
+    again = client.post(f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-2"]})
+    assert again.status_code == 409
+    missing = client.post(f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-9"]})
+    assert missing.status_code == 404
+    assert client.post(f"{BASE}/{batch['id']}/approvals", json={"documents": []}).status_code == 422
+
+    assert client.delete(f"{orders_url}/PV-2/approval").status_code == 204
+    assert client.delete(f"{orders_url}/PV-2/approval").status_code == 404
+    assert client.get(f"{BASE}/{batch['id']}").json()["ready_order_count"] == 1
+
+    assert client.delete(f"{BASE}/{batch['id']}").status_code == 204
+    assert client.get(f"{BASE}/{batch['id']}").status_code == 404
+    assert client.delete(f"{BASE}/{batch['id']}").status_code == 404
+
+
+def test_outsiders_cannot_approve_or_delete(client) -> None:
+    batch = upload(client).json()
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+
+    assert (
+        client.post(f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-2"]}).status_code
+        == 403
+    )
+    assert client.delete(f"{BASE}/{batch['id']}/orders/PV-2/approval").status_code == 403
+    assert client.delete(f"{BASE}/{batch['id']}").status_code == 403

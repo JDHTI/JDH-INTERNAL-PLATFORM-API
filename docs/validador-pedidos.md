@@ -5,7 +5,7 @@ contra el [maestro de apoyos](apoyos-proveedores.md) y dice, línea por línea y
 pedido, cuáles quedan **listos para liberación** y cuáles quedan **pendientes de
 validación**, con el motivo. Toda la validación es del lado del servidor.
 
-Módulo `order_validation`. Migración `0020`.
+Módulo `order_validation`. Migraciones `0020` y `0021`.
 
 ## El archivo
 
@@ -79,7 +79,20 @@ alcance de la línea. Un campo de alcance vacío es «todos», igual que en el m
 | `acuerdo_vencido` | pendiente | un apoyo cubriría la línea, pero no en la fecha del pedido |
 | `sin_acuerdo` | pendiente | ningún apoyo cubre la línea |
 
-Un **pedido** está listo para liberación solo si **todas** sus líneas lo están.
+Un **pedido** está listo para liberación si **todas** sus líneas lo están o si una persona
+lo **aprobó a mano**.
+
+## Aprobación manual
+
+Quien gestiona puede liberar pedidos pendientes a mano, por selección y en bloque: o se
+aprueban todos los enviados o ninguno (si uno no está en el archivo es 404; si uno ya no
+está pendiente, 409). Se guarda quién, cuándo y una nota opcional (máximo 500
+caracteres). La aprobación es del pedido: sus líneas conservan su estado y motivo, así
+que `ready_line_count` y el filtro `reason` no cambian, mientras que el estado del pedido,
+el filtro `status`, `counts` y `ready_order_count` lo cuentan como listo. **Revalidar
+conserva las aprobaciones** (son decisiones de una persona). Quitar la aprobación devuelve
+el pedido a lo que diga la validación. Borrar un archivo borra sus líneas y aprobaciones.
+Migración `0021`.
 
 Cada línea guarda todos los apoyos evaluados (`checks`) con su resultado, margen con
 apoyo, margen objetivo y una explicación en español, y el apoyo que decidió
@@ -87,7 +100,7 @@ apoyo, margen objetivo y una explicación en español, y el apoyo que decidió
 
 ## API (`/api/v1/order-validations`)
 
-Lectura: cualquier usuario autenticado. Subir y revalidar: administradores y miembros del
+Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: administradores y miembros del
 área `ORDER_VALIDATION_MANAGER_AREA_SLUG` (por defecto `comercial`).
 
 | Método y ruta | Uso |
@@ -95,8 +108,11 @@ Lectura: cualquier usuario autenticado. Subir y revalidar: administradores y mie
 | `POST /order-validations` | Subir el archivo (`multipart/form-data`, campo `file`); valida todo y devuelve el lote con sus conteos |
 | `GET /order-validations` | Archivos subidos, más recientes primero (`page`, `size`) |
 | `GET /order-validations/{id}` | Un archivo con sus conteos |
-| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, en el orden del archivo. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
-| `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos como están ahora |
+| `GET /order-validations/{id}/orders` | Pedidos con sus líneas y `manual_approval` (`approved_by`, `approved_at`, `note` o `null`), en el orden del archivo. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
+| `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos como están ahora; conserva las aprobaciones manuales |
+| `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: aprueba a mano pedidos pendientes, todo o nada; devuelve el archivo con sus conteos |
+| `DELETE /order-validations/{id}/orders/{document}/approval` | Quita la aprobación manual (204) |
+| `DELETE /order-validations/{id}` | Borra el archivo con sus líneas y aprobaciones (204) |
 | `GET /order-validations/catalogs` | Estados y motivos con su etiqueta |
 | `GET /order-validations/permissions` | `can_manage` para mostrar u ocultar subir y revalidar |
 

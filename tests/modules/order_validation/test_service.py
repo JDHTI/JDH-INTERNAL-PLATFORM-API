@@ -3,7 +3,7 @@
 from decimal import Decimal
 
 import pytest
-from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.order_validation.test_order_file import HEADER, ROW, workbook
@@ -128,3 +128,78 @@ def test_catalogs_label_every_status_and_reason(service) -> None:
         item["value"] for item in catalogs["reasons"] if item["status"] == "listo_para_liberar"
     ]
     assert ready == ["cumple_con_apoyo", "cumple_margen_lista"]
+
+
+async def test_manual_approval_makes_the_order_ready_and_keeps_its_lines(
+    service, source, manager
+) -> None:
+    source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    approved = await service.approve(manager, batch.id, ["PV-2"], "  Autorizado por gerencia  ")
+
+    assert (approved.ready_order_count, approved.pending_order_count) == (2, 0)
+    # Lines keep what the validation said.
+    assert (approved.ready_line_count, approved.pending_line_count) == (2, 1)
+    page = await service.orders(batch.id)
+    pv2 = page.items[1]
+    assert pv2.status == "listo_para_liberar"
+    assert pv2.manual_approval.approved_by == manager.email
+    assert pv2.manual_approval.note == "Autorizado por gerencia"
+    assert [line.result.reason for line in pv2.lines] == ["cumple_con_apoyo", "sin_acuerdo"]
+    assert page.counts == {"listo_para_liberar": 2, "pendiente_validacion": 0}
+    assert (await service.orders(batch.id, reason="sin_acuerdo")).total == 1
+    assert (await service.orders(batch.id, status="pendiente_validacion")).total == 0
+
+
+async def test_approval_is_all_or_nothing(service, source, manager) -> None:
+    source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    with pytest.raises(ConflictError, match="PV-1"):
+        await service.approve(manager, batch.id, ["PV-2", "PV-1"])
+    with pytest.raises(NotFoundError, match="PV-9"):
+        await service.approve(manager, batch.id, ["PV-2", "PV-9"])
+    assert (await service.get_batch(batch.id)).ready_order_count == 1
+
+    await service.approve(manager, batch.id, ["PV-2"])
+    with pytest.raises(ConflictError):
+        await service.approve(manager, batch.id, ["PV-2"])
+    with pytest.raises(InvalidInputError):
+        await service.approve(manager, batch.id, [" "])
+    with pytest.raises(InvalidInputError, match="500"):
+        await service.approve(manager, batch.id, ["PV-1"], "x" * 501)
+
+
+async def test_removing_the_approval_and_revalidating(service, source, manager) -> None:
+    batch = await service.upload(manager, "p.xlsx", report())
+    await service.approve(manager, batch.id, ["PV-1", "PV-2"], None)
+
+    # Re-validating recomputes the lines and keeps the people's decisions.
+    again = await service.revalidate(manager, batch.id)
+    assert again.ready_order_count == 2 and again.ready_line_count == 0
+
+    await service.remove_approval(manager, batch.id, "PV-2")
+    assert (await service.get_batch(batch.id)).ready_order_count == 1
+    assert (await service.orders(batch.id)).items[1].manual_approval is None
+    with pytest.raises(NotFoundError):
+        await service.remove_approval(manager, batch.id, "PV-2")
+
+
+async def test_delete_and_permissions_of_the_new_actions(service, manager) -> None:
+    outsider = person("otro@jdh.com.co")
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    for action in (
+        service.approve(outsider, batch.id, ["PV-1"]),
+        service.remove_approval(outsider, batch.id, "PV-1"),
+        service.delete(outsider, batch.id),
+    ):
+        with pytest.raises(ForbiddenError):
+            await action
+
+    await service.delete(manager, batch.id)
+    with pytest.raises(NotFoundError):
+        await service.get_batch(batch.id)
+    with pytest.raises(NotFoundError):
+        await service.delete(manager, batch.id)

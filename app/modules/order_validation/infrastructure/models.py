@@ -17,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -48,6 +49,26 @@ class OrderValidationBatchModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class OrderValidationApprovalModel(Base):
+    """A pending order a person released by hand; it survives re-validations."""
+
+    __tablename__ = "order_validation_approvals"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "document", name="uq_order_validation_approvals_document"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("order_validation_batches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
 
 
 class OrderValidationLineModel(Base):

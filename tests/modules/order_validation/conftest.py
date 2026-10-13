@@ -9,7 +9,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
-from app.core.errors import NotFoundError
+from app.core.errors import ConflictError, NotFoundError
 from app.modules.order_validation.application.service import OrderValidationService
 from app.modules.order_validation.domain.entities import (
     Agreement,
@@ -17,6 +17,7 @@ from app.modules.order_validation.domain.entities import (
     BatchPage,
     CustomerScope,
     LineResult,
+    ManualApproval,
     OrderLine,
     StoredLine,
 )
@@ -71,10 +72,12 @@ class FakeBatchRepository:
     def __init__(self) -> None:
         self.batches: dict[UUID, Batch] = {}
         self.lines_by_batch: dict[UUID, list[StoredLine]] = {}
+        self.approved: dict[UUID, dict[str, ManualApproval]] = {}
 
     def _counted(self, batch: Batch, lines: Sequence[StoredLine]) -> Batch:
         total, orders, ready, ready_orders = summarize(
-            (item.line.document, item.result.status) for item in lines
+            ((item.line.document, item.result.status) for item in lines),
+            self.approved.get(batch.id, {}),
         )
         return replace(
             batch,
@@ -115,6 +118,34 @@ class FakeBatchRepository:
         batch = replace(self.batches[batch_id], validated_by=actor, validated_at=now)
         self.batches[batch_id] = self._counted(batch, stored)
         return self.batches[batch_id]
+
+    async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]:
+        return dict(self.approved.get(batch_id, {}))
+
+    async def approve(self, batch_id: UUID, approvals: Sequence[ManualApproval]) -> Batch:
+        if batch_id not in self.batches:
+            raise NotFoundError("Validación no encontrada")
+        current = self.approved.setdefault(batch_id, {})
+        if any(item.document in current for item in approvals):
+            raise ConflictError("ya aprobado")
+        current.update({item.document: item for item in approvals})
+        self.batches[batch_id] = self._counted(
+            self.batches[batch_id], self.lines_by_batch[batch_id]
+        )
+        return self.batches[batch_id]
+
+    async def remove_approval(self, batch_id: UUID, document: str) -> bool:
+        if self.approved.get(batch_id, {}).pop(document, None) is None:
+            return False
+        self.batches[batch_id] = self._counted(
+            self.batches[batch_id], self.lines_by_batch[batch_id]
+        )
+        return True
+
+    async def delete(self, batch_id: UUID) -> bool:
+        self.lines_by_batch.pop(batch_id, None)
+        self.approved.pop(batch_id, None)
+        return self.batches.pop(batch_id, None) is not None
 
 
 def line(**values) -> OrderLine:

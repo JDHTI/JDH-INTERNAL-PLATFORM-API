@@ -8,14 +8,19 @@ from typing import Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
+from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
 from app.core.rate_limit import rate_limit
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
-from app.modules.order_validation.application.service import MAX_PAGE_SIZE, OrderValidationService
+from app.modules.order_validation.application.service import (
+    MAX_APPROVALS,
+    MAX_NOTE_LENGTH,
+    MAX_PAGE_SIZE,
+    OrderValidationService,
+)
 from app.modules.order_validation.domain.entities import (
     AgreementCheck,
     Batch,
@@ -109,10 +114,26 @@ class LineResponse(BaseModel):
     checks: list[CheckResponse]
 
 
+class ManualApprovalResponse(BaseModel):
+    """Who released the order by hand, when and why."""
+
+    approved_by: str
+    approved_at: datetime
+    note: str | None
+
+
+class ApprovalRequest(BaseModel):
+    """Pending orders of the file to release by hand, all or nothing."""
+
+    documents: list[str] = Field(min_length=1, max_length=MAX_APPROVALS)
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
+
+
 class OrderResponse(BaseModel):
-    """An order (document) with its lines; ready only when every line is."""
+    """An order with its lines: ready when every line is, or when a person approved it."""
 
     document: str
+    manual_approval: ManualApprovalResponse | None
     status: LineStatus
     status_label: str
     order_date: date | None
@@ -236,6 +257,15 @@ def _order(order: OrderView) -> OrderResponse:
         ready_line_count=order.ready_line_count,
         total_amount=order.total_amount,
         lines=[_line(item) for item in order.lines],
+        manual_approval=(
+            None
+            if order.manual_approval is None
+            else ManualApprovalResponse(
+                approved_by=order.manual_approval.approved_by,
+                approved_at=order.manual_approval.approved_at,
+                note=order.manual_approval.note,
+            )
+        ),
     )
 
 
@@ -356,6 +386,61 @@ async def revalidate(
     """Re-run the validation after supports changed. Managers only."""
 
     return _batch(await service.revalidate(principal, batch_id))
+
+
+@router.post(
+    "/{batch_id}/approvals",
+    response_model=BatchResponse,
+    summary="Approve pending orders by hand",
+    description=(
+        "All or nothing: 404 if a document is not in the file, 409 if one is not pending "
+        "any more. The approval belongs to the order; its lines keep their result, and "
+        "re-validating keeps it."
+    ),
+)
+@inject
+async def approve_orders(
+    batch_id: UUID,
+    body: ApprovalRequest,
+    principal: Principal = _principal,
+    service: OrderValidationService = _service,
+) -> BatchResponse:
+    """Release pending orders. Managers only."""
+
+    return _batch(await service.approve(principal, batch_id, body.documents, body.note))
+
+
+@router.delete(
+    "/{batch_id}/orders/{document}/approval",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a manual approval",
+)
+@inject
+async def remove_approval(
+    batch_id: UUID,
+    document: str,
+    principal: Principal = _principal,
+    service: OrderValidationService = _service,
+) -> Response:
+    """The order goes back to what the validation says. Managers only."""
+
+    await service.remove_approval(principal, batch_id, document)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete(
+    "/{batch_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an uploaded file"
+)
+@inject
+async def delete_batch(
+    batch_id: UUID,
+    principal: Principal = _principal,
+    service: OrderValidationService = _service,
+) -> Response:
+    """Delete the file with its lines, checks and approvals. Managers only."""
+
+    await service.delete(principal, batch_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 __all__ = ["router"]

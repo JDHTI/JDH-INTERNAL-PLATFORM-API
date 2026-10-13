@@ -15,6 +15,7 @@ from app.modules.order_validation.domain.entities import (
     BatchPage,
     CustomerScope,
     LineResult,
+    ManualApproval,
     OrderLine,
     StoredLine,
 )
@@ -63,6 +64,14 @@ class BatchRepository(Protocol):
         actor: str,
         now: datetime,
     ) -> Batch: ...
+
+    async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]: ...
+
+    async def approve(self, batch_id: UUID, approvals: Sequence[ManualApproval]) -> Batch: ...
+
+    async def remove_approval(self, batch_id: UUID, document: str) -> bool: ...
+
+    async def delete(self, batch_id: UUID) -> bool: ...
 
 
 class ManagerPolicy(Protocol):

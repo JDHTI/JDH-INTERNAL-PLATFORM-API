@@ -193,6 +193,16 @@ class BatchPage:
 
 
 @dataclass(frozen=True)
+class ManualApproval:
+    """A person released a pending order by hand; its lines keep their own result."""
+
+    document: str
+    approved_by: str
+    approved_at: datetime
+    note: str | None = None
+
+
+@dataclass(frozen=True)
 class OrderView:
     """The lines of one document, with the order-level status."""
 
@@ -200,6 +210,7 @@ class OrderView:
     status: str
     lines: list[StoredLine]
     total_amount: Decimal | None = None
+    manual_approval: ManualApproval | None = None
 
     @property
     def first(self) -> OrderLine:

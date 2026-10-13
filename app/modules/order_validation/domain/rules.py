@@ -13,7 +13,7 @@ taken inside the support itself are used. Then ``amount / price = share x (1 - m
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 
@@ -423,8 +423,12 @@ def by_supplier(agreements: Iterable[Agreement]) -> Mapping[str | None, list[Agr
     return grouped
 
 
-def summarize(lines: Iterable[tuple[str, str]]) -> tuple[int, int, int, int]:
+def summarize(
+    lines: Iterable[tuple[str, str]], approved: Collection[str] = ()
+) -> tuple[int, int, int, int]:
     """Counts of a batch from ``(document, line status)`` pairs.
+
+    An order a person approved counts as ready; its lines keep their own status.
 
     Returns:
         tuple[int, int, int, int]: Lines, orders, ready lines and ready orders.
@@ -435,5 +439,9 @@ def summarize(lines: Iterable[tuple[str, str]]) -> tuple[int, int, int, int]:
         statuses.setdefault(document, []).append(status)
     line_count = sum(len(items) for items in statuses.values())
     ready_lines = sum(items.count(vocabulary.READY) for items in statuses.values())
-    ready_orders = sum(1 for items in statuses.values() if order_status(items) == vocabulary.READY)
+    ready_orders = sum(
+        1
+        for document, items in statuses.items()
+        if document in approved or order_status(items) == vocabulary.READY
+    )
     return line_count, len(statuses), ready_lines, ready_orders

@@ -7,13 +7,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain import rules, vocabulary
 from app.modules.order_validation.domain.entities import (
     Batch,
     BatchPage,
     LineResult,
+    ManualApproval,
     OrderLine,
     OrderPage,
     OrderView,
@@ -28,6 +29,8 @@ from app.modules.order_validation.domain.ports import (
 )
 
 MAX_PAGE_SIZE = 200
+MAX_NOTE_LENGTH = 500
+MAX_APPROVALS = 1000
 
 
 def _matches(order: OrderView, term: str) -> bool:
@@ -184,7 +187,95 @@ class OrderValidationService:
             datetime.now(UTC),
         )
 
+    async def approve(
+        self,
+        principal: Principal,
+        batch_id: UUID,
+        documents: Sequence[str],
+        note: str | None = None,
+    ) -> Batch:
+        """Release pending orders by hand, all or nothing.
+
+        The approval belongs to the order: its lines keep their own result, and
+        re-validating the file keeps the approval.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            NotFoundError: If the file does not exist or a document is not in it.
+            ConflictError: If one of the orders is not pending any more.
+            InvalidInputError: If no document is sent or the note is too long.
+        """
+
+        await self._require_manager(principal)
+        wanted = list(dict.fromkeys(item.strip() for item in documents if item and item.strip()))
+        if not wanted:
+            raise InvalidInputError("Indica al menos un pedido para aprobar")
+        text = " ".join((note or "").split()) or None
+        if text and len(text) > MAX_NOTE_LENGTH:
+            raise InvalidInputError(f"La nota admite máximo {MAX_NOTE_LENGTH} caracteres")
+        await self.get_batch(batch_id)
+        orders = {order.document: order for order in await self._orders_of(batch_id)}
+        missing = [document for document in wanted if document not in orders]
+        if missing:
+            raise NotFoundError(f"Pedidos que no están en el archivo: {', '.join(missing)}")
+        settled = [document for document in wanted if orders[document].status != vocabulary.PENDING]
+        if settled:
+            raise ConflictError(
+                f"Estos pedidos ya no están pendientes: {', '.join(settled)}; no se aprobó ninguno"
+            )
+        now = datetime.now(UTC)
+        return await self.repository.approve(
+            batch_id,
+            [ManualApproval(document, principal.email, now, text) for document in wanted],
+        )
+
+    async def remove_approval(self, principal: Principal, batch_id: UUID, document: str) -> None:
+        """Undo a manual approval; the order goes back to what the validation says.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            NotFoundError: If the order has no manual approval.
+        """
+
+        await self._require_manager(principal)
+        if not await self.repository.remove_approval(batch_id, document.strip()):
+            raise NotFoundError("El pedido no tiene aprobación manual")
+
+    async def delete(self, principal: Principal, batch_id: UUID) -> None:
+        """Delete a file with its lines and approvals.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            NotFoundError: If the file does not exist.
+        """
+
+        await self._require_manager(principal)
+        if not await self.repository.delete(batch_id):
+            raise NotFoundError("Validación no encontrada")
+
     # --------------------------------------------------------------- queries
+
+    async def _orders_of(self, batch_id: UUID) -> list[OrderView]:
+        """Every order of a file in file order; a manual approval makes it ready."""
+
+        approvals = await self.repository.approvals(batch_id)
+        documents: dict[str, list[StoredLine]] = {}
+        for item in await self.repository.lines(batch_id):
+            documents.setdefault(item.line.document, []).append(item)
+        return [
+            OrderView(
+                document=document,
+                status=(
+                    vocabulary.READY
+                    if document in approvals
+                    else rules.order_status(item.result.status for item in lines)
+                ),
+                lines=lines,
+                total_amount=_total(lines),
+                manual_approval=approvals.get(document),
+            )
+            for document, lines in documents.items()
+        ]
 
     async def list_batches(self, page: int = 1, size: int = 20) -> BatchPage:
         """Uploaded files, newest first."""
@@ -231,18 +322,7 @@ class OrderValidationService:
             raise InvalidInputError(f"reason debe ser uno de: {', '.join(vocabulary.REASONS)}")
         await self.get_batch(batch_id)
 
-        documents: dict[str, list[StoredLine]] = {}
-        for item in await self.repository.lines(batch_id):
-            documents.setdefault(item.line.document, []).append(item)
-        orders = [
-            OrderView(
-                document=document,
-                status=rules.order_status(item.result.status for item in lines),
-                lines=lines,
-                total_amount=_total(lines),
-            )
-            for document, lines in documents.items()
-        ]
+        orders = await self._orders_of(batch_id)
         term = " ".join((q or "").lower().split())
         if term:
             orders = [order for order in orders if _matches(order, term)]
