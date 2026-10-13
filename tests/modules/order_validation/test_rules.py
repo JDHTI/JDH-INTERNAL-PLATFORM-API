@@ -16,11 +16,10 @@ def info(**margins) -> ProductInfo:
     return ProductInfo("18294", {f"margin_{name}": value for name, value in margins.items()})
 
 
-def decide(agreements=(), customer=None, reference=None, tolerance=None, product=None, **values):
+def decide(agreements=(), customer=None, reference=None, product=None, **values):
     if product is None and reference is not None:
         product = info(list=reference)
-    tolerance = D("0") if tolerance is None else tolerance
-    return rules.decide(line(**values), list(agreements), customer, product, TODAY, tolerance)
+    return rules.decide(line(**values), list(agreements), customer, product, TODAY)
 
 
 def test_a_percentage_of_cost_brings_the_margin_up_to_the_target() -> None:
@@ -244,7 +243,13 @@ def test_order_status_and_batch_counts() -> None:
 
     assert rules.order_status([ready, ready]) == ready
     assert rules.order_status([ready, pending]) == pending
-    assert rules.summarize([("A", ready), ("A", pending), ("B", ready)]) == (3, 2, 2, 1)
+    items = [
+        (line(document=document), rules.LineResult(status, "sin_acuerdo", ""))
+        for document, status in (("A", ready), ("A", pending), ("B", ready))
+    ]
+    assert rules.summarize_batch(items) == (3, 2, 2, 1)
+    # A manual approval makes the order ready; its lines keep their status.
+    assert rules.summarize_batch(items, {"A"}) == (3, 2, 2, 2)
 
 
 def test_the_margin_of_the_channel_is_the_reference() -> None:
@@ -279,31 +284,71 @@ def test_a_product_without_margin_for_the_channel_says_so() -> None:
     assert result.margin_basis is None and result.required_margin_pct is None
 
 
-def test_the_threshold_releases_a_line_that_falls_short_by_that_much() -> None:
-    # 19.5 % against a 20 % margin: pending without threshold, released with 0.5 points.
-    line_margin = D("0.195")
-
-    assert decide(reference=D("0.20"), margin_pct=line_margin).reason == "sin_acuerdo"
-    result = decide(reference=D("0.20"), margin_pct=line_margin, tolerance=D("0.005"))
-    assert result.status == "listo_para_liberar" and result.reason == "cumple_con_umbral"
-    assert "dentro del umbral de 0,50 puntos" in result.detail
-    assert decide(reference=D("0.20"), margin_pct=D("0.194"), tolerance=D("0.005")).status == (
-        "pendiente_validacion"
+def pair(price, quantity, margin, required, reason="sin_acuerdo", document="PV-1", row=2):
+    item = line(
+        document=document,
+        unit_price=D(price),
+        quantity=D(quantity),
+        margin_pct=margin,
+        row_number=row,
     )
-    # A line that already complies never shows as released by the threshold.
-    exact = decide(reference=D("0.20"), margin_pct=D("0.20"), tolerance=D("0.005"))
-    assert exact.reason == "cumple_margen_lista"
+    status = "listo_para_liberar" if reason.startswith("cumple") else "pendiente_validacion"
+    return item, rules.LineResult(status, reason, "", required_margin_pct=required)
 
 
-def test_the_threshold_applies_to_supports_too() -> None:
+def test_the_threshold_acts_on_the_margin_of_the_whole_order() -> None:
+    # 1 000 at 10 % and 3 000 at 20 %: the order margin is 17,5 % against a 20 % target.
+    items = [
+        pair("1000", "1", D("0.10"), D("0.20")),
+        pair("3000", "1", D("0.20"), D("0.20"), "cumple_margen_lista"),
+    ]
+
+    assert rules.order_margins(items) == (D("0.175000"), D("0.200000"))
+    assert not rules.release_by_threshold(items, D("0"))
+    assert not rules.release_by_threshold(items, D("0.02"))
+    assert rules.release_by_threshold(items, D("0.025"))
+    assert rules.release_by_threshold(items, D("0.03"))
+    assert rules.release_basis(items, False, D("0.03")) == "margen"
+    assert rules.release_basis(items, False, D("0")) is None
+    assert rules.release_basis(items, True, D("0")) == "manual"
+
+
+def test_the_threshold_example_of_the_business_19_5_against_20() -> None:
+    items = [pair("100", "10", D("0.195"), D("0.20"), "no_cumple_acuerdo")]
+
+    assert not rules.release_by_threshold(items, D("0"))
+    assert rules.release_by_threshold(items, D("0.005"))
+    assert not rules.release_by_threshold([pair("100", "10", D("0.194"), D("0.20"))], D("0.005"))
+
+
+def test_the_threshold_does_not_rescue_orders_that_need_a_person() -> None:
+    short = pair("1000", "1", D("0.199"), D("0.20"))
+    for reason in (
+        "acuerdo_en_revision",
+        "acuerdo_no_evaluable",
+        "acuerdo_vencido",
+        "datos_incompletos",
+    ):
+        other = pair("1000", "1", D("0.30"), D("0.20"), reason, row=3)
+        assert not rules.release_by_threshold([short, other], D("0.05"))
+    # A line with nothing to compare with, or with no cost, keeps the order pending too.
+    assert not rules.release_by_threshold(
+        [short, pair("1000", "1", D("0.30"), None, row=3)], D("0.05")
+    )
+    assert not rules.release_by_threshold(
+        [short, pair("1000", "1", D("1"), D("0.20"), row=3)], D("0.05")
+    )
+    assert rules.release_by_threshold(
+        [short, pair("1000", "1", D("0.30"), D("0.20"), "cumple_margen_lista", row=3)], D("0.05")
+    )
+
+
+def test_a_line_is_never_released_by_the_threshold() -> None:
+    result = decide(reference=D("0.20"), margin_pct=D("0.195"))
+
+    assert result.status == "pendiente_validacion" and result.reason == "sin_acuerdo"
     support = agreement(supplier_value=D("0.05"), target_margin_pct=D("0.1455"))
-
-    # 10 % + 5 % x 90 % = 14,5 %: 0,05 points short of the target.
     assert decide([support]).reason == "no_cumple_acuerdo"
-    result = decide([support], tolerance=D("0.001"))
-    assert result.reason == "cumple_con_umbral" and result.checks[0].threshold_applied
-    exact = agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14"))
-    assert decide([support, exact], tolerance=D("0.001")).reason == "cumple_con_apoyo"
 
 
 def test_a_product_with_liquor_tax_is_flagged_whatever_the_decision() -> None:

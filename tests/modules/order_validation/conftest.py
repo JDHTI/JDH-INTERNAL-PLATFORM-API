@@ -22,7 +22,7 @@ from app.modules.order_validation.domain.entities import (
     ProductInfo,
     StoredLine,
 )
-from app.modules.order_validation.domain.rules import summarize
+from app.modules.order_validation.domain.rules import summarize_batch
 from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
 
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
@@ -76,9 +76,10 @@ class FakeBatchRepository:
         self.approved: dict[UUID, dict[str, ManualApproval]] = {}
 
     def _counted(self, batch: Batch, lines: Sequence[StoredLine]) -> Batch:
-        total, orders, ready, ready_orders = summarize(
-            ((item.line.document, item.result.status) for item in lines),
+        total, orders, ready, ready_orders = summarize_batch(
+            ((item.line, item.result) for item in lines),
             self.approved.get(batch.id, {}),
+            batch.margin_threshold,
         )
         return replace(
             batch,
@@ -128,6 +129,13 @@ class FakeBatchRepository:
             margin_threshold=margin_threshold,
         )
         self.batches[batch_id] = self._counted(batch, stored)
+        return self.batches[batch_id]
+
+    async def set_threshold(self, batch_id: UUID, margin_threshold: Decimal) -> Batch | None:
+        if batch_id not in self.batches:
+            return None
+        batch = replace(self.batches[batch_id], margin_threshold=margin_threshold)
+        self.batches[batch_id] = self._counted(batch, self.lines_by_batch[batch_id])
         return self.batches[batch_id]
 
     async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]:

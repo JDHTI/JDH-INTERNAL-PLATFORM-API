@@ -90,17 +90,6 @@ alcance de la línea. Un campo de alcance vacío es «todos», igual que en el m
 (`Condiciones Especiales`): algunas no son automatizables. Siguen en el maestro de apoyos
 y documentadas, pero el validador las ignora.
 
-### Umbral de margen
-
-Cada archivo tiene un **umbral de margen** en puntos (`margin_threshold_points`, de 0 a 20,
-por defecto 0): lo que una línea puede quedarse corta del margen exigido y aun así
-liberarse. Con umbral `0.5`, una línea al 19,5 % frente a un margen de 20 % se libera. Vale
-para todos los pedidos del archivo, tanto frente al margen del producto como frente al
-objetivo de un apoyo. Se fija al subir (campo `margin_threshold_points`) o al revalidar, y
-se puede cambiar cuantas veces se quiera; revalidar sin valor conserva el guardado. Las
-líneas liberadas solo por el umbral salen con el motivo `cumple_con_umbral` y el detalle
-`dentro del umbral de 0,50 puntos`; las que ya cumplían sin umbral no cambian.
-
 ### Resultado de la línea (en este orden)
 
 | Motivo | Estado | Cuándo |
@@ -108,7 +97,6 @@ líneas liberadas solo por el umbral salen con el motivo `cumple_con_umbral` y e
 | `datos_incompletos` | pendiente | falta proveedor, precio o margen, o el margen es 100 % (la línea no trae costo) |
 | `cumple_con_apoyo` | **listo** | un apoyo activo que aplica se cumple; se muestra el de mayor holgura |
 | `cumple_margen_lista` | **listo** | el margen de la línea ya alcanza el margen del producto para el canal |
-| `cumple_con_umbral` | **listo** | no llega, pero queda dentro del umbral del archivo |
 | `acuerdo_en_revision` | pendiente | se cumpliría, pero con un apoyo `pendiente_revision` |
 | `no_cumple_acuerdo` | pendiente | hay apoyo y no se cumple (se muestra el más cercano) |
 | `acuerdo_no_evaluable` | pendiente | hay apoyo, pero no se puede evaluar por pedido |
@@ -116,28 +104,54 @@ líneas liberadas solo por el umbral salen con el motivo `cumple_con_umbral` y e
 | `sin_acuerdo` | pendiente | ningún apoyo cubre la línea |
 
 Cada línea trae además `margin_basis` (`lista`, `mayoristas` o `salsamentarias`: con cuál
-margen del producto se comparó) y todos los apoyos evaluados (`checks`, con `threshold_applied`).
+margen del producto se comparó) y todos los apoyos evaluados (`checks`). Las líneas se
+resumen en dos grupos: **sin apoyo** (`sin_acuerdo`, `without_support_line_count` del pedido) y
+**cumplen** (las listas, `ready_line_count`, con su descripción detallada en `detail`).
 
 ### Impuesto al licor
 
 Un producto con impuesto al consumo de licor (`IMPTOLIC` del maestro de márgenes) puede
-haberse montado en el pedido sin él. La línea sale con `liquor_tax: true` y
-`liquor_tax_amount` (el valor por unidad), y el pedido con `has_liquor_tax`; es solo una
-**bandera**: no cambia la decisión.
+haberse montado en el pedido sin él. Solo esas líneas salen con `liquor_tax: true` y
+`liquor_tax_amount` (el valor por unidad), y el pedido con `has_liquor_tax`; el resto no
+trae bandera de ningún tipo. El reporte no trae el impuesto, así que «falta» se infiere de que
+el producto lo tiene asignado. Es solo una **bandera**: no cambia la decisión.
 
 ### Margen general del pedido
 
 Cada pedido trae `margin_pct`: el margen del conjunto de sus líneas, ponderado por valor
 (`precio × cantidad`), que equivale a `1 − Σcosto / Σventas`. Quedan fuera las líneas sin
 precio, cantidad o margen y las de margen 100 % (sin costo). `required_margin_pct` es el
-objetivo ponderado de las líneas que tienen uno. Es informativo: la decisión sigue siendo
-por línea.
+objetivo ponderado de las líneas que tienen uno.
+
+### Margen del pedido y umbral
+
+El margen del pedido se evalúa **siempre**, con o sin umbral. Un pedido que solo está pendiente
+por margen se libera cuando
+
+```
+margen del pedido + umbral  ≥  objetivo del pedido
+```
+
+El **umbral de margen** de cada archivo (`margin_threshold_points`, en puntos, de 0 a 20, por
+defecto 0) siempre se suma al margen de cada pedido, nunca al de una línea. Con umbral `0.5`, un
+pedido al 19,5 % frente a un objetivo de 20 % queda listo. Reglas:
+
+- Solo cuenta para pedidos pendientes por margen: líneas `sin_acuerdo` o `no_cumple_acuerdo` con
+  un margen contra el cual comparar. Un pedido con una línea pendiente por otra razón (datos
+  incompletos, apoyo en revisión o vencido, no evaluable), sin margen de referencia o sin costo
+  sigue pendiente: lo decide una persona.
+- Las líneas no cambian: conservan su motivo. El pedido trae `margin_with_threshold_pct`
+  (`margin_pct` más el umbral, solo con umbral mayor que 0) y `release_basis`.
+- El umbral se **prueba** sin guardar con `GET /{id}/orders?margin_threshold_points=0.5` (los
+  estados, `counts` y márgenes salen como si el archivo lo tuviera) y se **guarda** con
+  `PUT /{id}/margin-threshold`, que no revalida las líneas. También se puede fijar al subir el
+  archivo o al revalidar. Los totales del lote (`ready_order_count`) usan el umbral guardado.
 
 ### Pedido
 
-Un **pedido** está listo para liberación si **todas** sus líneas lo están o si una persona
-lo **aprobó a mano**.
-
+Un **pedido** está listo para liberación si **todas** sus líneas lo están, si una persona lo
+**aprobó a mano** o si su **margen** (con el umbral) alcanza el objetivo. `release_basis` dice
+cuál: `lineas`, `manual`, `margen`, o `null` mientras está pendiente.
 ## Orden
 
 Por defecto (`sort=attention`) se listan primero los pedidos que tienen alguna línea **sin
@@ -170,8 +184,9 @@ Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: admi
 | `POST /order-validations` | Subir el archivo (`multipart/form-data`, campo `file` y opcional `margin_threshold_points`); valida todo y devuelve el lote con sus conteos y su umbral |
 | `GET /order-validations` | Archivos subidos, más recientes primero (`page`, `size`) |
 | `GET /order-validations/{id}` | Un archivo con sus conteos y `margin_threshold_points` |
-| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `liquor_tax` (`true`/`false`), `sort` (`attention` por defecto, o `file`), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
+| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado |
 | `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos y márgenes como están ahora. Cuerpo opcional `{"margin_threshold_points": 0.5}`; sin valor conserva el umbral guardado. Conserva las aprobaciones manuales |
+| `PUT /order-validations/{id}/margin-threshold` | `{"margin_threshold_points": 0.5}`: guarda el umbral del archivo y recalcula qué pedidos libera, sin revalidar las líneas; conserva las aprobaciones |
 | `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: aprueba a mano pedidos pendientes, todo o nada; devuelve el archivo con sus conteos |
 | `DELETE /order-validations/{id}/orders/{document}/approval` | Quita la aprobación manual (204) |
 | `DELETE /order-validations/{id}` | Borra el archivo con sus líneas y aprobaciones (204) |
@@ -187,7 +202,7 @@ Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: admi
 3. Si un apoyo `pendiente_revision` puede liberar.
 4. Si el costo de referencia del apoyo debe compararse con el costo actual (hoy solo se
    usa la proporción del apoyo).
-5. Si un pedido debe liberarse por su margen general y no solo línea por línea.
+5. Si el margen del pedido debe poder liberar pedidos con líneas sin apoyo (hoy sí, mientras tengan margen de referencia).
 6. Qué hacer con los productos con impuesto al licor además de marcarlos.
 7. Cuándo aplicar Margen Masivo Food y Margen Market Apartadó, y el margen de los productos
    cuya nota dice «Margen mínimo» distinto del de lista (por ejemplo RPB: lista 57 %, mínimo

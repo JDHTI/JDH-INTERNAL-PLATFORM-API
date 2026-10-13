@@ -23,7 +23,7 @@ from app.modules.order_validation.domain.entities import (
     OrderLine,
     StoredLine,
 )
-from app.modules.order_validation.domain.rules import summarize
+from app.modules.order_validation.domain.rules import summarize_batch
 from app.modules.order_validation.infrastructure.models import (
     OrderValidationApprovalModel,
     OrderValidationBatchModel,
@@ -91,10 +91,14 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
 
 def _apply_counts(
     model: OrderValidationBatchModel,
-    pairs: Sequence[tuple[str, str]],
+    items: Sequence[tuple[OrderLine, LineResult]],
     approved: Collection[str] = (),
 ) -> None:
-    lines, orders, ready_lines, ready_orders = summarize(pairs, approved)
+    """Counts of the file: an order is ready by its lines, a manual approval or the threshold."""
+
+    lines, orders, ready_lines, ready_orders = summarize_batch(
+        items, approved, model.margin_threshold or Decimal(0)
+    )
     model.line_count = lines
     model.order_count = orders
     model.ready_line_count = ready_lines
@@ -102,15 +106,39 @@ def _apply_counts(
 
 
 async def _recount(session: Any, batch: OrderValidationBatchModel) -> None:
-    """Counts of a stored file from its lines and its manual approvals."""
+    """Counts of a stored file from its lines, its manual approvals and its threshold."""
 
-    pairs = (
-        await session.execute(select(L.document, L.status).where(L.batch_id == batch.id))
+    rows = (
+        await session.execute(
+            select(
+                L.document,
+                L.row_number,
+                L.unit_price,
+                L.quantity,
+                L.margin_pct,
+                L.status,
+                L.reason,
+                L.required_margin_pct,
+            ).where(L.batch_id == batch.id)
+        )
     ).all()
     approved = (
         (await session.execute(select(A.document).where(A.batch_id == batch.id))).scalars().all()
     )
-    _apply_counts(batch, [(document, status) for document, status in pairs], set(approved))
+    items = [
+        (
+            OrderLine(
+                row_number=row_number,
+                document=document,
+                unit_price=price,
+                quantity=quantity,
+                margin_pct=margin,
+            ),
+            LineResult(status=status, reason=reason, detail="", required_margin_pct=required),
+        )
+        for document, row_number, price, quantity, margin, status, reason, required in rows
+    ]
+    _apply_counts(batch, items, set(approved))
 
 
 def _approval(model: OrderValidationApprovalModel) -> ManualApproval:
@@ -155,7 +183,7 @@ class SqlAlchemyOrderValidationRepository:
                 validated_at=now,
                 margin_threshold=margin_threshold,
             )
-            _apply_counts(batch, [(line.document, result.status) for line, result in lines])
+            _apply_counts(batch, lines)
             session.add(batch)
             await session.flush()
             session.add_all(
@@ -237,10 +265,24 @@ class SqlAlchemyOrderValidationRepository:
                     .values(**_result_columns(result))
                 )
             await session.flush()
+            batch.margin_threshold = margin_threshold
             await _recount(session, batch)
             batch.validated_by = actor
             batch.validated_at = now
+            await session.commit()
+            return _batch(batch)
+
+    async def set_threshold(self, batch_id: UUID, margin_threshold: Decimal) -> Batch | None:
+        """Save the margin threshold of a file and recount its orders; `None` if it is missing."""
+
+        async with self.database.session_factory() as session:
+            batch = (
+                await session.execute(select(B).where(B.id == batch_id).with_for_update())
+            ).scalar_one_or_none()
+            if batch is None:
+                return None
             batch.margin_threshold = margin_threshold
+            await _recount(session, batch)
             await session.commit()
             return _batch(batch)
 

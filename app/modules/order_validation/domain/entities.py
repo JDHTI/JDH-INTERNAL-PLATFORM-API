@@ -108,8 +108,6 @@ class AgreementCheck:
     detail: str
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
-    # It complies only because of the batch's margin threshold.
-    threshold_applied: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """JSON form stored with the line."""
@@ -126,7 +124,6 @@ class AgreementCheck:
             "detail": self.detail,
             "effective_margin_pct": _text(self.effective_margin_pct),
             "required_margin_pct": _text(self.required_margin_pct),
-            "threshold_applied": self.threshold_applied,
         }
 
     @classmethod
@@ -145,7 +142,6 @@ class AgreementCheck:
             detail=value.get("detail") or "",
             effective_margin_pct=_number(value.get("effective_margin_pct")),
             required_margin_pct=_number(value.get("required_margin_pct")),
-            threshold_applied=bool(value.get("threshold_applied")),
         )
 
 
@@ -238,6 +234,10 @@ class OrderView:
     # Weighted by amount over the lines that carry a cost, and the weighted target.
     margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
+    # The order margin plus the margin threshold, when the threshold is above zero.
+    margin_with_threshold_pct: Decimal | None = None
+    # Why the order is ready: `lineas`, `umbral` or `manual`; `None` while pending.
+    release_basis: str | None = None
     has_liquor_tax: bool = False
 
     @property
@@ -245,6 +245,12 @@ class OrderView:
         """The first line, which carries the order header (client, date, channel...)."""
 
         return self.lines[0].line
+
+    @property
+    def without_support_line_count(self) -> int:
+        """Lines no support covers."""
+
+        return sum(1 for item in self.lines if item.result.reason == "sin_acuerdo")
 
     @property
     def ready_line_count(self) -> int:

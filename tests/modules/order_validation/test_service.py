@@ -1,6 +1,7 @@
 """Use cases of the retained orders validator over in-memory ports."""
 
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
@@ -128,7 +129,7 @@ def test_catalogs_label_every_status_and_reason(service) -> None:
     ready = [
         item["value"] for item in catalogs["reasons"] if item["status"] == "listo_para_liberar"
     ]
-    assert ready == ["cumple_con_apoyo", "cumple_margen_lista", "cumple_con_umbral"]
+    assert ready == ["cumple_con_apoyo", "cumple_margen_lista"]
 
 
 async def test_manual_approval_makes_the_order_ready_and_keeps_its_lines(
@@ -206,30 +207,59 @@ async def test_delete_and_permissions_of_the_new_actions(service, manager) -> No
         await service.delete(manager, batch.id)
 
 
-async def test_the_threshold_is_stored_applied_and_kept_by_revalidate(
+async def test_the_threshold_releases_orders_by_their_margin_and_is_kept(
     service, source, manager
 ) -> None:
-    source.catalog["28703"] = ProductInfo("28703", {"margin_list": D("0.105")})
+    # PV-1 is one 10 % line against a 10,5 % margin; PV-2 has nothing to compare with.
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": D("0.105")})
 
     plain = await service.upload(manager, "p.xlsx", report())
     with_threshold = await service.upload(manager, "p.xlsx", report(), D("0.5"))
 
-    # A 10 % line against a 10,5 % margin: pending, then released by 0.5 points.
     assert plain.margin_threshold == D("0") and with_threshold.margin_threshold == D("0.005")
-    assert plain.ready_line_count == 0 and with_threshold.ready_line_count == 1
-    lines = (await service.orders(with_threshold.id, sort="file")).items[1].lines
-    assert lines[0].result.reason == "cumple_con_umbral"
+    assert (plain.ready_order_count, with_threshold.ready_order_count) == (0, 1)
+    # The lines are the same: the threshold does not act on them.
+    assert plain.ready_line_count == with_threshold.ready_line_count == 0
+    page = await service.orders(with_threshold.id, sort="file")
+    pv1, pv2 = page.items
+    assert pv1.status == "listo_para_liberar" and pv1.release_basis == "margen"
+    assert pv1.lines[0].result.reason == "sin_acuerdo"
+    assert pv1.margin_pct == D("0.100000") and pv1.margin_with_threshold_pct == D("0.105000")
+    assert pv2.status == "pendiente_validacion" and pv2.release_basis is None
+    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1}
 
-    # Revalidating without a value keeps the stored threshold; a new value replaces it.
-    assert (await service.revalidate(manager, with_threshold.id)).ready_line_count == 1
-    raised = await service.revalidate(manager, plain.id, D("0.5"))
-    assert raised.ready_line_count == 1 and raised.margin_threshold == D("0.005")
-    cleared = await service.revalidate(manager, plain.id, D("0"))
-    assert cleared.ready_line_count == 0 and cleared.margin_threshold == D("0")
+    # Revalidating keeps the stored threshold; a new value replaces it.
+    assert (await service.revalidate(manager, with_threshold.id)).ready_order_count == 1
+    cleared = await service.revalidate(manager, with_threshold.id, D("0"))
+    assert cleared.ready_order_count == 0 and cleared.margin_threshold == D("0")
     with pytest.raises(InvalidInputError, match="umbral"):
         await service.revalidate(manager, plain.id, D("25"))
     with pytest.raises(InvalidInputError, match="umbral"):
         await service.upload(manager, "p.xlsx", report(), D("-1"))
+
+
+async def test_the_threshold_can_be_tried_and_then_saved(service, source, manager) -> None:
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": D("0.105")})
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    tried = await service.orders(batch.id, margin_threshold_points=D("0.5"))
+    saved = await service.get_batch(batch.id)
+
+    assert tried.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1}
+    assert saved.margin_threshold == D("0") and saved.ready_order_count == 0
+    after = await service.set_threshold(manager, batch.id, D("0.5"))
+    assert after.margin_threshold == D("0.005") and after.ready_order_count == 1
+    assert (await service.orders(batch.id)).counts == tried.counts
+    # A manual approval and the threshold do not cancel each other.
+    approved = await service.approve(manager, batch.id, ["PV-2"])
+    assert approved.ready_order_count == 2
+    assert (await service.set_threshold(manager, batch.id, D("0"))).ready_order_count == 1
+    with pytest.raises(ForbiddenError):
+        await service.set_threshold(person("otro@jdh.com.co"), batch.id, D("1"))
+    with pytest.raises(InvalidInputError, match="umbral"):
+        await service.set_threshold(manager, batch.id, D("21"))
+    with pytest.raises(NotFoundError):
+        await service.set_threshold(manager, uuid4(), D("1"))
 
 
 async def test_orders_come_with_their_margin_and_the_liquor_tax_flag(
@@ -245,10 +275,8 @@ async def test_orders_come_with_their_margin_and_the_liquor_tax_flag(
     assert pv1.margin_pct == D("0.100000") and not pv1.has_liquor_tax
     assert pv2.margin_pct == D("0.075000") and pv2.has_liquor_tax
     assert pv2.required_margin_pct == D("0.180000")
-    assert [
-        order.document for order in (await service.orders(batch.id, liquor_tax=True)).items
-    ] == ["PV-2"]
-    assert (await service.orders(batch.id, liquor_tax=False)).total == 1
+    assert pv2.without_support_line_count == 2 and pv2.margin_with_threshold_pct is None
+    assert [line.result.liquor_tax for line in pv2.lines] == [False, True]
 
 
 async def test_orders_and_their_lines_come_by_attention_by_default(

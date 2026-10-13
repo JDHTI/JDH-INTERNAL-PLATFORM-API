@@ -205,7 +205,6 @@ def check(
     agreement: Agreement,
     line: OrderLine,
     reference: Decimal | None,
-    tolerance: Decimal = ZERO,
 ) -> AgreementCheck:
     """Check one applicable agreement against one line.
 
@@ -213,7 +212,6 @@ def check(
         agreement (Agreement): A support that covers the line on the order day.
         line (OrderLine): The order line; its margin and price are known.
         reference (Decimal | None): The product's margin for the channel of the order.
-        tolerance (Decimal): Margin a line may fall short by and still comply (a fraction).
 
     Returns:
         AgreementCheck: ``cumple``, ``no_cumple`` or ``no_evaluable`` with the margins.
@@ -246,7 +244,6 @@ def check(
             agreement.min_margin_pct,
             "Margen del pedido",
             "mínimo autorizado",
-            tolerance,
         )
     if method == "puntos_margen":
         base = agreement.list_margin_pct
@@ -262,7 +259,6 @@ def check(
             base - agreement.supplier_value,
             "Margen del pedido",
             "mínimo pactado",
-            tolerance,
         )
     if method not in _AMOUNT_METHODS:
         return _outcome(agreement, "no_evaluable", f"Método {method} no evaluable por pedido")
@@ -278,9 +274,7 @@ def check(
             f"Apoyo de {how}, pero sin margen objetivo para comparar",
         )
     effective = margin + share * (ONE - margin)
-    return _compare(
-        agreement, effective, required, f"Margen con apoyo ({how})", "objetivo", tolerance
-    )
+    return _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
 
 
 def _outcome(
@@ -289,7 +283,6 @@ def _outcome(
     detail: str,
     effective: Decimal | None = None,
     required: Decimal | None = None,
-    threshold_applied: bool = False,
 ) -> AgreementCheck:
     return AgreementCheck(
         support_id=agreement.id,
@@ -303,36 +296,20 @@ def _outcome(
         detail=detail,
         effective_margin_pct=_round(effective),
         required_margin_pct=_round(required),
-        threshold_applied=threshold_applied,
     )
 
 
 def _compare(
-    agreement: Agreement,
-    effective: Decimal,
-    required: Decimal,
-    what: str,
-    target: str,
-    tolerance: Decimal = ZERO,
+    agreement: Agreement, effective: Decimal, required: Decimal, what: str, target: str
 ) -> AgreementCheck:
-    exact = effective.quantize(QUANTUM) >= required.quantize(QUANTUM)
-    within = (effective + tolerance).quantize(QUANTUM) >= required.quantize(QUANTUM)
-    if exact:
-        detail = f"{what} {pct(effective)} ≥ {target} {pct(required)}"
-    elif within:
-        detail = (
-            f"{what} {pct(effective)} < {target} {pct(required)}, "
-            f"dentro del umbral de {points(tolerance)} puntos"
-        )
-    else:
-        detail = f"{what} {pct(effective)} < {target} {pct(required)}"
+    complies = effective.quantize(QUANTUM) >= required.quantize(QUANTUM)
+    sign = "≥" if complies else "<"
     return _outcome(
         agreement,
-        "cumple" if within else "no_cumple",
-        detail,
+        "cumple" if complies else "no_cumple",
+        f"{what} {pct(effective)} {sign} {target} {pct(required)}",
         effective,
         required,
-        threshold_applied=within and not exact,
     )
 
 
@@ -354,15 +331,14 @@ def decide(
     customer: CustomerScope | None,
     product: ProductInfo | None,
     today: date,
-    tolerance: Decimal = ZERO,
 ) -> LineResult:
     """Release decision for one line.
 
     A line is ready when an active agreement covering it on the order date is met, or when
-    its margin already reaches the product's margin for the channel. With a ``tolerance``,
-    a line that falls short by no more than that is released too, as ``cumple_con_umbral``.
-    Anything else is left pending for a person, with the reason. A product with liquor tax
-    is flagged, whatever the decision: the order may have been keyed without the tax.
+    its margin already reaches the product's margin for the channel. Anything else is left
+    pending for a person, with the reason. The margin threshold does not act on lines: it acts
+    on the margin of the whole order (``release_by_threshold``). A product with liquor tax is
+    flagged, whatever the decision: the order may have been keyed without the tax.
 
     Args:
         line (OrderLine): The order line.
@@ -370,14 +346,13 @@ def decide(
         customer (CustomerScope | None): The client in the master, if known.
         product (ProductInfo | None): The product in the master, if known.
         today (date): Day used when the file carries no order date.
-        tolerance (Decimal): Margin points a line may fall short by, as a fraction.
 
     Returns:
         LineResult: Status, reason, the margins of the deciding check and every check.
     """
 
     reference, basis = reference_margin(line, customer, product)
-    result = _decide(line, agreements, customer, reference, basis, today, tolerance)
+    result = _decide(line, agreements, customer, reference, basis, today)
     tax = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
     return replace(
         result,
@@ -394,7 +369,6 @@ def _decide(
     reference: Decimal | None,
     basis: str | None,
     today: date,
-    tolerance: Decimal,
 ) -> LineResult:
     if line.supplier_code is None or line.margin_pct is None or line.unit_price is None:
         missing = [
@@ -425,13 +399,12 @@ def _decide(
     scopes = [(item, scope_of(item, line, customer, day)) for item in agreements]
     applicable = [item for item, scope in scopes if scope == APPLIES]
     out_of_date = [item for item, scope in scopes if scope == OUT_OF_DATE]
-    checks = tuple(check(item, line, reference, tolerance) for item in applicable)
+    checks = tuple(check(item, line, reference) for item in applicable)
     label = _BASIS_LABEL.get(basis or "", "margen del producto")
 
     active_ok = [item for item in checks if item.outcome == "cumple" and not item.needs_review]
-    exact_ok = [item for item in active_ok if not item.threshold_applied]
-    if exact_ok:
-        best = _closest(exact_ok)
+    if active_ok:
+        best = _closest(active_ok)
         return _result(vocabulary.READY, "cumple_con_apoyo", best.detail, best, checks)
 
     if reference is not None and line.margin_pct.quantize(QUANTUM) >= reference.quantize(QUANTUM):
@@ -439,27 +412,6 @@ def _decide(
             status=vocabulary.READY,
             reason="cumple_margen_lista",
             detail=f"Margen del pedido {pct(line.margin_pct)} ≥ {label} {pct(reference)}",
-            effective_margin_pct=_round(line.margin_pct),
-            required_margin_pct=_round(reference),
-            checks=checks,
-        )
-
-    if active_ok:
-        best = _closest(active_ok)
-        return _result(vocabulary.READY, "cumple_con_umbral", best.detail, best, checks)
-
-    if (
-        reference is not None
-        and tolerance > ZERO
-        and (line.margin_pct + tolerance).quantize(QUANTUM) >= reference.quantize(QUANTUM)
-    ):
-        return LineResult(
-            status=vocabulary.READY,
-            reason="cumple_con_umbral",
-            detail=(
-                f"Margen del pedido {pct(line.margin_pct)} < {label} {pct(reference)}, "
-                f"dentro del umbral de {points(tolerance)} puntos"
-            ),
             effective_margin_pct=_round(line.margin_pct),
             required_margin_pct=_round(reference),
             checks=checks,
@@ -522,6 +474,15 @@ def _result(
     )
 
 
+def _amount(line: OrderLine) -> Decimal | None:
+    """Sales of a line that carries a cost, or `None` when it cannot be weighted."""
+
+    if line.unit_price is None or line.quantity is None or line.margin_pct is None:
+        return None
+    amount = line.unit_price * line.quantity
+    return None if amount <= ZERO or line.margin_pct >= ONE else amount
+
+
 def order_margins(
     lines: Iterable[tuple[OrderLine, LineResult]],
 ) -> tuple[Decimal | None, Decimal | None]:
@@ -539,10 +500,8 @@ def order_margins(
 
     sales = weighted = target_sales = target_weighted = ZERO
     for line, result in lines:
-        if line.unit_price is None or line.quantity is None or line.margin_pct is None:
-            continue
-        amount = line.unit_price * line.quantity
-        if amount <= ZERO or line.margin_pct >= ONE:
+        amount = _amount(line)
+        if amount is None or line.margin_pct is None:
             continue
         sales += amount
         weighted += amount * line.margin_pct
@@ -588,25 +547,82 @@ def by_supplier(agreements: Iterable[Agreement]) -> Mapping[str | None, list[Agr
     return grouped
 
 
-def summarize(
-    lines: Iterable[tuple[str, str]], approved: Collection[str] = ()
-) -> tuple[int, int, int, int]:
-    """Counts of a batch from ``(document, line status)`` pairs.
+# Reasons of a line that is pending only because its margin falls short.
+_SHORT_REASONS = ("sin_acuerdo", "no_cumple_acuerdo")
+RELEASE_LINES = "lineas"
+RELEASE_ORDER_MARGIN = "margen"
+RELEASE_MANUAL = "manual"
 
-    An order a person approved counts as ready; its lines keep their own status.
+
+def release_by_threshold(items: Iterable[tuple[OrderLine, LineResult]], threshold: Decimal) -> bool:
+    """Whether the margin of the whole order releases an order pending only for its margin.
+
+    The threshold is margin points added to the margin of the whole order (0 is the margin
+    alone, which is always checked): the order is released when
+    ``order margin + threshold >= order target``, both weighted by amount (see
+    :func:`order_margins`). It never rescues an order with a line that is pending for another
+    reason (incomplete data, a support in review or out of date, not evaluable) or that has no
+    margin to compare with: those need a person.
+
+    Args:
+        items (Iterable[tuple[OrderLine, LineResult]]): The lines of one order.
+        threshold (Decimal): Margin points, as a fraction (0.005 = 0,5 points).
 
     Returns:
-        tuple[int, int, int, int]: Lines, orders, ready lines and ready orders.
+        bool: ``True`` when the order margin, with the threshold, reaches its target.
     """
 
-    statuses: dict[str, list[str]] = {}
-    for document, status in lines:
-        statuses.setdefault(document, []).append(status)
-    line_count = sum(len(items) for items in statuses.values())
-    ready_lines = sum(items.count(vocabulary.READY) for items in statuses.values())
+    pairs = list(items)
+    if threshold < ZERO or not pairs:
+        return False
+    for line, result in pairs:
+        if result.status == vocabulary.READY:
+            continue
+        if result.reason not in _SHORT_REASONS or result.required_margin_pct is None:
+            return False
+        if _amount(line) is None:
+            return False
+    margin, required = order_margins(pairs)
+    if margin is None or required is None:
+        return False
+    return (margin + threshold).quantize(QUANTUM) >= required.quantize(QUANTUM)
+
+
+def release_basis(
+    items: Sequence[tuple[OrderLine, LineResult]], approved: bool, threshold: Decimal
+) -> str | None:
+    """Why an order is ready: ``manual`` approval, all its ``lineas``, or its ``margen``, or not."""
+
+    if approved:
+        return RELEASE_MANUAL
+    if order_status(result.status for _, result in items) == vocabulary.READY:
+        return RELEASE_LINES
+    if release_by_threshold(items, threshold):
+        return RELEASE_ORDER_MARGIN
+    return None
+
+
+def summarize_batch(
+    items: Iterable[tuple[OrderLine, LineResult]],
+    approved: Collection[str] = (),
+    threshold: Decimal = ZERO,
+) -> tuple[int, int, int, int]:
+    """Counts of a batch: lines, orders, ready lines and ready orders.
+
+    An order is ready when all its lines are, when a person approved it, or when the margin
+    threshold releases it. Its lines keep their own status either way.
+    """
+
+    orders: dict[str, list[tuple[OrderLine, LineResult]]] = {}
+    for line, result in items:
+        orders.setdefault(line.document, []).append((line, result))
+    line_count = sum(len(pairs) for pairs in orders.values())
+    ready_lines = sum(
+        1 for pairs in orders.values() for _, result in pairs if result.status == vocabulary.READY
+    )
     ready_orders = sum(
         1
-        for document, items in statuses.items()
-        if document in approved or order_status(items) == vocabulary.READY
+        for document, pairs in orders.items()
+        if release_basis(pairs, document in approved, threshold) is not None
     )
-    return line_count, len(statuses), ready_lines, ready_orders
+    return line_count, len(orders), ready_lines, ready_orders

@@ -32,12 +32,12 @@ from app.modules.order_validation.domain.vocabulary import REASON_LABELS, STATUS
 router = APIRouter(dependencies=[Depends(rate_limit("medium"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.order_validation_service])
 _principal = Depends(get_current_principal)
+_TRY_THRESHOLD = Query(default=None, ge=0, le=20, description="Try a threshold without saving it")
 
 LineStatus = Literal["listo_para_liberar", "pendiente_validacion"]
 Reason = Literal[
     "cumple_con_apoyo",
     "cumple_margen_lista",
-    "cumple_con_umbral",
     "acuerdo_en_revision",
     "no_cumple_acuerdo",
     "acuerdo_no_evaluable",
@@ -88,7 +88,6 @@ class CheckResponse(BaseModel):
     detail: str
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
-    threshold_applied: bool
 
 
 class LineResponse(BaseModel):
@@ -135,6 +134,12 @@ class ApprovalRequest(BaseModel):
     note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
 
 
+class ThresholdRequest(BaseModel):
+    """The margin threshold of a file, in points."""
+
+    margin_threshold_points: Decimal = Field(ge=0, le=20)
+
+
 class RevalidateRequest(BaseModel):
     """Optional settings of a new validation."""
 
@@ -160,6 +165,9 @@ class OrderResponse(BaseModel):
     total_amount: Decimal | None
     margin_pct: Decimal | None
     required_margin_pct: Decimal | None
+    margin_with_threshold_pct: Decimal | None
+    release_basis: Literal["lineas", "margen", "manual"] | None
+    without_support_line_count: int
     has_liquor_tax: bool
     lines: list[LineResponse]
 
@@ -226,7 +234,6 @@ def _check(item: AgreementCheck) -> CheckResponse:
         detail=item.detail,
         effective_margin_pct=item.effective_margin_pct,
         required_margin_pct=item.required_margin_pct,
-        threshold_applied=item.threshold_applied,
     )
 
 
@@ -278,6 +285,9 @@ def _order(order: OrderView) -> OrderResponse:
         total_amount=order.total_amount,
         margin_pct=order.margin_pct,
         required_margin_pct=order.required_margin_pct,
+        margin_with_threshold_pct=order.margin_with_threshold_pct,
+        release_basis=order.release_basis,  # type: ignore[arg-type]
+        without_support_line_count=order.without_support_line_count,
         has_liquor_tax=order.has_liquor_tax,
         lines=[_line(item) for item in order.lines],
         manual_approval=(
@@ -322,7 +332,7 @@ async def catalogs(
     description=(
         "multipart/form-data with `file` (.xlsx, .xlsm or .csv, the SIESA retained orders "
         "report). Every line is checked against the supports master at once. Optional form "
-        "field ``margin_threshold_points`` (0.5 releases a line at 19.5 % against a 20 % target)."
+        "field ``margin_threshold_points`` (0.5 releases an order at 19.5 % against a 20 % target)."
     ),
 )
 @inject
@@ -377,7 +387,7 @@ async def list_orders(
     status_filter: LineStatus | None = Query(default=None, alias="status"),  # noqa: B008
     reason: Reason | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
-    liquor_tax: bool | None = Query(default=None, description="Orders with a liquor-tax product"),
+    margin_threshold_points: Decimal | None = _TRY_THRESHOLD,
     sort: Literal["attention", "file"] = Query(default="attention"),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
@@ -387,7 +397,9 @@ async def list_orders(
     """Orders of a file with every line, its decision and the supports checked.
 
     `attention` (default) lists first the orders, and inside each the lines, that have no
-    support, then by margin from lowest to highest; `file` keeps the file order.
+    support, then by margin from lowest to highest; `file` keeps the file order. With
+    `margin_threshold_points` the statuses and counts come out as if the file had that
+    threshold, without saving it; `PUT /{id}/margin-threshold` saves it.
     """
 
     result = await service.orders(
@@ -395,7 +407,7 @@ async def list_orders(
         status=status_filter,
         reason=reason,
         q=q,
-        liquor_tax=liquor_tax,
+        margin_threshold_points=margin_threshold_points,
         sort=sort,
         page=page,
         size=size,
@@ -430,6 +442,28 @@ async def revalidate(
 
     points = body.margin_threshold_points if body else None
     return _batch(await service.revalidate(principal, batch_id, points))
+
+
+@router.put(
+    "/{batch_id}/margin-threshold",
+    response_model=BatchResponse,
+    summary="Save the margin threshold",
+    description=(
+        "Margin points an order may fall short by and still be released, added to the margin "
+        "of each order. Lines are not re-checked, only which orders are released; manual "
+        "approvals are kept."
+    ),
+)
+@inject
+async def set_margin_threshold(
+    batch_id: UUID,
+    body: ThresholdRequest,
+    principal: Principal = _principal,
+    service: OrderValidationService = _service,
+) -> BatchResponse:
+    """Save the threshold and recount the orders. Managers only."""
+
+    return _batch(await service.set_threshold(principal, batch_id, body.margin_threshold_points))
 
 
 @router.post(

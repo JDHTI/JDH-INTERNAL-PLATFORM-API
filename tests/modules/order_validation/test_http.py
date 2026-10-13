@@ -92,7 +92,7 @@ def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
 def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
     catalogs = client.get(f"{BASE}/catalogs").json()
-    assert len(catalogs["reasons"]) == 9 and catalogs["statuses"][0]["label"]
+    assert len(catalogs["reasons"]) == 8 and catalogs["statuses"][0]["label"]
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
@@ -143,7 +143,7 @@ def test_outsiders_cannot_approve_or_delete(client) -> None:
     assert client.delete(f"{BASE}/{batch['id']}").status_code == 403
 
 
-def test_orders_carry_the_margin_flag_threshold_and_sort(client, source) -> None:
+def test_orders_carry_the_margin_flag_and_sort(client, source) -> None:
     source.catalog["1128"] = ProductInfo("1128", {"margin_list": Decimal("0.18")}, Decimal("6911"))
     batch = upload(client).json()
     url = f"{BASE}/{batch['id']}/orders"
@@ -156,43 +156,74 @@ def test_orders_carry_the_margin_flag_threshold_and_sort(client, source) -> None
     assert pv2["has_liquor_tax"] is True and Decimal(pv2["margin_pct"]) == Decimal("0.075")
     # The 359 line aims at its support (14 %), the 233 line at the product margin (18 %).
     assert Decimal(pv2["required_margin_pct"]) == Decimal("0.16")
+    assert pv2["without_support_line_count"] == 1 and pv2["ready_line_count"] == 1
+    assert pv2["release_basis"] is None and pv2["margin_with_threshold_pct"] is None
     first = pv2["lines"][0]
     assert first["liquor_tax"] is True and Decimal(first["liquor_tax_amount"]) == 6911
     assert first["margin_basis"] == "lista" and first["checks"] == []
+    assert "threshold_applied" not in str(default)
     assert batch["margin_threshold_points"] == "0.00"
 
-    taxed = client.get(url, params={"liquor_tax": "true"}).json()
-    assert [item["document"] for item in taxed["items"]] == ["PV-2"]
+    assert default["items"][1]["release_basis"] == "lineas"
     in_file = client.get(url, params={"sort": "file"}).json()["items"]
     assert [item["document"] for item in in_file] == ["PV-1", "PV-2"]
     assert client.get(url, params={"sort": "margen"}).status_code == 422
 
 
-def test_threshold_on_upload_and_revalidate(client, source) -> None:
+def test_threshold_on_upload_try_save_and_revalidate(client, source) -> None:
     source.items.clear()
-    source.catalog["28703"] = ProductInfo("28703", {"margin_list": Decimal("0.105")})
+    # PV-1 is a 10 % line against a 10,5 % margin: short by half a point.
+    source.catalog["18294"] = ProductInfo("18294", {"margin_list": Decimal("0.105")})
     files = {"file": ("Pedidos Retenidos.xlsx", report(), XLSX)}
 
     created = client.post(BASE, files=files, data={"margin_threshold_points": "0.5"})
 
     assert created.status_code == 201
     batch = created.json()
-    assert batch["margin_threshold_points"] == "0.50" and batch["ready_line_count"] == 1
+    assert batch["margin_threshold_points"] == "0.50" and batch["ready_order_count"] == 1
+    assert batch["ready_line_count"] == 0  # the threshold acts on orders, not on lines
     url = f"{BASE}/{batch['id']}"
-    reasons = {
-        line["reason"]
-        for order in client.get(f"{url}/orders").json()["items"]
-        for line in order["lines"]
-    }
-    assert "cumple_con_umbral" in reasons
+    pv1 = client.get(f"{url}/orders", params={"sort": "file"}).json()["items"][0]
+    assert pv1["status"] == "listo_para_liberar" and pv1["release_basis"] == "margen"
+    assert Decimal(pv1["margin_pct"]) == Decimal("0.1")
+    assert Decimal(pv1["margin_with_threshold_pct"]) == Decimal("0.105")
+    assert pv1["lines"][0]["reason"] == "sin_acuerdo"
 
-    cleared = client.post(f"{url}/revalidate", json={"margin_threshold_points": "0"})
-    assert cleared.status_code == 200 and cleared.json()["margin_threshold_points"] == "0.00"
-    assert cleared.json()["ready_line_count"] == 0
-    kept = client.post(f"{url}/revalidate")
-    assert kept.json()["margin_threshold_points"] == "0.00"
+    # Trying another value changes the page, not the saved file.
+    tried = client.get(f"{url}/orders", params={"margin_threshold_points": "0"}).json()
+    assert tried["counts"]["listo_para_liberar"] == 0
+    assert client.get(url).json()["ready_order_count"] == 1
+    assert client.get(f"{url}/orders", params={"margin_threshold_points": "25"}).status_code == 422
+
+    saved = client.put(f"{url}/margin-threshold", json={"margin_threshold_points": "0"})
+    assert saved.status_code == 200 and saved.json()["margin_threshold_points"] == "0.00"
+    assert saved.json()["ready_order_count"] == 0
     assert (
-        client.post(f"{url}/revalidate", json={"margin_threshold_points": "25"}).status_code == 422
+        client.put(f"{url}/margin-threshold", json={"margin_threshold_points": 25}).status_code
+        == 422
     )
+    assert client.put(f"{url}/margin-threshold", json={}).status_code == 422
+    revalidated = client.post(f"{url}/revalidate", json={"margin_threshold_points": "0.5"})
+    assert revalidated.json()["margin_threshold_points"] == "0.50"
+    assert revalidated.json()["ready_order_count"] == 1
+    kept = client.post(f"{url}/revalidate")
+    assert kept.json()["margin_threshold_points"] == "0.50"
     bad = client.post(BASE, files=files, data={"margin_threshold_points": "-1"})
     assert bad.status_code == 422
+
+
+def test_outsiders_cannot_save_the_threshold(client) -> None:
+    batch = upload(client).json()
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+
+    denied = client.put(
+        f"{BASE}/{batch['id']}/margin-threshold", json={"margin_threshold_points": 1}
+    )
+
+    assert denied.status_code == 403
+    assert (
+        client.get(
+            f"{BASE}/{batch['id']}/orders", params={"margin_threshold_points": 1}
+        ).status_code
+        == 200
+    )
