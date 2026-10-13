@@ -7,8 +7,8 @@ Rows with problems (impossible dates, unknown NIT or SKU, duplicated rows,
 drag-filled NITs, ambiguous bases...) are imported as ``pendiente_revision`` with
 their issues, so nothing in the workbook is lost.
 
-Also loads the default list margin of each supplier (``Margenes Lista1``) and the
-supplier SKU catalogs (``Maestro_Sku_*``).
+Also loads the supplier SKU catalogs (``Maestro_Sku_*``). Margins live on each product:
+see ``scripts/import-product-margins.py``.
 
 Needs the commercial masters in the platform first (``scripts/sync-dwh-masters.py``).
 Runs as a dry run unless ``--apply`` is given; reruns skip supports already loaded
@@ -266,19 +266,7 @@ async def run(args: argparse.Namespace) -> int:
 
 
 async def import_catalogs(book, raw_lookup, overrides, lookup, notes, apply) -> None:
-    """Default list margins and supplier SKU catalogs."""
-
-    margins = wb.read_list_margins(book)
-    known = await lookup.commercial_suppliers_by_code([margin.code for margin in margins])
-    applied = 0
-    for margin in margins:
-        if margin.code in known and apply:
-            await raw_lookup.set_list_margin(margin.code, margin.pct, margin.notes)
-            applied += 1
-    print(
-        f"Márgenes lista: {len(margins)} en el Excel, {len(known)} con proveedor en el maestro"
-        + (f", {applied} guardados" if apply else "")
-    )
+    """Supplier SKU catalogs (the margin now lives on each product; see import-product-margins)."""
 
     codes = wb.read_supplier_codes(book)
     resolved = []

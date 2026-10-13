@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from app.modules.order_validation.domain import rules
-from app.modules.order_validation.domain.entities import CustomerScope
+from app.modules.order_validation.domain.entities import CustomerScope, ProductInfo
 
 from tests.modules.order_validation.conftest import agreement, line
 
@@ -12,8 +12,14 @@ TODAY = date(2026, 10, 9)
 D = Decimal
 
 
-def decide(agreements=(), customer=None, supplier_margin=None, **values):
-    return rules.decide(line(**values), list(agreements), customer, supplier_margin, TODAY)
+def info(**margins) -> ProductInfo:
+    return ProductInfo("18294", {f"margin_{name}": value for name, value in margins.items()})
+
+
+def decide(agreements=(), customer=None, reference=None, product=None, **values):
+    if product is None and reference is not None:
+        product = info(list=reference)
+    return rules.decide(line(**values), list(agreements), customer, product, TODAY)
 
 
 def test_a_percentage_of_cost_brings_the_margin_up_to_the_target() -> None:
@@ -63,7 +69,7 @@ def test_net_cost_without_reference_cannot_be_evaluated() -> None:
 def test_the_required_margin_falls_back_to_the_supplier_list_margin() -> None:
     support = agreement(supplier_value=D("0.05"))
 
-    assert decide([support], supplier_margin=D("0.14")).reason == "cumple_con_apoyo"
+    assert decide([support], reference=D("0.14")).reason == "cumple_con_apoyo"
     assert decide([support]).reason == "acuerdo_no_evaluable"
 
 
@@ -136,7 +142,7 @@ def test_an_active_agreement_wins_over_one_under_review_and_the_best_is_kept() -
 
 
 def test_margin_at_or_above_the_list_margin_needs_no_agreement() -> None:
-    result = decide(supplier_margin=D("0.10"))
+    result = decide(reference=D("0.10"))
 
     assert result.status == "listo_para_liberar" and result.reason == "cumple_margen_lista"
 
@@ -144,7 +150,7 @@ def test_margin_at_or_above_the_list_margin_needs_no_agreement() -> None:
 def test_no_agreement_and_low_margin_is_pending() -> None:
     other_client = agreement(customer_nit="800116299", supplier_value=D("0.5"))
 
-    result = decide([other_client], supplier_margin=D("0.18"))
+    result = decide([other_client], reference=D("0.18"))
 
     assert result.reason == "sin_acuerdo" and "18,00 %" in result.detail
     assert result.checks == ()
@@ -226,7 +232,7 @@ def test_missing_data_is_pending_and_lists_what_could_not_be_read() -> None:
 
 
 def test_a_full_margin_is_a_line_without_cost_not_a_release() -> None:
-    result = decide(margin_pct=D("1"), supplier_margin=D("0.18"))
+    result = decide(margin_pct=D("1"), reference=D("0.18"))
 
     assert result.status == "pendiente_validacion" and result.reason == "datos_incompletos"
     assert "no trae costo" in result.detail
@@ -237,4 +243,163 @@ def test_order_status_and_batch_counts() -> None:
 
     assert rules.order_status([ready, ready]) == ready
     assert rules.order_status([ready, pending]) == pending
-    assert rules.summarize([("A", ready), ("A", pending), ("B", ready)]) == (3, 2, 2, 1)
+    items = [
+        (line(document=document), rules.LineResult(status, "sin_acuerdo", ""))
+        for document, status in (("A", ready), ("A", pending), ("B", ready))
+    ]
+    assert rules.summarize_batch(items) == (3, 2, 2, 1)
+    # A manual approval makes the order ready; its lines keep their status.
+    assert rules.summarize_batch(items, {"A"}) == (3, 2, 2, 2)
+
+
+def test_the_margin_of_the_channel_is_the_reference() -> None:
+    product = info(list=D("0.18"), wholesale=D("0.12"), salsamentarias=D("0.10"))
+
+    assert decide(product=product, channel="HOTELES Y CLUBES").required_margin_pct == D("0.18")
+    wholesale = decide(product=product, channel="MAYORISTAS Y DISTRIBUIDORES")
+    assert wholesale.required_margin_pct == D("0.12") and wholesale.margin_basis == "mayoristas"
+    assert decide(product=product, channel="SUBDISTRIBUIDOR").margin_basis == "mayoristas"
+    sal = decide(product=product, channel="SALSAMENTARIAS", margin_pct=D("0.10"))
+    assert sal.reason == "cumple_margen_lista" and sal.margin_basis == "salsamentarias"
+    assert sal.detail == "Margen del pedido 10,00 % ≥ margen salsamentarias 10,00 %"
+    # Masivo Food and Market Apartadó are loaded but no rule applies them yet.
+    other = ProductInfo("1", {"margin_list": D("0.30"), "margin_mass_food": D("0.01")})
+    assert decide(product=other, channel="AUTOSERVICIO").required_margin_pct == D("0.30")
+
+
+def test_the_client_channel_is_used_when_the_file_has_none() -> None:
+    product = info(list=D("0.18"), wholesale=D("0.12"))
+    client = CustomerScope("900315138", channels=frozenset({"MAYORISTAS Y DISTRIBUIDORES"}))
+
+    result = decide(product=product, customer=client, channel=None, margin_pct=D("0.12"))
+
+    assert result.reason == "cumple_margen_lista" and result.margin_basis == "mayoristas"
+
+
+def test_a_product_without_margin_for_the_channel_says_so() -> None:
+    result = decide(product=info(wholesale=D("0.12")), channel="HOTELES Y CLUBES")
+
+    assert result.reason == "sin_acuerdo"
+    assert "no tiene margen definido para este canal" in result.detail
+    assert result.margin_basis is None and result.required_margin_pct is None
+
+
+def pair(price, quantity, margin, required, reason="sin_acuerdo", document="PV-1", row=2):
+    item = line(
+        document=document,
+        unit_price=D(price),
+        quantity=D(quantity),
+        margin_pct=margin,
+        row_number=row,
+    )
+    status = "listo_para_liberar" if reason.startswith("cumple") else "pendiente_validacion"
+    return item, rules.LineResult(status, reason, "", required_margin_pct=required)
+
+
+def test_the_threshold_acts_on_the_margin_of_the_whole_order() -> None:
+    # 1 000 at 10 % and 3 000 at 20 %: the order margin is 17,5 % against a 20 % target.
+    items = [
+        pair("1000", "1", D("0.10"), D("0.20")),
+        pair("3000", "1", D("0.20"), D("0.20"), "cumple_margen_lista"),
+    ]
+
+    assert rules.order_margins(items) == (D("0.175000"), D("0.200000"))
+    assert not rules.release_by_threshold(items, D("0"))
+    assert not rules.release_by_threshold(items, D("0.02"))
+    assert rules.release_by_threshold(items, D("0.025"))
+    assert rules.release_by_threshold(items, D("0.03"))
+    assert rules.release_basis(items, False, D("0.03")) == "margen"
+    assert rules.release_basis(items, False, D("0")) is None
+    assert rules.release_basis(items, True, D("0")) == "manual"
+
+
+def test_the_threshold_example_of_the_business_19_5_against_20() -> None:
+    items = [pair("100", "10", D("0.195"), D("0.20"), "no_cumple_acuerdo")]
+
+    assert not rules.release_by_threshold(items, D("0"))
+    assert rules.release_by_threshold(items, D("0.005"))
+    assert not rules.release_by_threshold([pair("100", "10", D("0.194"), D("0.20"))], D("0.005"))
+
+
+def test_the_threshold_does_not_rescue_orders_that_need_a_person() -> None:
+    short = pair("1000", "1", D("0.199"), D("0.20"))
+    for reason in (
+        "acuerdo_en_revision",
+        "acuerdo_no_evaluable",
+        "acuerdo_vencido",
+        "datos_incompletos",
+    ):
+        other = pair("1000", "1", D("0.30"), D("0.20"), reason, row=3)
+        assert not rules.release_by_threshold([short, other], D("0.05"))
+    # A line with nothing to compare with, or with no cost, keeps the order pending too.
+    assert not rules.release_by_threshold(
+        [short, pair("1000", "1", D("0.30"), None, row=3)], D("0.05")
+    )
+    assert not rules.release_by_threshold(
+        [short, pair("1000", "1", D("1"), D("0.20"), row=3)], D("0.05")
+    )
+    assert rules.release_by_threshold(
+        [short, pair("1000", "1", D("0.30"), D("0.20"), "cumple_margen_lista", row=3)], D("0.05")
+    )
+
+
+def test_a_line_is_never_released_by_the_threshold() -> None:
+    result = decide(reference=D("0.20"), margin_pct=D("0.195"))
+
+    assert result.status == "pendiente_validacion" and result.reason == "sin_acuerdo"
+    support = agreement(supplier_value=D("0.05"), target_margin_pct=D("0.1455"))
+    assert decide([support]).reason == "no_cumple_acuerdo"
+
+
+def test_a_product_with_liquor_tax_is_flagged_whatever_the_decision() -> None:
+    taxed = ProductInfo("18294", {"margin_list": D("0.20")}, liquor_tax=D("6911"))
+
+    pending = decide(product=taxed, margin_pct=D("0.05"))
+    ready = decide(product=taxed, margin_pct=D("0.25"))
+
+    assert pending.liquor_tax and pending.liquor_tax_amount == D("6911")
+    assert ready.liquor_tax and ready.status == "listo_para_liberar"
+    assert not decide(product=info(list=D("0.2"))).liquor_tax
+    assert not decide(product=ProductInfo("1", liquor_tax=D("0"))).liquor_tax
+    assert decide(product=taxed, margin_pct=None).liquor_tax
+
+
+def test_the_order_margin_is_weighted_by_amount() -> None:
+    def pair(price, quantity, margin, required=None):
+        item = line(unit_price=D(price), quantity=D(quantity), margin_pct=margin)
+        return item, rules.LineResult(
+            "pendiente_validacion", "sin_acuerdo", "", required_margin_pct=required
+        )
+
+    margin, required = rules.order_margins(
+        [
+            pair("100", "1", D("0.10"), D("0.20")),
+            pair("300", "1", D("0.20"), D("0.20")),
+            # No cost (100 %), unreadable margin and zero amounts stay out.
+            pair("500", "1", D("1")),
+            pair("100", "1", None),
+            pair("0", "1", D("0.5")),
+        ]
+    )
+
+    assert margin == D("0.175000") and required == D("0.200000")
+    assert rules.order_margins([pair("100", "1", None)]) == (None, None)
+
+
+def test_lines_without_support_come_first_then_lower_margins() -> None:
+    def key(row, margin, reason):
+        item = line(row_number=row, margin_pct=margin)
+        return rules.line_sort_key(item, rules.LineResult("pendiente_validacion", reason, ""))
+
+    ordered = sorted(
+        [
+            (3, key(3, D("0.30"), "cumple_con_apoyo")),
+            (4, key(4, None, "sin_acuerdo")),
+            (2, key(2, D("0.10"), "cumple_con_apoyo")),
+            (5, key(5, D("0.25"), "sin_acuerdo")),
+            (6, key(6, D("-0.05"), "sin_acuerdo")),
+        ],
+        key=lambda pair: pair[1],
+    )
+
+    assert [row for row, _ in ordered] == [6, 5, 4, 2, 3]

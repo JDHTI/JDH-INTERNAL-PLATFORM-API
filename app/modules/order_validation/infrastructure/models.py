@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -46,6 +47,10 @@ class OrderValidationBatchModel(Base):
     order_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ready_line_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ready_order_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Margin a line may fall short by and still be released, as a fraction (0.005 = 0,5 pts).
+    margin_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(8, 6), nullable=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -117,4 +122,7 @@ class OrderValidationLineModel(Base):
     )
     effective_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     required_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    margin_basis: Mapped[str | None] = mapped_column(String(20))
+    liquor_tax: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    liquor_tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")

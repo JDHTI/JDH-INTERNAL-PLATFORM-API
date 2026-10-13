@@ -16,7 +16,7 @@ propias con columnas reales:
 
 | Tabla | Origen | Llave | Notas |
 | --- | --- | --- | --- |
-| `commercial_suppliers` | `consumo.productos` (`cod_proveedor`, `proveedor`) | `code` | Es el **«Cod. Proveedor»** del Excel (649 códigos). No es una identidad tributaria. Guarda el margen lista 1 y sus excepciones. |
+| `commercial_suppliers` | `consumo.productos` (`cod_proveedor`, `proveedor`) | `code` | Es el **«Cod. Proveedor»** del Excel (649 códigos). No es una identidad tributaria. El margen ya no vive aquí: es [uno por producto](margenes-productos.md). |
 | `commercial_supplier_nits` | `consumo.producto_proveedor` | `(proveedor comercial, nit)` | NITs probables por historial de compras; el de más productos es el principal. Se confirman a mano (`PATCH /commercial/suppliers/{code}`). |
 | `suppliers` | `consumo.proveedores` | `proveedor_key` | Proveedor legal por sucursal. Sin datos bancarios ni de contacto. |
 | `customers` | `consumo.clientes` | `cliente_key` | Cliente por sucursal. Se omite el registro `cia = -1` («desconocido»). El NIT **no** es único. |
@@ -156,7 +156,7 @@ Lectura: cualquier usuario autenticado. Escritura: administradores y miembros de
 | `PATCH /supplier-supports/{id}` | Solo los campos enviados (`null` limpia); exige `version` (409 si cambió). `is_enabled: false` desactiva (estado `inactivo`, reversible); también edita la estructura (`jdh_pct`, `supplier_value`, `value_unit`, `pack_factor`…) |
 | `POST /supplier-supports/{id}/void` | Anular con motivo; no se borra nada |
 | `GET /supplier-supports/{id}/conflicts` | Apoyos que se solapan con este |
-| `GET /commercial/suppliers`, `/suppliers/{code}`, `PATCH /suppliers/{code}` | Proveedores comerciales, margen lista y NITs confirmados |
+| `GET /commercial/suppliers`, `/suppliers/{code}`, `PATCH /suppliers/{code}` | Proveedores comerciales y NITs confirmados (el margen es [por producto](margenes-productos.md)) |
 | `GET /commercial/legal-suppliers`, `/customers`, `/products` | Pickers de los maestros |
 
 ### Filtrado dinámico
@@ -245,9 +245,9 @@ inconsistencias.
 Decisiones tomadas al normalizar (revisables): `TODOS`/`NACIONAL` = sin restricción;
 `ANTIQOUIA` → `ANTIOQUIA`; `FOOD` → unidad `FOOD SERVICE`; `MAYORISTAS` → canal
 `MAYORISTAS Y DISTRIBUIDORES`; fechas `INDEFINIDO`/`UFN`/vacías = sin fecha final;
-`Margenes Lista1` → margen lista del proveedor comercial; `Condiciones Especiales`
-(márgenes mínimos autorizados, sin dinero del proveedor) → `excepcion_margen`,
-expandidas por proveedor × referencia × cliente; Unilever se carga con el código 399
+`Condiciones Especiales` (márgenes mínimos autorizados, sin dinero del proveedor; el
+validador de pedidos no las aplica, ver [condiciones especiales](condiciones-especiales.md))
+→ `excepcion_margen`, expandidas por proveedor × referencia × cliente; Unilever se carga con el código 399
 (ACO 1126 y Professional 1111 quedan por separar); Kimberly con el de Colpapel (1098)
 porque no tiene código propio.
 
@@ -273,8 +273,8 @@ columna si la página no tiene ningún valor. Cobertura del libro actual (% de a
 
 1. Base del % por proveedor (costo, lista 1, PVP o mayorista): hoy Ohra y Griffith
    mezclan bases.
-2. Margen lista autoritativo (la hoja `Margenes Lista1` contradice las hojas de
-   Unilever y Diversey).
+2. Margen lista autoritativo (el [margen por producto](margenes-productos.md) puede
+   contradecir las hojas de Unilever y Diversey).
 3. Si `puntos_margen` (Rubbermaid, Upfield) son realmente puntos o un % sobre precio.
 4. Si el costo apoyado se factura neto o se reclama por nota crédito.
 5. Qué apoyo gana cuando se solapan, y si los de cliente, grupo, canal y regional se

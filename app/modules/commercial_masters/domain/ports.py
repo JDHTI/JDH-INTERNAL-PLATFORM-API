@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
-from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -88,7 +87,12 @@ class CommercialMasterRepository(Protocol):
     ) -> CommercialSupplier | None: ...
 
     async def list_legal_suppliers(
-        self, query: str | None, nit: str | None, is_active: bool | None, page: int, size: int
+        self,
+        query: str | None,
+        nit: str | None,
+        is_active: bool | None,
+        page: int,
+        size: int,
     ) -> Page[LegalSupplier]: ...
 
     async def list_customers(
@@ -112,7 +116,22 @@ class CommercialMasterRepository(Protocol):
         is_active: bool | None,
         page: int,
         size: int,
+        has_margin: bool | None = None,
     ) -> Page[Product]: ...
+
+    async def get_product(self, sku: str) -> Product | None: ...
+
+    async def update_product(
+        self, sku: str, changes: Mapping[str, Any], actor: str, now: datetime
+    ) -> Product | None: ...
+
+    async def margins_by_sku(self, skus: Sequence[str]) -> dict[str, Product]: ...
+
+    async def bulk_update_products(
+        self, rows: Sequence[Mapping[str, Any]], actor: str, now: datetime
+    ) -> int: ...
+
+    async def products_with_margins(self) -> list[Product]: ...
 
     async def products_by_sku(self, skus: Sequence[str]) -> dict[str, ProductRef]: ...
 
@@ -125,8 +144,6 @@ class CommercialMasterRepository(Protocol):
     ) -> dict[UUID, tuple[str, str]]: ...
 
     async def existing_customer_nits(self, nits: Sequence[str]) -> dict[str, str]: ...
-
-    async def set_list_margin(self, code: str, pct: Decimal | None, notes: str | None) -> bool: ...
 
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

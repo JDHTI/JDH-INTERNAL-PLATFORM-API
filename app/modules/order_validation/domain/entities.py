@@ -67,6 +67,19 @@ class Agreement:
 
 
 @dataclass(frozen=True)
+class ProductInfo:
+    """What the validator needs from a product: its margin by channel and its liquor tax.
+
+    ``margins`` is keyed by the product margin column (``margin_list``...); a channel with
+    no margin defined is ``None``.
+    """
+
+    sku: str
+    margins: dict[str, Decimal | None] = field(default_factory=dict)
+    liquor_tax: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class CustomerScope:
     """Channel, business unit and regional of a client, across all its branches.
 
@@ -143,6 +156,11 @@ class LineResult:
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
     checks: tuple[AgreementCheck, ...] = ()
+    # Which product margin the line was compared with: lista, mayoristas, salsamentarias.
+    margin_basis: str | None = None
+    # The product has liquor tax and the order may have been keyed without it.
+    liquor_tax: bool = False
+    liquor_tax_amount: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +186,8 @@ class Batch:
     order_count: int
     ready_line_count: int
     ready_order_count: int
+    # Margin points a line may fall short by and still be released, as a fraction.
+    margin_threshold: Decimal = Decimal(0)
 
     @property
     def pending_line_count(self) -> int:
@@ -211,12 +231,26 @@ class OrderView:
     lines: list[StoredLine]
     total_amount: Decimal | None = None
     manual_approval: ManualApproval | None = None
+    # Weighted by amount over the lines that carry a cost, and the weighted target.
+    margin_pct: Decimal | None = None
+    required_margin_pct: Decimal | None = None
+    # The order margin plus the margin threshold, when the threshold is above zero.
+    margin_with_threshold_pct: Decimal | None = None
+    # Why the order is ready: `lineas`, `umbral` or `manual`; `None` while pending.
+    release_basis: str | None = None
+    has_liquor_tax: bool = False
 
     @property
     def first(self) -> OrderLine:
         """The first line, which carries the order header (client, date, channel...)."""
 
         return self.lines[0].line
+
+    @property
+    def without_support_line_count(self) -> int:
+        """Lines no support covers."""
+
+        return sum(1 for item in self.lines if item.result.reason == "sin_acuerdo")
 
     @property
     def ready_line_count(self) -> int:

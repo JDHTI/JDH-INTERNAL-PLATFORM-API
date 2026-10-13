@@ -19,9 +19,10 @@ from app.modules.order_validation.domain.entities import (
     LineResult,
     ManualApproval,
     OrderLine,
+    ProductInfo,
     StoredLine,
 )
-from app.modules.order_validation.domain.rules import summarize
+from app.modules.order_validation.domain.rules import summarize_batch
 from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
 
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
@@ -43,11 +44,11 @@ def agreement(**values) -> Agreement:
 
 
 class FakeAgreementSource:
-    """Supports, list margins and clients kept in memory."""
+    """Supports, product margins and clients kept in memory."""
 
     def __init__(self) -> None:
         self.items: list[Agreement] = []
-        self.margins: dict[str, Decimal | None] = {}
+        self.catalog: dict[str, ProductInfo] = {}
         self.clients: dict[str, CustomerScope] = {}
 
     async def agreements(self, supplier_codes, skus, nits) -> list[Agreement]:
@@ -59,8 +60,8 @@ class FakeAgreementSource:
             and (item.customer_nit is None or item.customer_nit in nits)
         ]
 
-    async def supplier_margins(self, codes) -> dict[str, Decimal | None]:
-        return {code: self.margins.get(code) for code in codes}
+    async def products(self, skus) -> dict[str, ProductInfo]:
+        return {sku: self.catalog[sku] for sku in skus if sku in self.catalog}
 
     async def customers(self, nits) -> dict[str, CustomerScope]:
         return {nit: self.clients[nit] for nit in nits if nit in self.clients}
@@ -75,9 +76,10 @@ class FakeBatchRepository:
         self.approved: dict[UUID, dict[str, ManualApproval]] = {}
 
     def _counted(self, batch: Batch, lines: Sequence[StoredLine]) -> Batch:
-        total, orders, ready, ready_orders = summarize(
-            ((item.line.document, item.result.status) for item in lines),
+        total, orders, ready, ready_orders = summarize_batch(
+            ((item.line, item.result) for item in lines),
             self.approved.get(batch.id, {}),
+            batch.margin_threshold,
         )
         return replace(
             batch,
@@ -87,9 +89,9 @@ class FakeBatchRepository:
             ready_order_count=ready_orders,
         )
 
-    async def create(self, batch_id, file_name, actor, now, lines) -> Batch:
+    async def create(self, batch_id, file_name, actor, now, lines, margin_threshold) -> Batch:
         stored = [StoredLine(uuid4(), line, result) for line, result in lines]
-        batch = Batch(batch_id, file_name, actor, now, actor, now, 0, 0, 0, 0)
+        batch = Batch(batch_id, file_name, actor, now, actor, now, 0, 0, 0, 0, margin_threshold)
         self.lines_by_batch[batch_id] = stored
         self.batches[batch_id] = self._counted(batch, stored)
         return self.batches[batch_id]
@@ -105,7 +107,12 @@ class FakeBatchRepository:
         return list(self.lines_by_batch.get(batch_id, []))
 
     async def save_results(
-        self, batch_id: UUID, results: Sequence[tuple[UUID, LineResult]], actor: str, now: datetime
+        self,
+        batch_id: UUID,
+        results: Sequence[tuple[UUID, LineResult]],
+        actor: str,
+        now: datetime,
+        margin_threshold: Decimal,
     ) -> Batch:
         if batch_id not in self.batches:
             raise NotFoundError("Validación no encontrada")
@@ -115,8 +122,20 @@ class FakeBatchRepository:
             for item in self.lines_by_batch[batch_id]
         ]
         self.lines_by_batch[batch_id] = stored
-        batch = replace(self.batches[batch_id], validated_by=actor, validated_at=now)
+        batch = replace(
+            self.batches[batch_id],
+            validated_by=actor,
+            validated_at=now,
+            margin_threshold=margin_threshold,
+        )
         self.batches[batch_id] = self._counted(batch, stored)
+        return self.batches[batch_id]
+
+    async def set_threshold(self, batch_id: UUID, margin_threshold: Decimal) -> Batch | None:
+        if batch_id not in self.batches:
+            return None
+        batch = replace(self.batches[batch_id], margin_threshold=margin_threshold)
+        self.batches[batch_id] = self._counted(batch, self.lines_by_batch[batch_id])
         return self.batches[batch_id]
 
     async def approvals(self, batch_id: UUID) -> dict[str, ManualApproval]:
