@@ -90,11 +90,13 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     """Configure and wire one container instance for one application instance."""
 
     from app.modules.areas.presentation import router as areas_router_module
+    from app.modules.commercial_masters.presentation import router as commercial_router_module
     from app.modules.consumption.presentation import router as consumption_router_module
     from app.modules.documents.presentation import router as documents_router_module
     from app.modules.health.presentation import router as health_router_module
     from app.modules.identity.presentation import router as identity_router_module
     from app.modules.masters.presentation import router as masters_router_module
+    from app.modules.order_validation.presentation import router as order_validation_router_module
     from app.modules.pqrsf.presentation import (
         certificates_router as pqrsf_certificates_router_module,
     )
@@ -107,6 +109,10 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     from app.modules.pqrsf.presentation import tracking_router as pqrsf_tracking_router_module
     from app.modules.projects.presentation import router as projects_router_module
     from app.modules.sites.presentation import router as sites_router_module
+    from app.modules.supplier_supports.presentation import router as supports_router_module
+    from app.modules.supplier_supports.presentation import (
+        special_cases_router as special_cases_router_module,
+    )
 
     container = ApplicationContainer()
     container.settings.override(app_settings)
@@ -127,6 +133,10 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             pqrsf_deliveries_router_module,
             pqrsf_item_delivery_router_module,
             projects_router_module,
+            commercial_router_module,
+            supports_router_module,
+            special_cases_router_module,
+            order_validation_router_module,
         ]
     )
     return container

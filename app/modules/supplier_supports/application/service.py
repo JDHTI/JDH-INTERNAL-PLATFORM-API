@@ -1,0 +1,669 @@
+"""Use cases of the supplier supports master."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
+from app.modules.identity.domain.principal import Principal
+from app.modules.supplier_supports.domain import filters, vocabulary
+from app.modules.supplier_supports.domain.entities import (
+    Conflict,
+    ImportOutcome,
+    Issue,
+    SupportData,
+    SupportPage,
+    SupportRow,
+    SupportView,
+)
+from app.modules.supplier_supports.domain.ports import (
+    Calendar,
+    ManagerPolicy,
+    MasterLookup,
+    SupportRepository,
+)
+from app.modules.supplier_supports.domain.pricing import derive
+from app.modules.supplier_supports.domain.units import infer_value_unit
+from app.modules.supplier_supports.domain.validity import validity_on
+
+MAX_PAGE_SIZE = 200
+MAX_BATCH = 500
+IMPORT_ACTOR = "importacion"
+
+_PCT_METHODS = ("pct_costo", "pct_precio_lista", "puntos_margen")
+_VALUE_REQUIRED = (
+    "pct_costo",
+    "pct_precio_lista",
+    "valor_unidad",
+    "costo_neto",
+    "precio_neto",
+    "puntos_margen",
+    "pct_ventas",
+)
+_TEXT_FIELDS = (
+    "external_ref",
+    "program",
+    "settlement_frequency",
+    "customer_branch_id",
+    "customer_name",
+    "customer_group",
+    "supplier_sku",
+    "brand",
+    "warehouse",
+    "conditions",
+    "end_condition",
+    "authorized_by",
+    "supplier_contact",
+    "sales_rep",
+    "notes",
+    "source",
+    "source_key",
+)
+_ARRAY_FIELDS = ("regionals", "business_units", "channels")
+# Fields a PATCH may change; identity and audit columns are not among them.
+EDITABLE_FIELDS = frozenset(
+    {
+        "kind",
+        "calc_method",
+        "funding",
+        "settlement_method",
+        "value_unit",
+        "customer_nit",
+        "product_sku",
+        "supplier_value",
+        "jdh_pct",
+        "target_margin_pct",
+        "min_margin_pct",
+        "list_margin_pct",
+        "pack_factor",
+        "reference_cost",
+        "reference_list_price",
+        "reference_date",
+        "min_quantity",
+        "committed_volume",
+        "budget_amount",
+        "budget_units",
+        "units_used",
+        "stock_quantity",
+        "valid_from",
+        "valid_to",
+        "status",
+        "is_enabled",
+        "tiers",
+        *_TEXT_FIELDS,
+        *_ARRAY_FIELDS,
+    }
+)
+
+
+def _clean(value: str | None) -> str | None:
+    return " ".join(value.split()) or None if value else None
+
+
+def _normalize_scope(values: Sequence[str]) -> tuple[str, ...]:
+    """Upper-case, trimmed, de-duplicated scope values; ``TODOS`` means everything."""
+
+    upper = list(dict.fromkeys(item.upper() for value in values if (item := _clean(value))))
+    return () if any(item in ("TODOS", "TODAS") for item in upper) else tuple(upper)
+
+
+def _with_base_filters(
+    group: filters.Group,
+    customer_nits: Sequence[str] | None,
+    supplier_codes: Sequence[str] | None,
+    product_skus: Sequence[str] | None,
+) -> filters.Group:
+    """AND the base search (client, supplier, reference) with the free conditions."""
+
+    base: list[filters.Condition | filters.Group] = []
+    for field_name, values in (
+        ("customer_nit", [nit for value in customer_nits or () if (nit := clean_nit(value))]),
+        ("supplier.code", [code for value in supplier_codes or () if (code := _clean(value))]),
+        ("product_sku", [sku for value in product_skus or () if (sku := _clean(value))]),
+    ):
+        if values:
+            if len(values) > filters.MAX_LIST_VALUES:
+                raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
+            base.append(filters.Condition(field_name, "in", values))
+    return filters.Group("all", (*base, group)) if base else group
+
+
+class SupplierSupportService:
+    """Create, edit, void and search supplier supports."""
+
+    def __init__(
+        self,
+        repository: SupportRepository,
+        masters: MasterLookup,
+        managers: ManagerPolicy,
+        calendar: Calendar,
+    ) -> None:
+        """Create the service.
+
+        Args:
+            repository (SupportRepository): Support persistence port.
+            masters (MasterLookup): Resolves suppliers, products and customers.
+            managers (ManagerPolicy): Decides who may write.
+            calendar (Calendar): Business-day clock.
+        """
+
+        self.repository = repository
+        self.masters = masters
+        self.managers = managers
+        self.calendar = calendar
+
+    # ------------------------------------------------------------ validation
+
+    async def _require_manager(self, principal: Principal) -> None:
+        if not await self.managers.is_manager(principal):
+            raise ForbiddenError("No tienes permiso para gestionar apoyos de proveedores")
+
+    def _check(self, data: SupportData) -> None:
+        """Business rules that need no lookup."""
+
+        for name, value, allowed in (
+            ("kind", data.kind, vocabulary.KINDS),
+            ("funding", data.funding, vocabulary.FUNDINGS),
+            ("calc_method", data.calc_method, vocabulary.CALC_METHODS),
+            ("status", data.status, vocabulary.STATUSES),
+        ):
+            if value not in allowed:
+                raise InvalidInputError(
+                    f"{name} inválido: {value!r} (válidos: {', '.join(allowed)})"
+                )
+        if data.settlement_method and data.settlement_method not in vocabulary.SETTLEMENTS:
+            raise InvalidInputError(f"settlement_method inválido: {data.settlement_method!r}")
+        if data.value_unit and data.value_unit not in vocabulary.VALUE_UNITS:
+            raise InvalidInputError(f"value_unit inválido: {data.value_unit!r}")
+        if data.valid_from and data.valid_to and data.valid_to < data.valid_from:
+            raise InvalidInputError("La vigencia final no puede ser anterior a la inicial")
+        if data.calc_method in _VALUE_REQUIRED and data.supplier_value is None:
+            raise InvalidInputError(f"{data.calc_method} requiere supplier_value")
+        if data.calc_method == "margen_minimo" and data.min_margin_pct is None:
+            raise InvalidInputError("margen_minimo requiere min_margin_pct")
+        if data.calc_method == "precio_neto" and data.target_margin_pct is None:
+            raise InvalidInputError("precio_neto requiere target_margin_pct (margen garantizado)")
+        if data.calc_method in _PCT_METHODS and data.supplier_value is not None:
+            if not Decimal(0) <= data.supplier_value <= Decimal(1):
+                raise InvalidInputError("El porcentaje debe expresarse entre 0 y 1 (0.05 = 5%)")
+        elif data.supplier_value is not None and data.supplier_value < 0:
+            raise InvalidInputError("El valor del proveedor no puede ser negativo")
+        for name in ("target_margin_pct", "list_margin_pct"):
+            value = getattr(data, name)
+            if value is not None and not Decimal(0) <= value < Decimal(1):
+                raise InvalidInputError(f"{name} debe estar entre 0 y 1")
+        if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
+            raise InvalidInputError("jdh_pct debe estar entre -1 y 1")
+        for name in ("reference_cost", "reference_list_price", "pack_factor"):
+            value = getattr(data, name)
+            if value is not None and value <= 0:
+                raise InvalidInputError(f"{name} debe ser mayor que cero")
+        for tier in data.tiers:
+            if tier.threshold_type not in vocabulary.THRESHOLD_TYPES:
+                raise InvalidInputError(f"Tipo de escala inválido: {tier.threshold_type!r}")
+            if tier.to_value is not None and tier.to_value < tier.from_value:
+                raise InvalidInputError("Una escala termina antes de empezar")
+        for issue in data.issues:
+            if issue.code not in vocabulary.ISSUE_CODES:
+                raise InvalidInputError(f"Inconsistencia desconocida: {issue.code!r}")
+
+    def _normalize(self, data: SupportData) -> SupportData:
+        changes: dict[str, Any] = {
+            "customer_nit": clean_nit(data.customer_nit),
+            "product_sku": _clean(data.product_sku),
+        }
+        for name in _TEXT_FIELDS:
+            changes[name] = _clean(getattr(data, name))
+        for name in _ARRAY_FIELDS:
+            changes[name] = _normalize_scope(getattr(data, name))
+        return replace(data, **changes)
+
+    async def _resolve(
+        self,
+        data: SupportData,
+        *,
+        supplier_code: str | None,
+        strict: bool,
+        previous: SupportData | None = None,
+    ) -> SupportData:
+        """Bind the support to real supplier, product and customer rows.
+
+        With ``strict`` (manual writes) an unknown reference is an error; the
+        importer passes ``strict=False`` and gets issues instead, so nothing in
+        the workbook is lost. References equal to `previous` are not looked up again,
+        so editing a note of a support with a pending SKU does not fail.
+        """
+
+        issues = list(data.issues)
+        supplier_id = data.commercial_supplier_id
+        if supplier_code is not None:
+            found = await self.masters.commercial_suppliers_by_code([supplier_code.strip()])
+            supplier_id = found.get(supplier_code.strip())
+            if supplier_id is None:
+                if strict:
+                    raise InvalidInputError(f"Proveedor comercial desconocido: {supplier_code}")
+                issues.append(Issue("proveedor_sin_cruce", supplier_code, "supplier"))
+        elif supplier_id is not None and (
+            previous is None or previous.commercial_supplier_id != supplier_id
+        ):
+            if supplier_id not in await self.masters.commercial_supplier_names([supplier_id]):
+                raise InvalidInputError("El proveedor comercial no existe")
+
+        product_id, brand = data.product_id, data.brand
+        product: ProductRef | None = None
+        if previous is not None and previous.product_sku == data.product_sku:
+            product_id = previous.product_id
+        elif data.product_sku:
+            product = (await self.masters.products_by_sku([data.product_sku])).get(data.product_sku)
+            if product is None:
+                if strict:
+                    raise InvalidInputError(f"Referencia JDH desconocida: {data.product_sku}")
+                product_id = None
+                issues.append(Issue("sku_sin_cruce", data.product_sku, "product_sku"))
+            else:
+                product_id = product.id
+                brand = brand or product.brand
+                data = self._fill_unit(data, product)
+        else:
+            product_id = None
+
+        if data.customer_nit and (previous is None or previous.customer_nit != data.customer_nit):
+            known = await self.masters.customer_names([data.customer_nit])
+            if data.customer_nit not in known:
+                if strict:
+                    raise InvalidInputError(f"NIT de cliente desconocido: {data.customer_nit}")
+                issues.append(Issue("nit_sin_cruce", data.customer_nit, "customer_nit"))
+            elif not data.customer_name:
+                data = replace(data, customer_name=known[data.customer_nit] or None)
+
+        status = data.status
+        if issues and status == "activo" and not strict:
+            status = "pendiente_revision"
+        unique = list({(issue.code, issue.field, issue.detail): issue for issue in issues}.values())
+        return replace(
+            data,
+            commercial_supplier_id=supplier_id,
+            product_id=product_id,
+            brand=brand,
+            issues=tuple(unique),
+            status=status,
+        )
+
+    @staticmethod
+    def _fill_unit(data: SupportData, product: ProductRef) -> SupportData:
+        """Complete the pack factor and the unit of the cost from the product master.
+
+        The pack factor falls back to the warehouse's. When the sheet did not say whether
+        its cost is per box or per unit, it is inferred against the warehouse's average
+        unit cost; a person who set the unit keeps it (provenance ``manual``).
+        """
+
+        pack = data.pack_factor or product.pack_factor
+        unit, source = data.value_unit, data.unit_basis_source
+        if unit is None:
+            guess = infer_value_unit(data.reference_cost, product.avg_unit_cost, pack)
+            if guess is not None:
+                unit, source = guess, "inferido_dwh"
+        elif source == "desconocido":
+            source = "manual"
+        return replace(data, pack_factor=pack, value_unit=unit, unit_basis_source=source)
+
+    async def _prepare(
+        self,
+        data: SupportData,
+        *,
+        supplier_code: str | None,
+        strict: bool,
+        previous: SupportData | None = None,
+    ) -> SupportData:
+        prepared = await self._resolve(
+            self._normalize(data), supplier_code=supplier_code, strict=strict, previous=previous
+        )
+        self._check(prepared)
+        if prepared.kind != "excepcion_margen" and prepared.commercial_supplier_id is None:
+            raise InvalidInputError("El apoyo requiere un proveedor comercial")
+        return prepared
+
+    # --------------------------------------------------------------- queries
+
+    async def _views(self, rows: Sequence[SupportRow]) -> list[SupportView]:
+        today = self.calendar.today()
+        return [self._view(row, today) for row in rows]
+
+    @staticmethod
+    def _view(row: SupportRow, today: date) -> SupportView:
+        data = row.support.data
+        validity = validity_on(data.valid_from, data.valid_to, today)
+        voided = data.status == "anulado"
+        return SupportView(
+            support=row.support,
+            supplier_code=row.supplier_code,
+            supplier_name=row.supplier_name,
+            product_description=row.product_description,
+            product_brand=row.product_brand,
+            validity=validity,
+            # The single state people see; a voided support is no longer in force.
+            state="anulado" if voided else ("inactivo" if not data.is_enabled else validity),
+            needs_review=data.status == "pendiente_revision",
+            has_conflicts=bool(row.conflicts),
+            derived=derive(data),
+            conflicts=row.conflicts,
+        )
+
+    async def get(self, support_id: UUID) -> SupportView:
+        """One support with names, validity, conflicts and derived values."""
+
+        row = await self.repository.get_row(support_id)
+        if row is None:
+            raise NotFoundError("Apoyo no encontrado")
+        return (await self._views([row]))[0]
+
+    async def search(
+        self,
+        *,
+        match: str = "all",
+        conditions: Sequence[Mapping[str, Any]] | None = None,
+        customer_nits: Sequence[str] | None = None,
+        supplier_codes: Sequence[str] | None = None,
+        product_skus: Sequence[str] | None = None,
+        q: str | None = None,
+        active_on: date | None = None,
+        validity: str | None = None,
+        state: str | None = None,
+        needs_review: bool | None = None,
+        has_issues: bool | None = None,
+        has_conflicts: bool | None = None,
+        effective_only: bool = False,
+        include_voided: bool = False,
+        sort: Sequence[str] | None = None,
+        page: int = 1,
+        size: int = 50,
+    ) -> SupportPage:
+        """Filter supports with the dynamic filter language.
+
+        Args:
+            match (str): ``all`` (AND) or ``any`` (OR) for the top-level conditions.
+            conditions (Sequence[Mapping[str, Any]] | None): Conditions or nested groups;
+                see :mod:`app.modules.supplier_supports.domain.filters`.
+            customer_nits (Sequence[str] | None): Base search by client NIT(s).
+            supplier_codes (Sequence[str] | None): Base search by commercial supplier code(s).
+            product_skus (Sequence[str] | None): Base search by JDH reference(s). The three base
+                filters are independent and optional (any one, two or all); the ones sent are
+                ANDed with each other and with ``conditions``.
+            q (str | None): Free text over program, client, SKU, brand, supplier and notes.
+            active_on (date | None): Day used for ``validity`` (default today).
+            validity (str | None): ``vigente``, ``vencido`` or ``programado`` on ``active_on``.
+            state (str | None): The state people see: a validity or ``anulado``. ``anulado``
+                lists voided supports; any other value excludes them.
+            needs_review (bool | None): Only supports flagged ``pendiente_revision`` (or not).
+            has_issues (bool | None): Only supports with (or without) data issues.
+            has_conflicts (bool | None): Only supports that overlap another one.
+            effective_only (bool): Keep the effective support per supplier x client x SKU.
+            include_voided (bool): Include voided supports.
+            sort (Sequence[str] | None): Ordering keys, ``-`` prefix for descending.
+            page (int): 1-based page.
+            size (int): Page size, up to :data:`MAX_PAGE_SIZE`.
+
+        Returns:
+            SupportPage: Matching supports.
+
+        Raises:
+            InvalidInputError: If a field, operator, value or bound is invalid.
+        """
+
+        if page < 1:
+            raise InvalidInputError("La página debe ser mayor o igual a 1")
+        if not 1 <= size <= MAX_PAGE_SIZE:
+            raise InvalidInputError(f"El tamaño debe estar entre 1 y {MAX_PAGE_SIZE}")
+        if validity is not None and validity not in vocabulary.VALIDITIES:
+            raise InvalidInputError(f"validity debe ser uno de: {', '.join(vocabulary.VALIDITIES)}")
+        if state is not None and state not in vocabulary.STATES:
+            raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATES)}")
+        spec = filters.SearchSpec(
+            group=_with_base_filters(
+                filters.parse_group({"match": match, "conditions": list(conditions or [])}),
+                customer_nits,
+                supplier_codes,
+                product_skus,
+            ),
+            q=_clean(q),
+            active_on=active_on or self.calendar.today(),
+            validity=validity,
+            state=state,
+            needs_review=needs_review,
+            has_issues=has_issues,
+            has_conflicts=has_conflicts,
+            effective_only=effective_only,
+            include_voided=include_voided,
+            sort=filters.parse_sort(sort),
+            page=page,
+            size=size,
+        )
+        rows, total = await self.repository.search(spec)
+        return SupportPage(items=await self._views(rows), total=total, page=page, size=size)
+
+    async def can_manage(self, principal: Principal) -> bool:
+        """Whether the caller may create, edit, switch and void supports (for UI gating)."""
+
+        return await self.managers.is_manager(principal)
+
+    def search_fields(self) -> list[dict[str, Any]]:
+        """Catalog of filterable fields, their operators and allowed values."""
+
+        return filters.catalog()
+
+    async def catalogs(self) -> dict[str, list[str]]:
+        """Closed vocabularies plus the scope values already in use."""
+
+        values = await self.repository.scope_values()
+        return {
+            "kinds": list(vocabulary.KINDS),
+            "fundings": list(vocabulary.FUNDINGS),
+            "settlement_methods": list(vocabulary.SETTLEMENTS),
+            "calc_methods": list(vocabulary.CALC_METHODS),
+            "value_units": list(vocabulary.VALUE_UNITS),
+            "statuses": list(vocabulary.STATUSES),
+            "validities": list(vocabulary.VALIDITIES),
+            "states": list(vocabulary.STATES),
+            "issue_codes": list(vocabulary.ISSUE_CODES),
+            **values,
+        }
+
+    async def conflicts(self, support_id: UUID) -> list[Conflict]:
+        """Supports in force at the same time over the same scope."""
+
+        if await self.repository.get(support_id) is None:
+            raise NotFoundError("Apoyo no encontrado")
+        return await self.repository.conflicts(support_id)
+
+    # ---------------------------------------------------------------- writes
+
+    async def create(
+        self, principal: Principal, data: SupportData, *, supplier_code: str | None = None
+    ) -> SupportView:
+        """Create a support bound to real masters.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            data (SupportData): Support inputs.
+            supplier_code (str | None): Commercial supplier code, instead of its id.
+
+        Returns:
+            SupportView: The created support.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            InvalidInputError: If a rule fails or a master reference does not exist.
+            ConflictError: If ``source_key`` is already used.
+        """
+
+        await self._require_manager(principal)
+        prepared = await self._prepare(data, supplier_code=supplier_code, strict=True)
+        saved = await self.repository.create(uuid4(), prepared, principal.email, datetime.now(UTC))
+        return await self.get(saved.id)
+
+    async def create_many(
+        self,
+        principal: Principal,
+        items: Sequence[tuple[SupportData, str | None]],
+    ) -> list[SupportView]:
+        """Create several supports; all are validated before any is written.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            items (Sequence[tuple[SupportData, str | None]]): Inputs with supplier code.
+
+        Returns:
+            list[SupportView]: The created supports, in order.
+        """
+
+        await self._require_manager(principal)
+        if not 1 <= len(items) <= MAX_BATCH:
+            raise InvalidInputError(f"Envía entre 1 y {MAX_BATCH} apoyos por lote")
+        prepared = [
+            await self._prepare(data, supplier_code=code, strict=True) for data, code in items
+        ]
+        now = datetime.now(UTC)
+        created = [
+            await self.repository.create(uuid4(), data, principal.email, now) for data in prepared
+        ]
+        return [await self.get(support.id) for support in created]
+
+    async def update(
+        self,
+        principal: Principal,
+        support_id: UUID,
+        *,
+        expected_version: int,
+        changes: Mapping[str, Any],
+        supplier_code: str | None = None,
+    ) -> SupportView:
+        """Apply the fields the client sent; the rest stays as it is.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            support_id (UUID): Support to change.
+            expected_version (int): Version the client edited; a newer one is a conflict.
+            changes (Mapping[str, Any]): Field values, limited to :data:`EDITABLE_FIELDS`.
+            supplier_code (str | None): Move the support to another commercial supplier.
+
+        Returns:
+            SupportView: The updated support.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            NotFoundError: If the support does not exist.
+            ConflictError: If the support is voided or changed since ``expected_version``.
+            InvalidInputError: If a field is not editable or a value breaks a rule.
+        """
+
+        await self._require_manager(principal)
+        unknown = sorted(set(changes) - EDITABLE_FIELDS)
+        if unknown:
+            raise InvalidInputError(f"Campos no editables: {', '.join(unknown)}")
+        current = await self.repository.get(support_id)
+        if current is None:
+            raise NotFoundError("Apoyo no encontrado")
+        if current.data.status == "anulado":
+            raise ConflictError("El apoyo está anulado y no se puede editar")
+        if current.version != expected_version:
+            raise ConflictError("El apoyo cambió desde que lo abriste; recárgalo")
+        values = dict(changes)
+        if "status" in values and values["status"] == "anulado":
+            raise InvalidInputError("Para anular un apoyo usa su endpoint de anulación")
+        if values.get("status") == "activo":
+            values["issues"] = ()
+        if "value_unit" in values:
+            values["unit_basis_source"] = "manual" if values["value_unit"] else "desconocido"
+        merged = replace(current.data, **values)
+        prepared = await self._prepare(
+            merged, supplier_code=supplier_code, strict=True, previous=current.data
+        )
+        saved = await self.repository.update(
+            support_id, prepared, expected_version, principal.email, datetime.now(UTC)
+        )
+        return await self.get(saved.id)
+
+    async def void(
+        self, principal: Principal, support_id: UUID, *, expected_version: int, reason: str
+    ) -> SupportView:
+        """Void a support; supports are never deleted so history stays auditable."""
+
+        await self._require_manager(principal)
+        text = _clean(reason)
+        if not text:
+            raise InvalidInputError("Indica el motivo de la anulación")
+        current = await self.repository.get(support_id)
+        if current is None:
+            raise NotFoundError("Apoyo no encontrado")
+        if current.data.status == "anulado":
+            raise ConflictError("El apoyo ya está anulado")
+        saved = await self.repository.void(
+            support_id, text, expected_version, principal.email, datetime.now(UTC)
+        )
+        return await self.get(saved.id)
+
+    # ---------------------------------------------------------------- import
+
+    async def import_support(
+        self,
+        data: SupportData,
+        *,
+        supplier_code: str | None,
+        dry_run: bool = False,
+        refresh: bool = False,
+    ) -> ImportOutcome:
+        """Create one support from the workbook; never fails on unknown references.
+
+        Idempotent by ``source_key``: a support already loaded is skipped, unless
+        ``refresh`` is set, which re-reads it from the workbook (new fields, fixed rules).
+        A refresh only rewrites supports nobody has touched (``updated_by`` is still the
+        importer), so manual edits, switches and voids are never overwritten.
+        Unknown suppliers, SKUs or NITs become issues and the support is left
+        ``pendiente_revision`` so nothing in the workbook is lost. With ``dry_run``
+        nothing is written and the outcome reports what would happen.
+        """
+
+        if not data.source_key:
+            raise InvalidInputError("La importación requiere source_key")
+        existing = await self.repository.get_by_source_key(data.source_key)
+        if existing is not None and not refresh:
+            return ImportOutcome(created=False, support_id=existing.id)
+        if existing is not None and existing.updated_by != IMPORT_ACTOR:
+            return ImportOutcome(created=False, support_id=existing.id, skipped_manual=True)
+        prepared = await self._resolve(
+            self._normalize(data), supplier_code=supplier_code, strict=False
+        )
+        issues = list(prepared.issues)
+        if prepared.commercial_supplier_id is None and prepared.kind != "excepcion_margen":
+            # No supplier to attach to: kept as an exception so it is still queryable.
+            if not any(issue.code == "proveedor_sin_cruce" for issue in issues):
+                issues.append(Issue("proveedor_sin_cruce", supplier_code, "supplier"))
+            prepared = replace(prepared, kind="excepcion_margen")
+        prepared = replace(
+            prepared,
+            issues=tuple(issues),
+            status="pendiente_revision" if issues else prepared.status,
+        )
+        if existing is not None:
+            if dry_run:
+                return ImportOutcome(
+                    created=False, support_id=existing.id, issues=issues, updated=True
+                )
+            saved = await self.repository.update(
+                existing.id, prepared, existing.version, IMPORT_ACTOR, datetime.now(UTC)
+            )
+            return ImportOutcome(created=False, support_id=saved.id, issues=issues, updated=True)
+        if dry_run:
+            return ImportOutcome(created=True, support_id=None, issues=issues)
+        saved = await self.repository.create(uuid4(), prepared, IMPORT_ACTOR, datetime.now(UTC))
+        return ImportOutcome(created=True, support_id=saved.id, issues=issues)
+
+
+__all__ = ["EDITABLE_FIELDS", "SupplierSupportService"]

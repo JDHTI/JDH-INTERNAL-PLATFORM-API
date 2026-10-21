@@ -27,6 +27,7 @@ dependencies = [
     "Pillow>=10.4,<12.0",
     "holidays (>=0.105,<0.106)",
     "tzdata (>=2026.4,<2027.0)",
+    "openpyxl (>=3.1,<4.0)",
 ]
 
 [tool.poetry]

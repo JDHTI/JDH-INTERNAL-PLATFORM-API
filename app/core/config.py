@@ -166,6 +166,16 @@ class Settings(BaseSettings):
     PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY: int = 5
     PQRSF_DOCUMENT_EMAIL_MAX_MB: int = 15
 
+    # Members of this area (plus platform admins) manage supplier supports.
+    SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
+    # Rows per DWH page and per upsert when syncing the commercial masters.
+    MASTERS_SYNC_BATCH_SIZE: int = 2000
+
+    # Members of this area (plus platform admins) upload retained orders files.
+    ORDER_VALIDATION_MANAGER_AREA_SLUG: str = "comercial"
+    ORDER_VALIDATION_MAX_UPLOAD_MB: int = 10
+    ORDER_VALIDATION_MAX_LINES: int = 10_000
+
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
     # with an Exchange Application Access Policy.
@@ -382,6 +392,15 @@ class Settings(BaseSettings):
                 "max_attachment_bytes": self.MAIL_MAX_ATTACHMENT_MB * 1024 * 1024,
                 "max_total_attachment_bytes": self.MAIL_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
                 "attachment_extensions": _split_lower(self.MAIL_ATTACHMENT_EXTENSIONS),
+            },
+            "supplier_supports": {
+                "manager_area_slug": self.SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG,
+            },
+            "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
+            "order_validation": {
+                "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,
+                "max_upload_bytes": self.ORDER_VALIDATION_MAX_UPLOAD_MB * 1024 * 1024,
+                "max_lines": self.ORDER_VALIDATION_MAX_LINES,
             },
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),

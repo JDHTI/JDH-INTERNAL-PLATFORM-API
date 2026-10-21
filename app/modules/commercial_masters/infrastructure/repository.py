@@ -1,0 +1,683 @@
+"""PostgreSQL repository for the commercial masters."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import Select, bindparam, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert
+
+from app.infrastructure.database import Base, Database
+from app.modules.commercial_masters.domain.entities import (
+    CommercialSupplier,
+    CommercialSupplierNit,
+    Customer,
+    LegalSupplier,
+    Page,
+    Product,
+    ProductRef,
+    SupplierProductCode,
+)
+from app.modules.commercial_masters.infrastructure.models import (
+    CommercialSupplierModel,
+    CommercialSupplierNitModel,
+    CustomerModel,
+    ProductModel,
+    ProductSupplierModel,
+    SupplierModel,
+    SupplierProductCodeModel,
+)
+from app.modules.masters.infrastructure.models import MasterDefinitionModel
+
+# Rows of an executemany upsert; SQLAlchemy splits it under asyncpg's parameter cap.
+_UPSERT_CHUNK = 1000
+_SYNC_TABLES: dict[str, tuple[type[Base], str]] = {
+    "commercial_suppliers": (CommercialSupplierModel, "update"),
+    "suppliers": (SupplierModel, "update"),
+    "customers": (CustomerModel, "update"),
+    "products": (ProductModel, "update"),
+    "product_suppliers": (ProductSupplierModel, "delete"),
+}
+
+
+def _like(query: str) -> str:
+    return query
+
+
+def _commercial_supplier(
+    model: CommercialSupplierModel, nits: Sequence[CommercialSupplierNitModel] = ()
+) -> CommercialSupplier:
+    return CommercialSupplier(
+        id=model.id,
+        code=model.code,
+        name=model.name,
+        is_active=model.is_active,
+        product_count=model.product_count,
+        active_product_count=model.active_product_count,
+        list_margin_pct=model.list_margin_pct,
+        list_margin_notes=model.list_margin_notes,
+        synced_at=model.synced_at,
+        nits=[
+            CommercialSupplierNit(
+                nit=nit.nit,
+                product_links=nit.product_links,
+                is_primary=nit.is_primary,
+                confirmed=nit.confirmed,
+            )
+            for nit in sorted(nits, key=lambda value: (-value.is_primary, -value.product_links))
+        ],
+    )
+
+
+def _legal_supplier(model: SupplierModel) -> LegalSupplier:
+    return LegalSupplier(
+        id=model.id,
+        nit=model.nit,
+        branch_id=model.branch_id,
+        legal_name=model.legal_name,
+        branch_name=model.branch_name,
+        supplier_class=model.supplier_class,
+        supplier_type=model.supplier_type,
+        city=model.city,
+        payment_condition=model.payment_condition,
+        state=model.state,
+        branch_state=model.branch_state,
+        is_active=model.is_active,
+    )
+
+
+def _customer(model: CustomerModel) -> Customer:
+    return Customer(
+        id=model.id,
+        nit=model.nit,
+        branch_id=model.branch_id,
+        legal_name=model.legal_name,
+        branch_name=model.branch_name,
+        establishment_name=model.establishment_name,
+        channel=model.channel,
+        business_unit=model.business_unit,
+        business_group=model.business_group,
+        billing_center=model.billing_center,
+        logistics_zone=model.logistics_zone,
+        department=model.department,
+        city=model.city,
+        salesperson_name=model.salesperson_name,
+        state=model.state,
+        branch_state=model.branch_state,
+        is_active=model.is_active,
+    )
+
+
+def _product(model: ProductModel) -> Product:
+    return Product(
+        id=model.id,
+        sku=model.sku,
+        supplier_sku=model.supplier_sku,
+        description=model.description,
+        state=model.state,
+        is_active=model.is_active,
+        commercial_supplier_code=model.commercial_supplier_code,
+        manufacturer=model.manufacturer,
+        brand=model.brand,
+        category=model.category,
+        subcategory=model.subcategory,
+        product_line=model.product_line,
+        pack_factor=model.pack_factor,
+        inventory_unit=model.inventory_unit,
+        main_barcode=model.main_barcode,
+    )
+
+
+def _page_bounds(page: int, size: int) -> tuple[int, int]:
+    return (page - 1) * size, size
+
+
+class SqlAlchemyCommercialMasterRepository:
+    """Sync and read the commercial masters, one short-lived session per operation."""
+
+    def __init__(self, database: Database) -> None:
+        """Create the repository.
+
+        Args:
+            database (Database): Shared database resource.
+        """
+
+        self.database = database
+
+    # ------------------------------------------------------------------ sync
+
+    async def _upsert(
+        self,
+        model: type[Base],
+        rows: Sequence[Mapping[str, Any]],
+        conflict: Sequence[str],
+        synced_at: datetime | None,
+        keep: Sequence[str] = (),
+    ) -> int:
+        if not rows:
+            return 0
+        columns = [column.name for column in model.__table__.columns]  # type: ignore[attr-defined]
+        async with self.database.session_factory() as session:
+            for start in range(0, len(rows), _UPSERT_CHUNK):
+                chunk = rows[start : start + _UPSERT_CHUNK]
+                values = []
+                for row in chunk:
+                    value = {**row, "id": uuid4()}
+                    if synced_at is not None and "synced_at" in columns:
+                        value["synced_at"] = synced_at
+                    values.append(value)
+                statement = insert(model)
+                skip = {"id", "created_at", *conflict, *keep}
+                updates = {
+                    name: statement.excluded[name]
+                    for name in values[0]
+                    if name in columns and name not in skip
+                }
+                if "updated_at" in columns:
+                    updates["updated_at"] = func.now()
+                await session.execute(
+                    statement.on_conflict_do_update(index_elements=list(conflict), set_=updates),
+                    values,
+                )
+            await session.commit()
+        return len(rows)
+
+    async def upsert_suppliers(self, rows: Sequence[Mapping[str, Any]], synced_at: datetime) -> int:
+        """Upsert legal suppliers by ``proveedor_key``."""
+
+        return await self._upsert(SupplierModel, rows, ["proveedor_key"], synced_at)
+
+    async def upsert_customers(self, rows: Sequence[Mapping[str, Any]], synced_at: datetime) -> int:
+        """Upsert customers by ``cliente_key``."""
+
+        return await self._upsert(CustomerModel, rows, ["cliente_key"], synced_at)
+
+    async def upsert_products(self, rows: Sequence[Mapping[str, Any]], synced_at: datetime) -> int:
+        """Upsert products by ``producto_key``."""
+
+        return await self._upsert(ProductModel, rows, ["producto_key"], synced_at)
+
+    async def upsert_product_suppliers(
+        self, rows: Sequence[Mapping[str, Any]], synced_at: datetime
+    ) -> int:
+        """Upsert the purchase bridge by ``(producto_key, proveedor_key)``."""
+
+        return await self._upsert(
+            ProductSupplierModel, rows, ["producto_key", "proveedor_key"], synced_at
+        )
+
+    async def upsert_commercial_suppliers(
+        self, rows: Sequence[Mapping[str, Any]], synced_at: datetime
+    ) -> int:
+        """Upsert commercial suppliers by code, keeping the hand-set list margin."""
+
+        return await self._upsert(
+            CommercialSupplierModel,
+            rows,
+            ["code"],
+            synced_at,
+            keep=("list_margin_pct", "list_margin_notes"),
+        )
+
+    async def replace_commercial_supplier_nits(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Refresh suggested NITs; confirmed pairs are left exactly as a person set them."""
+
+        if not rows:
+            return 0
+        async with self.database.session_factory() as session:
+            ids = {
+                code: supplier_id
+                for code, supplier_id in (
+                    await session.execute(
+                        select(CommercialSupplierModel.code, CommercialSupplierModel.id)
+                    )
+                ).all()
+            }
+            wanted = {(ids[row["code"]], row["nit"]): row for row in rows if row["code"] in ids}
+            existing = (await session.execute(select(CommercialSupplierNitModel))).scalars().all()
+            for model in existing:
+                key = (model.commercial_supplier_id, model.nit)
+                if key in wanted:
+                    row = wanted.pop(key)
+                    model.product_links = row["product_links"]
+                    if not model.confirmed:
+                        model.is_primary = row["is_primary"]
+                elif not model.confirmed:
+                    await session.delete(model)
+            for (supplier_id, nit), row in wanted.items():
+                session.add(
+                    CommercialSupplierNitModel(
+                        id=uuid4(),
+                        commercial_supplier_id=supplier_id,
+                        nit=nit,
+                        product_links=row["product_links"],
+                        is_primary=row["is_primary"],
+                        confirmed=False,
+                    )
+                )
+            await session.commit()
+        return len(rows)
+
+    async def update_unit_costs(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        """Set the current average unit cost of products by SKU."""
+
+        if not rows:
+            return 0
+        table = ProductModel.__table__
+        statement = (
+            update(table)
+            .where(table.c.sku == bindparam("b_sku"))
+            .values(avg_unit_cost=bindparam("b_cost"), avg_unit_cost_date=bindparam("b_date"))
+        )
+        params = [
+            {
+                "b_sku": row["sku"],
+                "b_cost": row["avg_unit_cost"],
+                "b_date": row["avg_unit_cost_date"],
+            }
+            for row in rows
+        ]
+        async with self.database.session_factory() as session:
+            for start in range(0, len(params), _UPSERT_CHUNK):
+                await session.execute(statement, params[start : start + _UPSERT_CHUNK])
+            await session.commit()
+        return len(rows)
+
+    async def deactivate_unseen(self, table: str, synced_at: datetime) -> int:
+        """Deactivate (or delete, for the bridge) rows the last sync did not see."""
+
+        model, mode = _SYNC_TABLES[table]
+        stale = model.synced_at < synced_at  # type: ignore[attr-defined]
+        async with self.database.session_factory() as session:
+            if mode == "delete":
+                result = await session.execute(delete(model).where(stale))
+            else:
+                result = await session.execute(
+                    update(model)
+                    .where(stale, model.is_active.is_(True))  # type: ignore[attr-defined]
+                    .values(is_active=False)
+                )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def touch_master_definition(self, slug: str, synced_at: datetime) -> None:
+        """Stamp the matching generic master definition with the sync time."""
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                update(MasterDefinitionModel)
+                .where(MasterDefinitionModel.slug == slug)
+                .values(last_synced_at=synced_at)
+            )
+            await session.commit()
+
+    # ----------------------------------------------------------------- reads
+
+    async def _page(self, query: Select[Any], count: Select[Any], page: int, size: int) -> Any:
+        offset, limit = _page_bounds(page, size)
+        async with self.database.session_factory() as session:
+            total = (await session.execute(count)).scalar_one()
+            rows = (await session.execute(query.offset(offset).limit(limit))).scalars().all()
+        return rows, int(total)
+
+    async def list_commercial_suppliers(
+        self, query: str | None, is_active: bool | None, page: int, size: int
+    ) -> Page[CommercialSupplier]:
+        """Page commercial suppliers by code/name and active flag."""
+
+        conditions = []
+        if query:
+            conditions.append(
+                or_(
+                    CommercialSupplierModel.code == query,
+                    CommercialSupplierModel.name.icontains(query, autoescape=True),
+                )
+            )
+        if is_active is not None:
+            conditions.append(CommercialSupplierModel.is_active.is_(is_active))
+        select_rows = (
+            select(CommercialSupplierModel)
+            .where(*conditions)
+            .order_by(CommercialSupplierModel.name, CommercialSupplierModel.code)
+        )
+        count = select(func.count()).select_from(CommercialSupplierModel).where(*conditions)
+        rows, total = await self._page(select_rows, count, page, size)
+        return Page([_commercial_supplier(row) for row in rows], total, page, size)
+
+    async def get_commercial_supplier(self, code: str) -> CommercialSupplier | None:
+        """One commercial supplier with its NITs."""
+
+        async with self.database.session_factory() as session:
+            model = (
+                await session.execute(
+                    select(CommercialSupplierModel).where(CommercialSupplierModel.code == code)
+                )
+            ).scalar_one_or_none()
+            if model is None:
+                return None
+            nits = (
+                (
+                    await session.execute(
+                        select(CommercialSupplierNitModel).where(
+                            CommercialSupplierNitModel.commercial_supplier_id == model.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return _commercial_supplier(model, nits)
+
+    async def update_commercial_supplier(
+        self,
+        code: str,
+        fields: Mapping[str, Any],
+        confirmed_nits: Sequence[str] | None,
+        primary_nit: str | None,
+    ) -> CommercialSupplier | None:
+        """Set the list margin/notes and confirm NITs (optionally choosing the primary)."""
+
+        async with self.database.session_factory() as session:
+            model = (
+                await session.execute(
+                    select(CommercialSupplierModel).where(CommercialSupplierModel.code == code)
+                )
+            ).scalar_one_or_none()
+            if model is None:
+                return None
+            for name, value in fields.items():
+                setattr(model, name, value)
+            if confirmed_nits is not None:
+                wanted = set(confirmed_nits)
+                existing = (
+                    (
+                        await session.execute(
+                            select(CommercialSupplierNitModel).where(
+                                CommercialSupplierNitModel.commercial_supplier_id == model.id
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                known = {nit.nit for nit in existing}
+                for nit in existing:
+                    nit.confirmed = nit.nit in wanted
+                    if primary_nit is not None:
+                        nit.is_primary = nit.nit == primary_nit
+                for nit in sorted(wanted - known):
+                    session.add(
+                        CommercialSupplierNitModel(
+                            id=uuid4(),
+                            commercial_supplier_id=model.id,
+                            nit=nit,
+                            confirmed=True,
+                            is_primary=primary_nit == nit,
+                        )
+                    )
+            await session.commit()
+        return await self.get_commercial_supplier(code)
+
+    async def list_legal_suppliers(
+        self, query: str | None, nit: str | None, is_active: bool | None, page: int, size: int
+    ) -> Page[LegalSupplier]:
+        """Page legal suppliers."""
+
+        conditions = []
+        if query:
+            conditions.append(SupplierModel.legal_name.icontains(query, autoescape=True))
+        if nit:
+            conditions.append(SupplierModel.nit == nit)
+        if is_active is not None:
+            conditions.append(SupplierModel.is_active.is_(is_active))
+        select_rows = (
+            select(SupplierModel)
+            .where(*conditions)
+            .order_by(SupplierModel.legal_name, SupplierModel.nit, SupplierModel.branch_id)
+        )
+        count = select(func.count()).select_from(SupplierModel).where(*conditions)
+        rows, total = await self._page(select_rows, count, page, size)
+        return Page([_legal_supplier(row) for row in rows], total, page, size)
+
+    async def list_customers(
+        self,
+        query: str | None,
+        nit: str | None,
+        channel: str | None,
+        business_unit: str | None,
+        business_group: str | None,
+        is_active: bool | None,
+        page: int,
+        size: int,
+    ) -> Page[Customer]:
+        """Page customers by text, NIT, channel, unit and group."""
+
+        conditions = []
+        if query:
+            conditions.append(
+                or_(
+                    CustomerModel.legal_name.icontains(query, autoescape=True),
+                    CustomerModel.branch_name.icontains(query, autoescape=True),
+                    CustomerModel.nit == query,
+                )
+            )
+        if nit:
+            conditions.append(CustomerModel.nit == nit)
+        if channel:
+            conditions.append(CustomerModel.channel == channel)
+        if business_unit:
+            conditions.append(CustomerModel.business_unit == business_unit)
+        if business_group:
+            conditions.append(CustomerModel.business_group == business_group)
+        if is_active is not None:
+            conditions.append(CustomerModel.is_active.is_(is_active))
+        select_rows = (
+            select(CustomerModel)
+            .where(*conditions)
+            .order_by(CustomerModel.legal_name, CustomerModel.nit, CustomerModel.branch_id)
+        )
+        count = select(func.count()).select_from(CustomerModel).where(*conditions)
+        rows, total = await self._page(select_rows, count, page, size)
+        return Page([_customer(row) for row in rows], total, page, size)
+
+    async def list_products(
+        self,
+        query: str | None,
+        brand: str | None,
+        category: str | None,
+        commercial_supplier_code: str | None,
+        is_active: bool | None,
+        page: int,
+        size: int,
+    ) -> Page[Product]:
+        """Page products by text/SKU, brand, category and commercial supplier."""
+
+        conditions = []
+        if query:
+            conditions.append(
+                or_(
+                    ProductModel.sku == query,
+                    ProductModel.description.icontains(query, autoescape=True),
+                )
+            )
+        if brand:
+            conditions.append(ProductModel.brand == brand)
+        if category:
+            conditions.append(ProductModel.category == category)
+        if commercial_supplier_code:
+            conditions.append(ProductModel.commercial_supplier_code == commercial_supplier_code)
+        if is_active is not None:
+            conditions.append(ProductModel.is_active.is_(is_active))
+        select_rows = (
+            select(ProductModel).where(*conditions).order_by(ProductModel.sku, ProductModel.id)
+        )
+        count = select(func.count()).select_from(ProductModel).where(*conditions)
+        rows, total = await self._page(select_rows, count, page, size)
+        return Page([_product(row) for row in rows], total, page, size)
+
+    # --------------------------------------------------------------- lookups
+
+    async def products_by_sku(self, skus: Sequence[str]) -> dict[str, ProductRef]:
+        """Products by exact SKU."""
+
+        if not skus:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = (
+                (await session.execute(select(ProductModel).where(ProductModel.sku.in_(skus))))
+                .scalars()
+                .all()
+            )
+        return {
+            row.sku: ProductRef(
+                id=row.id,
+                sku=row.sku,
+                description=row.description,
+                brand=row.brand,
+                commercial_supplier_code=row.commercial_supplier_code,
+                is_active=row.is_active,
+                pack_factor=row.pack_factor if row.pack_factor and row.pack_factor > 0 else None,
+                avg_unit_cost=row.avg_unit_cost,
+            )
+            for row in rows
+        }
+
+    async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
+        """Commercial supplier ids by code."""
+
+        if not codes:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(CommercialSupplierModel.code, CommercialSupplierModel.id).where(
+                    CommercialSupplierModel.code.in_(codes)
+                )
+            )
+            return {code: supplier_id for code, supplier_id in rows.all()}
+
+    async def commercial_suppliers_by_name(self, query: str) -> list[CommercialSupplier]:
+        """Commercial suppliers whose name contains the text, best match first."""
+
+        async with self.database.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(CommercialSupplierModel)
+                        .where(CommercialSupplierModel.name.icontains(query, autoescape=True))
+                        .order_by(
+                            CommercialSupplierModel.active_product_count.desc(),
+                            CommercialSupplierModel.code,
+                        )
+                        .limit(10)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_commercial_supplier(row) for row in rows]
+
+    async def commercial_supplier_names(self, ids: Sequence[UUID]) -> dict[UUID, tuple[str, str]]:
+        """``(code, name)`` by commercial supplier id."""
+
+        if not ids:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(
+                    CommercialSupplierModel.id,
+                    CommercialSupplierModel.code,
+                    CommercialSupplierModel.name,
+                ).where(CommercialSupplierModel.id.in_(ids))
+            )
+            return {supplier_id: (code, name) for supplier_id, code, name in rows.all()}
+
+    async def existing_customer_nits(self, nits: Sequence[str]) -> dict[str, str]:
+        """``{nit: legal name}`` of NITs that exist among the customers."""
+
+        if not nits:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(CustomerModel.nit, func.min(CustomerModel.legal_name))
+                .where(CustomerModel.nit.in_(nits))
+                .group_by(CustomerModel.nit)
+            )
+            return {nit: name or "" for nit, name in rows.all()}
+
+    async def set_list_margin(self, code: str, pct: Decimal | None, notes: str | None) -> bool:
+        """Set a supplier's list margin; ``False`` when the code does not exist."""
+
+        async with self.database.session_factory() as session:
+            result = await session.execute(
+                update(CommercialSupplierModel)
+                .where(CommercialSupplierModel.code == code)
+                .values(list_margin_pct=pct, list_margin_notes=notes)
+            )
+            await session.commit()
+        return bool(result.rowcount)
+
+    async def upsert_supplier_product_codes(
+        self, rows: Sequence[SupplierProductCode]
+    ) -> tuple[int, list[SupplierProductCode]]:
+        """Upsert supplier SKUs; returns the count and the rows whose supplier or SKU is unknown."""
+
+        if not rows:
+            return 0, []
+        async with self.database.session_factory() as session:
+            suppliers = {
+                code: supplier_id
+                for code, supplier_id in (
+                    await session.execute(
+                        select(CommercialSupplierModel.code, CommercialSupplierModel.id)
+                    )
+                ).all()
+            }
+            products = {
+                sku: product_id
+                for sku, product_id in (
+                    await session.execute(
+                        select(ProductModel.sku, ProductModel.id).where(
+                            ProductModel.sku.in_({row.product_sku for row in rows})
+                        )
+                    )
+                ).all()
+            }
+            values: dict[tuple[UUID, str, UUID], dict[str, Any]] = {}
+            unresolved: list[SupplierProductCode] = []
+            for row in rows:
+                supplier_id = suppliers.get(row.commercial_supplier_code)
+                product_id = products.get(row.product_sku)
+                if supplier_id is None or product_id is None:
+                    unresolved.append(row)
+                    continue
+                values[(supplier_id, row.supplier_sku, product_id)] = {
+                    "id": uuid4(),
+                    "commercial_supplier_id": supplier_id,
+                    "supplier_sku": row.supplier_sku,
+                    "product_id": product_id,
+                    "pack_factor": row.pack_factor,
+                    "kg_per_unit": row.kg_per_unit,
+                    "notes": row.notes,
+                }
+            if values:
+                statement = insert(SupplierProductCodeModel)
+                await session.execute(
+                    statement.on_conflict_do_update(
+                        constraint="uq_supplier_product_codes_triple",
+                        set_={
+                            "pack_factor": statement.excluded.pack_factor,
+                            "kg_per_unit": statement.excluded.kg_per_unit,
+                            "notes": statement.excluded.notes,
+                        },
+                    ),
+                    list(values.values()),
+                )
+            await session.commit()
+        return len(values), unresolved
+
+
+__all__ = ["SqlAlchemyCommercialMasterRepository"]
