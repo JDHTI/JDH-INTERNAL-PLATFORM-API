@@ -1,8 +1,10 @@
+import base64
 import json
 
 import httpx
 import pytest
 from app.core.errors import DependencyUnavailableError
+from app.modules.mail.domain import OutgoingFile
 from app.modules.mail.infrastructure.graph import GraphMailClient
 
 MAILBOX = "pqrsf@jdh.com.co"
@@ -189,3 +191,169 @@ async def test_server_errors_are_dependency_errors() -> None:
 
     with pytest.raises(DependencyUnavailableError):
         await api.reply(MAILBOX, "g1", "x")
+
+
+@pytest.mark.asyncio
+async def test_send_posts_a_plain_text_message_from_the_mailbox() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+
+    await api.send(MAILBOX, "carla@jdh.com.co", "Nuevo caso asignado", "Hola Carla")
+
+    (request,) = graph.requests
+    assert request.method == "POST" and str(request.url).endswith(
+        "/users/pqrsf%40jdh.com.co/sendMail"
+    )
+    assert json.loads(request.content) == {
+        "message": {
+            "subject": "Nuevo caso asignado",
+            "body": {"contentType": "Text", "content": "Hola Carla"},
+            "toRecipients": [{"emailAddress": {"address": "carla@jdh.com.co"}}],
+        },
+        "saveToSentItems": True,
+    }
+
+
+FILE = OutgoingFile("soporte.pdf", "application/pdf", b"%PDF-1.7 hola")
+
+
+@pytest.mark.asyncio
+async def test_a_reply_without_files_uses_the_plain_reply_endpoint() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+
+    assert await api.reply(MAILBOX, "g1", "Hola") is True
+
+    (request,) = graph.requests
+    assert str(request.url).endswith("/messages/g1/reply")
+    assert json.loads(request.content) == {"comment": "Hola"}
+
+
+@pytest.mark.asyncio
+async def test_reply_text_keeps_its_lines_and_is_escaped_as_html() -> None:
+    api, graph = client(lambda r: httpx.Response(201, json={"id": "d1"}))
+
+    await api.reply(MAILBOX, "g1", "Hola\r\n\r\nValor < 5 & más\nPQRSF JDH")
+    await api.reply(MAILBOX, "g1", "Con adjunto\nsegunda línea", [FILE])
+
+    assert json.loads(graph.requests[0].content) == {
+        "comment": "Hola<br><br>Valor &lt; 5 &amp; más<br>PQRSF JDH"
+    }
+    drafts = [r for r in graph.requests if str(r.url).endswith("/createReply")]
+    assert json.loads(drafts[0].content) == {"comment": "Con adjunto<br>segunda línea"}
+
+
+@pytest.mark.asyncio
+async def test_a_reply_with_files_goes_through_a_draft_in_the_same_conversation() -> None:
+    def handler(request):
+        if str(request.url).endswith("/createReply"):
+            return httpx.Response(201, json={"id": "draft-1"})
+        return httpx.Response(201 if request.url.path.endswith("/attachments") else 202)
+
+    api, graph = client(handler)
+
+    assert await api.reply(MAILBOX, "g1", "Con adjunto", [FILE]) is True
+
+    create, attach, send = graph.requests
+    assert str(create.url).endswith("/messages/g1/createReply")
+    assert json.loads(create.content) == {"comment": "Con adjunto"}
+    assert str(attach.url).endswith("/messages/draft-1/attachments")
+    sent = json.loads(attach.content)
+    assert (
+        sent["@odata.type"] == "#microsoft.graph.fileAttachment" and sent["name"] == "soporte.pdf"
+    )
+    assert base64.b64decode(sent["contentBytes"]) == FILE.content
+    assert send.method == "POST" and str(send.url).endswith("/messages/draft-1/send")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("files", [[], [FILE]])
+async def test_a_reply_to_a_message_that_no_longer_exists_says_so(files) -> None:
+    api, _ = client(lambda r: httpx.Response(404, json={}))
+
+    assert await api.reply(MAILBOX, "gone", "Hola", files) is False
+
+
+@pytest.mark.asyncio
+async def test_send_attaches_the_files_inside_the_message() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+
+    await api.send(MAILBOX, "cliente@empresa.com", "Asunto", "Texto", [FILE])
+
+    message = json.loads(graph.requests[0].content)["message"]
+    assert [a["name"] for a in message["attachments"]] == ["soporte.pdf"]
+    assert base64.b64decode(message["attachments"][0]["contentBytes"]) == FILE.content
+
+
+def _big(size: int, name: str = "grande.pdf") -> OutgoingFile:
+    return OutgoingFile(name, "application/pdf", b"%" * size)
+
+
+@pytest.mark.asyncio
+async def test_a_message_over_the_json_limit_goes_through_a_draft() -> None:
+    def handler(request):
+        if request.url.path.endswith("/messages") and request.method == "POST":
+            return httpx.Response(201, json={"id": "draft-9"})
+        return httpx.Response(201 if request.url.path.endswith("/attachments") else 202)
+
+    api, graph = client(handler)
+    files = [_big(1_500_000, "a.pdf"), _big(1_500_000, "b.pdf")]
+
+    await api.send(MAILBOX, "cliente@empresa.com", "Documentos", "Texto", files)
+
+    create, first, second, send = graph.requests
+    assert str(create.url).endswith("/users/pqrsf%40jdh.com.co/messages")
+    assert json.loads(create.content)["toRecipients"][0]["emailAddress"]["address"] == (
+        "cliente@empresa.com"
+    )
+    assert "attachments" not in json.loads(create.content)
+    assert [json.loads(r.content)["name"] for r in (first, second)] == ["a.pdf", "b.pdf"]
+    assert str(send.url).endswith("/messages/draft-9/send")
+
+
+@pytest.mark.asyncio
+async def test_a_file_of_three_megabytes_or_more_is_uploaded_in_chunks() -> None:
+    uploads: list[httpx.Request] = []
+
+    def handler(request):
+        if request.url.host == "upload.example":
+            uploads.append(request)
+            return httpx.Response(200 if len(uploads) < 2 else 201)
+        if request.url.path.endswith("/createUploadSession"):
+            return httpx.Response(200, json={"uploadUrl": "https://upload.example/session/1"})
+        if request.url.path.endswith("/messages") and request.method == "POST":
+            return httpx.Response(201, json={"id": "draft-9"})
+        return httpx.Response(202)
+
+    api, graph = client(handler)
+    size = 4_000_000
+
+    await api.send(MAILBOX, "cliente@empresa.com", "Documentos", "Texto", [_big(size)])
+
+    session = next(r for r in graph.requests if r.url.path.endswith("/createUploadSession"))
+    assert json.loads(session.content)["AttachmentItem"] == {
+        "attachmentType": "file",
+        "name": "grande.pdf",
+        "size": size,
+        "contentType": "application/pdf",
+    }
+    first, last = uploads
+    assert first.headers["Content-Range"] == "bytes 0-3276799/4000000"
+    assert last.headers["Content-Range"] == "bytes 3276800-3999999/4000000"
+    assert sum(len(u.content) for u in uploads) == size
+    # The upload URL authorizes itself: our bearer token must not travel to it.
+    assert all("authorization" not in u.headers for u in uploads)
+    assert str(graph.requests[-1].url).endswith("/messages/draft-9/send")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_chunk_is_a_dependency_error() -> None:
+    def handler(request):
+        if request.url.host == "upload.example":
+            return httpx.Response(500)
+        if request.url.path.endswith("/createUploadSession"):
+            return httpx.Response(200, json={"uploadUrl": "https://upload.example/s"})
+        return httpx.Response(201, json={"id": "d"})
+
+    api, _ = client(handler)
+
+    with pytest.raises(DependencyUnavailableError):
+        await api.send(MAILBOX, "c@e.com", "Asunto", "Texto", [_big(3_500_000)])

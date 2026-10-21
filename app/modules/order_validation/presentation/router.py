@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, statu
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
-from app.core.rate_limit import rate_limit
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.order_validation.application.service import (
@@ -29,7 +28,7 @@ from app.modules.order_validation.domain.entities import (
 )
 from app.modules.order_validation.domain.vocabulary import REASON_LABELS, STATUS_LABELS
 
-router = APIRouter(dependencies=[Depends(rate_limit("medium"))])
+router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.order_validation_service])
 _principal = Depends(get_current_principal)
 

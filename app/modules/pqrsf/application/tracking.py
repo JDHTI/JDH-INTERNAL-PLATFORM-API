@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Container
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -23,8 +24,16 @@ from app.modules.pqrsf.application.dto import (
     TrackingCatalog,
 )
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
-from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType, clean_optional
+from app.modules.pqrsf.domain.entities import (
+    HANDLING_ACKNOWLEDGE,
+    HANDLING_CASE,
+    PqrsfRequest,
+    RequestType,
+    clean_multiline,
+    clean_optional,
+)
 from app.modules.pqrsf.domain.ports import (
+    AssignmentNotifier,
     BusinessCalendar,
     CaseRepository,
     ManagerPolicy,
@@ -59,6 +68,8 @@ from app.modules.pqrsf.domain.tracking import (
 )
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
+
+logger = logging.getLogger(__name__)
 
 SUGGESTION_FIELDS = frozenset({"customer", "supplier", "sales_executive", "requester"})
 EXPORT_LIMIT = 20_000
@@ -105,6 +116,7 @@ class CaseTrackingService:
         people: PeopleDirectory,
         managers: ManagerPolicy,
         calendar: BusinessCalendar,
+        notifier: AssignmentNotifier | None = None,
     ) -> None:
         """Create the service.
 
@@ -115,8 +127,10 @@ class CaseTrackingService:
             people (PeopleDirectory): Platform users.
             managers (ManagerPolicy): Decides who manages PQRSF.
             calendar (BusinessCalendar): Local dates and holidays.
+            notifier (AssignmentNotifier | None): Emails the new responsible of a case.
         """
 
+        self.notifier = notifier
         self.repository = repository
         self.requests = requests
         self.sites = sites
@@ -235,8 +249,14 @@ class CaseTrackingService:
 
         is_manager = await self.managers.is_manager(principal)
         inactive = include_inactive and is_manager
+        # Suggestions and compliments have their own section: they are not types of cases.
+        request_types = [
+            kind
+            for kind in await self.requests.list_request_types(active_only=not inactive)
+            if kind.handling == HANDLING_CASE
+        ]
         return TrackingCatalog(
-            request_types=await self.requests.list_request_types(active_only=not inactive),
+            request_types=request_types,
             statuses=await self.repository.list_statuses(inactive),
             dependencies=await self.repository.list_dependencies(inactive),
             document_types=await self.repository.list_document_types(inactive),
@@ -253,6 +273,7 @@ class CaseTrackingService:
         prefix: str | None = None,
         requires_follow_up: bool | None = None,
         sla_days: int | None = None,
+        handling: str | None = None,
     ) -> RequestType:
         """Change the follow-up settings of a request type.
 
@@ -263,6 +284,7 @@ class CaseTrackingService:
             prefix (str | None): Consecutive prefix.
             requires_follow_up (bool | None): Whether cases get a due date.
             sla_days (int | None): Default response time in business days.
+            handling (str | None): ``case`` opens cases, ``acknowledge`` only thanks.
 
         Returns:
             RequestType: The updated type.
@@ -278,6 +300,10 @@ class CaseTrackingService:
             request_type.requires_follow_up = requires_follow_up
         if "sla_days" in fields:
             request_type.sla_days = validate_sla_days(sla_days)
+        if "handling" in fields and handling is not None:
+            if handling not in (HANDLING_CASE, HANDLING_ACKNOWLEDGE):
+                raise InvalidInputError("El manejo debe ser 'case' o 'acknowledge'")
+            request_type.handling = handling
         return await self.requests.save_request_type(request_type)
 
     async def create_status(
@@ -475,6 +501,7 @@ class CaseTrackingService:
         name: str | None = None,
         sla_days: int | None = None,
         is_active: bool | None = None,
+        allows_direct_upload: bool | None = None,
     ) -> DocumentType:
         """Edit a document type. Existing items keep the time they were given.
 
@@ -485,6 +512,7 @@ class CaseTrackingService:
             name (str | None): Visible name.
             sla_days (int | None): Response time for new items.
             is_active (bool | None): Offer it in selectors.
+            allows_direct_upload (bool | None): Its answer may skip the document manager.
 
         Returns:
             DocumentType: The updated document type.
@@ -506,6 +534,8 @@ class CaseTrackingService:
             document_type.sla_days = validate_sla_days(sla_days) or 0
         if "is_active" in fields and is_active is not None:
             document_type.is_active = is_active
+        if "allows_direct_upload" in fields and allows_direct_upload is not None:
+            document_type.allows_direct_upload = allows_direct_upload
         document_type.updated_at = datetime.now(UTC)
         return await self.repository.save_document_type(document_type)
 
@@ -797,6 +827,10 @@ class CaseTrackingService:
         request_type = await self.requests.get_request_type(command.request_type_id)
         if request_type is None or not request_type.is_active:
             raise NotFoundError("Tipo de solicitud no encontrado")
+        if request_type.handling != HANDLING_CASE:
+            raise InvalidInputError(
+                f"{request_type.name} no abre casos: se guarda en su propia sección"
+            )
         if len(command.items) > _ITEM_LIMIT:
             raise InvalidInputError(f"Un caso admite máximo {_ITEM_LIMIT} documentos")
         received_on = command.received_on or self.calendar.today()
@@ -832,6 +866,11 @@ class CaseTrackingService:
             data={"origin": case.origin, "assignee_user_id": _str(case.assignee_user_id)},
         )
         stored = await self.repository.create_case(case, event)
+        if stored.assignee_user_id is not None:
+            people = await self.people.get_users([stored.assignee_user_id])
+            await self._notify_assigned(
+                stored, people.get(stored.assignee_user_id), principal, None
+            )
         return await self._view(stored, principal, is_manager)
 
     # --- Reading ---
@@ -1122,7 +1161,31 @@ class CaseTrackingService:
             },
         )
         stored = await self.repository.save_case(case, [event])
+        if assignee_user_id is not None:
+            await self._notify_assigned(stored, people.get(assignee_user_id), principal, note)
         return await self._view(stored, principal, True)
+
+    async def _notify_assigned(
+        self,
+        case: TrackingCase,
+        assignee: DirectoryUser | None,
+        actor: Principal,
+        note: str | None,
+    ) -> None:
+        """Tell the new responsible, unless they assigned the case to themselves.
+
+        The case is already saved: a failure to queue the email is logged and never
+        undoes or blocks the assignment.
+        """
+
+        if self.notifier is None or assignee is None or assignee.id == actor.user_id:
+            return
+        try:
+            await self.notifier.case_assigned(
+                case, assignee, actor, clean_optional(note, "nota", 2_000)
+            )
+        except Exception:
+            logger.exception("Could not queue the assignment notice of case %s", case.code)
 
     async def change_status(
         self, case_id: UUID, status_id: UUID, note: str | None, principal: Principal
@@ -1178,10 +1241,13 @@ class CaseTrackingService:
     async def mark_read(self, case_id: UUID, principal: Principal) -> CaseView:
         """Record that someone opened the case.
 
-        The responsible's first opening moves an initial case to the ``leida``
-        status when that status exists and is active. Every other opening, by
-        anyone, leaves a ``viewed`` access record (one per person and case every
-        30 minutes) so the history shows who saw the case and when.
+        Opening the case moves it from the initial status to ``leida`` (when that status
+        exists and is active) if the caller can work it: its responsible or a manager.
+        Someone who can only see the case (who raised it) does not change its status,
+        and every other status change stays manual. ``first_read_at`` is the
+        responsible's own first opening, so a manager reading it first does not take it
+        over. Any opening that changes nothing leaves a ``viewed`` access record (one per
+        person and case every 30 minutes) so the history shows who saw the case and when.
 
         Args:
             case_id (UUID): Case identifier.
@@ -1191,48 +1257,59 @@ class CaseTrackingService:
             CaseView: The case after the change.
         """
 
-        case, _, is_manager = await self._load(case_id, principal)
-        if case.assignee_user_id != principal.user_id or case.first_read_at is not None:
+        case, access, is_manager = await self._load(case_id, principal)
+        first_by_responsible = (
+            case.assignee_user_id == principal.user_id and case.first_read_at is None
+        )
+        read_status = (
+            await self._active_status_by_code(READ_STATUS_CODE)
+            if case.status.is_initial and access.can_work
+            else None
+        )
+        if not first_by_responsible and read_status is None:
             await self._record_access(EventType.VIEWED, principal, case.id)
             return await self._view(case, principal, is_manager)
-        case.first_read_at = datetime.now(UTC)
-        events = []
-        read_status = (
-            await self._active_status_by_code(READ_STATUS_CODE) if case.status.is_initial else None
-        )
+        if first_by_responsible:
+            case.first_read_at = datetime.now(UTC)
         if read_status is not None:
-            events.append(
-                self._event(
-                    case.id,
-                    EventType.READ,
-                    principal.user_id,
-                    from_status=case.status.id,
-                    to_status=read_status.id,
-                )
+            event = self._event(
+                case.id,
+                EventType.READ,
+                principal.user_id,
+                from_status=case.status.id,
+                to_status=read_status.id,
             )
             case.status = read_status
         else:
-            events.append(self._event(case.id, EventType.READ, principal.user_id))
-        stored = await self.repository.save_case(case, events)
+            event = self._event(case.id, EventType.READ, principal.user_id)
+        stored = await self.repository.save_case(case, [event])
         return await self._view(stored, principal, is_manager)
 
-    async def add_comment(self, case_id: UUID, body: str, principal: Principal) -> EventView:
+    async def require_work(self, case_id: UUID, principal: Principal) -> TrackingCase:
+        """Return the case when the caller may work it (its responsible or a manager)."""
+
+        return await self._load_for_work(case_id, principal)
+
+    async def add_comment(
+        self, case_id: UUID, body: str, principal: Principal, data: dict | None = None
+    ) -> EventView:
         """Write in the case timeline.
 
         Args:
             case_id (UUID): Case identifier.
             body (str): Comment text.
             principal (Principal): Anyone who can see the case.
+            data (dict | None): Extra detail kept with the entry (files, client reply).
 
         Returns:
             EventView: The new timeline entry.
         """
 
         case, _, _ = await self._load(case_id, principal)
-        text = clean_optional(body, "comentario", 5_000)
+        text = clean_multiline(body, "comentario", 5_000)
         if text is None:
             raise InvalidInputError("El comentario no puede estar vacío")
-        event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text)
+        event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor)
@@ -1382,6 +1459,11 @@ class CaseTrackingService:
         )
         await self.repository.save_case(case, [event])
         return await self._reload_view(case.id, principal)
+
+    def today(self) -> date:
+        """Today in the business time zone."""
+
+        return self.calendar.today()
 
     async def update_item(
         self, case_id: UUID, item_id: UUID, changes: ItemChanges, principal: Principal

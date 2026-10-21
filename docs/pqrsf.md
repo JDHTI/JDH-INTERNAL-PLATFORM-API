@@ -8,18 +8,18 @@ rol local `admin`.
 
 La base local es `/api/v1`.
 
-| Método | Ruta | Acceso | Perfil de rate limit |
+| Método | Ruta | Acceso | Nivel de límite |
 | --- | --- | --- | --- |
-| `GET` | `/public/pqrsf/catalogs` | Público | `relaxed` |
+| `GET` | `/public/pqrsf/catalogs` | Público | `read` |
 | `POST` | `/public/pqrsf/requests` | Público | `strict` |
-| `GET` | `/pqrsf/requests` | Admin | `medium` |
-| `GET` | `/pqrsf/requests/{request_id}` | Admin | `medium` |
-| `GET` | `/pqrsf/requests/{request_id}/attachments/{attachment_id}/download` | Admin | `medium` |
-| `POST` | `/pqrsf/requests/{request_id}/case` | Admin | `medium` |
-| `GET` | `/sites` | Admin | `medium` |
-| `POST` | `/sites` | Admin | `medium` |
-| `PATCH` | `/sites/{site_id}` | Admin | `medium` |
-| `DELETE` | `/sites/{site_id}` | Admin | `medium` |
+| `GET` | `/pqrsf/requests` | Admin | `read` |
+| `GET` | `/pqrsf/requests/{request_id}` | Admin | `read` |
+| `GET` | `/pqrsf/requests/{request_id}/attachments/{attachment_id}/download` | Admin | `read` |
+| `POST` | `/pqrsf/requests/{request_id}/case` | Admin | `relaxed` |
+| `GET` | `/sites` | Admin | `read` |
+| `POST` | `/sites` | Admin | `relaxed` |
+| `PATCH` | `/sites/{site_id}` | Admin | `relaxed` |
+| `DELETE` | `/sites/{site_id}` | Admin | `relaxed` |
 
 El seguimiento interno de los casos (bandeja, estados, responsables,
 documentos y SLA) está documentado en
@@ -87,9 +87,12 @@ para un administrador mediante el endpoint protegido de descarga.
 
 Los perfiles son configurables por ambiente:
 
-- `strict`: 5 solicitudes cada 10 minutos.
-- `medium`: 30 solicitudes por minuto.
-- `relaxed`: 120 solicitudes por minuto.
+- `read`: 600 solicitudes por minuto (consultas).
+- `relaxed`: 120 solicitudes por minuto (cambios).
+- `strict`: 5 solicitudes cada 10 minutos (lo costoso o abierto al público).
+
+Todos los endpoints tienen un nivel, aplicado por un middleware global; la tabla completa está en
+[`docs/rate-limiting.md`](rate-limiting.md).
 
 El contador usa una ventana deslizante en Redis. Si Redis no responde, el
 endpoint falla cerrado con `503`; no se acepta un envío público sin el control

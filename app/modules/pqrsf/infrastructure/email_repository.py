@@ -8,7 +8,14 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.infrastructure.database import Database
-from app.modules.pqrsf.domain.email import FAILED, RECEIVED, CaseAttachment, EmailMessage
+from app.modules.pqrsf.domain.email import (
+    CREATED,
+    FAILED,
+    RECEIVED,
+    THREADED,
+    CaseAttachment,
+    EmailMessage,
+)
 from app.modules.pqrsf.infrastructure.models import (
     CaseAttachmentModel,
     CaseModel,
@@ -49,6 +56,7 @@ def _attachment(model: CaseAttachmentModel) -> CaseAttachment:
         checksum_sha256=model.checksum_sha256,
         storage_key=model.storage_key,
         created_at=model.created_at,
+        comment_event_id=model.comment_event_id,
     )
 
 
@@ -145,6 +153,21 @@ class SqlAlchemyEmailRepository:
             )
             return [_message(model) for model in rows]
 
+    async def find_feedback_by_conversation(self, conversation_id: str) -> UUID | None:
+        """The suggestion or compliment a conversation started, if it started one."""
+
+        async with self.database.session_factory() as session:
+            found = await session.scalar(
+                select(EmailMessageModel.detail["feedback_id"].astext)
+                .where(
+                    EmailMessageModel.conversation_id == conversation_id,
+                    EmailMessageModel.detail.has_key("feedback_id"),
+                )
+                .order_by(EmailMessageModel.received_at.desc())
+                .limit(1)
+            )
+        return UUID(found) if found else None
+
     async def find_case_by_conversation(self, conversation_id: str) -> UUID | None:
         """The case of the latest message of a conversation that opened or joined one.
 
@@ -206,6 +229,7 @@ class SqlAlchemyEmailRepository:
                     size_bytes=item.size_bytes,
                     checksum_sha256=item.checksum_sha256,
                     storage_key=item.storage_key,
+                    comment_event_id=item.comment_event_id,
                 )
                 for item in attachments
             )
@@ -221,6 +245,34 @@ class SqlAlchemyEmailRepository:
                 .order_by(CaseAttachmentModel.created_at, CaseAttachmentModel.id)
             )
             return [_attachment(model) for model in rows]
+
+    async def get_attachments(self, case_id: UUID, ids: list[UUID]) -> list[CaseAttachment]:
+        """Several attachments of one case, in the order asked."""
+
+        if not ids:
+            return []
+        async with self.database.session_factory() as session:
+            rows = await session.scalars(
+                select(CaseAttachmentModel).where(
+                    CaseAttachmentModel.case_id == case_id, CaseAttachmentModel.id.in_(ids)
+                )
+            )
+            found = {model.id: _attachment(model) for model in rows}
+        return [found[i] for i in ids if i in found]
+
+    async def latest_inbound_graph_id(self, case_id: UUID) -> str | None:
+        """The newest message the client sent for this case (to answer inside its thread)."""
+
+        async with self.database.session_factory() as session:
+            return await session.scalar(
+                select(EmailMessageModel.graph_id)
+                .where(
+                    EmailMessageModel.case_id == case_id,
+                    EmailMessageModel.status.in_((CREATED, THREADED)),
+                )
+                .order_by(EmailMessageModel.received_at.desc())
+                .limit(1)
+            )
 
     async def get_attachment(self, case_id: UUID, attachment_id: UUID) -> CaseAttachment | None:
         """One attachment owned by the case."""

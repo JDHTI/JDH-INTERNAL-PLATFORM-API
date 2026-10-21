@@ -10,6 +10,10 @@ from app.modules.documents.presentation.router import router as documents_router
 from app.modules.identity.presentation.router import router as identity_router
 from app.modules.masters.presentation.router import router as masters_router
 from app.modules.order_validation.presentation.router import router as order_validation_router
+from app.modules.pqrsf.presentation.certificates_router import router as pqrsf_certificates_router
+from app.modules.pqrsf.presentation.deliveries_router import router as pqrsf_deliveries_router
+from app.modules.pqrsf.presentation.feedback_router import router as pqrsf_feedback_router
+from app.modules.pqrsf.presentation.item_delivery_router import router as pqrsf_item_delivery_router
 from app.modules.pqrsf.presentation.router import admin_router as pqrsf_admin_router
 from app.modules.pqrsf.presentation.router import public_router as pqrsf_public_router
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
@@ -40,6 +44,10 @@ v1_router.include_router(
 v1_router.include_router(pqrsf_public_router, tags=["pqrsf-public"])
 v1_router.include_router(pqrsf_admin_router, tags=["pqrsf"])
 v1_router.include_router(pqrsf_tracking_router, tags=["pqrsf-tracking"])
+v1_router.include_router(pqrsf_feedback_router, tags=["pqrsf-feedback"])
+v1_router.include_router(pqrsf_certificates_router, tags=["pqrsf-certificates"])
+v1_router.include_router(pqrsf_deliveries_router, tags=["pqrsf-deliveries"])
+v1_router.include_router(pqrsf_item_delivery_router, tags=["pqrsf-tracking"])
 
 # Register every versioned module explicitly here. Example:
 # from app.modules.orders.presentation.router import router as orders_router

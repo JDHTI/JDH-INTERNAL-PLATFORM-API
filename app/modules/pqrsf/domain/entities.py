@@ -10,6 +10,8 @@ from uuid import UUID
 from app.core.errors import InvalidInputError
 from app.modules.sites.domain.entities import Site
 
+HANDLING_CASE = "case"
+HANDLING_ACKNOWLEDGE = "acknowledge"
 REQUEST_TYPE_CODES = frozenset({"peticion", "queja", "reclamo", "sugerencia", "felicitacion"})
 _IDEMPOTENCY_KEY_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
@@ -33,6 +35,9 @@ class RequestType:
     prefix: str = ""
     requires_follow_up: bool = True
     sla_days: int | None = None
+    # What a request of this type becomes: a follow-up case, or a stored message that is
+    # thanked at once (suggestions and compliments).
+    handling: str = HANDLING_CASE
 
 
 @dataclass
@@ -79,6 +84,8 @@ class DocumentOption:
 
     id: UUID
     name: str
+    # A certificate answers it automatically: no case and no waiting.
+    automatic: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +160,10 @@ class CreateResult:
     replayed: bool
     # Consecutive of the follow-up case (P26AC0012) when it could be opened.
     tracking_code: str | None = None
+    # ``feedback`` for a suggestion or compliment: stored apart, no case, no consecutive.
+    handled_as: str = "case"
+    # Names of the certificates sent to the requester without a case.
+    delivered: list[str] = field(default_factory=list)
 
 
 def clean_required(value: str, field: str, max_length: int) -> str:
@@ -161,6 +172,24 @@ def clean_required(value: str, field: str, max_length: int) -> str:
     cleaned = " ".join(value.split())
     if not cleaned:
         raise InvalidInputError(f"El campo {field} no puede estar vacío")
+    if len(cleaned) > max_length:
+        raise InvalidInputError(f"El campo {field} admite máximo {max_length} caracteres")
+    return cleaned
+
+
+def clean_multiline(value: str | None, field: str, max_length: int) -> str | None:
+    """Normalize free text that keeps its lines: a comment, a reply.
+
+    Spaces collapse inside each line, line breaks stay, and a run of blank lines becomes
+    one. Returns ``None`` when nothing is left.
+    """
+
+    if value is None:
+        return None
+    lines = [" ".join(line.split()) for line in value.replace("\r\n", "\n").split("\n")]
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    if not cleaned:
+        return None
     if len(cleaned) > max_length:
         raise InvalidInputError(f"El campo {field} admite máximo {max_length} caracteres")
     return cleaned

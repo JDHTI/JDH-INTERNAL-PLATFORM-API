@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
@@ -17,6 +17,15 @@ class MailAttachment:
     content_type: str
     size: int
     is_inline: bool = False
+
+
+@dataclass(frozen=True)
+class OutgoingFile:
+    """A file to attach to a message that leaves the mailbox."""
+
+    name: str
+    content_type: str
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -69,10 +78,22 @@ class MailGateway(Protocol):
         """Read the bytes of one attachment."""
         ...
 
-    async def reply(self, mailbox: str, graph_id: str, text: str) -> None:
-        """Answer inside the same conversation, from the mailbox."""
+    async def reply(
+        self, mailbox: str, graph_id: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> bool:
+        """Answer inside the same conversation, from the mailbox.
+
+        Returns:
+            bool: ``False`` when the message to answer no longer exists.
+        """
         ...
 
     async def mark_processed(self, mailbox: str, graph_id: str, category: str | None) -> None:
         """Mark the message as read and tag it, so people see it was handled."""
+        ...
+
+    async def send(
+        self, mailbox: str, to: str, subject: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> None:
+        """Send a plain-text message from the mailbox to one recipient."""
         ...

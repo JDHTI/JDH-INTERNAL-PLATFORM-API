@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import html
 import logging
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -12,7 +15,7 @@ from urllib.parse import quote
 import httpx
 
 from app.core.errors import DependencyUnavailableError
-from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment
+from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment, OutgoingFile
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,12 @@ _MESSAGE_FIELDS = (
 )
 _FILE_ATTACHMENT = "#microsoft.graph.fileAttachment"
 _PAGE_LIMIT = 200
+# A file attachment sent as JSON must stay well under 3 MB (base64 adds a third and the whole
+# request is capped near 4 MB): above this a message goes through a draft, and a single
+# file of 3 MB or more through an upload session, sent in chunks that are multiples of 320 KiB.
+_INLINE_LIMIT = 3 * 1024 * 1024
+_DRAFT_THRESHOLD = 2 * 1024 * 1024
+_UPLOAD_CHUNK = 320 * 1024 * 10
 
 
 def _segment(value: str) -> str:
@@ -236,14 +245,34 @@ class GraphMailClient:
         assert response is not None
         return response.content
 
-    async def reply(self, mailbox: str, graph_id: str, text: str) -> None:
-        """Reply in the same conversation; Graph quotes the original and keeps the thread."""
+    async def reply(
+        self, mailbox: str, graph_id: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> bool:
+        """Reply in the same conversation; Graph quotes the original and keeps the thread.
 
-        await self._request(
-            "POST",
-            f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}/reply",
-            json={"comment": text},
+        With files the reply goes through a draft (Graph's plain reply takes no
+        attachments): create it, attach each file, send it.
+
+        Returns:
+            bool: ``False`` when the message to answer no longer exists.
+        """
+
+        message = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}"
+        if not files:
+            response = await self._request(
+                "POST", f"{message}/reply", json={"comment": _html(text)}, missing=(404,)
+            )
+            return response is not None
+        draft = await self._request(
+            "POST", f"{message}/createReply", json={"comment": _html(text)}, missing=(404,)
         )
+        if draft is None:
+            return False
+        draft_url = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(draft.json()['id'])}"
+        for file in files:
+            await self._attach(draft_url, file)
+        await self._request("POST", f"{draft_url}/send")
+        return True
 
     async def mark_processed(self, mailbox: str, graph_id: str, category: str | None) -> None:
         """Mark as read and tag the message with the case code."""
@@ -256,3 +285,87 @@ class GraphMailClient:
             f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}",
             json=payload,
         )
+
+    async def send(
+        self, mailbox: str, to: str, subject: str, text: str, files: Sequence[OutgoingFile] = ()
+    ) -> None:
+        """Send a plain-text message from the mailbox; it is kept in its Sent Items."""
+
+        message: dict[str, Any] = {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": text},
+            "toRecipients": [{"emailAddress": {"address": to}}],
+        }
+        user = f"{GRAPH_URL}/users/{_segment(mailbox)}"
+        if sum(len(file.content) for file in files) >= _DRAFT_THRESHOLD:
+            # Too big for one JSON request: create a draft, attach each file, send it.
+            draft = await self._request("POST", f"{user}/messages", json=message)
+            assert draft is not None
+            draft_url = f"{user}/messages/{_segment(draft.json()['id'])}"
+            for file in files:
+                await self._attach(draft_url, file)
+            await self._request("POST", f"{draft_url}/send")
+            return
+        if files:
+            message["attachments"] = [_file_attachment(file) for file in files]
+        await self._request(
+            "POST", f"{user}/sendMail", json={"message": message, "saveToSentItems": True}
+        )
+
+    async def _attach(self, draft_url: str, file: OutgoingFile) -> None:
+        """Add a file to a draft: as JSON when small, through an upload session otherwise."""
+
+        if len(file.content) < _INLINE_LIMIT:
+            await self._request("POST", f"{draft_url}/attachments", json=_file_attachment(file))
+            return
+        session = await self._request(
+            "POST",
+            f"{draft_url}/attachments/createUploadSession",
+            json={
+                "AttachmentItem": {
+                    "attachmentType": "file",
+                    "name": file.name,
+                    "size": len(file.content),
+                    "contentType": file.content_type,
+                }
+            },
+        )
+        assert session is not None
+        upload_url = session.json()["uploadUrl"]
+        total = len(file.content)
+        for start in range(0, total, _UPLOAD_CHUNK):
+            chunk = file.content[start : start + _UPLOAD_CHUNK]
+            try:
+                # The upload URL carries its own authorization: no bearer token goes with it.
+                response = await self._http.put(
+                    upload_url,
+                    content=chunk,
+                    headers={
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"bytes {start}-{start + len(chunk) - 1}/{total}",
+                    },
+                )
+            except httpx.HTTPError as exc:
+                raise DependencyUnavailableError(
+                    "No se pudo subir el adjunto a Microsoft Graph"
+                ) from exc
+            if response.status_code >= 400:
+                logger.error("Graph upload session failed: %s", response.status_code)
+                raise DependencyUnavailableError(
+                    f"Microsoft Graph respondió {response.status_code} al subir el adjunto"
+                )
+
+
+def _html(text: str) -> str:
+    """Plain text as the HTML Graph puts a reply comment into: lines stay lines."""
+
+    return html.escape(text.replace("\r\n", "\n"), quote=False).replace("\n", "<br>")
+
+
+def _file_attachment(file: OutgoingFile) -> dict[str, Any]:
+    return {
+        "@odata.type": _FILE_ATTACHMENT,
+        "name": file.name,
+        "contentType": file.content_type,
+        "contentBytes": base64.b64encode(file.content).decode("ascii"),
+    }

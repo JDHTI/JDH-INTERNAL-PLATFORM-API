@@ -16,8 +16,12 @@ from app.core.errors import (
     InvalidInputError,
     NotFoundError,
 )
+from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
+from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.entities import (
+    HANDLING_ACKNOWLEDGE,
     CreateResult,
+    DocumentCategory,
     ImageUpload,
     PqrsfAttachment,
     PqrsfFilters,
@@ -31,6 +35,7 @@ from app.modules.pqrsf.domain.entities import (
     storage_key_for,
     validate_idempotency_key,
 )
+from app.modules.pqrsf.domain.feedback import ORIGIN_FORM, FeedbackFile
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
     CaseOpener,
@@ -60,6 +65,8 @@ class PqrsfService:
         max_attachments: int = 5,
         max_attachment_bytes: int = 5 * 1024 * 1024,
         max_total_attachment_bytes: int = 25 * 1024 * 1024,
+        feedback: FeedbackService | None = None,
+        deliveries: DocumentDeliveryService | None = None,
     ) -> None:
         """Create the service.
 
@@ -73,8 +80,14 @@ class PqrsfService:
             max_attachments (int): Maximum number of images per request.
             max_attachment_bytes (int): Maximum bytes per image.
             max_total_attachment_bytes (int): Maximum bytes across images.
+            feedback (FeedbackService | None): Stores and thanks suggestions and
+                compliments; without it every type opens a case.
+            deliveries (DocumentDeliveryService | None): Answers document requests with the
+                configured certificates; without it every request opens a case.
         """
 
+        self.deliveries = deliveries
+        self.feedback = feedback
         self.repository = repository
         self.sites = sites
         self.storage = storage
@@ -91,8 +104,24 @@ class PqrsfService:
         return (
             await self.repository.list_request_types(),
             await self.sites.list_sites(),
-            await self.repository.list_document_categories(),
+            await self._with_automatic(await self.repository.list_document_categories()),
         )
+
+    async def _with_automatic(self, categories: list[DocumentCategory]) -> list[DocumentCategory]:
+        """Mark the documents a certificate answers at once, so the form can say so."""
+
+        if self.deliveries is None:
+            return categories
+        automatic = await self.deliveries.automatic_documents(
+            [option.id for category in categories for option in category.documents]
+        )
+        return [
+            replace(
+                category,
+                documents=[replace(o, automatic=o.id in automatic) for o in category.documents],
+            )
+            for category in categories
+        ]
 
     async def create_request(
         self,
@@ -172,6 +201,16 @@ class PqrsfService:
         can be opened later with the recovery endpoint.
         """
 
+        if (
+            self.feedback is not None
+            and result.request.request_type.handling == HANDLING_ACKNOWLEDGE
+        ):
+            await self._thank(result.request)
+            return replace(result, handled_as="feedback")
+        if self.deliveries is not None and result.request.document_request:
+            answered = await self._answer_documents(result)
+            if answered is not None:
+                return answered
         if self.cases is None:
             return result
         try:
@@ -186,6 +225,89 @@ class PqrsfService:
             return result
         return replace(result, tracking_code=code)
 
+    async def _answer_documents(self, result: CreateResult) -> CreateResult | None:
+        """Send the certificates that are configured and open a case for the rest.
+
+        Returns ``None`` when nothing of the request is answered automatically (or anything
+        fails before something was sent): the request then opens its case as usual.
+
+        Order matters: the delivery is logged first, the case for what a person answers
+        is opened second, and the emails are queued last so the first one can name that
+        case. Every step is idempotent, so a replayed submission completes what was left.
+        """
+
+        assert self.deliveries is not None
+        request = result.request
+        try:
+            plan = await self.deliveries.plan(request)
+            if not plan.automatic or (plan.manual and self.cases is None):
+                return None
+            delivery = await self.deliveries.record(request, plan)
+        except Exception:
+            logger.exception("Could not answer the documents of PQRSF %s", request.id)
+            return None
+        code = delivery.case_code
+        if plan.manual and self.cases is not None and code is None:
+            try:
+                code = (
+                    await self.cases.open_for_request(replace(request, documents=plan.manual))
+                ).code
+                await self.deliveries.set_case(delivery, code)
+            except Exception:
+                logger.exception("Could not open the case of PQRSF %s", request.id)
+        try:
+            await self.deliveries.send(delivery)
+        except Exception:
+            logger.exception("Could not queue the certificates of PQRSF %s", request.id)
+        return replace(
+            result,
+            tracking_code=code,
+            handled_as="case" if plan.manual else "documents",
+            delivered=[item.name for item in delivery.items],
+        )
+
+    async def _thank(self, request: PqrsfRequest) -> None:
+        """Store a suggestion or compliment apart from the cases and thank its sender.
+
+        The request is already stored; a failure here is logged and never fails the
+        submission. Each step is idempotent, so a replayed submission completes it.
+        """
+
+        assert self.feedback is not None
+        try:
+            feedback = await self.feedback.record(
+                request_type=request.request_type,
+                origin=ORIGIN_FORM,
+                full_name=request.full_name,
+                email=request.email,
+                body=request.description,
+                subject=request.subject,
+                business_name=request.business_name,
+                site=request.site,
+                request_id=request.id,
+            )
+            if not feedback.files_count:
+                # The images stay where the form stored them; the message points at them.
+                await self.feedback.add_files(
+                    [
+                        FeedbackFile(
+                            id=uuid4(),
+                            feedback_id=feedback.id,
+                            original_filename=a.original_filename,
+                            extension=a.extension,
+                            content_type=a.content_type,
+                            size_bytes=a.size_bytes,
+                            checksum_sha256=a.checksum_sha256,
+                            storage_key=a.storage_key,
+                            created_at=a.created_at,
+                        )
+                        for a in request.attachments
+                    ]
+                )
+            await self.feedback.acknowledge(feedback)
+        except Exception:
+            logger.exception("Could not record the message of PQRSF %s", request.id)
+
     async def open_case(self, request_id: UUID) -> str:
         """Open the follow-up case of a stored request that has none.
 
@@ -198,7 +320,17 @@ class PqrsfService:
 
         if self.cases is None:
             raise DependencyUnavailableError("El seguimiento de casos no está configurado")
-        return (await self.cases.open_for_request(await self.get_request(request_id))).code
+        request = await self.get_request(request_id)
+        if self.deliveries is not None and request.document_request:
+            # What was already sent automatically is not asked of a person again.
+            plan = await self.deliveries.plan(request)
+            if plan.automatic:
+                if not plan.manual:
+                    raise ConflictError(
+                        "La solicitud ya se respondió automáticamente y no tiene casos"
+                    )
+                request = replace(request, documents=plan.manual)
+        return (await self.cases.open_for_request(request)).code
 
     async def _store_request(
         self,

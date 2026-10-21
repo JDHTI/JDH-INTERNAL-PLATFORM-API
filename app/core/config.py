@@ -96,13 +96,25 @@ class Settings(BaseSettings):
 
     # Public and administrative API protection. Values are intentionally
     # separate so each module can choose a tolerance profile without code edits.
-    RATE_LIMIT_STRICT_REQUESTS: int = 5
-    RATE_LIMIT_STRICT_WINDOW_SECONDS: int = 600
-    RATE_LIMIT_MEDIUM_REQUESTS: int = 30
-    RATE_LIMIT_MEDIUM_WINDOW_SECONDS: int = 60
+    # Three levels per client address, applied to every endpoint by app/core/rate_policy.py:
+    # read (queries), relaxed (changes) and strict (costly or open to the public).
+    RATE_LIMIT_READ_REQUESTS: int = 600
+    RATE_LIMIT_READ_WINDOW_SECONDS: int = 60
     RATE_LIMIT_RELAXED_REQUESTS: int = 120
     RATE_LIMIT_RELAXED_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_STRICT_REQUESTS: int = 5
+    RATE_LIMIT_STRICT_WINDOW_SECONDS: int = 600
     RATE_LIMIT_TRUSTED_PROXY_IPS: str = ""
+    # Public forms (POST /public/*): one budget for every visitor together, so a flood from
+    # many addresses cannot get past the per-address limit; and a cap on the request body,
+    # checked before it is read.
+    RATE_LIMIT_PUBLIC_GLOBAL_REQUESTS: int = 100
+    RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS: int = 3600
+    PUBLIC_MAX_BODY_MB: int = 28
+    # Cloudflare Turnstile secret; empty leaves the CAPTCHA off. When set, public POSTs must
+    # carry a valid token in the X-Captcha-Token header.
+    PUBLIC_CAPTCHA_SECRET: SecretStr = SecretStr("")
+    PUBLIC_CAPTCHA_VERIFY_URL: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
     S3_ENDPOINT_URL: str = "http://127.0.0.1:9000"
     S3_REGION: str = "us-east-1"
@@ -138,6 +150,21 @@ class Settings(BaseSettings):
     PQRSF_MANAGER_AREA_SLUG: str = "calidad"
     PQRSF_TIMEZONE: str = "America/Bogota"
     PQRSF_HOLIDAYS_COUNTRY: str = "CO"
+    # Public holidays API for the business-day check of the timers (Nager.Date, no key).
+    PQRSF_HOLIDAYS_API_URL: str = "https://date.nager.at/api/v3"
+    # Emails sent from the PQRSF mailbox: assignment notices and the two timers.
+    PQRSF_NOTIFICATIONS_ENABLED: bool = False
+    # Frontend root used for links in the emails (blank leaves the links out).
+    PQRSF_UI_BASE_URL: str = ""
+    # Testing: send every PQRSF email to this address instead of its recipient.
+    PQRSF_NOTIFY_REDIRECT: str = ""
+    # Automatic thank-yous one address can get per 24 hours (suggestions and compliments).
+    PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY: int = 3
+    # Certificates answered automatically come from files of this area of the document manager.
+    PQRSF_CERTIFICATES_AREA_SLUG: str = "calidad"
+    # Emails with certificates one address receives per 24 hours, and attachments per email.
+    PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY: int = 5
+    PQRSF_DOCUMENT_EMAIL_MAX_MB: int = 15
 
     # Members of this area (plus platform admins) manage supplier supports.
     SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
@@ -229,14 +256,14 @@ class Settings(BaseSettings):
                 datetime.fromisoformat(self.MAIL_INTAKE_SINCE.strip())
             except ValueError as exc:
                 raise ValueError("MAIL_INTAKE_SINCE must be an ISO date-time") from exc
-        if self.MAIL_INTAKE_ENABLED and not (
+        if (self.MAIL_INTAKE_ENABLED or self.PQRSF_NOTIFICATIONS_ENABLED) and not (
             (self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID)
             and self.MAIL_GRAPH_CLIENT_ID
             and self.MAIL_GRAPH_CLIENT_SECRET.get_secret_value()
         ):
             raise ValueError(
-                "MAIL_INTAKE_ENABLED needs a tenant, MAIL_GRAPH_CLIENT_ID "
-                "and MAIL_GRAPH_CLIENT_SECRET"
+                "MAIL_INTAKE_ENABLED and PQRSF_NOTIFICATIONS_ENABLED need a tenant, "
+                "MAIL_GRAPH_CLIENT_ID and MAIL_GRAPH_CLIENT_SECRET"
             )
         return self
 
@@ -344,6 +371,14 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.PQRSF_MANAGER_AREA_SLUG,
                 "timezone": self.PQRSF_TIMEZONE,
                 "holidays_country": self.PQRSF_HOLIDAYS_COUNTRY,
+                "holidays_api_url": self.PQRSF_HOLIDAYS_API_URL,
+                "notifications_enabled": self.PQRSF_NOTIFICATIONS_ENABLED,
+                "ui_base_url": self.PQRSF_UI_BASE_URL,
+                "notify_redirect": self.PQRSF_NOTIFY_REDIRECT,
+                "feedback_replies_per_email": self.PQRSF_FEEDBACK_REPLIES_PER_EMAIL_PER_DAY,
+                "certificates_area_slug": self.PQRSF_CERTIFICATES_AREA_SLUG,
+                "document_emails_per_address": self.PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY,
+                "document_email_max_bytes": self.PQRSF_DOCUMENT_EMAIL_MAX_MB * 1024 * 1024,
             },
             "mail": {
                 "tenant_id": self.MAIL_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,
@@ -404,7 +439,7 @@ class Settings(BaseSettings):
         """Return the configured ``(limit, window_seconds)`` for a profile.
 
         Args:
-            profile (str): One of ``strict``, ``medium`` or ``relaxed``.
+            profile (str): One of ``read``, ``relaxed``, ``strict`` or ``public_global``.
 
         Returns:
             tuple[int, int]: Maximum requests and window duration.
@@ -414,8 +449,12 @@ class Settings(BaseSettings):
         """
 
         policies = {
+            "public_global": (
+                self.RATE_LIMIT_PUBLIC_GLOBAL_REQUESTS,
+                self.RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS,
+            ),
             "strict": (self.RATE_LIMIT_STRICT_REQUESTS, self.RATE_LIMIT_STRICT_WINDOW_SECONDS),
-            "medium": (self.RATE_LIMIT_MEDIUM_REQUESTS, self.RATE_LIMIT_MEDIUM_WINDOW_SECONDS),
+            "read": (self.RATE_LIMIT_READ_REQUESTS, self.RATE_LIMIT_READ_WINDOW_SECONDS),
             "relaxed": (
                 self.RATE_LIMIT_RELAXED_REQUESTS,
                 self.RATE_LIMIT_RELAXED_WINDOW_SECONDS,

@@ -10,14 +10,15 @@ from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from pydantic import BaseModel, Field, ValidationError
 
 from app.app_container import ApplicationContainer
-from app.core.rate_limit import rate_limit
+from app.core.errors import InvalidInputError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.comments import CaseCommentService, UploadedFile
 from app.modules.pqrsf.application.dto import (
     CaseChanges,
     CaseDetail,
@@ -25,9 +26,16 @@ from app.modules.pqrsf.application.dto import (
     EventView,
     ItemChanges,
 )
+from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.notifications import (
+    JobSchedule,
+    Notification,
+    NotificationSettings,
+    parse_time,
+)
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
     CaseFilters,
@@ -44,10 +52,12 @@ from app.modules.sites.domain.entities import Site
 
 # Interactive inbox behind a session: the limit is per IP and offices share one
 # behind NAT, so it uses the relaxed profile.
-router = APIRouter(prefix="/pqrsf", dependencies=[Depends(rate_limit("relaxed"))])
+router = APIRouter(prefix="/pqrsf")
 _tracking = Depends(Provide[ApplicationContainer.v1_container.pqrsf_tracking_service])
 _pqrsf = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 _case_files = Depends(Provide[ApplicationContainer.v1_container.pqrsf_case_attachment_service])
+_comments = Depends(Provide[ApplicationContainer.v1_container.pqrsf_comment_service])
+_notifications = Depends(Provide[ApplicationContainer.v1_container.pqrsf_notification_service])
 _principal = Depends(get_current_principal)
 
 SortOption = Literal[
@@ -66,6 +76,7 @@ class TrackingRequestTypeResponse(BaseModel):
     prefix: str
     requires_follow_up: bool
     sla_days: int | None
+    handling: Literal["case", "acknowledge"]
     allows_document_request: bool
     allows_attachments: bool
     is_active: bool
@@ -101,6 +112,8 @@ class DocumentTypeResponse(BaseModel):
     name: str
     sla_days: int
     is_active: bool
+    # The answer can be uploaded straight to the case, without the document manager.
+    allows_direct_upload: bool = False
 
 
 class TrackingSiteResponse(BaseModel):
@@ -344,9 +357,10 @@ class DeleteCaseRequest(BaseModel):
 
 
 class CommentRequest(BaseModel):
-    """Timeline comment."""
+    """Timeline comment, optionally also emailed to the client (JSON, no files)."""
 
     body: str = Field(min_length=1, max_length=5_000)
+    reply_to_client: bool = False
 
 
 class UpdateItemRequest(BaseModel):
@@ -366,6 +380,7 @@ class UpdateRequestTypeRequest(BaseModel):
     prefix: str | None = Field(default=None, max_length=5)
     requires_follow_up: bool | None = None
     sla_days: int | None = Field(default=None, ge=0, le=365)
+    handling: Literal["case", "acknowledge"] | None = None
 
 
 class CreateStatusRequest(BaseModel):
@@ -419,6 +434,7 @@ class UpdateDocumentTypeRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     sla_days: int | None = Field(default=None, ge=0, le=365)
     is_active: bool | None = None
+    allows_direct_upload: bool | None = None
 
 
 # --- Mappers ---
@@ -649,6 +665,7 @@ async def update_request_type(
             prefix=body.prefix,
             requires_follow_up=body.requires_follow_up,
             sla_days=body.sla_days,
+            handling=body.handling,
         )
     )
 
@@ -1023,24 +1040,6 @@ async def last_seen(
 
 
 @router.post(
-    "/cases/{case_id}/comments",
-    response_model=CaseEventResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Comment on case",
-)
-@inject
-async def comment_case(
-    case_id: UUID,
-    body: CommentRequest,
-    principal: Principal = _principal,
-    service: CaseTrackingService = _tracking,
-) -> CaseEventResponse:
-    """Add a comment to the timeline (anyone who can see the case)."""
-
-    return _event(await service.add_comment(case_id, body.body, principal))
-
-
-@router.post(
     "/cases/{case_id}/items",
     response_model=CaseResponse,
     status_code=status.HTTP_201_CREATED,
@@ -1128,6 +1127,8 @@ class CaseFileResponse(BaseModel):
     content_type: str
     size_bytes: int
     created_at: datetime
+    # The timeline comment the file was attached to; null for files that came by email.
+    comment_event_id: UUID | None = None
 
 
 @router.get(
@@ -1150,6 +1151,7 @@ async def list_case_files(
             content_type=item.content_type,
             size_bytes=item.size_bytes,
             created_at=item.created_at,
+            comment_event_id=item.comment_event_id,
         )
         for item in await service.list_attachments(case_id, principal)
     ]
@@ -1181,6 +1183,248 @@ async def download_case_file(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+class RejectedFileResponse(BaseModel):
+    """A file that was not stored, and why."""
+
+    name: str
+    reason: str
+
+
+class ClientReplyResponse(BaseModel):
+    """A partial reply emailed to the client and where its delivery stands."""
+
+    id: UUID
+    event_id: UUID | None
+    to: str
+    status: Literal["pending", "sent", "failed"]
+    attempts: int
+    error: str | None
+    sent_at: datetime | None
+    created_at: datetime | None
+
+
+class CommentResponse(CaseEventResponse):
+    """The new timeline entry, its files and the client reply it queued."""
+
+    files: list[CaseFileResponse] = []
+    rejected_files: list[RejectedFileResponse] = []
+    client_reply: ClientReplyResponse | None = None
+
+
+def _client_reply(item: Notification) -> ClientReplyResponse:
+    event_id = item.payload.get("event_id")
+    return ClientReplyResponse(
+        id=item.id,
+        event_id=UUID(event_id) if event_id else None,
+        to=item.recipient_email,
+        status=item.status,
+        attempts=item.attempts,
+        error=item.error,
+        sent_at=item.sent_at,
+        created_at=item.created_at,
+    )
+
+
+_COMMENT_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "required": ["body"],
+                "properties": {
+                    "body": {"type": "string", "maxLength": 5000},
+                    "reply_to_client": {"type": "boolean", "default": False},
+                },
+            }
+        },
+        "multipart/form-data": {
+            "schema": {
+                "type": "object",
+                "required": ["body"],
+                "properties": {
+                    "body": {"type": "string", "maxLength": 5000},
+                    "reply_to_client": {"type": "boolean", "default": False},
+                    "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
+                },
+            }
+        },
+    },
+}
+_MAX_COMMENT_FILES = 20
+_TRUE = {"1", "true", "yes", "on"}
+
+
+async def _read_comment(
+    request: Request, max_file_bytes: int
+) -> tuple[str, bool, list[UploadedFile]]:
+    """Read a comment sent as JSON (text only) or as a multipart form with files."""
+
+    if request.headers.get("content-type", "").startswith("multipart/form-data"):
+        form = await request.form(max_files=_MAX_COMMENT_FILES, max_fields=20)
+        files = [
+            UploadedFile(upload.filename or "archivo", await upload.read(max_file_bytes + 1))
+            for upload in form.getlist("files")
+            if hasattr(upload, "read")
+        ]
+        return (
+            str(form.get("body") or ""),
+            str(form.get("reply_to_client") or "").lower() in _TRUE,
+            files,
+        )
+    try:
+        payload = CommentRequest.model_validate_json(await request.body())
+    except ValidationError as exc:
+        raise InvalidInputError(
+            "El comentario no es válido: escribe un texto de hasta 5000 caracteres"
+        ) from exc
+    return payload.body, payload.reply_to_client, []
+
+
+@router.post(
+    "/cases/{case_id}/comments",
+    response_model=CommentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Comment on case",
+    openapi_extra={"requestBody": _COMMENT_BODY},
+)
+@inject
+async def comment_case(
+    case_id: UUID,
+    request: Request,
+    principal: Principal = _principal,
+    service: CaseCommentService = _comments,
+) -> CommentResponse:
+    """Comment on the timeline, optionally with files and as a partial reply to the client.
+
+    Anyone who can see the case may comment. With ``reply_to_client`` the comment (and
+    its files) is also emailed to the requester from the PQRSF mailbox; that needs the
+    right to work the case, an open case and a requester email, and it never closes the
+    case. The email goes through a queue: ``client_reply.status`` says where it stands.
+    """
+
+    text, reply, uploads = await _read_comment(request, service.guard.max_attachment_bytes)
+    result = await service.comment(case_id, text, principal, uploads, reply)
+    return CommentResponse(
+        **_event(result.event).model_dump(),
+        files=[
+            CaseFileResponse(
+                id=item.id,
+                filename=item.original_filename,
+                content_type=item.content_type,
+                size_bytes=item.size_bytes,
+                created_at=item.created_at,
+                comment_event_id=item.comment_event_id,
+            )
+            for item in result.files
+        ],
+        rejected_files=[RejectedFileResponse(**item) for item in result.rejected],
+        client_reply=_client_reply(result.client_reply) if result.client_reply else None,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/client-replies",
+    response_model=list[ClientReplyResponse],
+    summary="List replies sent to the client",
+)
+@inject
+async def list_client_replies(
+    case_id: UUID,
+    principal: Principal = _principal,
+    service: CaseCommentService = _comments,
+) -> list[ClientReplyResponse]:
+    """The partial replies emailed to the client, with their delivery state."""
+
+    return [_client_reply(item) for item in await service.list_client_replies(case_id, principal)]
+
+
+@router.post(
+    "/cases/{case_id}/client-replies/{notification_id}/retry",
+    response_model=ClientReplyResponse,
+    summary="Retry a failed reply to the client",
+)
+@inject
+async def retry_client_reply(
+    case_id: UUID,
+    notification_id: UUID,
+    principal: Principal = _principal,
+    service: CaseCommentService = _comments,
+) -> ClientReplyResponse:
+    """Send a reply again after its delivery gave up (the responsible or a manager)."""
+
+    return _client_reply(await service.retry_client_reply(case_id, notification_id, principal))
+
+
+class JobScheduleModel(BaseModel):
+    """One timer: whether it runs and at what local time (24 hours, HH:MM)."""
+
+    enabled: bool
+    time: str = Field(pattern=r"^\d{2}:\d{2}$", examples=["17:30"])
+
+
+class NotificationSettingsModel(BaseModel):
+    """The organization-wide timers."""
+
+    daily_summary: JobScheduleModel
+    overdue_reminder: JobScheduleModel
+
+
+class NotificationSettingsResponse(NotificationSettingsModel):
+    """The timers plus the rules the UI should show next to them."""
+
+    timezone: str
+    business_days_only: bool = True
+
+
+def _settings_response(
+    settings: NotificationSettings, service: NotificationService
+) -> NotificationSettingsResponse:
+    stored = settings.to_json()
+    return NotificationSettingsResponse(
+        daily_summary=JobScheduleModel(**stored["daily_summary"]),
+        overdue_reminder=JobScheduleModel(**stored["overdue_reminder"]),
+        timezone=service.zone.key,
+    )
+
+
+@router.get(
+    "/settings/notifications",
+    response_model=NotificationSettingsResponse,
+    summary="Get the notification timers",
+)
+@inject
+async def get_notification_settings(
+    principal: Principal = _principal,
+    service: NotificationService = _notifications,
+) -> NotificationSettingsResponse:
+    """The organization timers: end-of-day summary and overdue reminder."""
+
+    return _settings_response(await service.get_settings(principal), service)
+
+
+@router.put(
+    "/settings/notifications",
+    response_model=NotificationSettingsResponse,
+    summary="Change the notification timers",
+)
+@inject
+async def update_notification_settings(
+    body: NotificationSettingsModel,
+    principal: Principal = _principal,
+    service: NotificationService = _notifications,
+) -> NotificationSettingsResponse:
+    """Replace the timers for the whole organization (whoever works PQRSF)."""
+
+    settings = NotificationSettings(
+        daily_summary=JobSchedule(body.daily_summary.enabled, parse_time(body.daily_summary.time)),
+        overdue_reminder=JobSchedule(
+            body.overdue_reminder.enabled, parse_time(body.overdue_reminder.time)
+        ),
+    )
+    return _settings_response(await service.update_settings(settings, principal), service)
 
 
 __all__ = ["router"]

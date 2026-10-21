@@ -7,11 +7,17 @@ import logging
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
 from app.core.errors import DependencyUnavailableError, InvalidInputError
-from app.modules.mail.domain import InboundMessage, MailAttachment, MailGateway
+from app.modules.mail.domain import InboundMessage, MailGateway
+from app.modules.pqrsf.application.attachment_guard import (
+    IMAGE_EXTENSIONS,
+    AttachmentGuard,
+    extension_of,
+    safe_filename,
+)
+from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.email import (
     CREATED,
     FAILED,
@@ -32,7 +38,8 @@ from app.modules.pqrsf.domain.email import (
     parse_request,
     strip_quoted_reply,
 )
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import HANDLING_ACKNOWLEDGE, RequestType
+from app.modules.pqrsf.domain.feedback import ORIGIN_EMAIL, FeedbackFile, feedback_file_key
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
     EmailCases,
@@ -47,38 +54,6 @@ from app.modules.sites.domain.entities import Site
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUEST_TYPE = "peticion"
-_IMAGE_EXTENSIONS = {
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-    "webp": "image/webp",
-}
-# Fixed, so a file is labeled the same on every machine (``mimetypes`` reads the OS
-# registry: on Windows it calls a CSV ``application/vnd.ms-excel``).
-_DOCUMENT_TYPES = {
-    "pdf": "application/pdf",
-    "doc": "application/msword",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "xls": "application/vnd.ms-excel",
-    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "ppt": "application/vnd.ms-powerpoint",
-    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "csv": "text/csv",
-    "txt": "text/plain",
-}
-_OLE = b"\xd0\xcf\x11\xe0"
-_ZIP = b"PK\x03\x04"
-# What a file of each type must start with; plain text only has to be free of NUL bytes.
-_SIGNATURES = {
-    "pdf": (b"%PDF-",),
-    "doc": (_OLE,),
-    "xls": (_OLE,),
-    "ppt": (_OLE,),
-    "docx": (_ZIP,),
-    "xlsx": (_ZIP,),
-    "pptx": (_ZIP,),
-}
-_TEXT_EXTENSIONS = {"txt", "csv"}
 _EXCERPT = 500
 
 
@@ -96,29 +71,13 @@ class SyncReport:
 class _Stored:
     """Attachments saved for a message and those that were turned away."""
 
-    saved: list[CaseAttachment]
+    saved: list[CaseAttachment | FeedbackFile]
     rejected: list[dict]
 
 
 def _trim(value: str | None, size: int) -> str | None:
     cleaned = " ".join((value or "").split())
     return cleaned[:size] or None
-
-
-def _filename(name: str) -> str:
-    base = PurePosixPath(name.replace("\\", "/")).name
-    cleaned = "".join(c for c in base if c.isprintable() and c not in '<>:"|?*').strip()
-    return cleaned[:255]
-
-
-def _extension(name: str) -> str:
-    return name.rsplit(".", 1)[1].lower() if "." in name else ""
-
-
-def _signature_ok(extension: str, content: bytes) -> bool:
-    if extension in _TEXT_EXTENSIONS:
-        return b"\x00" not in content[:8192]
-    return any(content.startswith(prefix) for prefix in _SIGNATURES.get(extension, ()))
 
 
 class EmailIntakeService:
@@ -148,6 +107,7 @@ class EmailIntakeService:
         max_total_attachment_bytes: int = 25 * 1024 * 1024,
         allowed_extensions: Collection[str] = (),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        feedback: FeedbackService | None = None,
     ) -> None:
         """Create the service.
 
@@ -169,24 +129,29 @@ class EmailIntakeService:
             max_total_attachment_bytes (int): Largest sum of files per message.
             allowed_extensions (Collection[str]): Lower-case extensions accepted.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
+            feedback (FeedbackService | None): Stores and thanks suggestions and compliments;
+                without it they open cases like any other message.
         """
 
+        self.feedback = feedback
         self.mail = mail
         self.emails = emails
         self.cases = cases
         self.requests = requests
         self.sites = sites
         self.storage = storage
-        self.image_processor = image_processor
-        self.malware_scanner = malware_scanner
+        self.guard = AttachmentGuard(
+            image_processor,
+            malware_scanner,
+            allowed_extensions,
+            max_attachments,
+            max_attachment_bytes,
+            max_total_attachment_bytes,
+        )
         self.mailbox = mailbox.lower()
         self.own_addresses = {self.mailbox, *(a.lower() for a in ignored_senders)}
         self.since = since
         self.max_attempts = max_attempts
-        self.max_attachments = max_attachments
-        self.max_attachment_bytes = max_attachment_bytes
-        self.max_total_attachment_bytes = max_total_attachment_bytes
-        self.allowed_extensions = {e.lower() for e in allowed_extensions}
         self.clock = clock
 
     # --- Sync ---
@@ -275,7 +240,8 @@ class EmailIntakeService:
     # --- Routing ---
 
     async def _route(self, message: InboundMessage, row: EmailMessage) -> None:
-        if row.case_id is None:
+        feedback_id = row.detail.get("feedback_id")
+        if row.case_id is None and not feedback_id:
             reason = is_automatic(message.headers, message.sender_address, self.own_addresses)
             if reason:
                 row.status, row.detail = IGNORED, {**row.detail, "reason": reason}
@@ -285,7 +251,9 @@ class EmailIntakeService:
                 await self._join(message, row, existing)
             else:
                 await self._open(message, row, None)
-        # Past this point the case exists: each step is flagged so a retry resumes.
+            feedback_id = row.detail.get("feedback_id")
+        # Past this point the case (or the stored message) exists: each step is flagged so
+        # a retry resumes.
         if not row.detail.get("files_done"):
             stored = await self._store_attachments(message, row)
             row.detail = {
@@ -295,7 +263,13 @@ class EmailIntakeService:
                 "rejected_files": stored.rejected,
             }
             await self.emails.save_message(row)
-        code = row.detail.get("code")
+        code = row.detail.get("code") or row.detail.get("category")
+        if feedback_id and self.feedback is not None and not row.detail.get("ack_sent"):
+            await self.feedback.acknowledge_by_id(
+                UUID(feedback_id), message.graph_id, message.conversation_id
+            )
+            row.detail = {**row.detail, "ack_sent": True}
+            await self.emails.save_message(row)
         if row.detail.get("opened") and not row.detail.get("ack_sent"):
             await self.mail.reply(
                 self.mailbox,
@@ -309,7 +283,7 @@ class EmailIntakeService:
         except DependencyUnavailableError:
             logger.warning("Could not mark email %s as processed", message.internet_message_id)
         # A retried message comes back as ``failed``: settle it by what it did.
-        row.status = CREATED if row.detail.get("opened") else THREADED
+        row.status = CREATED if row.detail.get("opened") or feedback_id else THREADED
 
     async def _open_case_of(self, message: InboundMessage):
         """The open case this message continues, found by conversation then by subject code."""
@@ -354,8 +328,12 @@ class EmailIntakeService:
             or (parsed.request_type is not None and request_type is None)
             or (parsed.site is not None and site is None)
         )
-        chosen = request_type or await self._default_type()
+        chosen = request_type or await self._type_of_thread(message)
+        chosen = chosen or await self._default_type()
         description = parsed.description or message.body_text.strip() or "(sin contenido)"
+        if chosen.handling == HANDLING_ACKNOWLEDGE and self.feedback is not None:
+            await self._store_feedback(message, row, parsed, chosen, site, description)
+            return
         # The case subject is what the client wrote in the Subject of the email, the same
         # text the team sees in the mailbox. A different «Motivo:» line is not lost: it
         # opens the description.
@@ -382,6 +360,45 @@ class EmailIntakeService:
         row.detail = {**row.detail, "code": case.code, "needs_review": review, "opened": True}
         if related:
             row.detail["related_case"] = related
+        await self.emails.save_message(row)
+
+    async def _type_of_thread(self, message: InboundMessage) -> RequestType | None:
+        """The type of the suggestion or compliment this conversation began.
+
+        A person who answers the thank-you ("gracias") without the template is still
+        talking about their suggestion: it must not open a petition.
+        """
+
+        if self.feedback is None or not message.conversation_id:
+            return None
+        found = await self.emails.find_feedback_by_conversation(message.conversation_id)
+        return await self.feedback.kind_of(found) if found else None
+
+    async def _store_feedback(
+        self,
+        message: InboundMessage,
+        row: EmailMessage,
+        parsed: ParsedRequest,
+        kind: RequestType,
+        site: Site | None,
+        description: str,
+    ) -> None:
+        """A suggestion or compliment: kept apart from the cases and thanked, no case opened."""
+
+        assert self.feedback is not None
+        feedback = await self.feedback.record(
+            request_type=kind,
+            origin=ORIGIN_EMAIL,
+            full_name=parsed.requester_name or message.sender_name or message.sender_address,
+            email=message.sender_address,
+            body=description,
+            subject=_trim(clean_subject(message.subject), 200) or _trim(parsed.subject, 200),
+            business_name=_trim(parsed.business_name, 200),
+            site=site,
+            email_message_id=row.id,
+        )
+        row.status = CREATED
+        row.detail = {**row.detail, "feedback_id": str(feedback.id), "category": kind.name}
         await self.emails.save_message(row)
 
     async def _request_type(self, parsed: ParsedRequest) -> RequestType | None:
@@ -415,21 +432,30 @@ class EmailIntakeService:
         until every object is stored, and stored objects are removed on failure.
         """
 
-        if not message.has_attachments or row.case_id is None:
+        feedback_id = UUID(row.detail["feedback_id"]) if row.detail.get("feedback_id") else None
+        if not message.has_attachments or (row.case_id is None and feedback_id is None):
             return _Stored([], [])
         files = await self.mail.list_attachments(self.mailbox, message.graph_id)
-        saved: list[CaseAttachment] = []
+        saved: list[CaseAttachment | FeedbackFile] = []
         rejected: list[dict] = []
         keys: list[str] = []
         total = 0
         # What the case already holds: a signature logo repeated in every reply, or a
         # file sent twice, is kept once.
-        known = {a.checksum_sha256 for a in await self.emails.list_attachments(row.case_id)}
+        if feedback_id is not None:
+            assert self.feedback is not None
+            held = await self.feedback.files_of(feedback_id)
+        else:
+            held = await self.emails.list_attachments(row.case_id)
+        known = {a.checksum_sha256 for a in held}
         try:
             for file in files:
-                if file.is_inline and _extension(_filename(file.name)) not in _IMAGE_EXTENSIONS:
+                if (
+                    file.is_inline
+                    and extension_of(safe_filename(file.name)) not in IMAGE_EXTENSIONS
+                ):
                     continue  # embedded objects that are not pictures
-                reason = self._refuse(file, len(saved), total)
+                reason = self.guard.refuse(file.name, file.size, len(saved), total)
                 if reason:
                     rejected.append({"name": file.name, "reason": reason})
                     continue
@@ -437,7 +463,7 @@ class EmailIntakeService:
                     self.mailbox, message.graph_id, file.id
                 )
                 try:
-                    clean = await self._clean(file, content)
+                    clean = await self.guard.clean(file.name, content)
                 except InvalidInputError as exc:
                     rejected.append({"name": file.name, "reason": str(exc)})
                     continue
@@ -447,25 +473,34 @@ class EmailIntakeService:
                     continue
                 known.add(checksum)
                 attachment_id = uuid4()
-                key = case_attachment_key(row.case_id, attachment_id, extension)
+                if feedback_id is not None:
+                    key = feedback_file_key(feedback_id, attachment_id, extension)
+                else:
+                    key = case_attachment_key(row.case_id, attachment_id, extension)
                 await self.storage.put_object(key, data, content_type)
                 keys.append(key)
                 total += len(data)
-                saved.append(
-                    CaseAttachment(
-                        id=attachment_id,
-                        case_id=row.case_id,
-                        message_id=row.id,
-                        original_filename=name,
-                        extension=extension,
-                        content_type=content_type,
-                        size_bytes=len(data),
-                        checksum_sha256=checksum,
-                        storage_key=key,
-                        created_at=self.clock(),
-                    )
+                details = {
+                    "id": attachment_id,
+                    "original_filename": name,
+                    "extension": extension,
+                    "content_type": content_type,
+                    "size_bytes": len(data),
+                    "checksum_sha256": checksum,
+                    "storage_key": key,
+                    "created_at": self.clock(),
+                }
+                if feedback_id is not None:
+                    saved.append(FeedbackFile(feedback_id=feedback_id, **details))
+                else:
+                    saved.append(CaseAttachment(case_id=row.case_id, message_id=row.id, **details))
+            if feedback_id is not None:
+                assert self.feedback is not None
+                await self.feedback.add_files([f for f in saved if isinstance(f, FeedbackFile)])
+            else:
+                await self.emails.add_attachments(
+                    [a for a in saved if isinstance(a, CaseAttachment)]
                 )
-            await self.emails.add_attachments(saved)
         except Exception:
             for key in keys:
                 try:
@@ -473,7 +508,7 @@ class EmailIntakeService:
                 except Exception:
                     logger.warning("Could not remove orphan object %s", key)
             raise
-        if rejected:
+        if rejected and row.case_id is not None:
             await self.cases.record_email(
                 row.case_id,
                 row.id,
@@ -482,41 +517,3 @@ class EmailIntakeService:
                 {"rejected_files": rejected},
             )
         return _Stored(saved, rejected)
-
-    def _refuse(self, file: MailAttachment, count: int, total: int) -> str | None:
-        extension = _extension(_filename(file.name))
-        if extension not in self.allowed_extensions:
-            return "tipo de archivo no permitido"
-        if count >= self.max_attachments:
-            return "supera el máximo de adjuntos por correo"
-        if file.size > self.max_attachment_bytes:
-            return "supera el tamaño máximo por archivo"
-        if total + file.size > self.max_total_attachment_bytes:
-            return "supera el tamaño máximo total"
-        return None
-
-    async def _clean(self, file: MailAttachment, content: bytes) -> tuple[str, str, str, bytes]:
-        """Return (name, extension, content type, bytes) ready to store.
-
-        Raises:
-            InvalidInputError: The file is not what its extension says, or the antivirus refused it.
-        """
-
-        name = _filename(file.name)
-        extension = _extension(name)
-        if not content or len(content) > self.max_attachment_bytes:
-            raise InvalidInputError("archivo vacío o demasiado grande")
-        if extension in _IMAGE_EXTENSIONS:
-            # Re-encoding strips metadata and anything appended after the image.
-            image = await self.image_processor.sanitize(name, _IMAGE_EXTENSIONS[extension], content)
-            data, extension, content_type = image.content, image.extension, image.content_type
-        else:
-            if not _signature_ok(extension, content):
-                raise InvalidInputError("el contenido no corresponde a su extensión")
-            data = content
-            content_type = _DOCUMENT_TYPES.get(extension, "application/octet-stream")
-        try:
-            await self.malware_scanner.scan(data)
-        except InvalidInputError as exc:
-            raise InvalidInputError("rechazado por el antivirus") from exc
-        return name, extension, content_type, data

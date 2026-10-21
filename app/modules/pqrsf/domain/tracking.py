@@ -94,6 +94,9 @@ class DocumentType:
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # The answer may be uploaded straight to the case and the email, without going through
+    # the document manager (a sensitive document, or one that does not belong there).
+    allows_direct_upload: bool = False
 
 
 @dataclass

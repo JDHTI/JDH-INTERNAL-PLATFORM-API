@@ -92,6 +92,15 @@ class FakeEmails:
         ]
         return max(rows, key=lambda m: m.received_at).case_id if rows else None
 
+    async def find_feedback_by_conversation(self, conversation_id):
+        rows = [
+            m
+            for m in self.messages.values()
+            if m.conversation_id == conversation_id and m.detail.get("feedback_id")
+        ]
+        found = max(rows, key=lambda m: m.received_at).detail["feedback_id"] if rows else None
+        return uuid.UUID(found) if found else None
+
     async def find_case_by_code(self, code):
         return next((c.id for c in self.cases.cases.values() if c.code == code), None)
 

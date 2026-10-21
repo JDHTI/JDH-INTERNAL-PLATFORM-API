@@ -39,12 +39,33 @@ from app.modules.order_validation.infrastructure.order_file import SpreadsheetOr
 from app.modules.order_validation.infrastructure.repository import (
     SqlAlchemyOrderValidationRepository,
 )
+from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
+from app.modules.pqrsf.application.certificates import CertificateService
+from app.modules.pqrsf.application.comments import CaseCommentService
+from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
+from app.modules.pqrsf.application.feedback import FeedbackService
+from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
+from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
+from app.modules.pqrsf.infrastructure.certificate_repository import (
+    ManagerDocumentFiles,
+    SqlAlchemyCertificateRepository,
+)
+from app.modules.pqrsf.infrastructure.delivery_repository import SqlAlchemyDeliveryRepository
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
-from app.modules.pqrsf.infrastructure.policies import HolidayCalendar
+from app.modules.pqrsf.infrastructure.feedback_repository import SqlAlchemyFeedbackRepository
+from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
+from app.modules.pqrsf.infrastructure.item_delivery_repository import (
+    SqlAlchemyItemDeliveryRepository,
+)
+from app.modules.pqrsf.infrastructure.notification_repository import (
+    SqlAlchemyNotificationRepository,
+)
+from app.modules.pqrsf.infrastructure.notification_worker import Wakeup
+from app.modules.pqrsf.infrastructure.policies import AreaTeamDirectory, HolidayCalendar
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
 from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
@@ -177,6 +198,66 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_manager_policy = providers.Factory(
         AreaManagerPolicy, areas=area_service, area_slug=config.pqrsf.manager_area_slug
     )
+    # --- PQRSF emails sent from the mailbox (Microsoft Graph) ---
+    mail_client = providers.Singleton(
+        GraphMailClient,
+        tenant_id=config.mail.tenant_id,
+        client_id=config.mail.client_id,
+        client_secret=config.mail.client_secret,
+    )
+    pqrsf_team = providers.Factory(
+        AreaTeamDirectory, areas=area_service, area_slug=config.pqrsf.manager_area_slug
+    )
+    pqrsf_holidays = providers.Singleton(
+        NagerHolidayProvider,
+        country=config.pqrsf.holidays_country,
+        fallback=pqrsf_calendar,
+        base_url=config.pqrsf.holidays_api_url,
+    )
+    pqrsf_notification_repository = providers.Factory(
+        SqlAlchemyNotificationRepository, database=database
+    )
+    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
+    pqrsf_feedback_repository = providers.Factory(SqlAlchemyFeedbackRepository, database=database)
+    # Wakes the email sender so a thank-you leaves right after it is queued.
+    pqrsf_wakeup = providers.Singleton(Wakeup)
+    pqrsf_feedback_service = providers.Factory(
+        FeedbackService,
+        repository=pqrsf_feedback_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        managers=pqrsf_manager_policy,
+        people=user_directory,
+        replies_enabled=config.pqrsf.notifications_enabled,
+        max_replies_per_email=config.pqrsf.feedback_replies_per_email,
+        wake=pqrsf_wakeup.provided.set,
+    )
+    pqrsf_certificate_repository = providers.Factory(
+        SqlAlchemyCertificateRepository, database=database
+    )
+    pqrsf_delivery_repository = providers.Factory(SqlAlchemyDeliveryRepository, database=database)
+    pqrsf_manager_files = providers.Factory(
+        ManagerDocumentFiles, database=database, storage=storage
+    )
+    pqrsf_notification_service = providers.Factory(
+        NotificationService,
+        repository=pqrsf_notification_repository,
+        cases=pqrsf_case_repository,
+        people=user_directory,
+        team=pqrsf_team,
+        mail=mail_client,
+        managers=pqrsf_manager_policy,
+        holidays=pqrsf_holidays,
+        mailbox=config.mail.pqrsf_inbox,
+        area_slug=config.pqrsf.manager_area_slug,
+        ui_base_url=config.pqrsf.ui_base_url,
+        timezone=config.pqrsf.timezone,
+        redirect_to=config.pqrsf.notify_redirect,
+        enabled=config.pqrsf.notifications_enabled,
+        emails=pqrsf_email_repository,
+        storage=storage,
+        documents=pqrsf_manager_files,
+    )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
         repository=pqrsf_case_repository,
@@ -185,6 +266,7 @@ class V1Container(containers.DeclarativeContainer):
         people=user_directory,
         managers=pqrsf_manager_policy,
         calendar=pqrsf_calendar,
+        notifier=pqrsf_notification_service,
     )
     # --- Commercial masters (DWH mirror) and supplier supports ---
     commercial_master_repository = providers.Factory(
@@ -257,19 +339,12 @@ class V1Container(containers.DeclarativeContainer):
         port=config.pqrsf.clamav_port,
         timeout=config.pqrsf.clamav_timeout,
     )
-    # --- PQRSF by email (Microsoft Graph) ---
-    mail_client = providers.Singleton(
-        GraphMailClient,
-        tenant_id=config.mail.tenant_id,
-        client_id=config.mail.client_id,
-        client_secret=config.mail.client_secret,
-    )
+    # --- PQRSF by email: reading the mailbox ---
     mail_image_processor = providers.Singleton(
         PillowImageProcessor,
         max_bytes=config.mail.max_attachment_bytes,
         max_pixels=config.pqrsf.max_image_pixels,
     )
-    pqrsf_email_repository = providers.Factory(SqlAlchemyEmailRepository, database=database)
     pqrsf_email_intake_service = providers.Factory(
         EmailIntakeService,
         mail=mail_client,
@@ -288,12 +363,63 @@ class V1Container(containers.DeclarativeContainer):
         max_attachment_bytes=config.mail.max_attachment_bytes,
         max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
         allowed_extensions=config.mail.attachment_extensions,
+        feedback=pqrsf_feedback_service,
+    )
+    pqrsf_comment_guard = providers.Factory(
+        AttachmentGuard,
+        image_processor=mail_image_processor,
+        malware_scanner=pqrsf_malware_scanner,
+        allowed_extensions=config.mail.attachment_extensions,
+        max_attachments=config.mail.max_attachments,
+        max_attachment_bytes=config.mail.max_attachment_bytes,
+        max_total_attachment_bytes=config.mail.max_total_attachment_bytes,
+    )
+    pqrsf_comment_service = providers.Factory(
+        CaseCommentService,
+        tracking=pqrsf_tracking_service,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
     )
     pqrsf_case_attachment_service = providers.Factory(
         CaseAttachmentService,
         emails=pqrsf_email_repository,
         access=pqrsf_tracking_service,
         storage=storage,
+    )
+    pqrsf_item_delivery_repository = providers.Factory(
+        SqlAlchemyItemDeliveryRepository, database=database
+    )
+    pqrsf_item_delivery_service = providers.Factory(
+        ItemDeliveryService,
+        tracking=pqrsf_tracking_service,
+        deliveries=pqrsf_item_delivery_repository,
+        certificates=pqrsf_certificate_repository,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        storage=storage,
+        guard=pqrsf_comment_guard,
+        area_slug=config.pqrsf.certificates_area_slug,
+        wake=pqrsf_wakeup.provided.set,
+    )
+    pqrsf_certificate_service = providers.Factory(
+        CertificateService,
+        repository=pqrsf_certificate_repository,
+        managers=pqrsf_manager_policy,
+        area_slug=config.pqrsf.certificates_area_slug,
+    )
+    pqrsf_delivery_service = providers.Factory(
+        DocumentDeliveryService,
+        deliveries=pqrsf_delivery_repository,
+        certificates=pqrsf_certificate_repository,
+        notifications=pqrsf_notification_repository,
+        managers=pqrsf_manager_policy,
+        people=user_directory,
+        enabled=config.pqrsf.notifications_enabled,
+        max_emails_per_address=config.pqrsf.document_emails_per_address,
+        max_email_bytes=config.pqrsf.document_email_max_bytes,
+        wake=pqrsf_wakeup.provided.set,
     )
     pqrsf_service = providers.Factory(
         PqrsfService,
@@ -306,4 +432,6 @@ class V1Container(containers.DeclarativeContainer):
         max_attachments=config.pqrsf.max_attachments,
         max_attachment_bytes=config.pqrsf.max_attachment_bytes,
         max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,
+        feedback=pqrsf_feedback_service,
+        deliveries=pqrsf_delivery_service,
     )

@@ -43,6 +43,7 @@ def _type(model: RequestTypeModel) -> RequestType:
         prefix=model.prefix,
         requires_follow_up=model.requires_follow_up,
         sla_days=model.sla_days,
+        handling=model.handling,
     )
 
 
@@ -222,6 +223,7 @@ class SqlAlchemyPqrsfRepository:
             model.prefix = request_type.prefix
             model.requires_follow_up = request_type.requires_follow_up
             model.sla_days = request_type.sla_days
+            model.handling = request_type.handling
             try:
                 await session.commit()
             except IntegrityError as exc:
