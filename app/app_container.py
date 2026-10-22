@@ -93,6 +93,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
     from app.modules.commercial_masters.presentation import router as commercial_router_module
     from app.modules.consumption.presentation import router as consumption_router_module
     from app.modules.documents.presentation import router as documents_router_module
+    from app.modules.dwh_monitoring.presentation import router as dwh_monitoring_router_module
     from app.modules.health.presentation import router as health_router_module
     from app.modules.identity.presentation import router as identity_router_module
     from app.modules.masters.presentation import router as masters_router_module
@@ -137,6 +138,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             supports_router_module,
             special_cases_router_module,
             order_validation_router_module,
+            dwh_monitoring_router_module,
         ]
     )
     return container

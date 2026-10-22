@@ -21,6 +21,7 @@ from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
 from app.core.public_guard import PublicIntakeGuard
 from app.core.rate_limit_middleware import RateLimitMiddleware
+from app.modules.dwh_monitoring.infrastructure.worker import MonitoringSyncWorker
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
 
@@ -37,6 +38,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         resources: GlobalResources | None = None
         mail_worker: EmailIntakeWorker | None = None
         notification_worker: NotificationWorker | None = None
+        monitoring_worker: MonitoringSyncWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
@@ -54,6 +56,17 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 )
                 notification_worker.start()
                 logger.info(f"PQRSF notifications sending from {runtime_settings.MAIL_PQRSF_INBOX}")
+            if runtime_settings.DWH_MONITORING_SYNC_ENABLED:
+                monitoring_worker = MonitoringSyncWorker(
+                    container.v1_container.dwh_monitoring_sync_service,
+                    runtime_settings.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
+                    trigger=container.v1_container.dwh_monitoring_trigger(),
+                )
+                monitoring_worker.start()
+                logger.info(
+                    "DWH monitoring copying the monitoreo schema every "
+                    f"{runtime_settings.DWH_MONITORING_SYNC_INTERVAL_SECONDS}s"
+                )
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -68,6 +81,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if monitoring_worker is not None:
+                await monitoring_worker.stop()
             if notification_worker is not None:
                 await notification_worker.stop()
                 await container.v1_container.pqrsf_holidays().close()

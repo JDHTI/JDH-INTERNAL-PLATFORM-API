@@ -198,6 +198,11 @@ class Settings(BaseSettings):
     MAIL_MAX_TOTAL_ATTACHMENT_MB: int = 25
     MAIL_ATTACHMENT_EXTENSIONS: str = "pdf,doc,docx,xls,xlsx,csv,txt,ppt,pptx,png,jpg,jpeg,webp"
 
+    # Data warehouse monitoring (TI → Monitoreo → Datawarehouse): a background loop copies
+    # the ``monitoreo`` schema over the DWH_* connection; the screens read the copy.
+    DWH_MONITORING_SYNC_ENABLED: bool = False
+    DWH_MONITORING_SYNC_INTERVAL_SECONDS: int = 600
+
     # Areas where the project manager is switched on (comma-separated slugs).
     PROJECTS_AREA_SLUGS: str = "ti"
     # A live connection without a ping for this long leaves the presence list.
@@ -401,6 +406,10 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,
                 "max_upload_bytes": self.ORDER_VALIDATION_MAX_UPLOAD_MB * 1024 * 1024,
                 "max_lines": self.ORDER_VALIDATION_MAX_LINES,
+            },
+            "dwh_monitoring": {
+                "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
+                "sync_interval": self.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
             },
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
