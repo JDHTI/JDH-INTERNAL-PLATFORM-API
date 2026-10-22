@@ -7,6 +7,7 @@ from app.modules.commercial_masters.presentation.router import router as commerc
 from app.modules.consumption.presentation.router import router as consumption_router
 from app.modules.documents.presentation.router import area_router as area_documents_router
 from app.modules.documents.presentation.router import router as documents_router
+from app.modules.dwh_monitoring.presentation.router import router as dwh_monitoring_router
 from app.modules.identity.presentation.router import router as identity_router
 from app.modules.masters.presentation.router import router as masters_router
 from app.modules.order_validation.presentation.router import router as order_validation_router
@@ -41,6 +42,7 @@ v1_router.include_router(
 v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
+v1_router.include_router(dwh_monitoring_router, prefix="/dwh-monitoring", tags=["dwh-monitoring"])
 v1_router.include_router(pqrsf_public_router, tags=["pqrsf-public"])
 v1_router.include_router(pqrsf_admin_router, tags=["pqrsf"])
 v1_router.include_router(pqrsf_tracking_router, tags=["pqrsf-tracking"])

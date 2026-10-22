@@ -191,6 +191,9 @@ services:
       ORDER_VALIDATION_MANAGER_AREA_SLUG: ${ORDER_VALIDATION_MANAGER_AREA_SLUG:-comercial}
       ORDER_VALIDATION_MAX_UPLOAD_MB: ${ORDER_VALIDATION_MAX_UPLOAD_MB:-10}
       ORDER_VALIDATION_MAX_LINES: ${ORDER_VALIDATION_MAX_LINES:-10000}
+      # Data warehouse monitoring: copies the monitoreo schema over the DWH_* connection.
+      DWH_MONITORING_SYNC_ENABLED: ${DWH_MONITORING_SYNC_ENABLED:-false}
+      DWH_MONITORING_SYNC_INTERVAL_SECONDS: ${DWH_MONITORING_SYNC_INTERVAL_SECONDS:-600}
     depends_on:
       postgres:
         condition: service_healthy

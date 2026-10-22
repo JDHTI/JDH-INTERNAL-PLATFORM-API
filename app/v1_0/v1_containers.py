@@ -25,6 +25,11 @@ from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
 from app.modules.documents.application.service import DocumentService
 from app.modules.documents.infrastructure.repository import SqlAlchemyDocumentRepository
+from app.modules.dwh_monitoring.application.service import DwhMonitoringService
+from app.modules.dwh_monitoring.application.sync import MonitoringSyncService
+from app.modules.dwh_monitoring.infrastructure.dwh_source import WarehouseMonitoringSource
+from app.modules.dwh_monitoring.infrastructure.repository import SqlAlchemyMonitoringRepository
+from app.modules.dwh_monitoring.infrastructure.worker import SyncTrigger
 from app.modules.health.application.service import HealthService
 from app.modules.identity.application.directory import UserDirectory
 from app.modules.identity.application.service import IdentityService
@@ -327,6 +332,24 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         max_upload_bytes=config.order_validation.max_upload_bytes,
         max_lines=config.order_validation.max_lines,
+    )
+    # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
+    # Same DWH connection as the masters; only TI members and admins see it.
+    dwh_monitoring_policy = providers.Factory(AreaManagerPolicy, areas=area_service, area_slug="ti")
+    dwh_monitoring_repository = providers.Factory(SqlAlchemyMonitoringRepository, database=database)
+    dwh_monitoring_source = providers.Factory(WarehouseMonitoringSource, connection=data_provider)
+    dwh_monitoring_sync_service = providers.Factory(
+        MonitoringSyncService, source=dwh_monitoring_source, repository=dwh_monitoring_repository
+    )
+    # Wakes the background load when someone asks for a load now.
+    dwh_monitoring_trigger = providers.Singleton(SyncTrigger)
+    dwh_monitoring_service = providers.Factory(
+        DwhMonitoringService,
+        repository=dwh_monitoring_repository,
+        access=dwh_monitoring_policy,
+        sync_enabled=config.dwh_monitoring.sync_enabled,
+        sync_interval=config.dwh_monitoring.sync_interval,
+        request_sync=dwh_monitoring_trigger.provided.set,
     )
     pqrsf_image_processor = providers.Singleton(
         PillowImageProcessor,
