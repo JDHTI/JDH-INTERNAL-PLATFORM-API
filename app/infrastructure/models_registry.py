@@ -5,6 +5,7 @@ here when it introduces models, so autogenerate and ``alembic check`` see them.
 """
 
 from app.infrastructure.database import Base
+from app.modules.app_monitoring.infrastructure import models as app_monitoring_models
 from app.modules.areas.infrastructure import models as areas_models
 from app.modules.commercial_masters.infrastructure import models as commercial_masters_models
 from app.modules.documents.infrastructure import models as documents_models
@@ -19,6 +20,7 @@ from app.modules.supplier_supports.infrastructure import models as supplier_supp
 
 __all__ = [
     "Base",
+    "app_monitoring_models",
     "areas_models",
     "commercial_masters_models",
     "documents_models",

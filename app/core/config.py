@@ -203,6 +203,13 @@ class Settings(BaseSettings):
     DWH_MONITORING_SYNC_ENABLED: bool = False
     DWH_MONITORING_SYNC_INTERVAL_SECONDS: int = 600
 
+    # Application monitoring (TI → Monitoreo → Aplicativos): a background loop requests the
+    # health endpoint and the UI of every registered platform; checks older than the
+    # retention are purged.
+    APP_MONITORING_ENABLED: bool = False
+    APP_MONITORING_INTERVAL_SECONDS: int = 60
+    APP_MONITORING_RETENTION_DAYS: int = 30
+
     # Areas where the project manager is switched on (comma-separated slugs).
     PROJECTS_AREA_SLUGS: str = "ti"
     # A live connection without a ping for this long leaves the presence list.
@@ -410,6 +417,11 @@ class Settings(BaseSettings):
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
                 "sync_interval": self.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
+            },
+            "app_monitoring": {
+                "enabled": self.APP_MONITORING_ENABLED,
+                "interval": self.APP_MONITORING_INTERVAL_SECONDS,
+                "retention_days": self.APP_MONITORING_RETENTION_DAYS,
             },
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),

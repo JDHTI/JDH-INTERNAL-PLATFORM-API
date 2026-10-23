@@ -89,6 +89,7 @@ class GlobalResources:
 def build_application_container(app_settings: Settings) -> ApplicationContainer:
     """Configure and wire one container instance for one application instance."""
 
+    from app.modules.app_monitoring.presentation import router as app_monitoring_router_module
     from app.modules.areas.presentation import router as areas_router_module
     from app.modules.commercial_masters.presentation import router as commercial_router_module
     from app.modules.consumption.presentation import router as consumption_router_module
@@ -139,6 +140,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             special_cases_router_module,
             order_validation_router_module,
             dwh_monitoring_router_module,
+            app_monitoring_router_module,
         ]
     )
     return container
