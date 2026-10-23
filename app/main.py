@@ -21,6 +21,7 @@ from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
 from app.core.public_guard import PublicIntakeGuard
 from app.core.rate_limit_middleware import RateLimitMiddleware
+from app.modules.app_monitoring.infrastructure.worker import AppCheckWorker
 from app.modules.dwh_monitoring.infrastructure.worker import MonitoringSyncWorker
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
@@ -39,6 +40,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         mail_worker: EmailIntakeWorker | None = None
         notification_worker: NotificationWorker | None = None
         monitoring_worker: MonitoringSyncWorker | None = None
+        app_worker: AppCheckWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
@@ -67,6 +69,17 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     "DWH monitoring copying the monitoreo schema every "
                     f"{runtime_settings.DWH_MONITORING_SYNC_INTERVAL_SECONDS}s"
                 )
+            if runtime_settings.APP_MONITORING_ENABLED:
+                app_worker = AppCheckWorker(
+                    container.v1_container.app_monitoring_service,
+                    runtime_settings.APP_MONITORING_INTERVAL_SECONDS,
+                    trigger=container.v1_container.app_monitoring_trigger(),
+                )
+                app_worker.start()
+                logger.info(
+                    "App monitoring checking the registered platforms every "
+                    f"{runtime_settings.APP_MONITORING_INTERVAL_SECONDS}s"
+                )
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -81,6 +94,12 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if app_worker is not None:
+                await app_worker.stop()
+            if resources is not None:
+                # Manual checks use it too, so it is closed even with the loop off.
+                # It opens its connections on the first check, so this costs nothing otherwise.
+                await container.v1_container.app_monitoring_prober().close()
             if monitoring_worker is not None:
                 await monitoring_worker.stop()
             if notification_worker is not None:
