@@ -193,7 +193,9 @@ Ejemplos:
 | Documento | Juan Gómez · Respondió el documento Ficha Técnica |
 
 Los registros de acceso (`viewed`) se siguen guardando, pero la UI puede agruparlos («Abrieron el
-caso: Ana, Juan») para que no tapen lo importante.
+caso: Ana, Juan») para que no tapen lo importante. La primera lectura (`read`) también es de
+categoría `access`, pero no se agrupa: trae `status_change` (Recibida → Leída) y ese chip no se
+debe perder. Entrar a la bandeja (`inbox_opened`) se lee «Entró a la bandeja».
 
 ## Ejecutivo comercial
 
