@@ -22,12 +22,13 @@ from app.modules.pqrsf.domain.feedback import (
     FeedbackSummary,
 )
 from app.modules.pqrsf.infrastructure.models import (
+    DependencyModel,
     FeedbackFileModel,
     FeedbackModel,
     NotificationModel,
     RequestTypeModel,
 )
-from app.modules.pqrsf.infrastructure.repository import request_type_from_model
+from app.modules.pqrsf.infrastructure.repository import area_ref, request_type_from_model
 from app.modules.sites.domain.entities import Site
 from app.modules.sites.infrastructure.models import SiteModel
 
@@ -46,9 +47,11 @@ _QUERY: Select = (
         NotificationModel.status,
         NotificationModel.sent_at,
         _FILES,
+        DependencyModel,
     )
     .join(RequestTypeModel, FeedbackModel.request_type_id == RequestTypeModel.id)
     .outerjoin(SiteModel, FeedbackModel.site_id == SiteModel.id)
+    .outerjoin(DependencyModel, FeedbackModel.dependency_id == DependencyModel.id)
     .outerjoin(NotificationModel, FeedbackModel.reply_notification_id == NotificationModel.id)
 )
 
@@ -68,7 +71,7 @@ def _site(model: SiteModel | None) -> Site | None:
 
 
 def _feedback(row) -> Feedback:
-    model, kind, site, reply_status, reply_sent_at, files = row
+    model, kind, site, reply_status, reply_sent_at, files, area = row
     if model.reply_skipped_reason:
         status = REPLY_SKIPPED
     else:
@@ -93,6 +96,7 @@ def _feedback(row) -> Feedback:
         reply_status=status,
         reply_sent_at=reply_sent_at,
         files_count=int(files or 0),
+        area=area_ref(area),
     )
 
 
@@ -138,6 +142,7 @@ class SqlAlchemyFeedbackRepository:
                 request_id=feedback.request_id,
                 email_message_id=feedback.email_message_id,
                 site_id=feedback.site.id if feedback.site else None,
+                dependency_id=feedback.area.id if feedback.area else None,
                 full_name=feedback.full_name,
                 business_name=feedback.business_name,
                 email=feedback.email,

@@ -44,6 +44,17 @@ class RequestType:
     handling: str = HANDLING_CASE
     # One short line shown under the option so the requester knows which type to pick.
     description: str | None = None
+    # Whether the form asks the requester for the area (every type but compliments).
+    asks_area: bool = False
+
+
+@dataclass(frozen=True)
+class AreaRef:
+    """An area (dependency) as the requester picked it."""
+
+    id: UUID
+    code: str
+    name: str
 
 
 @dataclass(frozen=True)
@@ -164,16 +175,24 @@ class PqrsfRequest:
     # ``yes`` | ``no`` | ``unknown``, asked only when there are products.
     pickup_order_requested: str | None = None
     pickup_order_number: str | None = None
+    # Area the requester picked on the form.
+    area: AreaRef | None = None
 
     @property
     def dependency_id(self) -> UUID | None:
-        """The dependency that attends it: the cause's, else the subject's, else the documents'."""
+        """The dependency that attends it.
+
+        The cause's, else the subject's, else the document category's (Quality set it for
+        those documents), else the area the requester picked.
+        """
 
         if self.cause_ref is not None and self.cause_ref.dependency_id is not None:
             return self.cause_ref.dependency_id
         if self.subject_ref is not None and self.subject_ref.dependency_id is not None:
             return self.subject_ref.dependency_id
-        return self.document_dependency_id
+        if self.document_dependency_id is not None:
+            return self.document_dependency_id
+        return self.area.id if self.area is not None else None
 
     @property
     def case_subject(self) -> str | None:

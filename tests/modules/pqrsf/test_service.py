@@ -567,3 +567,64 @@ async def test_videos_follow_the_evidence_rules_of_the_type() -> None:
             idempotency_payload=plain,
             videos=[clip],
         )
+
+
+# --- Area picked by the requester ---
+
+COMMERCIAL = uuid4()
+
+
+class FakeAreas(FakePqrsfRepository):
+    async def list_areas(self):
+        from app.modules.pqrsf.domain.tracking import Dependency
+
+        return [Dependency(COMMERCIAL, "comercial", "Comercial", 1, True, NOW, NOW)]
+
+
+def _area_service(asks_area: bool = True) -> tuple[PqrsfService, RequestType, Site]:
+    request_type = replace(_type(), asks_area=asks_area)
+    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
+    from app.modules.sites.application.service import SiteService
+
+    return (
+        PqrsfService(FakeAreas(request_type), SiteService(FakeSiteRepository(site))),
+        request_type,
+        site,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_area_is_required_where_the_type_asks_for_it() -> None:
+    service, request_type, site = _area_service()
+    values = _payload(request_type, site, str(uuid4()))
+
+    with pytest.raises(InvalidInputError, match="Selecciona el área"):
+        await _create(service, request_type, site, values)
+    with pytest.raises(InvalidInputError, match="no está disponible"):
+        await _create(service, request_type, site, {**values, "area_id": uuid4()})
+
+    created = await _create(service, request_type, site, {**values, "area_id": COMMERCIAL})
+    assert created.request.area.name == "Comercial"
+    # Nothing else decides: the area attends it.
+    assert created.request.dependency_id == COMMERCIAL
+
+
+@pytest.mark.asyncio
+async def test_a_type_that_does_not_ask_for_the_area_refuses_it() -> None:
+    service, request_type, site = _area_service(asks_area=False)
+    values = {**_payload(request_type, site, str(uuid4())), "area_id": COMMERCIAL}
+
+    with pytest.raises(InvalidInputError, match="no pide área"):
+        await _create(service, request_type, site, values)
+
+
+@pytest.mark.asyncio
+async def test_the_document_category_outranks_the_area() -> None:
+    service, request_type, site = _area_service()
+    values = _document_values(request_type, site, area_id=COMMERCIAL)
+
+    created = await _create(service, request_type, site, values)
+
+    assert created.request.dependency_id == COMMERCIAL  # the fake does not load categories
+    request = replace(created.request, document_dependency_id=CATEGORY.dependency_id)
+    assert request.dependency_id == CATEGORY.dependency_id

@@ -37,6 +37,8 @@ class RequestTypeModel(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     # One short line shown under the option so the requester knows which type to pick.
     description: Mapped[str | None] = mapped_column(String(300))
+    # Whether the form asks the requester for the area the request is about.
+    asks_area: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_attachments: Mapped[bool] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true")
@@ -96,6 +98,10 @@ class PqrsfRequestModel(Base):
     # ``yes`` | ``no`` | ``unknown``: whether a pickup order was already requested in the ERP.
     pickup_order_requested: Mapped[str | None] = mapped_column(String(8))
     pickup_order_number: Mapped[str | None] = mapped_column(String(40))
+    # Area the requester picked; decides only when no cause, subject or category does.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
     document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     document_category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
@@ -560,6 +566,10 @@ class FeedbackModel(Base):
     )
     site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    # Area the sender picked on the public form.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
     )
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     business_name: Mapped[str | None] = mapped_column(String(200))

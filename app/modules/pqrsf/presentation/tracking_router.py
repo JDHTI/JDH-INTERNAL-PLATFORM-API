@@ -82,6 +82,8 @@ class TrackingRequestTypeResponse(BaseModel):
     is_active: bool
     # One short line shown under the type on the forms.
     description: str | None = None
+    # Whether the public form asks the requester for the area.
+    asks_area: bool = False
 
 
 class CaseStatusResponse(BaseModel):
@@ -386,6 +388,7 @@ class UpdateRequestTypeRequest(BaseModel):
     # One visible line under the type on the form; ``null`` clears it.
     description: str | None = Field(default=None, max_length=MAX_TYPE_DESCRIPTION)
     allows_attachments: bool | None = None
+    asks_area: bool | None = None
 
 
 class CreateStatusRequest(BaseModel):
@@ -688,6 +691,7 @@ async def update_request_type(
             handling=body.handling,
             description=body.description,
             allows_attachments=body.allows_attachments,
+            asks_area=body.asks_area,
         )
     )
 

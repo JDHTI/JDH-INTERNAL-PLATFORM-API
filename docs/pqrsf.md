@@ -46,12 +46,20 @@ causal trae `id`, `code`, `name`, `description`, `is_other`, `allows_product` y
 `requires_product`. La dependencia y la ruta de tratamiento de la causal no se
 publican: deciden a qué área va el caso, en el servidor.
 
-Cada asunto trae también `dependency_id` (su área), y el catálogo trae
-`dependencies` (`id`, `code`, `name`): las áreas activas a las que pertenece algún
-asunto activo. El formulario las usa como filtro: el cliente elige el área y ve
-solo sus novedades (los asuntos `is_other` se muestran en todas). Es solo un
-filtro: la causal sigue decidiendo el área del caso en el servidor y el envío no
-lleva el área.
+### Área
+
+El catálogo trae `dependencies` (`id`, `code`, `name`): todas las áreas activas,
+que el cliente elige junto a la sede. Cada asunto trae su `dependency_id`, para
+mostrar solo las novedades del área elegida (los asuntos `is_other` se muestran
+en todas).
+
+Los tipos con `asks_area` (petición, queja, reclamo y sugerencia; no
+felicitación; editable con `PATCH /pqrsf/request-types/{id}`) exigen el campo
+`dependency_id` en el envío, que debe ser una de esas áreas; los demás lo
+rechazan. Se guarda en la solicitud (y en la sugerencia) y el detalle lo trae como
+`selected_area`. Quién atiende el caso se decide en este orden: la causal, el
+asunto, la categoría de los documentos pedidos (Calidad la configuró para esos
+documentos) y, si nada de eso decide, el área elegida.
 
 Reglas para la interfaz:
 
@@ -138,8 +146,8 @@ El catálogo trae `limits` (`max_images`, `max_image_mb`, `max_total_image_mb`,
 interfaz avise antes de enviar.
 
 El detalle administrativo de la solicitud (y el `request` del detalle del caso)
-incluye `selected_subject`, `selected_cause`, `products` y los dos campos de la
-orden de recogida.
+incluye `selected_area`, `selected_subject`, `selected_cause`, `products` y los dos
+campos de la orden de recogida. Las sugerencias y felicitaciones traen `area`.
 
 El servidor devuelve `201` con `{ "id", "reference", "tracking_code",
 "created_at" }`. `tracking_code` es el consecutivo del caso de seguimiento

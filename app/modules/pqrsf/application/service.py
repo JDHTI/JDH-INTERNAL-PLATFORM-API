@@ -21,6 +21,7 @@ from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.entities import (
     HANDLING_ACKNOWLEDGE,
     PICKUP_ORDER_ANSWERS,
+    AreaRef,
     Cause,
     ClaimedProduct,
     CreateResult,
@@ -158,17 +159,17 @@ class PqrsfService:
 
         return await self.repository.list_subjects()
 
-    async def subject_dependencies(self) -> list[Dependency]:
-        """Return the areas the public form filters subjects by.
+    async def areas(self) -> list[Dependency]:
+        """Return the areas a requester can pick on the public form.
 
-        The filter only narrows the subjects shown: the cause picked still decides who
-        attends the case.
+        The area narrows the subjects shown and is stored with the request; it decides who
+        attends the case only when no cause, subject or document category does.
 
         Returns:
-            list[Dependency]: Active dependencies some active subject belongs to.
+            list[Dependency]: Active dependencies in display order.
         """
 
-        return await self.repository.list_subject_dependencies()
+        return await self.repository.list_areas()
 
     async def search_products(self, query: str, limit: int = 10) -> list[ProductOption]:
         """Find products by reference or name for the product lines of the form.
@@ -231,6 +232,7 @@ class PqrsfService:
         pickup_order_requested: str | None = None,
         pickup_order_number: str | None = None,
         videos: Sequence[ImageUpload] = (),
+        area_id: UUID | None = None,
     ) -> CreateResult:
         """Validate and persist an idempotent public request.
 
@@ -268,6 +270,8 @@ class PqrsfService:
                 with products.
             pickup_order_number (str | None): Pickup order number, only with ``yes``.
             videos (Sequence[ImageUpload]): Evidence videos, where images are accepted.
+            area_id (UUID | None): Area the requester picked; required where the type
+                ``asks_area`` and refused otherwise.
 
         Returns:
             CreateResult: The stored request and whether it was replayed.
@@ -298,6 +302,7 @@ class PqrsfService:
             pickup_order_requested=pickup_order_requested,
             pickup_order_number=pickup_order_number,
             videos=videos,
+            area_id=area_id,
         )
         return await self._with_case(result)
 
@@ -392,6 +397,7 @@ class PqrsfService:
                 business_name=request.business_name,
                 site=request.site,
                 request_id=request.id,
+                area=request.area,
             )
             if not feedback.files_count:
                 # The images stay where the form stored them; the message points at them.
@@ -466,6 +472,7 @@ class PqrsfService:
         pickup_order_requested: str | None,
         pickup_order_number: str | None,
         videos: Sequence[ImageUpload] = (),
+        area_id: UUID | None = None,
     ) -> CreateResult:
         key = validate_idempotency_key(idempotency_key)
         request_type = await self.repository.get_request_type(request_type_id)
@@ -475,6 +482,7 @@ class PqrsfService:
         if not site.is_active:
             raise InvalidInputError("La sede seleccionada no está disponible")
 
+        area = await self._area(request_type, area_id)
         classification = await self._classify(
             request_type,
             document_request,
@@ -533,6 +541,7 @@ class PqrsfService:
             products=classification.products,
             pickup_order_requested=classification.pickup_order_requested,
             pickup_order_number=classification.pickup_order_number,
+            area=area,
             idempotency_key=key,
             idempotency_hash=payload_hash,
             created_at=datetime.now(UTC),
@@ -594,6 +603,22 @@ class PqrsfService:
             raise DependencyUnavailableError("No se pudieron guardar las imágenes") from exc
         stored.attachments = attachments
         return CreateResult(stored, replayed=False)
+
+    async def _area(self, request_type: RequestType, area_id: UUID | None) -> AreaRef | None:
+        """Validate the area picked: required where the type asks for it, else not sent."""
+
+        if not request_type.asks_area:
+            if area_id is not None:
+                raise InvalidInputError("Este tipo de solicitud no pide área")
+            return None
+        if area_id is None:
+            raise InvalidInputError("Selecciona el área")
+        area = next(
+            (item for item in await self.repository.list_areas() if item.id == area_id), None
+        )
+        if area is None:
+            raise InvalidInputError("El área seleccionada no está disponible")
+        return AreaRef(id=area.id, code=area.code, name=area.name)
 
     async def _classify(
         self,

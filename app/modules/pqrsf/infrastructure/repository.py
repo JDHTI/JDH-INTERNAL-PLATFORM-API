@@ -7,10 +7,12 @@ from uuid import UUID
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.entities import (
+    AreaRef,
     Cause,
     ClaimedProduct,
     DocumentCategory,
@@ -53,6 +55,7 @@ def _type(model: RequestTypeModel) -> RequestType:
         sla_days=model.sla_days,
         handling=model.handling,
         description=model.description,
+        asks_area=model.asks_area,
     )
 
 
@@ -171,6 +174,7 @@ def _request(
     document_dependency_id: UUID | None = None,
     subject: SubjectModel | None = None,
     cause: CauseModel | None = None,
+    area: DependencyModel | None = None,
 ) -> PqrsfRequest:
     return PqrsfRequest(
         id=model.id,
@@ -200,9 +204,19 @@ def _request(
         products=_products(model.products),
         pickup_order_requested=model.pickup_order_requested,
         pickup_order_number=model.pickup_order_number,
+        area=area_ref(area),
     )
 
 
+def area_ref(model: DependencyModel | None) -> AreaRef | None:
+    """Map the area a requester picked; shared with the feedback repository."""
+
+    if model is None:
+        return None
+    return AreaRef(id=model.id, code=model.code, name=model.name)
+
+
+_AREA = aliased(DependencyModel)
 _REQUEST_QUERY = (
     select(
         PqrsfRequestModel,
@@ -211,6 +225,7 @@ _REQUEST_QUERY = (
         DocumentCategoryModel.dependency_id,
         SubjectModel,
         CauseModel,
+        _AREA,
     )
     .join(RequestTypeModel, PqrsfRequestModel.request_type_id == RequestTypeModel.id)
     .join(SiteModel, PqrsfRequestModel.site_id == SiteModel.id)
@@ -219,6 +234,7 @@ _REQUEST_QUERY = (
     )
     .outerjoin(SubjectModel, PqrsfRequestModel.subject_id == SubjectModel.id)
     .outerjoin(CauseModel, PqrsfRequestModel.cause_id == CauseModel.id)
+    .outerjoin(_AREA, PqrsfRequestModel.dependency_id == _AREA.id)
 )
 _REQUEST_TYPE_ORDER = case(
     {
@@ -315,6 +331,7 @@ class SqlAlchemyPqrsfRepository:
             model.handling = request_type.handling
             model.description = request_type.description
             model.allows_attachments = request_type.allows_attachments
+            model.asks_area = request_type.asks_area
             try:
                 await session.commit()
             except IntegrityError as exc:
@@ -345,21 +362,16 @@ class SqlAlchemyPqrsfRepository:
                 by_subject.setdefault(model.subject_id, []).append(_cause(model))
         return [_subject(model, tuple(by_subject.get(model.id, ()))) for model in subject_rows]
 
-    async def list_subject_dependencies(self) -> list[Dependency]:
-        """List the active dependencies some active subject belongs to, in display order.
+    async def list_areas(self) -> list[Dependency]:
+        """List the active dependencies, in display order: the areas a requester can pick.
 
         Returns:
-            list[Dependency]: The areas the public form can filter subjects by.
+            list[Dependency]: The areas of the public form.
         """
 
         query = (
             select(DependencyModel)
-            .where(
-                DependencyModel.is_active.is_(True),
-                DependencyModel.id.in_(
-                    select(SubjectModel.dependency_id).where(SubjectModel.is_active.is_(True))
-                ),
-            )
+            .where(DependencyModel.is_active.is_(True))
             .order_by(DependencyModel.sort_order, DependencyModel.name)
         )
         async with self.database.session_factory() as session:
@@ -480,6 +492,7 @@ class SqlAlchemyPqrsfRepository:
             products=_product_rows(request.products),
             pickup_order_requested=request.pickup_order_requested,
             pickup_order_number=request.pickup_order_number,
+            dependency_id=request.area.id if request.area else None,
             idempotency_key=request.idempotency_key,
             idempotency_hash=request.idempotency_hash,
         )

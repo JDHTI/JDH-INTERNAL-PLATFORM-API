@@ -290,6 +290,7 @@ class CaseTrackingService:
         handling: str | None = None,
         description: str | None = None,
         allows_attachments: bool | None = None,
+        asks_area: bool | None = None,
     ) -> RequestType:
         """Change the follow-up settings of a request type.
 
@@ -304,6 +305,7 @@ class CaseTrackingService:
             description (str | None): Short line shown under the type on the form;
                 ``None`` clears it.
             allows_attachments (bool | None): Whether the form accepts evidence files.
+            asks_area (bool | None): Whether the public form asks for the area.
 
         Returns:
             RequestType: The updated type.
@@ -329,6 +331,8 @@ class CaseTrackingService:
             )
         if "allows_attachments" in fields and allows_attachments is not None:
             request_type.allows_attachments = allows_attachments
+        if "asks_area" in fields and asks_area is not None:
+            request_type.asks_area = asks_area
         return await self.requests.save_request_type(request_type)
 
     async def create_status(

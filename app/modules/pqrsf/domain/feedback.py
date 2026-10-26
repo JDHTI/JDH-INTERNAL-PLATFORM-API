@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from uuid import UUID
 
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import AreaRef, RequestType
 from app.modules.sites.domain.entities import Site
 
 # Where a message came from.
@@ -66,6 +66,8 @@ class Feedback:
     reply_sent_at: datetime | None = None
     files_count: int = 0
     files: list[FeedbackFile] = field(default_factory=list)
+    # Area the sender picked on the public form.
+    area: AreaRef | None = None
 
     @property
     def replied(self) -> bool:

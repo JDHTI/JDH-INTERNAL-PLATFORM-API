@@ -17,6 +17,7 @@ from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.presentation.router import require_admin
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import (
+    AreaRef,
     Cause,
     ImageUpload,
     PqrsfFilters,
@@ -45,6 +46,8 @@ class RequestTypeResponse(BaseModel):
     handling: Literal["case", "acknowledge"] = "case"
     # One short line to show under the option, always visible (at most 120 characters).
     description: str | None = None
+    # Whether the form asks for the area (and sends ``dependency_id``).
+    asks_area: bool = False
 
 
 class CauseResponse(BaseModel):
@@ -159,7 +162,7 @@ class PqrsfCatalogResponse(BaseModel):
     document_categories: list[DocumentCategoryResponse]
     # Subjects with their causes; each lists the request types that offer it.
     subjects: list[SubjectResponse] = []
-    # Active areas some active subject belongs to, for the area filter of the form.
+    # Active areas the requester can pick (and filter the subjects by).
     dependencies: list[PublicDependencyResponse] = []
     limits: AttachmentLimitsResponse | None = None
 
@@ -219,6 +222,8 @@ class PqrsfRequestResponse(BaseModel):
     products: list[ClaimedProductResponse] = []
     pickup_order_requested: Literal["yes", "no", "unknown"] | None = None
     pickup_order_number: str | None = None
+    # Area the requester picked on the form.
+    selected_area: ClassificationRefResponse | None = None
     attachments: list[PqrsfAttachmentResponse]
     created_at: datetime
     updated_at: datetime
@@ -256,7 +261,7 @@ def _site(value: Site) -> PqrsfSiteResponse:
     return PqrsfSiteResponse.model_validate(value, from_attributes=True)
 
 
-def _ref(value: Subject | Cause | None) -> ClassificationRefResponse | None:
+def _ref(value: Subject | Cause | AreaRef | None) -> ClassificationRefResponse | None:
     if value is None:
         return None
     return ClassificationRefResponse(id=value.id, code=value.code, name=value.name)
@@ -316,6 +321,7 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
         ],
         pickup_order_requested=value.pickup_order_requested,
         pickup_order_number=value.pickup_order_number,
+        selected_area=_ref(value.area),
         attachments=[
             PqrsfAttachmentResponse.model_validate(attachment, from_attributes=True)
             for attachment in value.attachments
@@ -345,7 +351,7 @@ async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogRespon
         subjects=[_subject(value) for value in await service.subjects()],
         dependencies=[
             PublicDependencyResponse(id=value.id, code=value.code, name=value.name)
-            for value in await service.subject_dependencies()
+            for value in await service.areas()
         ],
         limits=AttachmentLimitsResponse(
             max_images=service.max_attachments,
@@ -408,6 +414,7 @@ async def create_public_request(
     products: str | None = Form(default=None),  # noqa: B008
     pickup_order_requested: Literal["yes", "no", "unknown"] | None = Form(default=None),  # noqa: B008
     pickup_order_number: str | None = Form(default=None, max_length=40),  # noqa: B008
+    dependency_id: UUID | None = Form(default=None),  # noqa: B008
     images: list[UploadFile] = File(default=[]),  # noqa: B008
     videos: list[UploadFile] = File(default=[]),  # noqa: B008
     idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -441,6 +448,7 @@ async def create_public_request(
         "products": [line.__dict__ for line in product_lines],
         "pickup_order_requested": pickup_order_requested,
         "pickup_order_number": pickup_order_number,
+        "dependency_id": str(dependency_id) if dependency_id else None,
     }
     result = await service.create_request(
         request_type_id=request_type_id,
@@ -463,6 +471,7 @@ async def create_public_request(
         products=product_lines,
         pickup_order_requested=pickup_order_requested,
         pickup_order_number=pickup_order_number,
+        area_id=dependency_id,
         idempotency_key=idempotency_key,
         idempotency_payload=values,
         images=[

@@ -117,11 +117,11 @@ class PqrsfRepository(Protocol):
         """
         ...
 
-    async def list_subject_dependencies(self) -> list[Dependency]:
-        """List the active dependencies some active subject belongs to, in display order.
+    async def list_areas(self) -> list[Dependency]:
+        """List the active dependencies, in display order: the areas a requester can pick.
 
         Returns:
-            list[Dependency]: The areas the public form can filter subjects by.
+            list[Dependency]: The areas of the public form.
         """
         ...
 

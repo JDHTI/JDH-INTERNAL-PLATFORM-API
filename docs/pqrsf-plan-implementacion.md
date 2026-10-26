@@ -48,7 +48,8 @@ ya la consume.
 | Asuntos y causales oficiales (reemplazar el sembrado provisional) | [ ] | — |
 | Videos en el formulario público (1 video MP4/MOV/WebM de hasta 20 MB, `videos`) | [x] | [x] |
 | Topes de adjuntos en el catálogo público (`limits`) | [x] | [x] |
-| Formulario interno del comercial con los mismos campos (y productos a nivel de caso, `pqrsf_case_products`) | [ ] | [ ] |
+| Área elegida por el cliente (`asks_area`, `dependency_id` en el envío, `selected_area`) | [x] | [ ] |
+| Panel interno: clasificación y productos en el caso, reclasificación, filtros, formulario del comercial (detalle en [`pqrsf-panel-interno-plan.md`](pqrsf-panel-interno-plan.md)) | [ ] | [ ] |
 | Plantilla de correo con `Novedad:` y `Causal:` (dependencia derivada; revisión si no coincide) | [x] | — |
 | Productos en la plantilla de correo | [ ] | — |
 
