@@ -41,6 +41,7 @@ from app.modules.pqrsf.domain.feedback import (
 )
 from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
+from app.modules.pqrsf.domain.sales import InvoiceSeller
 from app.modules.pqrsf.domain.supplier_messages import SupplierContact
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
@@ -145,6 +146,25 @@ class PqrsfRepository(Protocol):
 
         Returns:
             Cause: The stored cause.
+        """
+        ...
+
+
+class SalesLookup(Protocol):
+    """Read the sales data (a view of the warehouse) to know who sold an invoice."""
+
+    async def sellers_of(
+        self, invoice_numbers: Sequence[str], customer_nit: str | None
+    ) -> list[InvoiceSeller]:
+        """Find the seller of each invoice that exists, in the order given.
+
+        Args:
+            invoice_numbers (Sequence[str]): Invoice numbers, already normalized.
+            customer_nit (str | None): The customer's NIT, to discard another
+                customer's invoice with the same number.
+
+        Returns:
+            list[InvoiceSeller]: One per invoice found.
         """
         ...
 

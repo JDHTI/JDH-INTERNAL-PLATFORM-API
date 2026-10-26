@@ -346,6 +346,12 @@ class CaseModel(Base):
         Index("ix_pqrsf_cases_received_on", "received_on"),
         Index("ix_pqrsf_cases_due_on", "due_on"),
         Index("ix_pqrsf_cases_created_by", "created_by_user_id"),
+        Index("ix_pqrsf_cases_sales_executive", "sales_executive_user_id"),
+        CheckConstraint(
+            "sales_executive_source IS NULL "
+            "OR sales_executive_source IN ('invoice', 'internal', 'manual')",
+            name="ck_pqrsf_cases_sales_executive_source",
+        ),
         Index(
             "ix_pqrsf_cases_legacy_source_key",
             text("(legacy ->> 'source_key')"),
@@ -385,6 +391,12 @@ class CaseModel(Base):
     customer_nit: Mapped[str | None] = mapped_column(String(30))
     supplier_name: Mapped[str | None] = mapped_column(String(200))
     sales_executive_name: Mapped[str | None] = mapped_column(String(200))
+    # The seller of the invoice (from the sales data), the comercial who filed it, or typed.
+    sales_executive_code: Mapped[str | None] = mapped_column(String(40))
+    sales_executive_email: Mapped[str | None] = mapped_column(String(320))
+    sales_executive_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # ``invoice`` | ``internal`` | ``manual``.
+    sales_executive_source: Mapped[str | None] = mapped_column(String(10))
     requester_name: Mapped[str | None] = mapped_column(String(200))
     requester_email: Mapped[str | None] = mapped_column(String(320))
     request_id: Mapped[uuid.UUID | None] = mapped_column(

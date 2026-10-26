@@ -766,3 +766,85 @@ async def test_a_classified_request_opens_with_the_dependency_of_its_cause() -> 
     assert case.dependency == distribucion
     assert case.subject == "Calidad del producto · Producto vencido"
     assert case.supplier_name == "Unilever"
+
+
+class FakeSales:
+    def __init__(self, sellers=None, fail=False) -> None:
+        self.sellers = sellers or {}
+        self.fail = fail
+        self.asked = None
+
+    async def sellers_of(self, invoice_numbers, customer_nit):
+        self.asked = (list(invoice_numbers), customer_nit)
+        if self.fail:
+            raise RuntimeError("DWH caído")
+        return [self.sellers[n] for n in invoice_numbers if n in self.sellers]
+
+
+def _claim_request(s, *invoices):
+    return replace(
+        _public_request(s.peticion),
+        products=[
+            ClaimedProduct(number, "9834", "L1", date(2026, 12, 1), 1, "Aceite", "P1", "TF")
+            for number in invoices
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sales_executive_comes_from_the_invoice_and_follows_the_case() -> None:
+    from app.modules.pqrsf.domain.sales import InvoiceSeller
+
+    s = Setup()
+    s.service.sales = FakeSales(
+        {"FE1020": InvoiceSeller("FE1020", "V07", "Carolina Ríos", "Carolina@JDH.com.co")}
+    )
+
+    case = await s.service.open_for_request(_claim_request(s, "fe 1020", "FE1020", "FE9"))
+
+    assert s.service.sales.asked == (["FE1020", "FE9"], "900123456")
+    assert (case.sales_executive_name, case.sales_executive_code) == ("Carolina Ríos", "V07")
+    assert case.sales_executive_email == "carolina@jdh.com.co"
+    assert case.sales_executive_source == "invoice"
+    assert case.sales_executive_user_id == s.seller.user_id
+    detail = await s.service.get_case(case.id, s.seller)
+    assert detail.view.access.can_view and not detail.view.access.can_work
+
+
+@pytest.mark.asyncio
+async def test_without_sales_data_or_invoice_the_executive_stays_empty() -> None:
+    from app.modules.pqrsf.domain.sales import InvoiceSeller
+
+    s = Setup()
+    s.service.sales = FakeSales(fail=True)
+    failed = await s.service.open_for_request(_claim_request(s, "FE1"))
+    assert failed.sales_executive_name is None
+
+    s.service.sales = FakeSales(
+        {"FE2": InvoiceSeller("FE2", "V9", "Sin Cuenta", "nadie@jdh.com.co")}
+    )
+    unlinked = await s.service.open_for_request(replace(_claim_request(s, "FE2"), id=uuid.uuid4()))
+    assert unlinked.sales_executive_name == "Sin Cuenta"
+    assert unlinked.sales_executive_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_typing_the_executive_drops_the_invoice_link() -> None:
+    from app.modules.pqrsf.domain.sales import InvoiceSeller
+
+    s = Setup()
+    s.service.sales = FakeSales(
+        {"FE1": InvoiceSeller("FE1", "V07", "Carolina Ríos", "carolina@jdh.com.co")}
+    )
+    case = await s.service.open_for_request(_claim_request(s, "FE1"))
+
+    from app.modules.pqrsf.application.dto import CaseChanges
+
+    view = await s.service.update_case(
+        case.id,
+        CaseChanges(fields=frozenset({"sales_executive_name"}), sales_executive_name="Otra"),
+        s.admin,
+    )
+
+    assert view.case.sales_executive_source == "manual"
+    assert view.case.sales_executive_user_id is None

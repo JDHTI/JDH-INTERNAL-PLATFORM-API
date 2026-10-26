@@ -186,6 +186,18 @@ class CasePermissionsResponse(BaseModel):
     can_delete: bool
 
 
+class SalesExecutiveResponse(BaseModel):
+    """Who sold the invoice of the case, or who filed it, or who was typed."""
+
+    name: str | None
+    code: str | None
+    email: str | None
+    # Platform user matched by email: they can see and comment on the case.
+    user_id: UUID | None
+    # ``invoice`` (sales data), ``internal`` (the comercial who filed it) or ``manual``.
+    source: Literal["invoice", "internal", "manual"] | None
+
+
 class CaseResponse(BaseModel):
     """A follow-up case."""
 
@@ -207,6 +219,7 @@ class CaseResponse(BaseModel):
     customer_nit: str | None
     supplier_name: str | None
     sales_executive_name: str | None
+    sales_executive: SalesExecutiveResponse | None = None
     requester_name: str | None
     requester_email: str | None
     request_id: UUID | None
@@ -533,6 +546,17 @@ def _case(view: CaseView) -> CaseResponse:
         customer_nit=case.customer_nit,
         supplier_name=case.supplier_name,
         sales_executive_name=case.sales_executive_name,
+        sales_executive=(
+            SalesExecutiveResponse(
+                name=case.sales_executive_name,
+                code=case.sales_executive_code,
+                email=case.sales_executive_email,
+                user_id=case.sales_executive_user_id,
+                source=case.sales_executive_source,
+            )
+            if case.sales_executive_name or case.sales_executive_code
+            else None
+        ),
         requester_name=case.requester_name,
         requester_email=case.requester_email,
         request_id=case.request_id,

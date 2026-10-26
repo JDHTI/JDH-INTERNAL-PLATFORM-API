@@ -195,6 +195,31 @@ Ejemplos:
 Los registros de acceso (`viewed`) se siguen guardando, pero la UI puede agruparlos («Abrieron el
 caso: Ana, Juan») para que no tapen lo importante.
 
+## Ejecutivo comercial
+
+Las quejas y los reclamos sobre un producto o un pedido llevan el ejecutivo comercial que vendió
+esa factura. No se le pide al cliente: se saca de las ventas.
+
+- **Cuándo:** al abrir el caso de una solicitud con productos (traen número de factura). Las
+  facturas se normalizan (`domain/sales.py: invoice_key`) y se buscan en la vista de ventas del
+  DWH junto con el NIT del cliente, para no tomar la factura de otro cliente con el mismo número.
+  Gana la primera factura que tenga vendedor.
+- **Qué guarda el caso:** `sales_executive_name` (como hasta ahora), `sales_executive_code`,
+  `sales_executive_email`, `sales_executive_user_id` y `sales_executive_source`:
+  - `invoice`: sale de las ventas.
+  - `internal`: el comercial que radica desde el formulario interno (I-5).
+  - `manual`: alguien lo escribió. Editar el nombre a mano borra el código, el correo y el usuario.
+- **Enlace al usuario:** con el correo del vendedor se busca el usuario de la plataforma. Si ya
+  inició sesión, puede ver y comentar el caso, y lo encuentra en su bandeja. Si no, se guardan el
+  nombre y el correo, sin acceso.
+- **Si las ventas no responden** o la factura no aparece, el caso se abre igual sin ejecutivo.
+- **Respaldo por el vendedor asignado al cliente (por NIT en el maestro comercial):** queda para la
+  entrega final de esta función.
+- **Pendiente:** la vista de ventas del esquema `consumo` (nombre, columnas y formato de la
+  factura) se está confirmando con el equipo del DWH. Hasta conectar su adaptador
+  (`SalesLookup`), el campo queda vacío en los casos nuevos.
+- En el detalle del caso: `sales_executive` con `name`, `code`, `email`, `user_id` y `source`.
+
 ## Endpoints nuevos y cambios de contrato
 
 | Método | Ruta | Cambio |
@@ -228,6 +253,9 @@ caso: Ana, Juan») para que no tapen lo importante.
 | I-6 | Correo: la plantilla deja la clasificación en el caso (hoy solo deriva el área) | [ ] | — |
 | I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [x] | [ ] |
 | I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo ([`pqrsf-proveedor.md`](pqrsf-proveedor.md)) | [x] | [ ] |
+| I-9 | Ejecutivo comercial desde la factura: campos en el caso, enlace al usuario por correo, acceso del ejecutivo, `sales_executive` en el detalle | [x] | [ ] |
+| I-9 | Adaptador de la vista de ventas del DWH (`SalesLookup`) | [ ] | — |
+| I-9 | Respaldo por el vendedor asignado al cliente (maestro comercial) | [ ] | — |
 | Fase 4 | `invoice_verified` y fecha de entrega desde el DWH | [ ] | [ ] |
 | Fase 5 | Reclasificar recalcula el plazo con la criticidad (según P16) | [ ] | [ ] |
 

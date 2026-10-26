@@ -40,7 +40,9 @@ from app.modules.pqrsf.domain.ports import (
     ManagerPolicy,
     PeopleDirectory,
     PqrsfRepository,
+    SalesLookup,
 )
+from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_key
 from app.modules.pqrsf.domain.timeline import (
     EVENT_SUPPLIER_MESSAGE,
     TimelineContext,
@@ -124,6 +126,7 @@ class CaseTrackingService:
         managers: ManagerPolicy,
         calendar: BusinessCalendar,
         notifier: AssignmentNotifier | None = None,
+        sales: SalesLookup | None = None,
     ) -> None:
         """Create the service.
 
@@ -135,8 +138,11 @@ class CaseTrackingService:
             managers (ManagerPolicy): Decides who manages PQRSF.
             calendar (BusinessCalendar): Local dates and holidays.
             notifier (AssignmentNotifier | None): Emails the new responsible of a case.
+            sales (SalesLookup | None): Sales data, to take the sales executive of a
+                complaint or claim from its invoice; without it the field stays empty.
         """
 
+        self.sales = sales
         self.notifier = notifier
         self.repository = repository
         self.requests = requests
@@ -152,7 +158,8 @@ class CaseTrackingService:
             return CaseAccess(can_view=True, can_work=True, can_assign=True, can_delete=True)
         if case.assignee_user_id == principal.user_id:
             return CaseAccess(can_view=True, can_work=True, can_assign=False)
-        if case.created_by_user_id == principal.user_id:
+        if principal.user_id in (case.created_by_user_id, case.sales_executive_user_id):
+            # Who filed it and the executive who sold the invoice follow it and comment.
             return CaseAccess(can_view=True, can_work=False, can_assign=False)
         return CaseAccess(can_view=False, can_work=False, can_assign=False)
 
@@ -745,6 +752,7 @@ class CaseTrackingService:
             dict.fromkeys(p.supplier_name for p in request.products if p.supplier_name)
         )
         case.supplier_name = ", ".join(suppliers)[:200] or None
+        await self._seller_from_invoices(case, request)
         # The cause picked (or the category of the documents) says who attends it.
         dependency = (
             await self.repository.get_dependency(request.dependency_id)
@@ -770,6 +778,37 @@ class CaseTrackingService:
             if existing is None:
                 raise
             return existing
+
+    async def _seller_from_invoices(self, case: TrackingCase, request: PqrsfRequest) -> None:
+        """Take the sales executive of a case from the invoices of its products.
+
+        Only for requests about products or an order (they carry invoice numbers). The
+        first invoice with a seller wins; the seller's email links the platform user who
+        then follows the case. A failure of the sales data never stops the case.
+        """
+
+        if self.sales is None or not request.products:
+            return
+        numbers = list(dict.fromkeys(invoice_key(p.invoice_number) for p in request.products))
+        try:
+            sellers = await self.sales.sellers_of(numbers, request.nit)
+        except Exception:
+            logger.exception("Could not read the sellers of the invoices of %s", case.code)
+            return
+        seller = next((s for s in sellers if s.name or s.code), None)
+        if seller is None:
+            return
+        case.sales_executive_name = (seller.name or seller.code or "")[:200]
+        case.sales_executive_code = seller.code
+        case.sales_executive_email = seller.email.strip().lower() if seller.email else None
+        case.sales_executive_source = SOURCE_INVOICE
+        if case.sales_executive_email:
+            try:
+                user = await self.people.require_user(case.sales_executive_email)
+            except NotFoundError:
+                # The executive has not signed in yet: the name and email are kept.
+                return
+            case.sales_executive_user_id = user.id
 
     async def code_for_request(self, request_id: UUID) -> str | None:
         """Return the consecutive of a request's case.
@@ -1152,6 +1191,11 @@ class CaseTrackingService:
             "sales_executive_name",
             clean_optional(changes.sales_executive_name, "ejecutivo comercial", 200),
         )
+        if "sales_executive_name" in changed:
+            # A typed name no longer is the invoice's seller: drop the code, email and user.
+            case.sales_executive_code = case.sales_executive_email = None
+            case.sales_executive_user_id = None
+            case.sales_executive_source = SOURCE_MANUAL if case.sales_executive_name else None
         apply("requester_name", clean_optional(changes.requester_name, "usuario", 200))
         apply("requester_email", _clean_email(changes.requester_email))
         if "site_id" in fields:
