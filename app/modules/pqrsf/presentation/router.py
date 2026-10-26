@@ -70,8 +70,18 @@ class SubjectResponse(BaseModel):
     description: str | None
     # Codes of the request types that offer it.
     request_type_codes: list[str]
+    # Area it is filed under on the form (a filter only: the cause decides the case's area).
+    dependency_id: UUID | None = None
     is_other: bool
     causes: list[CauseResponse]
+
+
+class PublicDependencyResponse(BaseModel):
+    """An area the form lets the requester narrow the subjects by."""
+
+    id: UUID
+    code: str
+    name: str
 
 
 class ProductOptionResponse(BaseModel):
@@ -149,6 +159,8 @@ class PqrsfCatalogResponse(BaseModel):
     document_categories: list[DocumentCategoryResponse]
     # Subjects with their causes; each lists the request types that offer it.
     subjects: list[SubjectResponse] = []
+    # Active areas some active subject belongs to, for the area filter of the form.
+    dependencies: list[PublicDependencyResponse] = []
     limits: AttachmentLimitsResponse | None = None
 
 
@@ -257,6 +269,7 @@ def _subject(value: Subject) -> SubjectResponse:
         name=value.name,
         description=value.description,
         request_type_codes=list(value.request_type_codes),
+        dependency_id=value.dependency_id,
         is_other=value.is_other,
         causes=[
             CauseResponse.model_validate(cause, from_attributes=True) for cause in value.causes
@@ -330,6 +343,10 @@ async def public_catalog(service: PqrsfService = _service) -> PqrsfCatalogRespon
             for value in categories
         ],
         subjects=[_subject(value) for value in await service.subjects()],
+        dependencies=[
+            PublicDependencyResponse(id=value.id, code=value.code, name=value.name)
+            for value in await service.subject_dependencies()
+        ],
         limits=AttachmentLimitsResponse(
             max_images=service.max_attachments,
             max_image_mb=service.max_attachment_bytes // (1024 * 1024),

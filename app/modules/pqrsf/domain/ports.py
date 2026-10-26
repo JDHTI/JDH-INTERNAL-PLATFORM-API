@@ -117,6 +117,14 @@ class PqrsfRepository(Protocol):
         """
         ...
 
+    async def list_subject_dependencies(self) -> list[Dependency]:
+        """List the active dependencies some active subject belongs to, in display order.
+
+        Returns:
+            list[Dependency]: The areas the public form can filter subjects by.
+        """
+        ...
+
     async def save_subject(self, subject: Subject) -> Subject:
         """Insert or update a subject (its causes are saved apart).
 

@@ -66,7 +66,8 @@ class CreateSubjectRequest(BaseModel):
     code: str = Field(max_length=40)
     name: str = Field(max_length=120)
     description: str | None = Field(default=None, max_length=MAX_OPTION_DESCRIPTION)
-    request_type_codes: list[RequestTypeCode] = Field(min_length=1)
+    # Validated by the service, so a mistake comes back with a message in Spanish.
+    request_type_codes: list[str] = Field(default_factory=list, max_length=5)
     dependency_id: UUID | None = None
     is_other: bool = False
     sort_order: int = 0
@@ -77,7 +78,7 @@ class UpdateSubjectRequest(BaseModel):
 
     name: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=MAX_OPTION_DESCRIPTION)
-    request_type_codes: list[RequestTypeCode] | None = None
+    request_type_codes: list[str] | None = Field(default=None, max_length=5)
     dependency_id: UUID | None = None
     is_other: bool | None = None
     sort_order: int | None = None
@@ -91,7 +92,7 @@ class CreateCauseRequest(BaseModel):
     name: str = Field(max_length=120)
     description: str | None = Field(default=None, max_length=MAX_OPTION_DESCRIPTION)
     dependency_id: UUID | None = None
-    route: Route = "none"
+    route: str = Field(default="none", max_length=10)
     requires_product: bool = False
     allows_product: bool = False
     is_other: bool = False
@@ -104,7 +105,7 @@ class UpdateCauseRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=MAX_OPTION_DESCRIPTION)
     dependency_id: UUID | None = None
-    route: Route | None = None
+    route: str | None = Field(default=None, max_length=10)
     requires_product: bool | None = None
     allows_product: bool | None = None
     is_other: bool | None = None

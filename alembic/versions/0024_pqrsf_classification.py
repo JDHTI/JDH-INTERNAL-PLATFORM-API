@@ -222,6 +222,15 @@ _SUBJECTS = (
             ("otro_documentos_producto", "Otro", "calidad", "none", False, True, True),
         ),
     ),
+    (
+        "facturacion",
+        "Facturación",
+        "Errores de precio, cantidad o datos en la factura.",
+        _CLAIMS,
+        "comercial",
+        False,
+        (),
+    ),
     ("otro_novedad", "Otro", "Una novedad que no está en la lista.", _CLAIMS, "calidad", True, ()),
     (
         "visita",

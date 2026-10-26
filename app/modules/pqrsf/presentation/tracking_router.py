@@ -648,6 +648,21 @@ async def tracking_catalogs(
     )
 
 
+@router.get(
+    "/request-types",
+    response_model=list[TrackingRequestTypeResponse],
+    summary="List every request type with its settings",
+)
+@inject
+async def list_request_types(
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> list[TrackingRequestTypeResponse]:
+    """All five types, suggestions and compliments included, to configure them (managers)."""
+
+    return [_request_type(value) for value in await service.list_request_types(principal)]
+
+
 @router.patch(
     "/request-types/{request_type_id}",
     response_model=TrackingRequestTypeResponse,

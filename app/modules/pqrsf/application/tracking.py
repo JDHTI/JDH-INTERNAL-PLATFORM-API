@@ -265,6 +265,19 @@ class CaseTrackingService:
             is_manager=is_manager,
         )
 
+    async def list_request_types(self, principal: Principal) -> list[RequestType]:
+        """List every request type with its settings, including suggestions and compliments.
+
+        Args:
+            principal (Principal): The caller, who must manage PQRSF.
+
+        Returns:
+            list[RequestType]: The five types, active or not, in display order.
+        """
+
+        await self._require_manager(principal)
+        return await self.requests.list_request_types(active_only=False)
+
     async def update_request_type(
         self,
         request_type_id: UUID,

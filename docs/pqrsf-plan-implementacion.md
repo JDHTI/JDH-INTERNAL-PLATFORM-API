@@ -34,7 +34,7 @@ ya la consume.
 | Tarea | API | UI |
 |---|---|---|
 | Descripción corta por tipo, visible bajo cada opción (`request_types[].description`, máx. 120) | [x] | [x] |
-| Descripción editable por gestores (`PATCH /pqrsf/request-types/{id}`: `description`, `allows_attachments`) | [x] | [ ] |
+| Descripción editable por gestores (`PATCH /pqrsf/request-types/{id}`: `description`, `allows_attachments`) | [x] | [x] |
 | Catálogo de asuntos y causales con dependencia y ruta (migración `0024`, sembrado provisional) | [x] | — |
 | Asuntos y causales en el catálogo público (`subjects`) | [x] | [x] |
 | Envío con `subject_id`/`cause_id`; descripción opcional, obligatoria con «Otro» | [x] | [x] |
@@ -44,10 +44,10 @@ ya la consume.
 | ¿Ya solicitó orden de recogida? + número opcional | [x] | [x] |
 | Adjuntos en sugerencia | [x] | [x] |
 | Asunto, causal y productos visibles en el detalle del caso (`request.selected_subject`, `selected_cause`, `products`) | [x] | [x] |
-| Administración de asuntos y causales para gestores (`/pqrsf/subjects`, `/pqrsf/causes`) | [x] | [ ] |
+| Administración de asuntos y causales para gestores (`/pqrsf/subjects`, `/pqrsf/causes`) | [x] | [x] |
 | Asuntos y causales oficiales (reemplazar el sembrado provisional) | [ ] | — |
-| Videos en el formulario público (1 video MP4/MOV/WebM de hasta 20 MB, `videos`) | [x] | [ ] |
-| Topes de adjuntos en el catálogo público (`limits`) | [x] | [ ] |
+| Videos en el formulario público (1 video MP4/MOV/WebM de hasta 20 MB, `videos`) | [x] | [x] |
+| Topes de adjuntos en el catálogo público (`limits`) | [x] | [x] |
 | Formulario interno del comercial con los mismos campos (y productos a nivel de caso, `pqrsf_case_products`) | [ ] | [ ] |
 | Plantilla de correo con `Novedad:` y `Causal:` (dependencia derivada; revisión si no coincide) | [x] | — |
 | Productos en la plantilla de correo | [ ] | — |
@@ -498,7 +498,7 @@ Para Carlos o Calidad, salvo que se indique otra cosa. Cada una dice qué bloque
 | P12 | ¿Las evidencias deben ser guiadas (foto de anverso, reverso, lote y vencimiento como campos separados) para que la OM salga completa, o basta una lista libre de archivos? | F1, F3 |
 | P13 | Nombres a confirmar de la grabación: aprobadores del motivo 20 (Manuela, Cristian en Funza, Carlos; suplentes Juan Camilo y Juan David Martínez), director de inventarios (¿Brailen Muñoz?), dueños de proceso (John Dairo Vergara en Distribución; Paula Molina e Isabel Quiroga en Comercial) | F3 |
 | P14 | La plantilla de correo es más difícil con varios productos. ¿Se acepta que por correo se radique un solo producto y el resto se complete en la plataforma? (para nosotros) | F1 |
-| P15 | ¿El cliente debe ver en el formulario público a qué área va su caso, o solo el formulario interno? (para nosotros) | F1 |
+| P15 | **Resuelta (26-oct):** después de «Sede» el cliente elige el área y solo ve las novedades de esa área (`subjects[].dependency_id`, `dependencies` en el catálogo público). Es un filtro: la causal sigue decidiendo el área del caso (D4) | F1 |
 
 ## 8. Riesgos y notas
 

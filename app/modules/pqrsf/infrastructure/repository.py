@@ -23,8 +23,10 @@ from app.modules.pqrsf.domain.entities import (
     RequestType,
     Subject,
 )
+from app.modules.pqrsf.domain.tracking import Dependency
 from app.modules.pqrsf.infrastructure.models import (
     CauseModel,
+    DependencyModel,
     DocumentCategoryModel,
     DocumentTypeModel,
     PqrsfAttachmentModel,
@@ -342,6 +344,37 @@ class SqlAlchemyPqrsfRepository:
             for model in (await session.execute(causes)).scalars():
                 by_subject.setdefault(model.subject_id, []).append(_cause(model))
         return [_subject(model, tuple(by_subject.get(model.id, ()))) for model in subject_rows]
+
+    async def list_subject_dependencies(self) -> list[Dependency]:
+        """List the active dependencies some active subject belongs to, in display order.
+
+        Returns:
+            list[Dependency]: The areas the public form can filter subjects by.
+        """
+
+        query = (
+            select(DependencyModel)
+            .where(
+                DependencyModel.is_active.is_(True),
+                DependencyModel.id.in_(
+                    select(SubjectModel.dependency_id).where(SubjectModel.is_active.is_(True))
+                ),
+            )
+            .order_by(DependencyModel.sort_order, DependencyModel.name)
+        )
+        async with self.database.session_factory() as session:
+            return [
+                Dependency(
+                    id=model.id,
+                    code=model.code,
+                    name=model.name,
+                    sort_order=model.sort_order,
+                    is_active=model.is_active,
+                    created_at=model.created_at,
+                    updated_at=model.updated_at,
+                )
+                for model in (await session.execute(query)).scalars()
+            ]
 
     async def save_subject(self, subject: Subject) -> Subject:
         """Insert or update a subject (its causes are saved apart).

@@ -46,6 +46,13 @@ causal trae `id`, `code`, `name`, `description`, `is_other`, `allows_product` y
 `requires_product`. La dependencia y la ruta de tratamiento de la causal no se
 publican: deciden a qué área va el caso, en el servidor.
 
+Cada asunto trae también `dependency_id` (su área), y el catálogo trae
+`dependencies` (`id`, `code`, `name`): las áreas activas a las que pertenece algún
+asunto activo. El formulario las usa como filtro: el cliente elige el área y ve
+solo sus novedades (los asuntos `is_other` se muestran en todas). Es solo un
+filtro: la causal sigue decidiendo el área del caso en el servidor y el envío no
+lleva el área.
+
 Reglas para la interfaz:
 
 - Ofrecer los asuntos cuyo `request_type_codes` contiene el `code` del tipo
@@ -63,6 +70,7 @@ despliegue (sesión de Entra; crear y editar solo gestores PQRSF):
 
 | Método | Ruta | Para qué |
 | --- | --- | --- |
+| `GET` | `/pqrsf/request-types` | Los cinco tipos (sugerencia y felicitación incluidas) con su configuración, para editarlos con `PATCH /pqrsf/request-types/{id}` |
 | `GET` | `/pqrsf/subjects?include_inactive=` | Asuntos con sus causales, dependencia (`dependency_id`) y ruta (`route`) |
 | `POST` | `/pqrsf/subjects` | Crear asunto: `code`, `name`, `request_type_codes`, `description?`, `dependency_id?`, `is_other?`, `sort_order?` |
 | `PATCH` | `/pqrsf/subjects/{id}` | Editar o desactivar (`is_active`); el código no cambia |
@@ -135,7 +143,7 @@ orden de recogida.
 
 El servidor devuelve `201` con `{ "id", "reference", "tracking_code",
 "created_at" }`. `tracking_code` es el consecutivo del caso de seguimiento
-(`Q-2026-00012`) y es el número que la UI debe mostrar al cliente; puede ser
+(`Q26AC0012`: prefijo del tipo, año, sigla de la sede y contador) y es el número que la UI debe mostrar al cliente; puede ser
 `null` si el caso no se pudo abrir en ese momento (ver
 [`docs/pqrsf-seguimiento.md`](pqrsf-seguimiento.md)). Los
 errores de validación usan el formato de errores de la API y normalmente

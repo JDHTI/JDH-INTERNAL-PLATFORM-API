@@ -52,6 +52,7 @@ from app.modules.pqrsf.domain.ports import (
     ProductCatalog,
     VideoInspector,
 )
+from app.modules.pqrsf.domain.tracking import Dependency
 from app.modules.sites.application.service import SiteService
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,18 @@ class PqrsfService:
         """
 
         return await self.repository.list_subjects()
+
+    async def subject_dependencies(self) -> list[Dependency]:
+        """Return the areas the public form filters subjects by.
+
+        The filter only narrows the subjects shown: the cause picked still decides who
+        attends the case.
+
+        Returns:
+            list[Dependency]: Active dependencies some active subject belongs to.
+        """
+
+        return await self.repository.list_subject_dependencies()
 
     async def search_products(self, query: str, limit: int = 10) -> list[ProductOption]:
         """Find products by reference or name for the product lines of the form.
