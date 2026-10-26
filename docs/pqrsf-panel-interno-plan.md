@@ -6,6 +6,23 @@ qué puede corregir Calidad y en qué orden se entrega. Parte de la fase 1 de
 [`pqrsf-plan-implementacion.md`](pqrsf-plan-implementacion.md). El contrato vigente está en
 [`pqrsf.md`](pqrsf.md) y [`pqrsf-seguimiento.md`](pqrsf-seguimiento.md).
 
+## Qué cambia en la clasificación
+
+La clasificación de un PQRSF deja de ser «tipo + asunto escrito + dependencia elegida a mano» y
+pasa a construirse con los campos nuevos del formulario:
+
+| Antes | Ahora |
+|---|---|
+| Asunto en texto libre | **Asunto** del catálogo (la novedad de la tabla de canales de comunicación) |
+| — | **Causal** del asunto |
+| Dependencia elegida a mano por Calidad | **Dependencia derivada**: causal > asunto > categoría de documentos > área elegida por el cliente. Calidad solo la corrige al reclasificar |
+| — | **Ruta de tratamiento**: proveedor, proceso interno o ninguna (la propone la causal y Calidad la confirma) |
+| Proveedor en texto libre | **Productos** con factura, SKU, lote, FDV y cantidad; el proveedor sale del maestro por SKU |
+| — | **Área elegida** por el cliente y **orden de recogida** |
+
+Todo lo que el panel filtra, reporta o envía (bandeja, CSV, OM, mensajes al proveedor) se apoya
+en estos campos, no en texto libre.
+
 ## Principio: la solicitud es evidencia, el caso es la copia de trabajo
 
 - `pqrsf_requests` guarda **lo que envió el cliente** y no cambia nunca. Es la evidencia ante
@@ -117,6 +134,67 @@ radique a nombre del cliente (D6 del plan):
   el comercial queda como `created_by` y como `sales_executive_user_id`.
 - Pregunta abierta (P3 del plan): quién recibe el acuse cuando radica un comercial.
 
+## Comunicaciones con el proveedor
+
+Hoy el panel escribe al **cliente** (respuestas parciales desde un comentario, entrega de
+documentos). Falta escribirle al **proveedor** desde el mismo caso, sin salir a Outlook, y que
+todo quede en la línea de tiempo.
+
+- **Tipos de mensaje:**
+
+  | `kind` | Nombre | Uso |
+  |---|---|---|
+  | `request` | Solicitud de información | Pedir ficha técnica, certificado, explicación |
+  | `response` | Respuesta | Contestarle algo que el proveedor preguntó |
+  | `improvement` | Oportunidad de mejora | Escalar una novedad de calidad de fabricante (la OM con formato llega en la fase 3) |
+  | `notice` | Informativo | Avisar sin pedir nada (por ejemplo, el cierre) |
+
+- **Quién:** el responsable del caso o un gestor, con el caso abierto.
+- **Destinatarios:** de 1 a 5 correos. El panel sugiere los contactos ya usados para ese
+  proveedor (`pqrsf_supplier_contacts`, que se llena sola al enviar) y los proveedores salen de
+  los productos del caso. Cuando Abastecimiento entregue el catálogo de contactos, se carga en
+  la misma tabla.
+- **Contenido:** texto, datos del caso opcionales (radicado, cliente, sede, productos con lote,
+  FDV y cantidad), las evidencias del cliente (fotos y video) si se marcan, y archivos nuevos.
+- **Envío:** desde `pqrsf@`, con el radicado en el asunto (`[Q26AC0001] Solicitud de
+  información: …`). Así la respuesta del proveedor vuelve sola al caso por el buzón.
+- **Línea de tiempo:** evento `supplier_message` con tipo, destinatarios, proveedor, archivos y
+  el estado de envío de cada correo. Cuando el proveedor contesta, el evento `email_received`
+  se muestra como «Proveedor respondió» si el remitente es uno de los destinatarios.
+- El cliente no ve estos mensajes.
+
+## Línea de tiempo legible
+
+Cada evento llega con una frase lista para mostrar, quién la hizo y de qué tipo es, para que la
+UI no tenga que traducir códigos:
+
+| Campo | Contenido |
+|---|---|
+| `actor_kind` | `system`, `user`, `client` o `supplier` |
+| `actor_name` | «Sistema», el nombre de la persona, el cliente o el proveedor |
+| `title` | Frase corta en español |
+| `category` | `lifecycle`, `access`, `assignment`, `status`, `communication`, `documents`, `classification` |
+| `status_change` | `{from, to}` con los nombres de los estados, cuando cambia el estado |
+
+Ejemplos:
+
+| Evento | Título |
+|---|---|
+| Caso abierto desde el formulario | Sistema · Creó el caso desde el formulario público |
+| Caso abierto desde un correo | Sistema · Creó el caso desde un correo de ana@cliente.com |
+| Caso creado por alguien | Ana Pérez · Creó el caso |
+| Primera lectura | Ana Pérez · Abrió el caso por primera vez · Recibida → Leída |
+| Apertura posterior | Ana Pérez · Abrió el caso |
+| Asignación | Ana Pérez · Asignó el caso a Juan Gómez |
+| Estado | Juan Gómez · Cambió el estado · En curso → Finalizada |
+| Comentario / respuesta | Juan Gómez · Comentó / Respondió al cliente |
+| Mensaje al proveedor | Juan Gómez · Envió una solicitud de información a TEAM FOODS |
+| Correo recibido | Cliente · Escribió por correo / Proveedor · Respondió por correo |
+| Documento | Juan Gómez · Respondió el documento Ficha Técnica |
+
+Los registros de acceso (`viewed`) se siguen guardando, pero la UI puede agruparlos («Abrieron el
+caso: Ana, Juan») para que no tapen lo importante.
+
 ## Endpoints nuevos y cambios de contrato
 
 | Método | Ruta | Cambio |
@@ -130,6 +208,11 @@ radique a nombre del cliente (D6 del plan):
 | `POST` | `/pqrsf/cases` | Campos del comercial (sección anterior) y multipart |
 | `GET` | `/pqrsf/products?q=` | Nuevo, con sesión: como el público pero con proveedor |
 | `GET` | `/pqrsf/cases/export` | Columnas de clasificación y una fila por producto |
+| `GET` | `/pqrsf/cases/{id}` y `/pqrsf/activity` | Cada evento trae `actor_kind`, `actor_name`, `title`, `category` y `status_change` |
+| `POST` | `/pqrsf/cases/{id}/supplier-messages` | Nuevo: mensaje al proveedor (multipart) |
+| `GET` | `/pqrsf/cases/{id}/supplier-messages` | Nuevo: mensajes enviados y su estado |
+| `POST` | `/pqrsf/cases/{id}/supplier-messages/{notification_id}/retry` | Nuevo: reintentar un envío fallido |
+| `GET` | `/pqrsf/supplier-contacts?supplier_code=&q=` | Nuevo: contactos usados antes |
 
 ## Entrega por fases
 
@@ -143,6 +226,8 @@ radique a nombre del cliente (D6 del plan):
 | I-4 | Filtros y columnas nuevos en bandeja, resumen y CSV | [ ] | [ ] |
 | I-5 | Formulario interno del comercial con los campos del público y evidencias | [ ] | [ ] |
 | I-6 | Correo: la plantilla deja la clasificación en el caso (hoy solo deriva el área) | [ ] | — |
+| I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [ ] | [ ] |
+| I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo | [ ] | [ ] |
 | Fase 4 | `invoice_verified` y fecha de entrega desde el DWH | [ ] | [ ] |
 | Fase 5 | Reclasificar recalcula el plazo con la criticidad (según P16) | [ ] | [ ] |
 

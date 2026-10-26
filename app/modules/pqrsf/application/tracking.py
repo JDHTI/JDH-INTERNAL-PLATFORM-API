@@ -41,6 +41,7 @@ from app.modules.pqrsf.domain.ports import (
     PeopleDirectory,
     PqrsfRepository,
 )
+from app.modules.pqrsf.domain.timeline import TimelineContext, describe, supplier_addresses
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_REPEAT_WINDOW,
     ACCESS_RETENTION,
@@ -993,14 +994,24 @@ class CaseTrackingService:
             {e.actor_user_id for e in events if e.actor_user_id is not None}
         )
         request = await self.requests.get_request(case.request_id) if case.request_id else None
+        context = TimelineContext(
+            statuses={s.id: s for s in await self.repository.list_statuses(True)},
+            requester_name=case.requester_name,
+            requester_email=case.requester_email,
+            supplier_addresses=supplier_addresses(events),
+        )
         return CaseDetail(
             view=await self._view(case, principal, is_manager),
-            events=[
-                EventView(e, actors.get(e.actor_user_id) if e.actor_user_id else None)
-                for e in events
-            ],
+            events=[self._event_view(e, actors, context) for e in events],
             request=request,
         )
+
+    @staticmethod
+    def _event_view(
+        event: CaseEvent, actors: dict[UUID, DirectoryUser], context: TimelineContext
+    ) -> EventView:
+        actor = actors.get(event.actor_user_id) if event.actor_user_id else None
+        return EventView(event, actor, describe(event, actor, context))
 
     async def request_for_download(self, case_id: UUID, principal: Principal) -> UUID:
         """Authorize reading the intake attachments of a case.
@@ -1357,7 +1368,7 @@ class CaseTrackingService:
         event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
-        return EventView(event, actor)
+        return EventView(event, actor, describe(event, actor, TimelineContext()))
 
     # --- History ---
 
@@ -1429,10 +1440,11 @@ class CaseTrackingService:
         actors = await self.people.get_users(
             {e.actor_user_id for e in page if e.actor_user_id is not None}
         )
+        context = TimelineContext(
+            statuses={s.id: s for s in await self.repository.list_statuses(True)}
+        )
         return ActivityPage(
-            items=[
-                EventView(e, actors.get(e.actor_user_id) if e.actor_user_id else None) for e in page
-            ],
+            items=[self._event_view(e, actors, context) for e in page],
             next_before=page[-1].created_at if more and page else None,
         )
 

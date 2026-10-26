@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.modules.identity.domain.principal import DirectoryUser
 from app.modules.pqrsf.domain.entities import PqrsfRequest, RequestType
+from app.modules.pqrsf.domain.timeline import EventSummary
 from app.modules.pqrsf.domain.tracking import (
     CaseEvent,
     CaseStatus,
@@ -42,10 +43,11 @@ class CaseView:
 
 @dataclass(frozen=True)
 class EventView:
-    """A timeline entry with its author."""
+    """A timeline entry with its author and how it reads on screen."""
 
     event: CaseEvent
     actor: DirectoryUser | None
+    summary: EventSummary | None = None
 
 
 @dataclass(frozen=True)

@@ -221,8 +221,15 @@ class CaseResponse(BaseModel):
     updated_at: datetime
 
 
+class StatusChangeResponse(BaseModel):
+    """Status names before and after an event."""
+
+    from_name: str | None = Field(default=None, serialization_alias="from")
+    to_name: str | None = Field(default=None, serialization_alias="to")
+
+
 class CaseEventResponse(BaseModel):
-    """Timeline entry."""
+    """Timeline entry, with a ready-to-show sentence."""
 
     id: UUID
     event_type: str
@@ -232,6 +239,14 @@ class CaseEventResponse(BaseModel):
     note: str | None
     data: dict
     created_at: datetime
+    # ``system``, ``user``, ``client``, ``supplier`` or ``external`` (an unknown sender).
+    actor_kind: str = "system"
+    actor_name: str = "Sistema"
+    # One short sentence: «Abrió el caso por primera vez», «Asignó el caso a Juan».
+    title: str = ""
+    # ``lifecycle``, ``access``, ``assignment``, ``status``, ``communication``, ``documents``.
+    category: str = "lifecycle"
+    status_change: StatusChangeResponse | None = None
 
 
 class ActivityEventResponse(CaseEventResponse):
@@ -538,7 +553,20 @@ def _case(view: CaseView) -> CaseResponse:
 
 
 def _event(value: EventView) -> CaseEventResponse:
-    event = value.event
+    event, summary = value.event, value.summary
+    told = {}
+    if summary is not None:
+        told = {
+            "actor_kind": summary.actor_kind,
+            "actor_name": summary.actor_name,
+            "title": summary.title,
+            "category": summary.category,
+            "status_change": (
+                StatusChangeResponse(from_name=summary.status_from, to_name=summary.status_to)
+                if summary.status_from or summary.status_to
+                else None
+            ),
+        }
     return CaseEventResponse(
         id=event.id,
         event_type=event.event_type,
@@ -548,6 +576,7 @@ def _event(value: EventView) -> CaseEventResponse:
         note=event.note,
         data=event.data,
         created_at=event.created_at,
+        **told,
     )
 
 
