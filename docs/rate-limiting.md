@@ -12,7 +12,7 @@ excede su cupo cuesta un contador en Redis y nada más.
 
 Cada nivel cuenta aparte por dirección: una pantalla que consulta mucho no gasta el cupo de los
 cambios. El formulario público suma además un tope global y, opcionalmente, CAPTCHA
-(`docs/pqrsf-sugerencias.md`). El nivel `medium` desapareció: sus endpoints pasaron a `read` o
+(`docs/pqrsf.md`, sección «Seguridad del formulario público»). El nivel `medium` desapareció: sus endpoints pasaron a `read` o
 `relaxed` según su método.
 
 ## Cómo se asigna el nivel
