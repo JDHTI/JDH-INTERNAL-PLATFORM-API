@@ -193,6 +193,24 @@ class MasterLookup:
 
         return await self.repository.products_by_sku(list(dict.fromkeys(skus)))
 
+    async def search_products(self, query: str, limit: int) -> list[ProductRef]:
+        """Active products whose SKU is the text or whose description contains it."""
+
+        page = await self.repository.list_products(
+            _term(query), None, None, None, True, 1, max(1, min(limit, 100))
+        )
+        return [
+            ProductRef(
+                id=product.id,
+                sku=product.sku,
+                description=product.description,
+                brand=product.brand,
+                commercial_supplier_code=product.commercial_supplier_code,
+                is_active=product.is_active,
+            )
+            for product in page.items
+        ]
+
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         """Commercial supplier ids by code."""
 

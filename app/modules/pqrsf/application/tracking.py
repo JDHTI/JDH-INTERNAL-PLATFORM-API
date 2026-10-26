@@ -27,6 +27,7 @@ from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
 from app.modules.pqrsf.domain.entities import (
     HANDLING_ACKNOWLEDGE,
     HANDLING_CASE,
+    MAX_TYPE_DESCRIPTION,
     PqrsfRequest,
     RequestType,
     clean_multiline,
@@ -274,6 +275,8 @@ class CaseTrackingService:
         requires_follow_up: bool | None = None,
         sla_days: int | None = None,
         handling: str | None = None,
+        description: str | None = None,
+        allows_attachments: bool | None = None,
     ) -> RequestType:
         """Change the follow-up settings of a request type.
 
@@ -285,6 +288,9 @@ class CaseTrackingService:
             requires_follow_up (bool | None): Whether cases get a due date.
             sla_days (int | None): Default response time in business days.
             handling (str | None): ``case`` opens cases, ``acknowledge`` only thanks.
+            description (str | None): Short line shown under the type on the form;
+                ``None`` clears it.
+            allows_attachments (bool | None): Whether the form accepts evidence files.
 
         Returns:
             RequestType: The updated type.
@@ -304,6 +310,12 @@ class CaseTrackingService:
             if handling not in (HANDLING_CASE, HANDLING_ACKNOWLEDGE):
                 raise InvalidInputError("El manejo debe ser 'case' o 'acknowledge'")
             request_type.handling = handling
+        if "description" in fields:
+            request_type.description = clean_optional(
+                description, "descripción del tipo", MAX_TYPE_DESCRIPTION
+            )
+        if "allows_attachments" in fields and allows_attachments is not None:
+            request_type.allows_attachments = allows_attachments
         return await self.requests.save_request_type(request_type)
 
     async def create_status(
@@ -700,21 +712,26 @@ class CaseTrackingService:
         )
         case.request_id = request.id
         case.site = request.site
-        case.subject = request.subject
+        case.subject = request.case_subject
         case.description = request.description
         case.customer_name = request.business_name
         case.customer_nit = request.nit
         case.requester_name = request.full_name
         case.requester_email = request.email
+        suppliers = list(
+            dict.fromkeys(p.supplier_name for p in request.products if p.supplier_name)
+        )
+        case.supplier_name = ", ".join(suppliers)[:200] or None
+        # The cause picked (or the category of the documents) says who attends it.
+        dependency = (
+            await self.repository.get_dependency(request.dependency_id)
+            if request.dependency_id
+            else None
+        )
+        case.dependency = dependency if dependency and dependency.is_active else None
         if request.document_request:
             # The customer already said what they need: the documents become
-            # items, with their response times, and the category's scope owns it.
-            dependency = (
-                await self.repository.get_dependency(request.document_dependency_id)
-                if request.document_dependency_id
-                else None
-            )
-            case.dependency = dependency if dependency and dependency.is_active else None
+            # items, with their response times.
             case.items = [
                 await self._new_item(
                     case.id, ItemInput(item.document_type_id, item.description), position
@@ -768,10 +785,21 @@ class CaseTrackingService:
         case.customer_nit = command.nit
         case.requester_name = command.requester_name
         case.requester_email = command.requester_email
+        # The cause named in the template (else its subject) says who attends it.
+        dependency_id = (command.cause_ref and command.cause_ref.dependency_id) or (
+            command.subject_ref and command.subject_ref.dependency_id
+        )
+        if dependency_id:
+            dependency = await self.repository.get_dependency(dependency_id)
+            case.dependency = dependency if dependency and dependency.is_active else None
         self._refresh_dates(case)
         data: dict = {"origin": "email", "message_id": str(command.message_id)}
         if command.related_code:
             data["related_case"] = command.related_code
+        if command.subject_ref:
+            data["subject"] = {"code": command.subject_ref.code, "name": command.subject_ref.name}
+        if command.cause_ref:
+            data["cause"] = {"code": command.cause_ref.code, "name": command.cause_ref.name}
         return await self.repository.create_case(
             case, self._event(case.id, EventType.CREATED, None, data=data)
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from app.core.errors import InvalidInputError
@@ -13,6 +13,10 @@ from app.modules.sites.domain.entities import Site
 HANDLING_CASE = "case"
 HANDLING_ACKNOWLEDGE = "acknowledge"
 REQUEST_TYPE_CODES = frozenset({"peticion", "queja", "reclamo", "sugerencia", "felicitacion"})
+# The description of a type is one visible line under the option, never a paragraph.
+MAX_TYPE_DESCRIPTION = 120
+# How a cause is treated: escalated to the manufacturer, a process failure of JDH, or neither.
+CAUSE_ROUTES = frozenset({"supplier", "internal", "none"})
 _IDEMPOTENCY_KEY_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
@@ -38,6 +42,91 @@ class RequestType:
     # What a request of this type becomes: a follow-up case, or a stored message that is
     # thanked at once (suggestions and compliments).
     handling: str = HANDLING_CASE
+    # One short line shown under the option so the requester knows which type to pick.
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class Cause:
+    """The cause of a subject: it decides who attends the case and how it is treated."""
+
+    id: UUID
+    subject_id: UUID
+    code: str
+    name: str
+    description: str | None
+    dependency_id: UUID | None
+    # ``supplier`` may be escalated to the manufacturer; ``internal`` is a process failure.
+    route: str
+    requires_product: bool
+    allows_product: bool
+    is_other: bool
+    sort_order: int = 0
+    is_active: bool = True
+
+
+@dataclass(frozen=True)
+class Subject:
+    """What a request is about, offered to some request types, with its causes."""
+
+    id: UUID
+    code: str
+    name: str
+    description: str | None
+    request_type_codes: tuple[str, ...]
+    dependency_id: UUID | None
+    is_other: bool
+    causes: tuple[Cause, ...] = ()
+    sort_order: int = 0
+    is_active: bool = True
+
+    def offered_to(self, request_type_code: str) -> bool:
+        """Whether the form offers it for a request type."""
+
+        return request_type_code in self.request_type_codes
+
+
+@dataclass(frozen=True)
+class ProductInput:
+    """A product line as the requester typed it."""
+
+    invoice_number: str
+    sku: str
+    lot: str
+    expiry_date: date
+    affected_quantity: int
+
+
+@dataclass(frozen=True)
+class ClaimedProduct:
+    """A product line of a complaint or claim, with the master data seen at submission."""
+
+    invoice_number: str
+    sku: str
+    lot: str
+    expiry_date: date
+    affected_quantity: int
+    description: str | None = None
+    supplier_code: str | None = None
+    supplier_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductOption:
+    """A product the public form offers when the requester types a reference."""
+
+    sku: str
+    description: str | None
+
+
+@dataclass(frozen=True)
+class ProductMaster:
+    """What the product master knows of a reference: its name and its supplier."""
+
+    sku: str
+    description: str | None
+    supplier_code: str | None
+    supplier_name: str | None
 
 
 @dataclass
@@ -56,7 +145,7 @@ class PqrsfRequest:
     city: str
     email: str
     subject: str | None
-    description: str
+    description: str | None
     idempotency_key: str
     idempotency_hash: str
     created_at: datetime
@@ -68,6 +157,45 @@ class PqrsfRequest:
     documents: list[RequestedDocument] = field(default_factory=list)
     # Dependency of that category, read when the request is loaded.
     document_dependency_id: UUID | None = None
+    # Classification picked from the catalogs, read when the request is loaded.
+    subject_ref: Subject | None = None
+    cause_ref: Cause | None = None
+    products: list[ClaimedProduct] = field(default_factory=list)
+    # ``yes`` | ``no`` | ``unknown``, asked only when there are products.
+    pickup_order_requested: str | None = None
+    pickup_order_number: str | None = None
+
+    @property
+    def dependency_id(self) -> UUID | None:
+        """The dependency that attends it: the cause's, else the subject's, else the documents'."""
+
+        if self.cause_ref is not None and self.cause_ref.dependency_id is not None:
+            return self.cause_ref.dependency_id
+        if self.subject_ref is not None and self.subject_ref.dependency_id is not None:
+            return self.subject_ref.dependency_id
+        return self.document_dependency_id
+
+    @property
+    def case_subject(self) -> str | None:
+        """One line for the case: the subject and cause picked, or the typed subject.
+
+        With "Otro" the typed subject (when there is one) says more than the word "Otro".
+        """
+
+        if self.subject_ref is None:
+            return self.subject
+        parts = [self.subject_ref.name]
+        if self.cause_ref is not None:
+            parts.append(self.cause_ref.name)
+        line = " · ".join(parts)
+        if self.subject and (
+            self.subject_ref.is_other or (self.cause_ref and self.cause_ref.is_other)
+        ):
+            line = f"{line}: {self.subject}"
+        return line[:200]
+
+
+PICKUP_ORDER_ANSWERS = frozenset({"yes", "no", "unknown"})
 
 
 @dataclass(frozen=True)

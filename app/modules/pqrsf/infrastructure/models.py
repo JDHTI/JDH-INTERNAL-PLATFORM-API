@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
@@ -35,6 +35,8 @@ class RequestTypeModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     code: Mapped[str] = mapped_column(String(30), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # One short line shown under the option so the requester knows which type to pick.
+    description: Mapped[str | None] = mapped_column(String(300))
     allows_document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_attachments: Mapped[bool] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true")
@@ -81,7 +83,19 @@ class PqrsfRequestModel(Base):
     city: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(200))
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_subjects.id", ondelete="SET NULL")
+    )
+    cause_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_causes.id", ondelete="SET NULL")
+    )
+    # [{"invoice_number", "sku", "description", "supplier_code", "supplier_name", "lot",
+    #   "expiry_date", "affected_quantity"}, ...]; names are copies taken at submission.
+    products: Mapped[list | None] = mapped_column(JSONB)
+    # ``yes`` | ``no`` | ``unknown``: whether a pickup order was already requested in the ERP.
+    pickup_order_requested: Mapped[str | None] = mapped_column(String(8))
+    pickup_order_number: Mapped[str | None] = mapped_column(String(40))
     document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     document_category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
@@ -159,6 +173,69 @@ class DependencyModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SubjectModel(Base):
+    """What a request is about (the "novedad" of the communication channels table)."""
+
+    __tablename__ = "pqrsf_subjects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(300))
+    # Codes of the request types that offer it (``queja``, ``reclamo``…).
+    request_type_codes: Mapped[list[str]] = mapped_column(
+        ARRAY(String(30)), nullable=False, server_default="{}"
+    )
+    # Who attends it when it has no causes, or the cause names none.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    is_other: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CauseModel(Base):
+    """The cause of a subject; it decides the dependency and the treatment route."""
+
+    __tablename__ = "pqrsf_causes"
+    __table_args__ = (
+        Index("ix_pqrsf_causes_subject", "subject_id", "sort_order"),
+        CheckConstraint("route IN ('supplier', 'internal', 'none')", name="ck_pqrsf_causes_route"),
+        CheckConstraint("NOT requires_product OR allows_product", name="ck_pqrsf_causes_product"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    subject_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_subjects.id", ondelete="CASCADE"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(300))
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    # ``supplier``: may be escalated to the manufacturer; ``internal``: a process failure.
+    route: Mapped[str] = mapped_column(String(10), nullable=False, server_default="none")
+    requires_product: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    allows_product: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_other: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(

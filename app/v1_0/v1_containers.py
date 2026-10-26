@@ -47,6 +47,7 @@ from app.modules.order_validation.infrastructure.repository import (
 from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
 from app.modules.pqrsf.application.certificates import CertificateService
+from app.modules.pqrsf.application.classification import ClassificationService
 from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
@@ -71,8 +72,13 @@ from app.modules.pqrsf.infrastructure.notification_repository import (
 )
 from app.modules.pqrsf.infrastructure.notification_worker import Wakeup
 from app.modules.pqrsf.infrastructure.policies import AreaTeamDirectory, HolidayCalendar
+from app.modules.pqrsf.infrastructure.product_catalog import MasterProductCatalog
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
-from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
+from app.modules.pqrsf.infrastructure.security import (
+    ClamAVScanner,
+    PillowImageProcessor,
+    VideoInspector,
+)
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
 from app.modules.projects.application.live import ProjectLiveService
 from app.modules.projects.application.service import ProjectService
@@ -203,6 +209,12 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_manager_policy = providers.Factory(
         AreaManagerPolicy, areas=area_service, area_slug=config.pqrsf.manager_area_slug
     )
+    pqrsf_classification_service = providers.Factory(
+        ClassificationService,
+        requests=pqrsf_repository,
+        cases=pqrsf_case_repository,
+        managers=pqrsf_manager_policy,
+    )
     # --- PQRSF emails sent from the mailbox (Microsoft Graph) ---
     mail_client = providers.Singleton(
         GraphMailClient,
@@ -288,6 +300,7 @@ class V1Container(containers.DeclarativeContainer):
         managers=supplier_support_manager_policy,
     )
     master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)
+    pqrsf_product_catalog = providers.Factory(MasterProductCatalog, masters=master_lookup)
     warehouse_master_source = providers.Factory(
         WarehouseMasterSource, connection=data_provider, schema=settings.provided.DWH_SCHEMA
     )
@@ -361,6 +374,9 @@ class V1Container(containers.DeclarativeContainer):
         host=config.pqrsf.clamav_host,
         port=config.pqrsf.clamav_port,
         timeout=config.pqrsf.clamav_timeout,
+    )
+    pqrsf_video_inspector = providers.Singleton(
+        VideoInspector, max_bytes=config.pqrsf.max_video_bytes
     )
     # --- PQRSF by email: reading the mailbox ---
     mail_image_processor = providers.Singleton(
@@ -457,4 +473,8 @@ class V1Container(containers.DeclarativeContainer):
         max_total_attachment_bytes=config.pqrsf.max_total_attachment_bytes,
         feedback=pqrsf_feedback_service,
         deliveries=pqrsf_delivery_service,
+        products=pqrsf_product_catalog,
+        video_inspector=pqrsf_video_inspector,
+        max_videos=config.pqrsf.max_videos,
+        max_video_bytes=config.pqrsf.max_video_bytes,
     )

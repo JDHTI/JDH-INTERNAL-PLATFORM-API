@@ -29,7 +29,7 @@ from app.modules.pqrsf.application.dto import (
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import MAX_TYPE_DESCRIPTION, RequestType
 from app.modules.pqrsf.domain.notifications import (
     JobSchedule,
     Notification,
@@ -80,6 +80,8 @@ class TrackingRequestTypeResponse(BaseModel):
     allows_document_request: bool
     allows_attachments: bool
     is_active: bool
+    # One short line shown under the type on the forms.
+    description: str | None = None
 
 
 class CaseStatusResponse(BaseModel):
@@ -381,6 +383,9 @@ class UpdateRequestTypeRequest(BaseModel):
     requires_follow_up: bool | None = None
     sla_days: int | None = Field(default=None, ge=0, le=365)
     handling: Literal["case", "acknowledge"] | None = None
+    # One visible line under the type on the form; ``null`` clears it.
+    description: str | None = Field(default=None, max_length=MAX_TYPE_DESCRIPTION)
+    allows_attachments: bool | None = None
 
 
 class CreateStatusRequest(BaseModel):
@@ -655,7 +660,7 @@ async def update_request_type(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> TrackingRequestTypeResponse:
-    """Change prefix, follow-up flag or default response time (managers)."""
+    """Change prefix, follow-up flag, response time, form description or evidence (managers)."""
 
     return _request_type(
         await service.update_request_type(
@@ -666,6 +671,8 @@ async def update_request_type(
             requires_follow_up=body.requires_follow_up,
             sla_days=body.sla_days,
             handling=body.handling,
+            description=body.description,
+            allows_attachments=body.allows_attachments,
         )
     )
 
