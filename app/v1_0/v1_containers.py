@@ -75,6 +75,7 @@ from app.modules.pqrsf.infrastructure.notification_worker import Wakeup
 from app.modules.pqrsf.infrastructure.policies import AreaTeamDirectory, HolidayCalendar
 from app.modules.pqrsf.infrastructure.product_catalog import MasterProductCatalog
 from app.modules.pqrsf.infrastructure.repository import SqlAlchemyPqrsfRepository
+from app.modules.pqrsf.infrastructure.sales_lookup import WarehouseSalesLookup
 from app.modules.pqrsf.infrastructure.security import (
     ClamAVScanner,
     PillowImageProcessor,
@@ -280,6 +281,9 @@ class V1Container(containers.DeclarativeContainer):
         documents=pqrsf_manager_files,
         requests=pqrsf_repository,
     )
+    pqrsf_sales_lookup = providers.Factory(
+        WarehouseSalesLookup, connection=data_provider, schema=settings.provided.DWH_SCHEMA
+    )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
         repository=pqrsf_case_repository,
@@ -289,6 +293,7 @@ class V1Container(containers.DeclarativeContainer):
         managers=pqrsf_manager_policy,
         calendar=pqrsf_calendar,
         notifier=pqrsf_notification_service,
+        sales=pqrsf_sales_lookup,
     )
     # --- Commercial masters (DWH mirror) and supplier supports ---
     commercial_master_repository = providers.Factory(

@@ -159,7 +159,8 @@ class SalesLookup(Protocol):
         """Find the seller of each invoice that exists, in the order given.
 
         Args:
-            invoice_numbers (Sequence[str]): Invoice numbers, already normalized.
+            invoice_numbers (Sequence[str]): ``nro_transaccion`` values from
+                ``invoice_candidates`` (``FEV-1386163``).
             customer_nit (str | None): The customer's NIT, to discard another
                 customer's invoice with the same number.
 

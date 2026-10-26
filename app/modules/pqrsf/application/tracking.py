@@ -42,7 +42,7 @@ from app.modules.pqrsf.domain.ports import (
     PqrsfRepository,
     SalesLookup,
 )
-from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_key
+from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_candidates
 from app.modules.pqrsf.domain.timeline import (
     EVENT_SUPPLIER_MESSAGE,
     TimelineContext,
@@ -789,7 +789,9 @@ class CaseTrackingService:
 
         if self.sales is None or not request.products:
             return
-        numbers = list(dict.fromkeys(invoice_key(p.invoice_number) for p in request.products))
+        numbers = list(
+            dict.fromkeys(n for p in request.products for n in invoice_candidates(p.invoice_number))
+        )
         try:
             sellers = await self.sales.sellers_of(numbers, request.nit)
         except Exception:

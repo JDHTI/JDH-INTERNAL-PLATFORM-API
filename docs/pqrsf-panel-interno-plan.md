@@ -215,9 +215,24 @@ esa factura. No se le pide al cliente: se saca de las ventas.
 - **Si las ventas no responden** o la factura no aparece, el caso se abre igual sin ejecutivo.
 - **Respaldo por el vendedor asignado al cliente (por NIT en el maestro comercial):** queda para la
   entrega final de esta función.
-- **Pendiente:** la vista de ventas del esquema `consumo` (nombre, columnas y formato de la
-  factura) se está confirmando con el equipo del DWH. Hasta conectar su adaptador
-  (`SalesLookup`), el campo queda vacío en los casos nuevos.
+- **Fuente:** `consumo.ventas` (vista sobre `mart_ventas.fact_venta`, una fila por línea de factura),
+  cruzada con `consumo.vendedores` por `vendedor_key` para el código, el nombre y el correo. La
+  factura es `nro_transaccion` = `<tipo>-<consecutivo>` (`FEV-1386163`). Solo cuentan ventas
+  (`concepto = 'Ventas'`), sin anuladas, de los últimos 2 años. El vendedor es de la cabecera: uno
+  por factura. Lo que escribe el cliente se normaliza (`fev 001386163` → `FEV-1386163`); un número
+  sin tipo se prueba como FEV, FEE y NND.
+- **NIT:** con el NIT del caso solo cuenta la factura de ese cliente; una de otro cliente se
+  descarta, para no darle el caso a un vendedor que no lo debe ver.
+- **Carga:** la vista se publica de lunes a viernes hacia las 07:40 (de lunes a sábado con el PR
+  #138 del DWH). Una factura emitida hoy aparece en la siguiente carga: si el cliente reclama el
+  mismo día, el caso abre sin ejecutivo.
+- **Verificado** contra el DWH real (solo lectura): `FEV-1386163` devuelve código y nombre del
+  vendedor; con otro NIT no devuelve nada. En los últimos 90 días, 109 de 126 vendedores tienen
+  correo `@jdh.com.co`; el resto queda con nombre y código, sin enlace.
+- **Sin confirmar:** que el número impreso en la factura electrónica (prefijo DIAN) coincida con
+  `nro_transaccion`. Hay que revisarlo con 2 o 3 facturas físicas; el ajuste va en
+  `invoice_candidates`.
+- **Lote:** no existe en ninguna vista del DWH; el cliente lo sigue escribiendo.
 - En el detalle del caso: `sales_executive` con `name`, `code`, `email`, `user_id` y `source`.
 
 ## Endpoints nuevos y cambios de contrato
@@ -254,7 +269,7 @@ esa factura. No se le pide al cliente: se saca de las ventas.
 | I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [x] | [ ] |
 | I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo ([`pqrsf-proveedor.md`](pqrsf-proveedor.md)) | [x] | [ ] |
 | I-9 | Ejecutivo comercial desde la factura: campos en el caso, enlace al usuario por correo, acceso del ejecutivo, `sales_executive` en el detalle | [x] | [ ] |
-| I-9 | Adaptador de la vista de ventas del DWH (`SalesLookup`) | [ ] | — |
+| I-9 | Adaptador de la vista de ventas del DWH (`consumo.ventas` + `consumo.vendedores`) | [x] | — |
 | I-9 | Respaldo por el vendedor asignado al cliente (maestro comercial) | [ ] | — |
 | Fase 4 | `invoice_verified` y fecha de entrega desde el DWH | [ ] | [ ] |
 | Fase 5 | Reclasificar recalcula el plazo con la criticidad (según P16) | [ ] | [ ] |

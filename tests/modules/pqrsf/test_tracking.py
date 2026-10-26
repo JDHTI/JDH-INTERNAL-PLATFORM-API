@@ -187,13 +187,14 @@ class FakeCases:
 
     async def list_activity(self, filters):
         items = [
-            e
-            for e in self.events
+            (position, e)
+            for position, e in enumerate(self.events)
             if (filters.before is None or e.created_at < filters.before)
             and (filters.include_access or e.event_type not in ACCESS_EVENT_TYPES)
         ]
-        items.sort(key=lambda e: e.created_at, reverse=True)
-        return items[: filters.limit]
+        # Two events in the same instant: the one written last comes first.
+        items.sort(key=lambda pair: (pair[1].created_at, pair[0]), reverse=True)
+        return [e for _, e in items[: filters.limit]]
 
     async def has_recent_access(self, event_type, actor_user_id, case_id, since):
         return any(
@@ -797,12 +798,12 @@ async def test_the_sales_executive_comes_from_the_invoice_and_follows_the_case()
 
     s = Setup()
     s.service.sales = FakeSales(
-        {"FE1020": InvoiceSeller("FE1020", "V07", "Carolina Ríos", "Carolina@JDH.com.co")}
+        {"FEV-1020": InvoiceSeller("FEV-1020", "V07", "Carolina Ríos", "Carolina@JDH.com.co")}
     )
 
-    case = await s.service.open_for_request(_claim_request(s, "fe 1020", "FE1020", "FE9"))
+    case = await s.service.open_for_request(_claim_request(s, "fev 001020", "FEV-1020", "FEV9"))
 
-    assert s.service.sales.asked == (["FE1020", "FE9"], "900123456")
+    assert s.service.sales.asked == (["FEV-1020", "FEV-9"], "900123456")
     assert (case.sales_executive_name, case.sales_executive_code) == ("Carolina Ríos", "V07")
     assert case.sales_executive_email == "carolina@jdh.com.co"
     assert case.sales_executive_source == "invoice"
@@ -817,13 +818,13 @@ async def test_without_sales_data_or_invoice_the_executive_stays_empty() -> None
 
     s = Setup()
     s.service.sales = FakeSales(fail=True)
-    failed = await s.service.open_for_request(_claim_request(s, "FE1"))
+    failed = await s.service.open_for_request(_claim_request(s, "FEV1"))
     assert failed.sales_executive_name is None
 
     s.service.sales = FakeSales(
-        {"FE2": InvoiceSeller("FE2", "V9", "Sin Cuenta", "nadie@jdh.com.co")}
+        {"FEV-2": InvoiceSeller("FEV-2", "V9", "Sin Cuenta", "nadie@jdh.com.co")}
     )
-    unlinked = await s.service.open_for_request(replace(_claim_request(s, "FE2"), id=uuid.uuid4()))
+    unlinked = await s.service.open_for_request(replace(_claim_request(s, "FEV2"), id=uuid.uuid4()))
     assert unlinked.sales_executive_name == "Sin Cuenta"
     assert unlinked.sales_executive_user_id is None
 
@@ -834,9 +835,9 @@ async def test_typing_the_executive_drops_the_invoice_link() -> None:
 
     s = Setup()
     s.service.sales = FakeSales(
-        {"FE1": InvoiceSeller("FE1", "V07", "Carolina Ríos", "carolina@jdh.com.co")}
+        {"FEV-1": InvoiceSeller("FEV-1", "V07", "Carolina Ríos", "carolina@jdh.com.co")}
     )
-    case = await s.service.open_for_request(_claim_request(s, "FE1"))
+    case = await s.service.open_for_request(_claim_request(s, "FEV1"))
 
     from app.modules.pqrsf.application.dto import CaseChanges
 
