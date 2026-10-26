@@ -1,15 +1,20 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import (
+    Cause,
     DocumentCategory,
     DocumentOption,
     ImageUpload,
+    ProductInput,
+    ProductMaster,
+    ProductOption,
     RequestType,
+    Subject,
 )
 from app.modules.sites.domain.entities import Site
 
@@ -48,12 +53,16 @@ def _type(petition: bool = True) -> RequestType:
 
 
 class FakePqrsfRepository:
-    def __init__(self, request_type: RequestType) -> None:
+    def __init__(self, request_type: RequestType, subjects: list[Subject] | None = None) -> None:
         self.request_type = request_type
+        self.subjects = subjects or []
         self.requests = {}
 
     async def list_request_types(self, active_only=True):
         return [self.request_type]
+
+    async def list_subjects(self, active_only=True):
+        return self.subjects
 
     async def list_document_categories(self):
         return [CATEGORY, OTHER_CATEGORY]
@@ -286,3 +295,336 @@ async def test_documents_are_rejected_when_the_request_is_not_for_documents() ->
 
     with pytest.raises(InvalidInputError, match="solo se indican"):
         await _create(service, request_type, site, values)
+
+
+# --- Classification: subject, cause and product lines ---
+
+QUALITY = uuid4()
+DISTRIBUTION = uuid4()
+PRODUCT_SUBJECT_ID = uuid4()
+
+
+def _cause(name: str, **values) -> Cause:
+    defaults = {
+        "dependency_id": QUALITY,
+        "route": "supplier",
+        "requires_product": False,
+        "allows_product": False,
+        "is_other": False,
+    }
+    return Cause(
+        id=uuid4(),
+        subject_id=PRODUCT_SUBJECT_ID,
+        code=name.lower().replace(" ", "_"),
+        name=name,
+        description=None,
+        **{**defaults, **values},
+    )
+
+
+EXPIRED = _cause(
+    "Producto vencido",
+    dependency_id=DISTRIBUTION,
+    route="internal",
+    requires_product=True,
+    allows_product=True,
+)
+OTHER_CAUSE = _cause("Otro", route="none", allows_product=True, is_other=True)
+NO_PRODUCT = _cause("Actitud de servicio", route="internal")
+PRODUCT_SUBJECT = Subject(
+    id=PRODUCT_SUBJECT_ID,
+    code="calidad_producto",
+    name="Calidad del producto",
+    description=None,
+    request_type_codes=("queja", "reclamo"),
+    dependency_id=QUALITY,
+    is_other=False,
+    causes=(EXPIRED, OTHER_CAUSE, NO_PRODUCT),
+)
+OTHER_SUBJECT = Subject(
+    id=uuid4(),
+    code="otro_novedad",
+    name="Otro",
+    description=None,
+    request_type_codes=("queja", "reclamo"),
+    dependency_id=QUALITY,
+    is_other=True,
+)
+
+
+class FakeProducts:
+    async def search(self, query, limit):
+        return [ProductOption("9834", "Aceite suavizante")][:limit]
+
+    async def resolve(self, skus):
+        known = {"9834": ProductMaster("9834", "Aceite suavizante", "P01", "Unilever Andina")}
+        return {sku: known[sku] for sku in skus if sku in known}
+
+
+def _claims_service() -> tuple[PqrsfService, RequestType, Site]:
+    request_type = replace(_type(), code="queja", name="Queja", allows_document_request=False)
+    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
+    from app.modules.sites.application.service import SiteService
+
+    repository = FakePqrsfRepository(request_type, [PRODUCT_SUBJECT, OTHER_SUBJECT])
+    service = PqrsfService(
+        repository, SiteService(FakeSiteRepository(site)), products=FakeProducts()
+    )
+    return service, request_type, site
+
+
+def _line(**values) -> ProductInput:
+    defaults = {
+        "invoice_number": "FE-1020",
+        "sku": "9834",
+        "lot": "L-77",
+        "expiry_date": date(2026, 12, 1),
+        "affected_quantity": 3,
+    }
+    return ProductInput(**{**defaults, **values})
+
+
+def _claim(request_type: RequestType, site: Site, **overrides) -> dict[str, object]:
+    values = {
+        **_payload(request_type, site, str(uuid4())),
+        "subject": None,
+        "description": None,
+        "subject_id": PRODUCT_SUBJECT.id,
+        "cause_id": EXPIRED.id,
+        "products": [_line()],
+        "pickup_order_requested": "no",
+    }
+    return {**values, **overrides}
+
+
+@pytest.mark.asyncio
+async def test_a_claim_takes_subject_cause_and_products_with_master_data() -> None:
+    service, request_type, site = _claims_service()
+
+    created = await _create(service, request_type, site, _claim(request_type, site))
+
+    request = created.request
+    assert request.description is None
+    assert request.case_subject == "Calidad del producto · Producto vencido"
+    assert request.dependency_id == DISTRIBUTION
+    [product] = request.products
+    assert (product.description, product.supplier_name) == ("Aceite suavizante", "Unilever Andina")
+    assert request.pickup_order_requested == "no"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"subject_id": None}, "Selecciona el asunto"),
+        ({"subject_id": uuid4()}, "no está disponible"),
+        ({"cause_id": None}, "Selecciona la causal"),
+        ({"cause_id": uuid4()}, "no pertenece"),
+        ({"products": []}, "al menos un producto"),
+        ({"products": [_line(sku="0000")]}, "no existe en el maestro"),
+        ({"products": [_line(affected_quantity=0)]}, "mayor que cero"),
+        ({"pickup_order_requested": None}, "orden de recogida"),
+        ({"pickup_order_number": "OR-55"}, "solo si ya la solicitaste"),
+        ({"cause_id": NO_PRODUCT.id}, "no admite productos"),
+    ],
+)
+async def test_a_claim_is_validated_against_the_catalog(overrides, message) -> None:
+    service, request_type, site = _claims_service()
+
+    with pytest.raises(InvalidInputError, match=message):
+        await _create(service, request_type, site, _claim(request_type, site, **overrides))
+
+
+@pytest.mark.asyncio
+async def test_other_requires_a_description() -> None:
+    service, request_type, site = _claims_service()
+    values = _claim(
+        request_type, site, cause_id=OTHER_CAUSE.id, products=[], pickup_order_requested=None
+    )
+
+    with pytest.raises(InvalidInputError, match="Otro"):
+        await _create(service, request_type, site, values)
+
+    created = await _create(
+        service, request_type, site, {**values, "description": "Llegó con olor extraño"}
+    )
+    assert created.request.case_subject == "Calidad del producto · Otro"
+
+
+@pytest.mark.asyncio
+async def test_a_subject_without_causes_takes_none() -> None:
+    service, request_type, site = _claims_service()
+    values = _claim(
+        request_type,
+        site,
+        subject_id=OTHER_SUBJECT.id,
+        cause_id=None,
+        products=[],
+        pickup_order_requested=None,
+        subject="Cobro doble",
+        description="Nos facturaron dos veces",
+    )
+
+    created = await _create(service, request_type, site, values)
+
+    assert created.request.case_subject == "Otro: Cobro doble"
+    assert created.request.dependency_id == QUALITY
+    with pytest.raises(InvalidInputError, match="no tiene causales"):
+        await _create(service, request_type, site, {**values, "cause_id": EXPIRED.id})
+
+
+@pytest.mark.asyncio
+async def test_the_pickup_order_number_goes_with_yes() -> None:
+    service, request_type, site = _claims_service()
+    values = _claim(request_type, site, pickup_order_requested="yes", pickup_order_number=" OR-55 ")
+
+    created = await _create(service, request_type, site, values)
+
+    assert created.request.pickup_order_number == "OR-55"
+
+
+@pytest.mark.asyncio
+async def test_types_without_subjects_keep_the_typed_subject() -> None:
+    service, request_type, site = _service()
+    values = {**_payload(request_type, site, str(uuid4())), "subject_id": PRODUCT_SUBJECT.id}
+
+    with pytest.raises(InvalidInputError, match="no aplican"):
+        await _create(service, request_type, site, values)
+
+
+@pytest.mark.asyncio
+async def test_product_search_needs_two_characters() -> None:
+    service, _, _ = _claims_service()
+
+    with pytest.raises(InvalidInputError, match="2 caracteres"):
+        await service.search_products(" a ")
+    assert [p.sku for p in await service.search_products("aceite")] == ["9834"]
+
+
+def test_the_form_sends_product_lines_as_json() -> None:
+    from app.modules.pqrsf.presentation.router import _product_lines
+
+    [line] = _product_lines(
+        '[{"invoice_number": "FE-1", "sku": "9834", "lot": "L1",'
+        ' "expiry_date": "2026-12-01", "affected_quantity": 2}]'
+    )
+    assert (line.sku, line.expiry_date, line.affected_quantity) == ("9834", date(2026, 12, 1), 2)
+    assert _product_lines(None) == [] and _product_lines("  ") == []
+    for broken in (
+        "no es json",
+        '[{"sku": "9834"}]',
+        '[{"invoice_number": "F", "sku": "1", '
+        '"lot": "L", "expiry_date": "2026-12-01", "affected_quantity": 0}]',
+    ):
+        with pytest.raises(InvalidInputError, match="productos"):
+            _product_lines(broken)
+
+
+class FakeVideos:
+    async def inspect(self, filename, content_type, content):
+        from app.modules.pqrsf.domain.entities import SanitizedImage
+
+        return SanitizedImage(filename, "mp4", "video/mp4", content)
+
+
+class FakeScanner:
+    async def scan(self, content):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_videos_follow_the_evidence_rules_of_the_type() -> None:
+    service, request_type, site = _service()
+    service.video_inspector, service.malware_scanner = FakeVideos(), FakeScanner()
+    clip = ImageUpload(filename="caja.mp4", content_type="video/mp4", content=b"v")
+    values = _payload(request_type, site, str(uuid4()))
+
+    with pytest.raises(InvalidInputError, match="Máximo 1 video"):
+        await service.create_request(
+            request_type_id=request_type.id,
+            site_id=site.id,
+            **{k: v for k, v in values.items() if k not in {"request_type_id", "site_id"}},
+            idempotency_payload=values,
+            videos=[clip, clip],
+        )
+    documents = _document_values(request_type, site)
+    with pytest.raises(InvalidInputError, match="no admite evidencias"):
+        await service.create_request(
+            request_type_id=request_type.id,
+            site_id=site.id,
+            **{k: v for k, v in documents.items() if k not in {"request_type_id", "site_id"}},
+            idempotency_payload=documents,
+            videos=[clip],
+        )
+    no_evidence, other_type, other_site = _service(petition=False)
+    no_evidence.video_inspector = FakeVideos()
+    plain = _payload(other_type, other_site, str(uuid4()))
+    with pytest.raises(InvalidInputError, match="no admite videos"):
+        await no_evidence.create_request(
+            request_type_id=other_type.id,
+            site_id=other_site.id,
+            **{k: v for k, v in plain.items() if k not in {"request_type_id", "site_id"}},
+            idempotency_payload=plain,
+            videos=[clip],
+        )
+
+
+# --- Area picked by the requester ---
+
+COMMERCIAL = uuid4()
+
+
+class FakeAreas(FakePqrsfRepository):
+    async def list_areas(self):
+        from app.modules.pqrsf.domain.tracking import Dependency
+
+        return [Dependency(COMMERCIAL, "comercial", "Comercial", 1, True, NOW, NOW)]
+
+
+def _area_service(asks_area: bool = True) -> tuple[PqrsfService, RequestType, Site]:
+    request_type = replace(_type(), asks_area=asks_area)
+    site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
+    from app.modules.sites.application.service import SiteService
+
+    return (
+        PqrsfService(FakeAreas(request_type), SiteService(FakeSiteRepository(site))),
+        request_type,
+        site,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_area_is_required_where_the_type_asks_for_it() -> None:
+    service, request_type, site = _area_service()
+    values = _payload(request_type, site, str(uuid4()))
+
+    with pytest.raises(InvalidInputError, match="Selecciona el área"):
+        await _create(service, request_type, site, values)
+    with pytest.raises(InvalidInputError, match="no está disponible"):
+        await _create(service, request_type, site, {**values, "area_id": uuid4()})
+
+    created = await _create(service, request_type, site, {**values, "area_id": COMMERCIAL})
+    assert created.request.area.name == "Comercial"
+    # Nothing else decides: the area attends it.
+    assert created.request.dependency_id == COMMERCIAL
+
+
+@pytest.mark.asyncio
+async def test_a_type_that_does_not_ask_for_the_area_refuses_it() -> None:
+    service, request_type, site = _area_service(asks_area=False)
+    values = {**_payload(request_type, site, str(uuid4())), "area_id": COMMERCIAL}
+
+    with pytest.raises(InvalidInputError, match="no pide área"):
+        await _create(service, request_type, site, values)
+
+
+@pytest.mark.asyncio
+async def test_the_document_category_outranks_the_area() -> None:
+    service, request_type, site = _area_service()
+    values = _document_values(request_type, site, area_id=COMMERCIAL)
+
+    created = await _create(service, request_type, site, values)
+
+    assert created.request.dependency_id == COMMERCIAL  # the fake does not load categories
+    request = replace(created.request, document_dependency_id=CATEGORY.dependency_id)
+    assert request.dependency_id == CATEGORY.dependency_id

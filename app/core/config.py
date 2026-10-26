@@ -110,7 +110,8 @@ class Settings(BaseSettings):
     # checked before it is read.
     RATE_LIMIT_PUBLIC_GLOBAL_REQUESTS: int = 100
     RATE_LIMIT_PUBLIC_GLOBAL_WINDOW_SECONDS: int = 3600
-    PUBLIC_MAX_BODY_MB: int = 28
+    # Room for the PQRSF evidence: 25 MB of images plus a 20 MB video and the form fields.
+    PUBLIC_MAX_BODY_MB: int = 50
     # Cloudflare Turnstile secret; empty leaves the CAPTCHA off. When set, public POSTs must
     # carry a valid token in the X-Captcha-Token header.
     PUBLIC_CAPTCHA_SECRET: SecretStr = SecretStr("")
@@ -143,6 +144,9 @@ class Settings(BaseSettings):
     PQRSF_MAX_ATTACHMENT_MB: int = 5
     PQRSF_MAX_TOTAL_ATTACHMENT_MB: int = 25
     PQRSF_MAX_IMAGE_PIXELS: int = 20_000_000
+    # Evidence videos are not re-encoded: few and short.
+    PQRSF_MAX_VIDEOS: int = 1
+    PQRSF_MAX_VIDEO_MB: int = 20
     PQRSF_CLAMAV_HOST: str = "clamav"
     PQRSF_CLAMAV_PORT: int = 3310
     PQRSF_CLAMAV_TIMEOUT_SECONDS: float = 10.0
@@ -377,6 +381,8 @@ class Settings(BaseSettings):
                 "max_attachment_bytes": self.PQRSF_MAX_ATTACHMENT_MB * 1024 * 1024,
                 "max_total_attachment_bytes": self.PQRSF_MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024,
                 "max_image_pixels": self.PQRSF_MAX_IMAGE_PIXELS,
+                "max_videos": self.PQRSF_MAX_VIDEOS,
+                "max_video_bytes": self.PQRSF_MAX_VIDEO_MB * 1024 * 1024,
                 "clamav_host": self.PQRSF_CLAMAV_HOST,
                 "clamav_port": self.PQRSF_CLAMAV_PORT,
                 "clamav_timeout": self.PQRSF_CLAMAV_TIMEOUT_SECONDS,

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.entities import (
+    AreaRef,
+    Cause,
+    ClaimedProduct,
     DocumentCategory,
     DocumentOption,
     PqrsfAttachment,
@@ -18,13 +23,18 @@ from app.modules.pqrsf.domain.entities import (
     PqrsfRequest,
     RequestedDocument,
     RequestType,
+    Subject,
 )
+from app.modules.pqrsf.domain.tracking import Dependency
 from app.modules.pqrsf.infrastructure.models import (
+    CauseModel,
+    DependencyModel,
     DocumentCategoryModel,
     DocumentTypeModel,
     PqrsfAttachmentModel,
     PqrsfRequestModel,
     RequestTypeModel,
+    SubjectModel,
 )
 from app.modules.sites.domain.entities import Site
 from app.modules.sites.infrastructure.models import SiteModel
@@ -44,7 +54,73 @@ def _type(model: RequestTypeModel) -> RequestType:
         requires_follow_up=model.requires_follow_up,
         sla_days=model.sla_days,
         handling=model.handling,
+        description=model.description,
+        asks_area=model.asks_area,
     )
+
+
+def _cause(model: CauseModel) -> Cause:
+    return Cause(
+        id=model.id,
+        subject_id=model.subject_id,
+        code=model.code,
+        name=model.name,
+        description=model.description,
+        dependency_id=model.dependency_id,
+        route=model.route,
+        requires_product=model.requires_product,
+        allows_product=model.allows_product,
+        is_other=model.is_other,
+        sort_order=model.sort_order,
+        is_active=model.is_active,
+    )
+
+
+def _subject(model: SubjectModel, causes: tuple[Cause, ...] = ()) -> Subject:
+    return Subject(
+        id=model.id,
+        code=model.code,
+        name=model.name,
+        description=model.description,
+        request_type_codes=tuple(model.request_type_codes or ()),
+        dependency_id=model.dependency_id,
+        is_other=model.is_other,
+        causes=causes,
+        sort_order=model.sort_order,
+        is_active=model.is_active,
+    )
+
+
+def _products(items: list | None) -> list[ClaimedProduct]:
+    return [
+        ClaimedProduct(
+            invoice_number=item["invoice_number"],
+            sku=item["sku"],
+            lot=item["lot"],
+            expiry_date=date.fromisoformat(item["expiry_date"]),
+            affected_quantity=int(item["affected_quantity"]),
+            description=item.get("description"),
+            supplier_code=item.get("supplier_code"),
+            supplier_name=item.get("supplier_name"),
+        )
+        for item in items or []
+    ]
+
+
+def _product_rows(products: list[ClaimedProduct]) -> list[dict] | None:
+    return [
+        {
+            "invoice_number": product.invoice_number,
+            "sku": product.sku,
+            "description": product.description,
+            "supplier_code": product.supplier_code,
+            "supplier_name": product.supplier_name,
+            "lot": product.lot,
+            "expiry_date": product.expiry_date.isoformat(),
+            "affected_quantity": product.affected_quantity,
+        }
+        for product in products
+    ] or None
 
 
 def request_type_from_model(model: RequestTypeModel) -> RequestType:
@@ -96,6 +172,9 @@ def _request(
     request_type: RequestTypeModel,
     site: SiteModel,
     document_dependency_id: UUID | None = None,
+    subject: SubjectModel | None = None,
+    cause: CauseModel | None = None,
+    area: DependencyModel | None = None,
 ) -> PqrsfRequest:
     return PqrsfRequest(
         id=model.id,
@@ -120,16 +199,42 @@ def _request(
         document_category_id=model.document_category_id,
         documents=_documents(model.document_items),
         document_dependency_id=document_dependency_id,
+        subject_ref=_subject(subject) if subject is not None else None,
+        cause_ref=_cause(cause) if cause is not None else None,
+        products=_products(model.products),
+        pickup_order_requested=model.pickup_order_requested,
+        pickup_order_number=model.pickup_order_number,
+        area=area_ref(area),
     )
 
 
+def area_ref(model: DependencyModel | None) -> AreaRef | None:
+    """Map the area a requester picked; shared with the feedback repository."""
+
+    if model is None:
+        return None
+    return AreaRef(id=model.id, code=model.code, name=model.name)
+
+
+_AREA = aliased(DependencyModel)
 _REQUEST_QUERY = (
-    select(PqrsfRequestModel, RequestTypeModel, SiteModel, DocumentCategoryModel.dependency_id)
+    select(
+        PqrsfRequestModel,
+        RequestTypeModel,
+        SiteModel,
+        DocumentCategoryModel.dependency_id,
+        SubjectModel,
+        CauseModel,
+        _AREA,
+    )
     .join(RequestTypeModel, PqrsfRequestModel.request_type_id == RequestTypeModel.id)
     .join(SiteModel, PqrsfRequestModel.site_id == SiteModel.id)
     .outerjoin(
         DocumentCategoryModel, PqrsfRequestModel.document_category_id == DocumentCategoryModel.id
     )
+    .outerjoin(SubjectModel, PqrsfRequestModel.subject_id == SubjectModel.id)
+    .outerjoin(CauseModel, PqrsfRequestModel.cause_id == CauseModel.id)
+    .outerjoin(_AREA, PqrsfRequestModel.dependency_id == _AREA.id)
 )
 _REQUEST_TYPE_ORDER = case(
     {
@@ -224,6 +329,9 @@ class SqlAlchemyPqrsfRepository:
             model.requires_follow_up = request_type.requires_follow_up
             model.sla_days = request_type.sla_days
             model.handling = request_type.handling
+            model.description = request_type.description
+            model.allows_attachments = request_type.allows_attachments
+            model.asks_area = request_type.asks_area
             try:
                 await session.commit()
             except IntegrityError as exc:
@@ -231,6 +339,116 @@ class SqlAlchemyPqrsfRepository:
                 raise ConflictError("Otro tipo de solicitud ya usa ese prefijo") from exc
             await session.refresh(model)
             return _type(model)
+
+    async def list_subjects(self, active_only: bool = True) -> list[Subject]:
+        """List subjects in display order, each with its causes in display order.
+
+        Args:
+            active_only (bool): Leave out disabled subjects and causes.
+
+        Returns:
+            list[Subject]: The subject catalog.
+        """
+
+        subjects = select(SubjectModel).order_by(SubjectModel.sort_order, SubjectModel.name)
+        causes = select(CauseModel).order_by(CauseModel.sort_order, CauseModel.name)
+        if active_only:
+            subjects = subjects.where(SubjectModel.is_active.is_(True))
+            causes = causes.where(CauseModel.is_active.is_(True))
+        async with self.database.session_factory() as session:
+            subject_rows = list((await session.execute(subjects)).scalars())
+            by_subject: dict[UUID, list[Cause]] = {}
+            for model in (await session.execute(causes)).scalars():
+                by_subject.setdefault(model.subject_id, []).append(_cause(model))
+        return [_subject(model, tuple(by_subject.get(model.id, ()))) for model in subject_rows]
+
+    async def list_areas(self) -> list[Dependency]:
+        """List the active dependencies, in display order: the areas a requester can pick.
+
+        Returns:
+            list[Dependency]: The areas of the public form.
+        """
+
+        query = (
+            select(DependencyModel)
+            .where(DependencyModel.is_active.is_(True))
+            .order_by(DependencyModel.sort_order, DependencyModel.name)
+        )
+        async with self.database.session_factory() as session:
+            return [
+                Dependency(
+                    id=model.id,
+                    code=model.code,
+                    name=model.name,
+                    sort_order=model.sort_order,
+                    is_active=model.is_active,
+                    created_at=model.created_at,
+                    updated_at=model.updated_at,
+                )
+                for model in (await session.execute(query)).scalars()
+            ]
+
+    async def save_subject(self, subject: Subject) -> Subject:
+        """Insert or update a subject (its causes are saved apart).
+
+        Args:
+            subject (Subject): Subject to store.
+
+        Returns:
+            Subject: The stored subject, without causes.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(SubjectModel, subject.id)
+            if model is None:
+                model = SubjectModel(id=subject.id, code=subject.code)
+                session.add(model)
+            model.name = subject.name
+            model.description = subject.description
+            model.request_type_codes = list(subject.request_type_codes)
+            model.dependency_id = subject.dependency_id
+            model.is_other = subject.is_other
+            model.sort_order = subject.sort_order
+            model.is_active = subject.is_active
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar el asunto: código repetido") from exc
+            await session.refresh(model)
+            return _subject(model)
+
+    async def save_cause(self, cause: Cause) -> Cause:
+        """Insert or update a cause.
+
+        Args:
+            cause (Cause): Cause to store.
+
+        Returns:
+            Cause: The stored cause.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(CauseModel, cause.id)
+            if model is None:
+                model = CauseModel(id=cause.id, subject_id=cause.subject_id, code=cause.code)
+                session.add(model)
+            model.name = cause.name
+            model.description = cause.description
+            model.dependency_id = cause.dependency_id
+            model.route = cause.route
+            model.requires_product = cause.requires_product
+            model.allows_product = cause.allows_product
+            model.is_other = cause.is_other
+            model.sort_order = cause.sort_order
+            model.is_active = cause.is_active
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar la causal: código repetido") from exc
+            await session.refresh(model)
+            return _cause(model)
 
     async def get_by_idempotency_key(self, key: str) -> PqrsfRequest | None:
         """Find a request by its client idempotency key."""
@@ -269,6 +487,12 @@ class SqlAlchemyPqrsfRepository:
                 for item in request.documents
             ]
             or None,
+            subject_id=request.subject_ref.id if request.subject_ref else None,
+            cause_id=request.cause_ref.id if request.cause_ref else None,
+            products=_product_rows(request.products),
+            pickup_order_requested=request.pickup_order_requested,
+            pickup_order_number=request.pickup_order_number,
+            dependency_id=request.area.id if request.area else None,
             idempotency_key=request.idempotency_key,
             idempotency_hash=request.idempotency_hash,
         )

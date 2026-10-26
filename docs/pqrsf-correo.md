@@ -15,6 +15,8 @@ Sede: (sede o sucursal)
 Nombre: (quien solicita)
 Razón social: (empresa)
 NIT: (de la empresa)
+Novedad: (en quejas y reclamos: Calidad del producto, Comportamiento en la entrega…)
+Causal: (en quejas y reclamos: Producto vencido, Producto trocado…)
 Motivo: (resumen corto)
 Descripción:
 (todo lo que sigue es la descripción, en las líneas que se necesiten)
@@ -29,6 +31,12 @@ Descripción:
 - Solo la descripción es necesaria. Un correo sin plantilla **igual abre el caso**
   (tipo Petición, descripción = cuerpo, motivo = asunto) y queda marcado
   `needs_review` para que un gestor lo revise; el acuse incluye la plantilla.
+- `Novedad` y `Causal` son el asunto y la causal del catálogo del formulario
+  (`docs/pqrsf.md`), comparados por nombre o código sin mayúsculas ni tildes. La
+  causal decide la dependencia del caso. Basta la causal si su nombre es de un solo
+  asunto («Otro» necesita la novedad). Lo escrito que no coincide marca el caso
+  para revisión. Los productos todavía no se leen del correo: se completan en la
+  plataforma.
 - `Tipo` y `Sede` se comparan por nombre, código o abreviatura. Si no coinciden, se
   usan los valores por defecto y el caso se marca para revisión.
 - El historial citado de una respuesta (`> …`, `El … escribió:`) no se guarda.

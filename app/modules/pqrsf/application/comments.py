@@ -147,13 +147,13 @@ class CaseCommentService:
                     "El caso no tiene un correo del solicitante para responderle"
                 )
 
-        accepted, rejected = await self._accept(files)
+        accepted, rejected = await self.accept_files(files)
         if reply_to_client and sum(len(a[3]) for a in accepted) > REPLY_ATTACHMENT_LIMIT:
             raise InvalidInputError(
                 "Los adjuntos de una respuesta al cliente no pueden superar 3 MB en total"
             )
 
-        stored = await self._store(case.id, accepted)
+        stored = await self.store_files(case.id, accepted)
         notification_id = uuid4()
         data: dict = {"file_ids": [str(a.id) for a in stored], "reply_to_client": reply_to_client}
         if rejected:
@@ -165,7 +165,7 @@ class CaseCommentService:
             attachments = [replace(a, comment_event_id=event.event.id) for a in stored]
             await self.emails.add_attachments(attachments)
         except Exception:
-            await self._discard(stored)
+            await self.discard_files(stored)
             raise
 
         reply = None
@@ -197,9 +197,20 @@ class CaseCommentService:
 
     # --- Helpers ---
 
-    async def _accept(
+    async def accept_files(
         self, files: Sequence[UploadedFile]
     ) -> tuple[list[tuple[str, str, str, bytes]], list[dict]]:
+        """Clean and scan uploaded files with the case rules; also used by supplier messages.
+
+        Args:
+            files (Sequence[UploadedFile]): Files as received.
+
+        Returns:
+            tuple[list[tuple[str, str, str, bytes]], list[dict]]: ``(name, extension,
+            content type, bytes)`` of each accepted file (repeated ones once), and
+            ``{name, reason}`` of each refused one.
+        """
+
         accepted: list[tuple[str, str, str, bytes]] = []
         rejected: list[dict] = []
         known: set[str] = set()
@@ -224,9 +235,19 @@ class CaseCommentService:
             accepted.append((name, extension, content_type, data))
         return accepted, rejected
 
-    async def _store(
+    async def store_files(
         self, case_id: UUID, accepted: list[tuple[str, str, str, bytes]]
     ) -> list[CaseAttachment]:
+        """Put accepted files in the bucket under the case; nothing stays if one fails.
+
+        Args:
+            case_id (UUID): Case the files belong to.
+            accepted (list[tuple[str, str, str, bytes]]): Files from ``accept_files``.
+
+        Returns:
+            list[CaseAttachment]: Metadata to record once the timeline entry exists.
+        """
+
         stored: list[CaseAttachment] = []
         try:
             for name, extension, content_type, data in accepted:
@@ -248,13 +269,22 @@ class CaseCommentService:
                     )
                 )
         except Exception as exc:
-            await self._discard(stored)
+            await self.discard_files(stored)
             if isinstance(exc, DependencyUnavailableError):
                 raise
             raise DependencyUnavailableError("No se pudieron guardar los archivos") from exc
         return stored
 
-    async def _discard(self, stored: list[CaseAttachment]) -> None:
+    async def discard_files(self, stored: list[CaseAttachment]) -> None:
+        """Remove stored objects whose timeline entry could not be written.
+
+        Args:
+            stored (list[CaseAttachment]): Files from ``store_files``.
+
+        Returns:
+            None
+        """
+
         for attachment in stored:
             try:
                 await self.storage.delete_object(attachment.storage_key)

@@ -7,9 +7,10 @@ from app.modules.mail.domain import DeltaResult, InboundMessage, MailAttachment
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, CaseAttachment, EmailMessage
 from app.modules.pqrsf.domain.entities import SanitizedImage
+from app.modules.pqrsf.domain.tracking import Dependency
 from app.modules.sites.domain.entities import Site
 
-from tests.modules.pqrsf.test_tracking import Setup
+from tests.modules.pqrsf.test_tracking import Setup, _classified
 
 NOW = datetime(2026, 9, 28, 15, tzinfo=UTC)
 MAILBOX = "pqrsf@jdh.com.co"
@@ -622,3 +623,22 @@ async def test_the_case_subject_is_the_email_subject_and_the_motivo_is_kept_if_i
 
     (case,) = t.cases()
     assert (case.subject, case.description) == (expected_subject, expected_description)
+
+
+@pytest.mark.asyncio
+async def test_novedad_and_causal_route_the_case_to_the_dependency_of_the_cause() -> None:
+    t = Intake()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    t.setup.cases.dependencies[distribucion.id] = distribucion
+    subject, cause = _classified(distribucion.id)
+    t.setup.requests.subjects = [subject]
+    t.mail.add(t.message("Tipo: Petición\nCausal: producto vencido\nDescripción:\nLlegó vencido"))
+    t.mail.add(t.message("Tipo: Petición\nNovedad: Algo raro\nDescripción:\nNo está en la lista"))
+
+    await t.service.sync()
+
+    first, second = t.cases()
+    assert first.dependency == distribucion
+    assert t.emails.messages["<m1@x>"].detail["needs_review"] is False
+    assert second.dependency is None
+    assert t.emails.messages["<m2@x>"].detail["needs_review"] is True

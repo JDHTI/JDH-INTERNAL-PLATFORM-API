@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Container, Iterable
+from collections.abc import Container, Iterable, Sequence
 from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
@@ -20,13 +20,17 @@ from app.modules.pqrsf.domain.certificates import (
 )
 from app.modules.pqrsf.domain.email import CaseAttachment, EmailCaseInput, EmailMessage
 from app.modules.pqrsf.domain.entities import (
+    Cause,
     DocumentCategory,
     PqrsfAttachment,
     PqrsfFilters,
     PqrsfPage,
     PqrsfRequest,
+    ProductMaster,
+    ProductOption,
     RequestType,
     SanitizedImage,
+    Subject,
 )
 from app.modules.pqrsf.domain.feedback import (
     Feedback,
@@ -37,6 +41,8 @@ from app.modules.pqrsf.domain.feedback import (
 )
 from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
+from app.modules.pqrsf.domain.sales import InvoiceSeller
+from app.modules.pqrsf.domain.supplier_messages import SupplierContact
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
     CaseEvent,
@@ -100,6 +106,143 @@ class PqrsfRepository(Protocol):
 
     async def save_request_type(self, request_type: RequestType) -> RequestType:
         """Persist the follow-up settings of a request type."""
+        ...
+
+    async def list_subjects(self, active_only: bool = True) -> list[Subject]:
+        """List subjects in display order, each with its causes in display order.
+
+        Args:
+            active_only (bool): Leave out disabled subjects and causes.
+
+        Returns:
+            list[Subject]: The subject catalog.
+        """
+        ...
+
+    async def list_areas(self) -> list[Dependency]:
+        """List the active dependencies, in display order: the areas a requester can pick.
+
+        Returns:
+            list[Dependency]: The areas of the public form.
+        """
+        ...
+
+    async def save_subject(self, subject: Subject) -> Subject:
+        """Insert or update a subject (its causes are saved apart).
+
+        Args:
+            subject (Subject): Subject to store.
+
+        Returns:
+            Subject: The stored subject, without causes.
+        """
+        ...
+
+    async def save_cause(self, cause: Cause) -> Cause:
+        """Insert or update a cause.
+
+        Args:
+            cause (Cause): Cause to store.
+
+        Returns:
+            Cause: The stored cause.
+        """
+        ...
+
+
+class SalesLookup(Protocol):
+    """Read the sales data (a view of the warehouse) to know who sold an invoice."""
+
+    async def sellers_of(
+        self, invoice_numbers: Sequence[str], customer_nit: str | None
+    ) -> list[InvoiceSeller]:
+        """Find the seller of each invoice that exists, in the order given.
+
+        Args:
+            invoice_numbers (Sequence[str]): ``nro_transaccion`` values from
+                ``invoice_candidates`` (``FEV-1386163``).
+            customer_nit (str | None): The customer's NIT, to discard another
+                customer's invoice with the same number.
+
+        Returns:
+            list[InvoiceSeller]: One per invoice found.
+        """
+        ...
+
+
+class SupplierContactRepository(Protocol):
+    """Store the addresses cases wrote to as supplier."""
+
+    async def search(
+        self, supplier_code: str | None, query: str | None, limit: int
+    ) -> list[SupplierContact]:
+        """Find contacts of a supplier, or by address or name, most recently used first.
+
+        Args:
+            supplier_code (str | None): Only this supplier's contacts.
+            query (str | None): Part of the address, contact or supplier name.
+            limit (int): Most results to return.
+
+        Returns:
+            list[SupplierContact]: Matching contacts.
+        """
+        ...
+
+    async def remember(self, contacts: list[SupplierContact]) -> None:
+        """Insert new contacts and refresh when the known ones were last used.
+
+        Args:
+            contacts (list[SupplierContact]): The addresses just written to.
+
+        Returns:
+            None
+        """
+        ...
+
+
+class VideoInspector(Protocol):
+    """Check an evidence video before it is scanned and stored."""
+
+    async def inspect(
+        self, filename: str | None, content_type: str | None, content: bytes
+    ) -> SanitizedImage:
+        """Validate name, MIME and real container of a video.
+
+        Args:
+            filename (str | None): Name sent by the browser.
+            content_type (str | None): MIME sent by the browser.
+            content (bytes): The video.
+
+        Returns:
+            SanitizedImage: The video with a safe name and its stored MIME type.
+        """
+        ...
+
+
+class ProductCatalog(Protocol):
+    """Read the JDH product master (implemented over the commercial masters)."""
+
+    async def search(self, query: str, limit: int) -> list[ProductOption]:
+        """Find active products whose reference is the text or whose name contains it.
+
+        Args:
+            query (str): Reference or part of the name.
+            limit (int): Most results to return.
+
+        Returns:
+            list[ProductOption]: Matching products, by reference.
+        """
+        ...
+
+    async def resolve(self, skus: Sequence[str]) -> dict[str, ProductMaster]:
+        """Look up references with their name and supplier.
+
+        Args:
+            skus (Sequence[str]): JDH references.
+
+        Returns:
+            dict[str, ProductMaster]: The references that exist, by reference.
+        """
         ...
 
 

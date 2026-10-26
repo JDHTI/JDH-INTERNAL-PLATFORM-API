@@ -27,6 +27,7 @@ from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
 from app.modules.pqrsf.domain.entities import (
     HANDLING_ACKNOWLEDGE,
     HANDLING_CASE,
+    MAX_TYPE_DESCRIPTION,
     PqrsfRequest,
     RequestType,
     clean_multiline,
@@ -39,6 +40,14 @@ from app.modules.pqrsf.domain.ports import (
     ManagerPolicy,
     PeopleDirectory,
     PqrsfRepository,
+    SalesLookup,
+)
+from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_candidates
+from app.modules.pqrsf.domain.timeline import (
+    EVENT_SUPPLIER_MESSAGE,
+    TimelineContext,
+    describe,
+    supplier_addresses,
 )
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_REPEAT_WINDOW,
@@ -117,6 +126,7 @@ class CaseTrackingService:
         managers: ManagerPolicy,
         calendar: BusinessCalendar,
         notifier: AssignmentNotifier | None = None,
+        sales: SalesLookup | None = None,
     ) -> None:
         """Create the service.
 
@@ -128,8 +138,11 @@ class CaseTrackingService:
             managers (ManagerPolicy): Decides who manages PQRSF.
             calendar (BusinessCalendar): Local dates and holidays.
             notifier (AssignmentNotifier | None): Emails the new responsible of a case.
+            sales (SalesLookup | None): Sales data, to take the sales executive of a
+                complaint or claim from its invoice; without it the field stays empty.
         """
 
+        self.sales = sales
         self.notifier = notifier
         self.repository = repository
         self.requests = requests
@@ -145,7 +158,8 @@ class CaseTrackingService:
             return CaseAccess(can_view=True, can_work=True, can_assign=True, can_delete=True)
         if case.assignee_user_id == principal.user_id:
             return CaseAccess(can_view=True, can_work=True, can_assign=False)
-        if case.created_by_user_id == principal.user_id:
+        if principal.user_id in (case.created_by_user_id, case.sales_executive_user_id):
+            # Who filed it and the executive who sold the invoice follow it and comment.
             return CaseAccess(can_view=True, can_work=False, can_assign=False)
         return CaseAccess(can_view=False, can_work=False, can_assign=False)
 
@@ -264,6 +278,19 @@ class CaseTrackingService:
             is_manager=is_manager,
         )
 
+    async def list_request_types(self, principal: Principal) -> list[RequestType]:
+        """List every request type with its settings, including suggestions and compliments.
+
+        Args:
+            principal (Principal): The caller, who must manage PQRSF.
+
+        Returns:
+            list[RequestType]: The five types, active or not, in display order.
+        """
+
+        await self._require_manager(principal)
+        return await self.requests.list_request_types(active_only=False)
+
     async def update_request_type(
         self,
         request_type_id: UUID,
@@ -274,6 +301,9 @@ class CaseTrackingService:
         requires_follow_up: bool | None = None,
         sla_days: int | None = None,
         handling: str | None = None,
+        description: str | None = None,
+        allows_attachments: bool | None = None,
+        asks_area: bool | None = None,
     ) -> RequestType:
         """Change the follow-up settings of a request type.
 
@@ -285,6 +315,10 @@ class CaseTrackingService:
             requires_follow_up (bool | None): Whether cases get a due date.
             sla_days (int | None): Default response time in business days.
             handling (str | None): ``case`` opens cases, ``acknowledge`` only thanks.
+            description (str | None): Short line shown under the type on the form;
+                ``None`` clears it.
+            allows_attachments (bool | None): Whether the form accepts evidence files.
+            asks_area (bool | None): Whether the public form asks for the area.
 
         Returns:
             RequestType: The updated type.
@@ -304,6 +338,14 @@ class CaseTrackingService:
             if handling not in (HANDLING_CASE, HANDLING_ACKNOWLEDGE):
                 raise InvalidInputError("El manejo debe ser 'case' o 'acknowledge'")
             request_type.handling = handling
+        if "description" in fields:
+            request_type.description = clean_optional(
+                description, "descripción del tipo", MAX_TYPE_DESCRIPTION
+            )
+        if "allows_attachments" in fields and allows_attachments is not None:
+            request_type.allows_attachments = allows_attachments
+        if "asks_area" in fields and asks_area is not None:
+            request_type.asks_area = asks_area
         return await self.requests.save_request_type(request_type)
 
     async def create_status(
@@ -700,21 +742,27 @@ class CaseTrackingService:
         )
         case.request_id = request.id
         case.site = request.site
-        case.subject = request.subject
+        case.subject = request.case_subject
         case.description = request.description
         case.customer_name = request.business_name
         case.customer_nit = request.nit
         case.requester_name = request.full_name
         case.requester_email = request.email
+        suppliers = list(
+            dict.fromkeys(p.supplier_name for p in request.products if p.supplier_name)
+        )
+        case.supplier_name = ", ".join(suppliers)[:200] or None
+        await self._seller_from_invoices(case, request)
+        # The cause picked (or the category of the documents) says who attends it.
+        dependency = (
+            await self.repository.get_dependency(request.dependency_id)
+            if request.dependency_id
+            else None
+        )
+        case.dependency = dependency if dependency and dependency.is_active else None
         if request.document_request:
             # The customer already said what they need: the documents become
-            # items, with their response times, and the category's scope owns it.
-            dependency = (
-                await self.repository.get_dependency(request.document_dependency_id)
-                if request.document_dependency_id
-                else None
-            )
-            case.dependency = dependency if dependency and dependency.is_active else None
+            # items, with their response times.
             case.items = [
                 await self._new_item(
                     case.id, ItemInput(item.document_type_id, item.description), position
@@ -730,6 +778,39 @@ class CaseTrackingService:
             if existing is None:
                 raise
             return existing
+
+    async def _seller_from_invoices(self, case: TrackingCase, request: PqrsfRequest) -> None:
+        """Take the sales executive of a case from the invoices of its products.
+
+        Only for requests about products or an order (they carry invoice numbers). The
+        first invoice with a seller wins; the seller's email links the platform user who
+        then follows the case. A failure of the sales data never stops the case.
+        """
+
+        if self.sales is None or not request.products:
+            return
+        numbers = list(
+            dict.fromkeys(n for p in request.products for n in invoice_candidates(p.invoice_number))
+        )
+        try:
+            sellers = await self.sales.sellers_of(numbers, request.nit)
+        except Exception:
+            logger.exception("Could not read the sellers of the invoices of %s", case.code)
+            return
+        seller = next((s for s in sellers if s.name or s.code), None)
+        if seller is None:
+            return
+        case.sales_executive_name = (seller.name or seller.code or "")[:200]
+        case.sales_executive_code = seller.code
+        case.sales_executive_email = seller.email.strip().lower() if seller.email else None
+        case.sales_executive_source = SOURCE_INVOICE
+        if case.sales_executive_email:
+            try:
+                user = await self.people.require_user(case.sales_executive_email)
+            except NotFoundError:
+                # The executive has not signed in yet: the name and email are kept.
+                return
+            case.sales_executive_user_id = user.id
 
     async def code_for_request(self, request_id: UUID) -> str | None:
         """Return the consecutive of a request's case.
@@ -768,10 +849,21 @@ class CaseTrackingService:
         case.customer_nit = command.nit
         case.requester_name = command.requester_name
         case.requester_email = command.requester_email
+        # The cause named in the template (else its subject) says who attends it.
+        dependency_id = (command.cause_ref and command.cause_ref.dependency_id) or (
+            command.subject_ref and command.subject_ref.dependency_id
+        )
+        if dependency_id:
+            dependency = await self.repository.get_dependency(dependency_id)
+            case.dependency = dependency if dependency and dependency.is_active else None
         self._refresh_dates(case)
         data: dict = {"origin": "email", "message_id": str(command.message_id)}
         if command.related_code:
             data["related_case"] = command.related_code
+        if command.subject_ref:
+            data["subject"] = {"code": command.subject_ref.code, "name": command.subject_ref.name}
+        if command.cause_ref:
+            data["cause"] = {"code": command.cause_ref.code, "name": command.cause_ref.name}
         return await self.repository.create_case(
             case, self._event(case.id, EventType.CREATED, None, data=data)
         )
@@ -948,14 +1040,24 @@ class CaseTrackingService:
             {e.actor_user_id for e in events if e.actor_user_id is not None}
         )
         request = await self.requests.get_request(case.request_id) if case.request_id else None
+        context = TimelineContext(
+            statuses={s.id: s for s in await self.repository.list_statuses(True)},
+            requester_name=case.requester_name,
+            requester_email=case.requester_email,
+            supplier_addresses=supplier_addresses(events),
+        )
         return CaseDetail(
             view=await self._view(case, principal, is_manager),
-            events=[
-                EventView(e, actors.get(e.actor_user_id) if e.actor_user_id else None)
-                for e in events
-            ],
+            events=[self._event_view(e, actors, context) for e in events],
             request=request,
         )
+
+    @staticmethod
+    def _event_view(
+        event: CaseEvent, actors: dict[UUID, DirectoryUser], context: TimelineContext
+    ) -> EventView:
+        actor = actors.get(event.actor_user_id) if event.actor_user_id else None
+        return EventView(event, actor, describe(event, actor, context))
 
     async def request_for_download(self, case_id: UUID, principal: Principal) -> UUID:
         """Authorize reading the intake attachments of a case.
@@ -1091,6 +1193,11 @@ class CaseTrackingService:
             "sales_executive_name",
             clean_optional(changes.sales_executive_name, "ejecutivo comercial", 200),
         )
+        if "sales_executive_name" in changed:
+            # A typed name no longer is the invoice's seller: drop the code, email and user.
+            case.sales_executive_code = case.sales_executive_email = None
+            case.sales_executive_user_id = None
+            case.sales_executive_source = SOURCE_MANUAL if case.sales_executive_name else None
         apply("requester_name", clean_optional(changes.requester_name, "usuario", 200))
         apply("requester_email", _clean_email(changes.requester_email))
         if "site_id" in fields:
@@ -1312,7 +1419,32 @@ class CaseTrackingService:
         event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
-        return EventView(event, actor)
+        return EventView(event, actor, describe(event, actor, TimelineContext()))
+
+    async def record_supplier_message(
+        self, case_id: UUID, text: str, principal: Principal, data: dict
+    ) -> EventView:
+        """Write in the timeline a message sent to the supplier.
+
+        Args:
+            case_id (UUID): Case identifier.
+            text (str): The message, already cleaned.
+            principal (Principal): Who works the case and sent it.
+            data (dict): Kind, recipients, supplier, files and queued emails.
+
+        Returns:
+            EventView: The new timeline entry.
+        """
+
+        case = await self._load_for_work(case_id, principal)
+        if case.is_closed:
+            raise ConflictError("El caso está finalizado: no se puede escribir al proveedor")
+        event = self._event(
+            case.id, EVENT_SUPPLIER_MESSAGE, principal.user_id, note=text, data=data
+        )
+        await self.repository.add_event(event)
+        actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
+        return EventView(event, actor, describe(event, actor, TimelineContext()))
 
     # --- History ---
 
@@ -1384,10 +1516,11 @@ class CaseTrackingService:
         actors = await self.people.get_users(
             {e.actor_user_id for e in page if e.actor_user_id is not None}
         )
+        context = TimelineContext(
+            statuses={s.id: s for s in await self.repository.list_statuses(True)}
+        )
         return ActivityPage(
-            items=[
-                EventView(e, actors.get(e.actor_user_id) if e.actor_user_id else None) for e in page
-            ],
+            items=[self._event_view(e, actors, context) for e in page],
             next_before=page[-1].created_at if more and page else None,
         )
 

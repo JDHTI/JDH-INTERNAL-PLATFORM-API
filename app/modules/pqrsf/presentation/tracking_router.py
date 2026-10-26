@@ -29,7 +29,7 @@ from app.modules.pqrsf.application.dto import (
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import MAX_TYPE_DESCRIPTION, RequestType
 from app.modules.pqrsf.domain.notifications import (
     JobSchedule,
     Notification,
@@ -80,6 +80,10 @@ class TrackingRequestTypeResponse(BaseModel):
     allows_document_request: bool
     allows_attachments: bool
     is_active: bool
+    # One short line shown under the type on the forms.
+    description: str | None = None
+    # Whether the public form asks the requester for the area.
+    asks_area: bool = False
 
 
 class CaseStatusResponse(BaseModel):
@@ -182,6 +186,18 @@ class CasePermissionsResponse(BaseModel):
     can_delete: bool
 
 
+class SalesExecutiveResponse(BaseModel):
+    """Who sold the invoice of the case, or who filed it, or who was typed."""
+
+    name: str | None
+    code: str | None
+    email: str | None
+    # Platform user matched by email: they can see and comment on the case.
+    user_id: UUID | None
+    # ``invoice`` (sales data), ``internal`` (the comercial who filed it) or ``manual``.
+    source: Literal["invoice", "internal", "manual"] | None
+
+
 class CaseResponse(BaseModel):
     """A follow-up case."""
 
@@ -203,6 +219,7 @@ class CaseResponse(BaseModel):
     customer_nit: str | None
     supplier_name: str | None
     sales_executive_name: str | None
+    sales_executive: SalesExecutiveResponse | None = None
     requester_name: str | None
     requester_email: str | None
     request_id: UUID | None
@@ -217,8 +234,15 @@ class CaseResponse(BaseModel):
     updated_at: datetime
 
 
+class StatusChangeResponse(BaseModel):
+    """Status names before and after an event."""
+
+    from_name: str | None = Field(default=None, serialization_alias="from")
+    to_name: str | None = Field(default=None, serialization_alias="to")
+
+
 class CaseEventResponse(BaseModel):
-    """Timeline entry."""
+    """Timeline entry, with a ready-to-show sentence."""
 
     id: UUID
     event_type: str
@@ -228,6 +252,14 @@ class CaseEventResponse(BaseModel):
     note: str | None
     data: dict
     created_at: datetime
+    # ``system``, ``user``, ``client``, ``supplier`` or ``external`` (an unknown sender).
+    actor_kind: str = "system"
+    actor_name: str = "Sistema"
+    # One short sentence: «Abrió el caso por primera vez», «Asignó el caso a Juan».
+    title: str = ""
+    # ``lifecycle``, ``access``, ``assignment``, ``status``, ``communication``, ``documents``.
+    category: str = "lifecycle"
+    status_change: StatusChangeResponse | None = None
 
 
 class ActivityEventResponse(CaseEventResponse):
@@ -381,6 +413,10 @@ class UpdateRequestTypeRequest(BaseModel):
     requires_follow_up: bool | None = None
     sla_days: int | None = Field(default=None, ge=0, le=365)
     handling: Literal["case", "acknowledge"] | None = None
+    # One visible line under the type on the form; ``null`` clears it.
+    description: str | None = Field(default=None, max_length=MAX_TYPE_DESCRIPTION)
+    allows_attachments: bool | None = None
+    asks_area: bool | None = None
 
 
 class CreateStatusRequest(BaseModel):
@@ -510,6 +546,17 @@ def _case(view: CaseView) -> CaseResponse:
         customer_nit=case.customer_nit,
         supplier_name=case.supplier_name,
         sales_executive_name=case.sales_executive_name,
+        sales_executive=(
+            SalesExecutiveResponse(
+                name=case.sales_executive_name,
+                code=case.sales_executive_code,
+                email=case.sales_executive_email,
+                user_id=case.sales_executive_user_id,
+                source=case.sales_executive_source,
+            )
+            if case.sales_executive_name or case.sales_executive_code
+            else None
+        ),
         requester_name=case.requester_name,
         requester_email=case.requester_email,
         request_id=case.request_id,
@@ -530,7 +577,20 @@ def _case(view: CaseView) -> CaseResponse:
 
 
 def _event(value: EventView) -> CaseEventResponse:
-    event = value.event
+    event, summary = value.event, value.summary
+    told = {}
+    if summary is not None:
+        told = {
+            "actor_kind": summary.actor_kind,
+            "actor_name": summary.actor_name,
+            "title": summary.title,
+            "category": summary.category,
+            "status_change": (
+                StatusChangeResponse(from_name=summary.status_from, to_name=summary.status_to)
+                if summary.status_from or summary.status_to
+                else None
+            ),
+        }
     return CaseEventResponse(
         id=event.id,
         event_type=event.event_type,
@@ -540,6 +600,7 @@ def _event(value: EventView) -> CaseEventResponse:
         note=event.note,
         data=event.data,
         created_at=event.created_at,
+        **told,
     )
 
 
@@ -643,6 +704,21 @@ async def tracking_catalogs(
     )
 
 
+@router.get(
+    "/request-types",
+    response_model=list[TrackingRequestTypeResponse],
+    summary="List every request type with its settings",
+)
+@inject
+async def list_request_types(
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> list[TrackingRequestTypeResponse]:
+    """All five types, suggestions and compliments included, to configure them (managers)."""
+
+    return [_request_type(value) for value in await service.list_request_types(principal)]
+
+
 @router.patch(
     "/request-types/{request_type_id}",
     response_model=TrackingRequestTypeResponse,
@@ -655,7 +731,7 @@ async def update_request_type(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> TrackingRequestTypeResponse:
-    """Change prefix, follow-up flag or default response time (managers)."""
+    """Change prefix, follow-up flag, response time, form description or evidence (managers)."""
 
     return _request_type(
         await service.update_request_type(
@@ -666,6 +742,9 @@ async def update_request_type(
             requires_follow_up=body.requires_follow_up,
             sla_days=body.sla_days,
             handling=body.handling,
+            description=body.description,
+            allows_attachments=body.allows_attachments,
+            asks_area=body.asks_area,
         )
     )
 

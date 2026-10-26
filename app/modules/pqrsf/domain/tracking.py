@@ -211,6 +211,12 @@ class TrackingCase:
     created_at: datetime
     updated_at: datetime
     items: list[CaseItem] = field(default_factory=list)
+    # The seller beyond the typed name: code and email from the sales data, the platform
+    # user they match, and where it came from (``invoice``, ``internal`` or ``manual``).
+    sales_executive_code: str | None = None
+    sales_executive_email: str | None = None
+    sales_executive_user_id: UUID | None = None
+    sales_executive_source: str | None = None
 
     @property
     def is_closed(self) -> bool:

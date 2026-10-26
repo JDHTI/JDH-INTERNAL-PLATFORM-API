@@ -38,7 +38,7 @@ from app.modules.pqrsf.domain.email import (
     parse_request,
     strip_quoted_reply,
 )
-from app.modules.pqrsf.domain.entities import HANDLING_ACKNOWLEDGE, RequestType
+from app.modules.pqrsf.domain.entities import HANDLING_ACKNOWLEDGE, Cause, RequestType, Subject
 from app.modules.pqrsf.domain.feedback import ORIGIN_EMAIL, FeedbackFile, feedback_file_key
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
@@ -334,6 +334,8 @@ class EmailIntakeService:
         if chosen.handling == HANDLING_ACKNOWLEDGE and self.feedback is not None:
             await self._store_feedback(message, row, parsed, chosen, site, description)
             return
+        subject_ref, cause_ref, unmatched = await self._classification(parsed, chosen)
+        review = review or unmatched
         # The case subject is what the client wrote in the Subject of the email, the same
         # text the team sees in the mailbox. A different «Motivo:» line is not lost: it
         # opens the description.
@@ -354,6 +356,8 @@ class EmailIntakeService:
                 nit=_trim(parsed.nit, 30),
                 message_id=row.id,
                 related_code=related,
+                subject_ref=subject_ref,
+                cause_ref=cause_ref,
             )
         )
         row.case_id, row.status = case.id, CREATED
@@ -400,6 +404,38 @@ class EmailIntakeService:
         row.status = CREATED
         row.detail = {**row.detail, "feedback_id": str(feedback.id), "category": kind.name}
         await self.emails.save_message(row)
+
+    async def _classification(
+        self, parsed: ParsedRequest, request_type: RequestType
+    ) -> tuple[Subject | None, Cause | None, bool]:
+        """The subject and cause of the catalog named by ``Novedad:`` and ``Causal:``.
+
+        A cause alone is enough when its name belongs to a single subject. Returns also
+        whether something was typed that did not match (the case then needs review).
+        """
+
+        if parsed.novelty is None and parsed.cause is None:
+            return None, None, False
+        subjects = [
+            item
+            for item in await self.requests.list_subjects()
+            if item.offered_to(request_type.code)
+        ]
+        subject = match_name(
+            parsed.novelty, [(s.name, s) for s in subjects] + [(s.code, s) for s in subjects]
+        )
+        cause = None
+        if parsed.cause:
+            pool = subject.causes if subject else tuple(c for s in subjects for c in s.causes)
+            matches = [c for c in pool if fold(parsed.cause) in (fold(c.name), fold(c.code))]
+            # «Otro» exists in every subject: without the subject it says nothing.
+            cause = matches[0] if len(matches) == 1 else None
+        if cause is not None and subject is None:
+            subject = next(s for s in subjects if s.id == cause.subject_id)
+        unmatched = (parsed.novelty is not None and subject is None) or (
+            parsed.cause is not None and cause is None
+        )
+        return subject, cause, unmatched
 
     async def _request_type(self, parsed: ParsedRequest) -> RequestType | None:
         options = []

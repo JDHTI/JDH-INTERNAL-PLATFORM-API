@@ -18,6 +18,8 @@ CLIENT_REPLY = "client_reply"
 FEEDBACK_ACK = "feedback_ack"
 # The certificates a customer asked for on the public form, attached from the document manager.
 DOCUMENT_DELIVERY = "document_delivery"
+# A message to a supplier written from a case (request, response, improvement, notice).
+SUPPLIER_MESSAGE = "supplier_message"
 
 # Statuses of a queued email.
 PENDING = "pending"

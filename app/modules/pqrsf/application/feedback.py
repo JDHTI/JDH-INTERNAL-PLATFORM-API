@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from app.core.errors import DependencyUnavailableError, ForbiddenError, NotFoundError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.pqrsf.application import notification_templates as templates
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import AreaRef, RequestType
 from app.modules.pqrsf.domain.feedback import (
     SKIP_RECIPIENT_LIMIT,
     SKIP_SAME_CONVERSATION,
@@ -99,6 +99,7 @@ class FeedbackService:
         site: Site | None = None,
         request_id: UUID | None = None,
         email_message_id: UUID | None = None,
+        area: AreaRef | None = None,
     ) -> Feedback:
         """Store a message once; a repeated delivery of the same one returns the stored row."""
 
@@ -116,6 +117,7 @@ class FeedbackService:
                 subject=subject,
                 request_id=request_id,
                 email_message_id=email_message_id,
+                area=area,
             )
         )
         return stored

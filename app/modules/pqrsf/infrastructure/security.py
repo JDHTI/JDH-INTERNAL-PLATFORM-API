@@ -112,6 +112,68 @@ class PillowImageProcessor:
             raise InvalidInputError("No se permiten imágenes animadas")
 
 
+# extension -> (allowed MIME types, stored MIME type)
+_VIDEO_TYPES = {
+    "mp4": ({"video/mp4"}, "video/mp4"),
+    "mov": ({"video/quicktime"}, "video/quicktime"),
+    "webm": ({"video/webm"}, "video/webm"),
+}
+
+
+class VideoInspector:
+    """Accept a short evidence video only when its name, MIME and real container agree.
+
+    Videos are not re-encoded like images: the container signature is checked and the
+    bytes go to the antivirus as they came.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        """Create the inspector.
+
+        Args:
+            max_bytes (int): Largest video in bytes.
+        """
+
+        self.max_bytes = max_bytes
+
+    async def inspect(
+        self, filename: str | None, content_type: str | None, content: bytes
+    ) -> SanitizedImage:
+        """Return the video as stored evidence or raise a validation error."""
+
+        if len(content) > self.max_bytes:
+            raise PayloadTooLargeError("El video supera el tamaño máximo permitido")
+        safe_name = PurePosixPath((filename or "").replace("\\", "/")).name.strip()
+        if not safe_name or len(safe_name) > 255 or "." not in safe_name:
+            raise InvalidInputError("El video debe tener un nombre y una extensión permitida")
+        if any(character in safe_name for character in ("\x00", ":")):
+            raise InvalidInputError("El nombre del video no es válido")
+        extension = safe_name.rsplit(".", 1)[1].lower()
+        if extension not in _VIDEO_TYPES:
+            raise InvalidInputError("Solo se permiten videos MP4, MOV o WebM")
+        allowed, stored_type = _VIDEO_TYPES[extension]
+        if not content_type or content_type.lower() not in allowed:
+            raise InvalidInputError("El tipo MIME del video no está permitido")
+        if _container(content) != extension:
+            raise InvalidInputError("La extensión y el formato real del video no coinciden")
+        return SanitizedImage(
+            original_filename=safe_name,
+            extension=extension,
+            content_type=stored_type,
+            content=content,
+        )
+
+
+def _container(content: bytes) -> str | None:
+    """The video container a file really is, from its first bytes."""
+
+    if content[:4] == b"\x1a\x45\xdf\xa3":
+        return "webm"
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        return "mov" if content[8:12] == b"qt  " else "mp4"
+    return None
+
+
 class ClamAVScanner:
     """Scan bytes through ClamAV's INSTREAM protocol."""
 
@@ -158,9 +220,9 @@ class ClamAVScanner:
 
         normalized_result = result.rstrip(b"\0\r\n ")
         if b"FOUND" in normalized_result:
-            raise InvalidInputError("La imagen fue rechazada por el antivirus")
+            raise InvalidInputError("El archivo fue rechazado por el antivirus")
         if not normalized_result.endswith(b"OK"):
-            raise DependencyUnavailableError("El antivirus no pudo validar la imagen")
+            raise DependencyUnavailableError("El antivirus no pudo validar el archivo")
 
 
-__all__ = ["ClamAVScanner", "PillowImageProcessor"]
+__all__ = ["ClamAVScanner", "PillowImageProcessor", "VideoInspector"]

@@ -38,6 +38,14 @@ class FeedbackSiteResponse(BaseModel):
     name: str
 
 
+class FeedbackAreaResponse(BaseModel):
+    """Area the sender picked on the public form."""
+
+    id: UUID
+    code: str
+    name: str
+
+
 class FeedbackReplyResponse(BaseModel):
     """Where the automatic thank-you stands."""
 
@@ -59,6 +67,8 @@ class FeedbackItemResponse(BaseModel):
     subject: str | None
     body_excerpt: str
     site: FeedbackSiteResponse | None
+    # Area the sender picked on the public form.
+    area: FeedbackAreaResponse | None = None
     files_count: int
     reply: FeedbackReplyResponse
     read_at: datetime | None
@@ -131,6 +141,11 @@ def _item_fields(value: Feedback) -> dict:
         "site": (
             FeedbackSiteResponse(id=value.site.id, code=value.site.code, name=value.site.name)
             if value.site
+            else None
+        ),
+        "area": (
+            FeedbackAreaResponse(id=value.area.id, code=value.area.code, name=value.area.name)
+            if value.area
             else None
         ),
         "files_count": value.files_count,
