@@ -44,9 +44,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   usar `credentials: include`; no debe guardar tokens en `localStorage`.
 - Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
   `/api/v1/areas`; requieren el rol local `admin`.
-- El formulario público y el contrato de PQRSF están documentados en
-  [`docs/pqrsf.md`](docs/pqrsf.md); su página visual debe usar `/pqrsf` fuera
-  del layout autenticado.
+- Todo el módulo PQRSF (contrato de la API, interfaz, estado y hoja de ruta) está
+  en un solo documento: [`docs/pqrsf.md`](docs/pqrsf.md). Su formulario público
+  vive en `/pqrsf`, fuera del layout autenticado.
 - El monitoreo del datawarehouse (TI → Monitoreo → Datawarehouse) vive en
   `/api/v1/dwh-monitoring`; su carga y su contrato están en
   [`docs/dwh-monitoring.md`](docs/dwh-monitoring.md).

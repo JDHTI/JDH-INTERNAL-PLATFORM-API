@@ -61,7 +61,7 @@ poetry run python scripts/import-pqrsf-tracking.py P.13.F.csv --year 2026 \
 ```
 
 Detalles y decisiones de la importación en
-[`docs/pqrsf-seguimiento.md`](../docs/pqrsf-seguimiento.md#migración-del-excel).
+[`docs/pqrsf.md`](../docs/pqrsf.md#migración-del-excel).
 
 ## Apoyos de proveedores
 
