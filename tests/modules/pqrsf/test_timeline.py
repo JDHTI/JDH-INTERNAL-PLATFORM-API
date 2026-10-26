@@ -147,3 +147,16 @@ def test_supplier_addresses_come_from_the_messages_sent() -> None:
     sent = _event(EVENT_SUPPLIER_MESSAGE, JUAN, {"to": ["A@x.com", "b@y.com"]})
 
     assert supplier_addresses([sent, _event("comment", JUAN)]) == {"a@x.com", "b@y.com"}
+
+
+def test_every_event_type_reads_in_spanish() -> None:
+    from app.modules.pqrsf.domain.tracking import EventType
+
+    inbox = describe(_event(EventType.INBOX_OPENED, ANA), ANA, CONTEXT)
+    unknown = describe(_event("something_new", ANA), ANA, CONTEXT)
+
+    assert (inbox.title, inbox.category) == ("Entró a la bandeja", "access")
+    assert unknown.title == "Registró un cambio en el caso"
+    names = [v for k, v in vars(EventType).items() if k.isupper()]
+    titles = {describe(_event(name, ANA), ANA, CONTEXT).title for name in names}
+    assert "Registró un cambio en el caso" not in titles

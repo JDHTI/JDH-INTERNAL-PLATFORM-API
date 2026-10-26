@@ -126,6 +126,8 @@ def describe(
         )
     if event_type == EventType.VIEWED:
         return EventSummary(kind, name, "Abrió el caso", ACCESS)
+    if event_type == EventType.INBOX_OPENED:
+        return EventSummary(kind, name, "Entró a la bandeja", ACCESS)
     if event_type == EventType.ASSIGNED:
         return EventSummary(kind, name, _assignment(event, data, actor), ASSIGNMENT)
     if event_type == EventType.STATUS_CHANGED:
@@ -158,7 +160,8 @@ def describe(
         return EventSummary(kind, name, f"Envió {what} a {target}", COMMUNICATION)
     if event_type == EVENT_EMAIL_RECEIVED:
         return _email(data, context)
-    return EventSummary(kind, name, event_type.replace("_", " ").capitalize(), LIFECYCLE)
+    # An event this module does not tell yet still reads in Spanish.
+    return EventSummary(kind, name, "Registró un cambio en el caso", LIFECYCLE)
 
 
 def _assignment(event: CaseEvent, data: dict, actor: DirectoryUser | None) -> str:
