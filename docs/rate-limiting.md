@@ -172,6 +172,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/cases/{case_id}/items/{item_id}/delivery` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/read` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/status` | `relaxed` |  |
+| `PATCH` | `/v1/pqrsf/causes/{cause_id}` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/certificates` | `read` |  |
 | `GET` | `/v1/pqrsf/certificates/documents` | `read` |  |
 | `DELETE` | `/v1/pqrsf/certificates/{document_type_id}` | `relaxed` |  |
@@ -197,8 +198,13 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `PUT` | `/v1/pqrsf/settings/notifications` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/statuses` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/statuses/{status_id}` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/subjects` | `read` |  |
+| `POST` | `/v1/pqrsf/subjects` | `relaxed` |  |
+| `PATCH` | `/v1/pqrsf/subjects/{subject_id}` | `relaxed` |  |
+| `POST` | `/v1/pqrsf/subjects/{subject_id}/causes` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/tracking/catalogs` | `read` |  |
 | `GET` | `/v1/public/pqrsf/catalogs` | `read` |  |
+| `GET` | `/v1/public/pqrsf/products` | `read` |  |
 | `POST` | `/v1/public/pqrsf/requests` | `strict` | Abierto a cualquiera: además tamaño, tope global y CAPTCHA (public_guard) |
 | `GET` | `/v1/roles` | `read` |  |
 | `GET` | `/v1/sites` | `read` |  |
