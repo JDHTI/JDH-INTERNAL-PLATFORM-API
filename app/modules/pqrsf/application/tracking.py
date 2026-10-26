@@ -41,7 +41,12 @@ from app.modules.pqrsf.domain.ports import (
     PeopleDirectory,
     PqrsfRepository,
 )
-from app.modules.pqrsf.domain.timeline import TimelineContext, describe, supplier_addresses
+from app.modules.pqrsf.domain.timeline import (
+    EVENT_SUPPLIER_MESSAGE,
+    TimelineContext,
+    describe,
+    supplier_addresses,
+)
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_REPEAT_WINDOW,
     ACCESS_RETENTION,
@@ -1366,6 +1371,31 @@ class CaseTrackingService:
         if text is None:
             raise InvalidInputError("El comentario no puede estar vacío")
         event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
+        await self.repository.add_event(event)
+        actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
+        return EventView(event, actor, describe(event, actor, TimelineContext()))
+
+    async def record_supplier_message(
+        self, case_id: UUID, text: str, principal: Principal, data: dict
+    ) -> EventView:
+        """Write in the timeline a message sent to the supplier.
+
+        Args:
+            case_id (UUID): Case identifier.
+            text (str): The message, already cleaned.
+            principal (Principal): Who works the case and sent it.
+            data (dict): Kind, recipients, supplier, files and queued emails.
+
+        Returns:
+            EventView: The new timeline entry.
+        """
+
+        case = await self._load_for_work(case_id, principal)
+        if case.is_closed:
+            raise ConflictError("El caso está finalizado: no se puede escribir al proveedor")
+        event = self._event(
+            case.id, EVENT_SUPPLIER_MESSAGE, principal.user_id, note=text, data=data
+        )
         await self.repository.add_event(event)
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor, describe(event, actor, TimelineContext()))

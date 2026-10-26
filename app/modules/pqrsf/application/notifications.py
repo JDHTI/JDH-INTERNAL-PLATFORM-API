@@ -23,6 +23,7 @@ from app.modules.pqrsf.domain.notifications import (
     OVERDUE_REMINDER,
     PENDING,
     SENT,
+    SUPPLIER_MESSAGE,
     Notification,
     NotificationSettings,
     retry_after,
@@ -36,6 +37,7 @@ from app.modules.pqrsf.domain.ports import (
     ManagerPolicy,
     NotificationRepository,
     PeopleDirectory,
+    PqrsfRepository,
     RecipientDirectory,
 )
 from app.modules.pqrsf.domain.tracking import CaseFilters, TrackingCase
@@ -68,6 +70,7 @@ class NotificationService:
         storage: BinaryStorage | None = None,
         documents: DocumentFileSource | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        requests: PqrsfRepository | None = None,
     ) -> None:
         """Create the service.
 
@@ -89,8 +92,11 @@ class NotificationService:
             storage (BinaryStorage | None): Private bucket the case files are read from.
             documents (DocumentFileSource | None): The document manager, to attach certificates.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
+            requests (PqrsfRepository | None): Public requests, to attach the client's
+                evidence to supplier messages.
         """
 
+        self.requests = requests
         self.repository = repository
         self.cases = cases
         self.people = people
@@ -298,6 +304,11 @@ class NotificationService:
             files = [*await self._certificates(item), *await self._reply_files(item)]
             await self.mail.send(self.mailbox, to, subject, body, files)
             return
+        if item.kind == SUPPLIER_MESSAGE:
+            # A new email (not an answer in a thread): it can carry large evidence files.
+            files = [*await self._reply_files(item), *await self._evidence(item)]
+            await self.mail.send(self.mailbox, to, subject, body, files)
+            return
         if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
             await self.mail.send(self.mailbox, to, subject, body)
             return
@@ -324,6 +335,24 @@ class NotificationService:
                     "Un documento ya no existe en el gestor documental"
                 )
             files.append(found)
+        return files
+
+    async def _evidence(self, item: Notification) -> list[OutgoingFile]:
+        """The client's photos and video picked for a supplier message."""
+
+        ids = [UUID(value) for value in item.payload.get("evidence_ids", [])]
+        request_id = item.payload.get("request_id")
+        if not ids or not request_id:
+            return []
+        if self.requests is None or self.storage is None:
+            raise DependencyUnavailableError("Las evidencias del cliente no están disponibles")
+        files: list[OutgoingFile] = []
+        for attachment_id in ids:
+            found = await self.requests.get_attachment(UUID(request_id), attachment_id)
+            if found is None:
+                continue
+            content = await self.storage.get_object(found.storage_key)
+            files.append(OutgoingFile(found.original_filename, found.content_type, content))
         return files
 
     async def _reply_files(self, item: Notification) -> list[OutgoingFile]:

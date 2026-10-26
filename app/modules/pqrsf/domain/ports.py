@@ -41,6 +41,7 @@ from app.modules.pqrsf.domain.feedback import (
 )
 from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
+from app.modules.pqrsf.domain.supplier_messages import SupplierContact
 from app.modules.pqrsf.domain.tracking import (
     ActivityFilters,
     CaseEvent,
@@ -144,6 +145,36 @@ class PqrsfRepository(Protocol):
 
         Returns:
             Cause: The stored cause.
+        """
+        ...
+
+
+class SupplierContactRepository(Protocol):
+    """Store the addresses cases wrote to as supplier."""
+
+    async def search(
+        self, supplier_code: str | None, query: str | None, limit: int
+    ) -> list[SupplierContact]:
+        """Find contacts of a supplier, or by address or name, most recently used first.
+
+        Args:
+            supplier_code (str | None): Only this supplier's contacts.
+            query (str | None): Part of the address, contact or supplier name.
+            limit (int): Most results to return.
+
+        Returns:
+            list[SupplierContact]: Matching contacts.
+        """
+        ...
+
+    async def remember(self, contacts: list[SupplierContact]) -> None:
+        """Insert new contacts and refresh when the known ones were last used.
+
+        Args:
+            contacts (list[SupplierContact]): The addresses just written to.
+
+        Returns:
+            None
         """
         ...
 

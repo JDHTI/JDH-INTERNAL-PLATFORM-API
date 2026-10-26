@@ -110,6 +110,9 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
         item_delivery_router as pqrsf_item_delivery_router_module,
     )
     from app.modules.pqrsf.presentation import router as pqrsf_router_module
+    from app.modules.pqrsf.presentation import (
+        supplier_messages_router as pqrsf_supplier_messages_router_module,
+    )
     from app.modules.pqrsf.presentation import tracking_router as pqrsf_tracking_router_module
     from app.modules.projects.presentation import router as projects_router_module
     from app.modules.sites.presentation import router as sites_router_module
@@ -137,6 +140,7 @@ def build_application_container(app_settings: Settings) -> ApplicationContainer:
             pqrsf_deliveries_router_module,
             pqrsf_item_delivery_router_module,
             pqrsf_classification_router_module,
+            pqrsf_supplier_messages_router_module,
             projects_router_module,
             commercial_router_module,
             supports_router_module,

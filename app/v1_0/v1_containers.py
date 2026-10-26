@@ -55,6 +55,7 @@ from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
+from app.modules.pqrsf.application.supplier_messages import SupplierMessageService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.infrastructure.certificate_repository import (
     ManagerDocumentFiles,
@@ -78,6 +79,9 @@ from app.modules.pqrsf.infrastructure.security import (
     ClamAVScanner,
     PillowImageProcessor,
     VideoInspector,
+)
+from app.modules.pqrsf.infrastructure.supplier_contact_repository import (
+    SqlAlchemySupplierContactRepository,
 )
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
 from app.modules.projects.application.live import ProjectLiveService
@@ -274,6 +278,7 @@ class V1Container(containers.DeclarativeContainer):
         emails=pqrsf_email_repository,
         storage=storage,
         documents=pqrsf_manager_files,
+        requests=pqrsf_repository,
     )
     pqrsf_tracking_service = providers.Factory(
         CaseTrackingService,
@@ -420,6 +425,19 @@ class V1Container(containers.DeclarativeContainer):
         notifications=pqrsf_notification_repository,
         storage=storage,
         guard=pqrsf_comment_guard,
+    )
+    pqrsf_supplier_contact_repository = providers.Factory(
+        SqlAlchemySupplierContactRepository, database=database
+    )
+    pqrsf_supplier_message_service = providers.Factory(
+        SupplierMessageService,
+        tracking=pqrsf_tracking_service,
+        files=pqrsf_comment_service,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        requests=pqrsf_repository,
+        contacts=pqrsf_supplier_contact_repository,
+        wake=pqrsf_wakeup.provided.set,
     )
     pqrsf_case_attachment_service = providers.Factory(
         CaseAttachmentService,

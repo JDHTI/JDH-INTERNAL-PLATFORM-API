@@ -172,6 +172,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/cases/{case_id}/items/{item_id}/delivery` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/read` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/status` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/supplier-messages` | `read` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/supplier-messages` | `relaxed` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/supplier-messages/{notification_id}/retry` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/causes/{cause_id}` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/certificates` | `read` |  |
 | `GET` | `/v1/pqrsf/certificates/documents` | `read` |  |
@@ -203,6 +206,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/subjects` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/subjects/{subject_id}` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/subjects/{subject_id}/causes` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/supplier-contacts` | `read` |  |
 | `GET` | `/v1/pqrsf/tracking/catalogs` | `read` |  |
 | `GET` | `/v1/public/pqrsf/catalogs` | `read` |  |
 | `GET` | `/v1/public/pqrsf/products` | `read` |  |

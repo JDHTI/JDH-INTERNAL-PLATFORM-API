@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date
 
+from app.modules.pqrsf.domain.entities import ClaimedProduct
 from app.modules.pqrsf.domain.tracking import TrackingCase
 
 _LIST_LIMIT = 30
@@ -104,6 +105,41 @@ def client_reply(case: TrackingCase, text: str) -> tuple[str, str]:
         f"{greeting}\n\n{text.strip()}\n\nConsecutivo de tu solicitud: {case.code}\n\n{SIGNATURE}"
     )
     return subject, body
+
+
+def supplier_message(
+    case: TrackingCase,
+    kind_label: str,
+    text: str,
+    products: Sequence[ClaimedProduct] = (),
+    with_case_data: bool = False,
+) -> tuple[str, str]:
+    """A message to a supplier written from a case.
+
+    The consecutive opens the subject in brackets, so the supplier's answer returns to the
+    case through the mailbox even from a new conversation.
+    """
+
+    subject = f"[{case.code}] {kind_label}"
+    if case.subject:
+        subject += f": {case.subject[:80]}"
+    lines = ["Cordial saludo,", "", text.strip()]
+    if with_case_data:
+        lines += ["", f"Datos del caso {case.code}:"]
+        if case.customer_name:
+            lines.append(f"- Cliente: {case.customer_name}")
+        if case.site:
+            lines.append(f"- Sede: {case.site.name}")
+        lines.append(f"- Recibido el: {_day(case.received_on)}")
+        for product in products:
+            lines.append(
+                f"- Producto {product.sku} {product.description or ''}".rstrip()
+                + f" · Lote {product.lot} · Vence {_day(product.expiry_date)}"
+                + f" · Cantidad afectada {product.affected_quantity}"
+                + f" · Factura {product.invoice_number}"
+            )
+    lines += ["", f"Por favor responda conservando el consecutivo {case.code} en el asunto."]
+    return subject, "\n".join(lines) + f"\n\n{SIGNATURE}"
 
 
 def feedback_ack(kind_code: str, name: str | None) -> tuple[str, str]:

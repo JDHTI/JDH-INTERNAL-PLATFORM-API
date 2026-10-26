@@ -226,8 +226,8 @@ caso: Ana, Juan») para que no tapen lo importante.
 | I-4 | Filtros y columnas nuevos en bandeja, resumen y CSV | [ ] | [ ] |
 | I-5 | Formulario interno del comercial con los campos del público y evidencias | [ ] | [ ] |
 | I-6 | Correo: la plantilla deja la clasificación en el caso (hoy solo deriva el área) | [ ] | — |
-| I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [ ] | [ ] |
-| I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo | [ ] | [ ] |
+| I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [x] | [ ] |
+| I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo ([`pqrsf-proveedor.md`](pqrsf-proveedor.md)) | [x] | [ ] |
 | Fase 4 | `invoice_verified` y fecha de entrega desde el DWH | [ ] | [ ] |
 | Fase 5 | Reclasificar recalcula el plazo con la criticidad (según P16) | [ ] | [ ] |
 

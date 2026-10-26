@@ -697,6 +697,26 @@ class ItemDeliveryModel(Base):
     )
 
 
+class SupplierContactModel(Base):
+    """An address a case wrote to as supplier; suggested again for that supplier."""
+
+    __tablename__ = "pqrsf_supplier_contacts"
+    __table_args__ = (
+        UniqueConstraint("supplier_code", "email", name="pqrsf_supplier_contacts_code_email_key"),
+        Index("ix_pqrsf_supplier_contacts_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    supplier_code: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+    supplier_name: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(200))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class MailSyncStateModel(Base):
     """Where the next delta sync of a mailbox starts."""
 
