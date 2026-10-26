@@ -26,6 +26,9 @@ class FakeRequestRepository:
     async def list_request_types(self, active_only=True):
         return [self.request_type]
 
+    async def list_subjects(self, active_only=True):
+        return []
+
     async def get_request_type(self, request_type_id):
         return self.request_type if request_type_id == self.request_type.id else None
 

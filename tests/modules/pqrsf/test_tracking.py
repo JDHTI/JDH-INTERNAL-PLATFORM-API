@@ -9,10 +9,13 @@ from app.modules.pqrsf.application.dto import ImportedCase, ImportedItem, ItemCh
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import (
+    Cause,
+    ClaimedProduct,
     CreateResult,
     PqrsfRequest,
     RequestedDocument,
     RequestType,
+    Subject,
 )
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_EVENT_TYPES,
@@ -85,9 +88,13 @@ class FakeRequests:
     def __init__(self, types) -> None:
         self.types = {t.id: t for t in types}
         self.requests: dict[uuid.UUID, PqrsfRequest] = {}
+        self.subjects = []
 
     async def list_request_types(self, active_only=True):
         return list(self.types.values())
+
+    async def list_subjects(self, active_only=True):
+        return self.subjects
 
     async def get_request_type(self, request_type_id):
         return self.types.get(request_type_id)
@@ -709,3 +716,53 @@ async def test_unanswered_documents_past_due_are_flagged_and_assignments_keep_na
     assignments = [e for e in s.cases.events if e.event_type == "assigned"]
     assert assignments[-1].data["from_name"] == "cristian@jdh.com.co"
     assert assignments[-1].data["to_name"] == "carolina@jdh.com.co"
+
+
+def _classified(dependency_id):
+    subject_id = uuid.uuid4()
+    cause = Cause(
+        uuid.uuid4(),
+        subject_id,
+        "vencido",
+        "Producto vencido",
+        None,
+        dependency_id,
+        "internal",
+        True,
+        True,
+        False,
+    )
+    subject = Subject(
+        subject_id,
+        "calidad_producto",
+        "Calidad del producto",
+        None,
+        ("peticion",),
+        None,
+        False,
+        (cause,),
+    )
+    return subject, cause
+
+
+@pytest.mark.asyncio
+async def test_a_classified_request_opens_with_the_dependency_of_its_cause() -> None:
+    s = Setup()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    s.cases.dependencies[distribucion.id] = distribucion
+    subject, cause = _classified(distribucion.id)
+    request = replace(
+        _public_request(s.peticion),
+        subject_ref=subject,
+        cause_ref=cause,
+        products=[
+            ClaimedProduct("FE-1", "9834", "L1", date(2026, 12, 1), 2, "Aceite", "P1", "Unilever"),
+            ClaimedProduct("FE-1", "9835", "L2", date(2026, 12, 1), 1, "Jabón", "P1", "Unilever"),
+        ],
+    )
+
+    case = await s.service.open_for_request(request)
+
+    assert case.dependency == distribucion
+    assert case.subject == "Calidad del producto · Producto vencido"
+    assert case.supplier_name == "Unilever"

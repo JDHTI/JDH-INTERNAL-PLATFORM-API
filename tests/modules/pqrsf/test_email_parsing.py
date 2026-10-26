@@ -119,3 +119,13 @@ def test_the_acknowledgment_carries_the_code_and_the_template_only_when_needed()
 
     assert "P26AC0012" in plain and "Tipo:" not in plain
     assert "P26AC0012" in flagged and "Tipo:" in flagged
+
+
+def test_the_template_names_the_subject_and_cause_of_the_catalog() -> None:
+    parsed = parse_request(
+        "Tipo: Reclamo\nNovedad: Calidad del producto\nCausal: producto VENCIDO\n"
+        "Motivo: Arroz con gorgojo\nDescripción:\nLlegó así"
+    )
+
+    assert (parsed.novelty, parsed.cause) == ("Calidad del producto", "producto VENCIDO")
+    assert parsed.subject == "Arroz con gorgojo"
