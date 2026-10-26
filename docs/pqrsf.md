@@ -538,7 +538,7 @@ en `src/features/pqrsf`.
 | `/[area]/pqrsf/[caseId]` | Detalle: datos, ejecutivo comercial, documentos, solicitud original, archivos, línea de tiempo, comentar, responder al cliente, escribir al proveedor | `case-detail`, `case-items`, `intake-request`, `case-files`, `case-timeline`, `event-line`, `supplier-message-dialog`, `respond-item-dialog`, `status-menu`, `case-dialogs` |
 | `/[area]/pqrsf/nuevo` | Caso interno | `new-case-form` |
 | `/[area]/pqrsf/historial` | Historial del módulo (gestores) | `activity-history` |
-| `/[area]/pqrsf/configuracion` | Tipos (descripción, adjuntos), asuntos y causales, estados, dependencias, tipos de documento, temporizadores | `catalog-settings`, `subject-settings`, `notification-settings` |
+| `/[area]/pqrsf/configuracion` | Tipos en dos tablas: «En el formulario público» (descripción, evidencias y si pide el área, para los 5 tipos, de `GET /pqrsf/request-types`) y «Seguimiento de los casos» (prefijo, seguimiento y días, solo los 3 que abren caso); asuntos y causales; estados; dependencias; tipos de documento; temporizadores | `catalog-settings`, `subject-settings`, `notification-settings`, `settings-parts` (diálogo y tabla compartidos) |
 | `/[area]/pqrsf/sugerencias` y `/[feedbackId]` | Sugerencias y felicitaciones | `feedback-list`, `feedback-detail` |
 
 ### Comportamiento
@@ -546,7 +546,9 @@ en `src/features/pqrsf`.
 - Al abrir el detalle se llama `POST /cases/{id}/read`.
 - Las acciones dependen de `permissions`.
 - La línea de tiempo pinta «`actor_name` · `title`», el chip de `status_change` y un icono por
-  `category` o `actor_kind`, y agrupa los accesos. Ya no traduce `event_type`.
+  `category` o `actor_kind`. Ya no traduce `event_type`.
+- Agrupa los accesos consecutivos (en el historial, por caso), salvo un acceso que trae
+  `status_change`: la primera lectura («Recibida → Leída») va sola, para no perder el chip.
 - Estados: `recibida` neutro, `leida` informativo, `en_curso` alerta, `finalizada` éxito. El
   `color` hex de la API no se aplica inline.
 - Vencido: error + icono + texto. Vence hoy: alerta + texto. Nunca solo color.
@@ -794,7 +796,10 @@ certificación bancaria, estados financieros): el formulario es público.
 - **Consultas:** `GET /cases/{id}/documents/search` y `GET /cases/{id}/deliveries`.
 
 **Pendiente de UI:** la configuración de certificados, la sección «Solicitudes de documentos» y
-esta respuesta con archivo existen en la API, pero la interfaz todavía no las consume.
+esta respuesta con archivo existen en la API, pero master de la interfaz todavía no las consume.
+El código ya existe sin fusionar en la rama `Lovealone1/pqrsf-certificates-ui` (commit
+`2abf131`), que solo entró en `Lovealone1/pqrsf-feedback`: hay que llevarlo a master, no
+rehacerlo.
 
 ---
 
@@ -975,7 +980,7 @@ de la UI.
 | I-8 | Mensajes al proveedor y contactos | [x] | [x] |
 | I-9 | Ejecutivo comercial desde la factura (DWH) | [x] | [x] |
 | I-9 | Respaldo por el vendedor del cliente | [ ] | — |
-| — | UI de certificados, solicitudes de documentos y respuesta con archivo | [x] | [ ] |
+| — | UI de certificados, solicitudes de documentos y respuesta con archivo (hecha en `Lovealone1/pqrsf-certificates-ui`, sin fusionar en master) | [x] | [ ] |
 
 ### Fases siguientes
 
