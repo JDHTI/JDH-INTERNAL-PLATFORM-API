@@ -266,9 +266,9 @@ esa factura. No se le pide al cliente: se saca de las ventas.
 | I-4 | Filtros y columnas nuevos en bandeja, resumen y CSV | [ ] | [ ] |
 | I-5 | Formulario interno del comercial con los campos del público y evidencias | [ ] | [ ] |
 | I-6 | Correo: la plantilla deja la clasificación en el caso (hoy solo deriva el área) | [ ] | — |
-| I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [x] | [ ] |
-| I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo ([`pqrsf-proveedor.md`](pqrsf-proveedor.md)) | [x] | [ ] |
-| I-9 | Ejecutivo comercial desde la factura: campos en el caso, enlace al usuario por correo, acceso del ejecutivo, `sales_executive` en el detalle | [x] | [ ] |
+| I-7 | Línea de tiempo legible (`actor_kind`, `actor_name`, `title`, `category`, `status_change`) | [x] | [x] |
+| I-8 | Mensajes al proveedor desde el caso, contactos sugeridos y respuesta del proveedor en la línea de tiempo ([`pqrsf-proveedor.md`](pqrsf-proveedor.md)) | [x] | [x] |
+| I-9 | Ejecutivo comercial desde la factura: campos en el caso, enlace al usuario por correo, acceso del ejecutivo, `sales_executive` en el detalle | [x] | [x] |
 | I-9 | Adaptador de la vista de ventas del DWH (`consumo.ventas` + `consumo.vendedores`) | [x] | — |
 | I-9 | Respaldo por el vendedor asignado al cliente (maestro comercial) | [ ] | — |
 | Fase 4 | `invoice_verified` y fecha de entrega desde el DWH | [ ] | [ ] |
