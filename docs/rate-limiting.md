@@ -55,6 +55,15 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 |---|---|---|---|
 | `GET` | `/health/live` | `sin límite` | Las sondas del orquestador siempre deben recibir respuesta |
 | `GET` | `/health/ready` | `sin límite` | Las sondas del orquestador siempre deben recibir respuesta |
+| `GET` | `/v1/app-monitoring/applications` | `read` |  |
+| `POST` | `/v1/app-monitoring/applications` | `relaxed` |  |
+| `DELETE` | `/v1/app-monitoring/applications/{application_id}` | `relaxed` |  |
+| `GET` | `/v1/app-monitoring/applications/{application_id}` | `read` |  |
+| `PATCH` | `/v1/app-monitoring/applications/{application_id}` | `relaxed` |  |
+| `POST` | `/v1/app-monitoring/applications/{application_id}/check` | `relaxed` |  |
+| `GET` | `/v1/app-monitoring/applications/{application_id}/checks` | `read` |  |
+| `POST` | `/v1/app-monitoring/check` | `relaxed` |  |
+| `GET` | `/v1/app-monitoring/overview` | `read` |  |
 | `GET` | `/v1/areas` | `read` |  |
 | `POST` | `/v1/areas` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}` | `relaxed` |  |
@@ -135,6 +144,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/masters` | `read` |  |
 | `GET` | `/v1/masters/{slug}` | `read` |  |
 | `GET` | `/v1/masters/{slug}/records` | `read` |  |
+| `GET` | `/v1/monitoring/board` | `read` |  |
 | `GET` | `/v1/order-validations` | `read` |  |
 | `POST` | `/v1/order-validations` | `relaxed` |  |
 | `GET` | `/v1/order-validations/catalogs` | `read` |  |

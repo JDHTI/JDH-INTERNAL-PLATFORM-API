@@ -8,6 +8,10 @@ from app.infrastructure.database import Database
 from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
+from app.modules.app_monitoring.application.board import MonitoringBoardService
+from app.modules.app_monitoring.application.service import AppMonitoringService
+from app.modules.app_monitoring.infrastructure.prober import HttpProber
+from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyApplicationRepository
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import AreaManagerPolicy
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
@@ -373,6 +377,28 @@ class V1Container(containers.DeclarativeContainer):
         sync_enabled=config.dwh_monitoring.sync_enabled,
         sync_interval=config.dwh_monitoring.sync_interval,
         request_sync=dwh_monitoring_trigger.provided.set,
+    )
+    # --- Application monitoring (TI → Monitoreo → Aplicativos) and the general board ---
+    app_monitoring_repository = providers.Factory(
+        SqlAlchemyApplicationRepository, database=database
+    )
+    app_monitoring_prober = providers.Singleton(HttpProber)
+    # Wakes the background checks when someone asks to check everything now.
+    app_monitoring_trigger = providers.Singleton(SyncTrigger)
+    app_monitoring_service = providers.Factory(
+        AppMonitoringService,
+        repository=app_monitoring_repository,
+        prober=app_monitoring_prober,
+        access=dwh_monitoring_policy,
+        check_enabled=config.app_monitoring.enabled,
+        check_interval=config.app_monitoring.interval,
+        retention_days=config.app_monitoring.retention_days,
+        request_check=app_monitoring_trigger.provided.set,
+    )
+    monitoring_board_service = providers.Factory(
+        MonitoringBoardService,
+        applications=app_monitoring_service,
+        warehouse=dwh_monitoring_service,
     )
     pqrsf_image_processor = providers.Singleton(
         PillowImageProcessor,

@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter
 
+from app.modules.app_monitoring.presentation.router import board_router as monitoring_board_router
+from app.modules.app_monitoring.presentation.router import router as app_monitoring_router
 from app.modules.areas.presentation.router import router as areas_router
 from app.modules.commercial_masters.presentation.router import router as commercial_router
 from app.modules.consumption.presentation.router import router as consumption_router
@@ -49,6 +51,8 @@ v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
 v1_router.include_router(dwh_monitoring_router, prefix="/dwh-monitoring", tags=["dwh-monitoring"])
+v1_router.include_router(app_monitoring_router, prefix="/app-monitoring", tags=["app-monitoring"])
+v1_router.include_router(monitoring_board_router, prefix="/monitoring", tags=["monitoring"])
 v1_router.include_router(pqrsf_public_router, tags=["pqrsf-public"])
 v1_router.include_router(pqrsf_admin_router, tags=["pqrsf"])
 v1_router.include_router(pqrsf_tracking_router, tags=["pqrsf-tracking"])
