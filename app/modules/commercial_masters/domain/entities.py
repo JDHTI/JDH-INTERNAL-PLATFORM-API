@@ -60,8 +60,6 @@ class CommercialSupplier:
     is_active: bool
     product_count: int
     active_product_count: int
-    list_margin_pct: Decimal | None
-    list_margin_notes: str | None
     synced_at: datetime | None
     nits: list[CommercialSupplierNit] = field(default_factory=list)
 
@@ -108,6 +106,39 @@ class Customer:
 
 
 @dataclass(frozen=True)
+class ProductMargins:
+    """Margins of a product by channel, as fractions (0.18 = 18 %).
+
+    ``None`` means no margin is defined for that channel (the margin master writes 0).
+    """
+
+    list: Decimal | None = None
+    wholesale: Decimal | None = None
+    mass_food: Decimal | None = None
+    market: Decimal | None = None
+    salsamentarias: Decimal | None = None
+    notes: str | None = None
+    source: str | None = None
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def defined(self) -> bool:
+        """Whether at least one channel has a margin."""
+
+        return any(
+            value is not None
+            for value in (
+                self.list,
+                self.wholesale,
+                self.mass_food,
+                self.market,
+                self.salsamentarias,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class Product:
     """Product; ``sku`` is the JDH reference."""
 
@@ -126,6 +157,12 @@ class Product:
     pack_factor: Decimal | None
     inventory_unit: str | None
     main_barcode: str | None
+    product_subline: str | None = None
+    product_group: str | None = None
+    margins: ProductMargins = field(default_factory=ProductMargins)
+    liquor_tax: Decimal | None = None
+    liquor_tax_coast: Decimal | None = None
+    liquor_tax_group: str | None = None
 
 
 @dataclass(frozen=True)

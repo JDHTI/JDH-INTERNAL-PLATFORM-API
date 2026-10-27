@@ -1,6 +1,7 @@
 from datetime import date
 
 import pytest
+
 from app.modules.pqrsf.domain.sales import invoice_candidates, nit_core
 from app.modules.pqrsf.infrastructure.sales_lookup import WarehouseSalesLookup
 

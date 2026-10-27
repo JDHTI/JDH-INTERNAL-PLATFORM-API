@@ -20,6 +20,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import openpyxl
+
 from app.modules.commercial_masters.domain.entities import SupplierProductCode
 from app.modules.supplier_supports.application import normalize as n
 from app.modules.supplier_supports.domain.entities import Issue, SupportData
@@ -848,8 +850,6 @@ class Workbook:
             FileNotFoundError: If the file does not exist.
         """
 
-        import openpyxl
-
         if not path.is_file():
             raise FileNotFoundError(path)
         with warnings.catch_warnings():
@@ -1159,33 +1159,3 @@ def read_supplier_codes(
                 )
             )
     return found
-
-
-@dataclass(frozen=True)
-class ListMargin:
-    """Default list margin of a supplier (``Margenes Lista1``)."""
-
-    code: str
-    name: str
-    pct: Decimal
-    notes: str | None
-
-
-def read_list_margins(book: Workbook) -> list[ListMargin]:
-    """``Margenes Lista1``: one default list margin per supplier code."""
-
-    margins = []
-    for row in book.table("Margenes Lista1", "Margenes_Lista1"):
-        code = n.clean_sku(row.get("Cod. Proveedor"))
-        pct, _ = n.parse_fraction(row.get("Margen Lista 1"), "list_margin_pct")
-        if code is None or pct is None:
-            continue
-        margins.append(
-            ListMargin(
-                code,
-                n.clean_text(row.get("Proveedor")) or code,
-                pct,
-                n.clean_text(row.get("Observacion")),
-            )
-        )
-    return margins

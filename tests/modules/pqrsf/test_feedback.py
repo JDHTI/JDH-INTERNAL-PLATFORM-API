@@ -4,6 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+
 from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.application.service import PqrsfService
@@ -17,7 +18,6 @@ from app.modules.pqrsf.domain.feedback import (
 )
 from app.modules.pqrsf.domain.notifications import FEEDBACK_ACK
 from app.modules.sites.application.service import SiteService
-
 from tests.modules.fakes import FakeDirectory
 from tests.modules.pqrsf.test_email_intake import NOW, Intake, file
 from tests.modules.pqrsf.test_service import (

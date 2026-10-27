@@ -174,6 +174,8 @@ class Settings(BaseSettings):
     SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
     # Rows per DWH page and per upsert when syncing the commercial masters.
     MASTERS_SYNC_BATCH_SIZE: int = 2000
+    # Largest margin file a manager can upload to update the product margins.
+    PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
 
     # Members of this area (plus platform admins) upload retained orders files.
     ORDER_VALIDATION_MANAGER_AREA_SLUG: str = "comercial"
@@ -415,6 +417,9 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG,
             },
             "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
+            "product_margins": {
+                "max_upload_bytes": self.PRODUCT_MARGINS_MAX_UPLOAD_MB * 1024 * 1024,
+            },
             "order_validation": {
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,
                 "max_upload_bytes": self.ORDER_VALIDATION_MAX_UPLOAD_MB * 1024 * 1024,

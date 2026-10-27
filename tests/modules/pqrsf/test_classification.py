@@ -2,6 +2,7 @@ from dataclasses import replace
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.pqrsf.application.classification import ClassificationService
 from app.modules.pqrsf.domain.entities import Subject

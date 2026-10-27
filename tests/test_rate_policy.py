@@ -3,11 +3,11 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.core.rate_policy import LEVELS, READ, RELAXED, RULES, STRICT, RatePolicy, describe
 from app.main import create_app
-from fastapi.testclient import TestClient
-
 from tests.test_public_guard import CountingRedis
 
 PREFIX = "/api"

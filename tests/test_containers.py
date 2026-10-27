@@ -1,4 +1,5 @@
 import pytest
+
 from app.app_container import (
     build_application_container,
     initialize_global_resources,

@@ -11,7 +11,6 @@ from app.modules.dwh_monitoring.domain.views import (
     SECUENCIAS,
     VIEWS,
 )
-
 from tests.modules.dwh_monitoring.conftest import NOW
 
 

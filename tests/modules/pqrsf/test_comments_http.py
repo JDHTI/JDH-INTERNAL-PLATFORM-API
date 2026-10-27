@@ -5,14 +5,14 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.main import create_app
 from app.modules.pqrsf.application.comments import CommentResult, UploadedFile
 from app.modules.pqrsf.application.dto import EventView
 from app.modules.pqrsf.domain.email import CaseAttachment
 from app.modules.pqrsf.domain.notifications import CLIENT_REPLY, Notification
 from app.modules.pqrsf.domain.tracking import CaseEvent
-from fastapi.testclient import TestClient
-
 from tests.modules.projects.test_live_http import StubIdentity, settings  # noqa: F401
 
 NOW = datetime(2026, 10, 8, 18, tzinfo=UTC)

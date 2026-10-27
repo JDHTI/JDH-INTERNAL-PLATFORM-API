@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import DependencyUnavailableError
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import (

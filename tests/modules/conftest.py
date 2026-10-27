@@ -1,7 +1,7 @@
 import pytest
+
 from app.modules.areas.application.service import AreaService
 from app.modules.documents.application.service import DocumentService
-
 from tests.modules.fakes import (
     FakeAreaRepository,
     FakeDirectory,

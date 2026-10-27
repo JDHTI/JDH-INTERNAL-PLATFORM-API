@@ -5,13 +5,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.dwh_monitoring.application.service import DwhMonitoringService
 from app.modules.dwh_monitoring.domain.entities import CycleStatus, LoadCycle, ViewReport
 from app.modules.identity.presentation.principal import get_current_principal
-from fastapi.testclient import TestClient
-
 from tests.modules.dwh_monitoring.conftest import NOW, OUTSIDER, TI_MEMBER, FakeAccess
 from tests.modules.dwh_monitoring.test_service import FakeReader, card
 

@@ -9,6 +9,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, NotFoundError
 from app.modules.commercial_masters.domain.entities import CommercialSupplier, ProductRef
 from app.modules.identity.domain.principal import Principal

@@ -3,12 +3,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.pqrsf.application.dto import EventView
+from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.supplier_messages import SupplierMessageService
 from app.modules.pqrsf.domain.entities import ClaimedProduct
 from app.modules.pqrsf.domain.notifications import FAILED, PENDING, SUPPLIER_MESSAGE
 from app.modules.pqrsf.domain.tracking import CaseEvent
+from tests.modules.pqrsf.test_notifications import FakeOutbox as Outbox
 
 NOW = datetime(2026, 10, 26, 15, tzinfo=UTC)
 PRINCIPAL = SimpleNamespace(user_id=uuid4())
@@ -237,10 +240,6 @@ class Evidence:
 
 @pytest.mark.asyncio
 async def test_the_email_to_the_supplier_carries_its_files_and_the_client_evidence() -> None:
-    from app.modules.pqrsf.application.notifications import NotificationService
-
-    from tests.modules.pqrsf.test_notifications import FakeOutbox as Outbox
-
     outbox, mail = Outbox(), FilesMail()
     service, case, *_ = _service()
     service.notifications = outbox

@@ -21,6 +21,7 @@ from app.modules.commercial_masters.application.service import (
 )
 from app.modules.commercial_masters.application.sync import MasterSyncService
 from app.modules.commercial_masters.infrastructure.dwh_source import WarehouseMasterSource
+from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
 from app.modules.commercial_masters.infrastructure.repository import (
     SqlAlchemyCommercialMasterRepository,
 )
@@ -308,10 +309,13 @@ class V1Container(containers.DeclarativeContainer):
         areas=area_service,
         area_slug=config.supplier_supports.manager_area_slug,
     )
+    commercial_margin_reader = providers.Singleton(SpreadsheetMarginReader)
     commercial_master_service = providers.Factory(
         CommercialMasterService,
         repository=commercial_master_repository,
         managers=supplier_support_manager_policy,
+        margin_reader=commercial_margin_reader,
+        max_upload_bytes=config.product_margins.max_upload_bytes,
     )
     master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)
     pqrsf_product_catalog = providers.Factory(MasterProductCatalog, masters=master_lookup)

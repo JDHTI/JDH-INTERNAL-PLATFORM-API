@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.main import create_app
@@ -15,8 +17,6 @@ from app.modules.supplier_supports.domain.special_cases import (
     SpecialCaseData,
     SpecialCaseView,
 )
-from fastapi.testclient import TestClient
-
 from tests.modules.supplier_supports.conftest import FAMILIA_ID, FakeLookup, FakeManagers, person
 
 

@@ -14,8 +14,9 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import op
-from app.core.config import settings
 from sqlalchemy.dialects import postgresql
+
+from app.core.config import settings
 
 revision: str = "0003_areas"
 down_revision: str | None = "0002_identity"

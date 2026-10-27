@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -22,7 +23,7 @@ from app.modules.order_validation.domain.entities import (
     OrderLine,
     StoredLine,
 )
-from app.modules.order_validation.domain.rules import summarize
+from app.modules.order_validation.domain.rules import summarize_batch
 from app.modules.order_validation.infrastructure.models import (
     OrderValidationApprovalModel,
     OrderValidationBatchModel,
@@ -49,6 +50,7 @@ def _batch(model: OrderValidationBatchModel) -> Batch:
         order_count=model.order_count,
         ready_line_count=model.ready_line_count,
         ready_order_count=model.ready_order_count,
+        margin_threshold=model.margin_threshold,
     )
 
 
@@ -61,6 +63,9 @@ def _result_columns(result: LineResult) -> dict[str, object]:
         "effective_margin_pct": result.effective_margin_pct,
         "required_margin_pct": result.required_margin_pct,
         "checks": [item.as_dict() for item in result.checks],
+        "margin_basis": result.margin_basis,
+        "liquor_tax": result.liquor_tax,
+        "liquor_tax_amount": result.liquor_tax_amount,
     }
 
 
@@ -77,16 +82,23 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
         effective_margin_pct=model.effective_margin_pct,
         required_margin_pct=model.required_margin_pct,
         checks=tuple(AgreementCheck.from_dict(item) for item in model.checks or ()),
+        margin_basis=model.margin_basis,
+        liquor_tax=model.liquor_tax,
+        liquor_tax_amount=model.liquor_tax_amount,
     )
     return StoredLine(id=model.id, line=line, result=result)
 
 
 def _apply_counts(
     model: OrderValidationBatchModel,
-    pairs: Sequence[tuple[str, str]],
+    items: Sequence[tuple[OrderLine, LineResult]],
     approved: Collection[str] = (),
 ) -> None:
-    lines, orders, ready_lines, ready_orders = summarize(pairs, approved)
+    """Counts of the file: an order is ready by its lines, a manual approval or the threshold."""
+
+    lines, orders, ready_lines, ready_orders = summarize_batch(
+        items, approved, model.margin_threshold or Decimal(0)
+    )
     model.line_count = lines
     model.order_count = orders
     model.ready_line_count = ready_lines
@@ -94,15 +106,39 @@ def _apply_counts(
 
 
 async def _recount(session: Any, batch: OrderValidationBatchModel) -> None:
-    """Counts of a stored file from its lines and its manual approvals."""
+    """Counts of a stored file from its lines, its manual approvals and its threshold."""
 
-    pairs = (
-        await session.execute(select(L.document, L.status).where(L.batch_id == batch.id))
+    rows = (
+        await session.execute(
+            select(
+                L.document,
+                L.row_number,
+                L.unit_price,
+                L.quantity,
+                L.margin_pct,
+                L.status,
+                L.reason,
+                L.required_margin_pct,
+            ).where(L.batch_id == batch.id)
+        )
     ).all()
     approved = (
         (await session.execute(select(A.document).where(A.batch_id == batch.id))).scalars().all()
     )
-    _apply_counts(batch, [(document, status) for document, status in pairs], set(approved))
+    items = [
+        (
+            OrderLine(
+                row_number=row_number,
+                document=document,
+                unit_price=price,
+                quantity=quantity,
+                margin_pct=margin,
+            ),
+            LineResult(status=status, reason=reason, detail="", required_margin_pct=required),
+        )
+        for document, row_number, price, quantity, margin, status, reason, required in rows
+    ]
+    _apply_counts(batch, items, set(approved))
 
 
 def _approval(model: OrderValidationApprovalModel) -> ManualApproval:
@@ -133,6 +169,7 @@ class SqlAlchemyOrderValidationRepository:
         actor: str,
         now: datetime,
         lines: Sequence[tuple[OrderLine, LineResult]],
+        margin_threshold: Decimal,
     ) -> Batch:
         """Insert a file with all its lines and their results in one transaction."""
 
@@ -144,8 +181,9 @@ class SqlAlchemyOrderValidationRepository:
                 uploaded_at=now,
                 validated_by=actor,
                 validated_at=now,
+                margin_threshold=margin_threshold,
             )
-            _apply_counts(batch, [(line.document, result.status) for line, result in lines])
+            _apply_counts(batch, lines)
             session.add(batch)
             await session.flush()
             session.add_all(
@@ -210,8 +248,9 @@ class SqlAlchemyOrderValidationRepository:
         results: Sequence[tuple[UUID, LineResult]],
         actor: str,
         now: datetime,
+        margin_threshold: Decimal,
     ) -> Batch:
-        """Replace the result of each line and the counts of the file."""
+        """Replace the result of each line, the threshold and the counts of the file."""
 
         async with self.database.session_factory() as session:
             batch = (
@@ -226,9 +265,24 @@ class SqlAlchemyOrderValidationRepository:
                     .values(**_result_columns(result))
                 )
             await session.flush()
+            batch.margin_threshold = margin_threshold
             await _recount(session, batch)
             batch.validated_by = actor
             batch.validated_at = now
+            await session.commit()
+            return _batch(batch)
+
+    async def set_threshold(self, batch_id: UUID, margin_threshold: Decimal) -> Batch | None:
+        """Save the margin threshold of a file and recount its orders; `None` if it is missing."""
+
+        async with self.database.session_factory() as session:
+            batch = (
+                await session.execute(select(B).where(B.id == batch_id).with_for_update())
+            ).scalar_one_or_none()
+            if batch is None:
+                return None
+            batch.margin_threshold = margin_threshold
+            await _recount(session, batch)
             await session.commit()
             return _batch(batch)
 

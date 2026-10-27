@@ -2,6 +2,7 @@ import uuid
 from datetime import date
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.areas.application.dto import CreateAreaCommand
 from app.modules.projects.application.dto import (

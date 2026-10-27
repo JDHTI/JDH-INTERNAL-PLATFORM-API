@@ -4,10 +4,11 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from app.core.config import Environment, Settings
-from app.main import create_app
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
+
+from app.core.config import Environment, Settings
+from app.main import create_app
 
 URL = "/api/v1/public/pqrsf/requests"
 HEADERS = {"Idempotency-Key": "0d9f3c1e-6b1a-4f0e-9d2c-4a7f6a3b1c55"}

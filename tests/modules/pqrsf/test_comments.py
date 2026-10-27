@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+
 from app.core.errors import (
     ConflictError,
     DependencyUnavailableError,
@@ -20,7 +21,6 @@ from app.modules.pqrsf.application.comments import (
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.domain.notifications import CLIENT_REPLY, FAILED, Notification
 from app.modules.pqrsf.domain.tracking import EventType
-
 from tests.modules.pqrsf.test_email_intake import FakeImages, FakeScanner
 from tests.modules.pqrsf.test_notifications import (
     FakeHolidays,

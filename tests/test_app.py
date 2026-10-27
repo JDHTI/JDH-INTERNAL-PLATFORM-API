@@ -1,6 +1,7 @@
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
-from fastapi.testclient import TestClient
 
 
 def test_liveness_and_request_id() -> None:

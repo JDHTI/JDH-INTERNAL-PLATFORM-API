@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.app_monitoring.application.board import (
@@ -18,8 +20,6 @@ from app.modules.app_monitoring.domain.entities import CheckStatus, Target
 from app.modules.dwh_monitoring.application.service import DwhMonitoringService
 from app.modules.dwh_monitoring.domain.entities import CycleStatus, LoadCycle
 from app.modules.identity.presentation.principal import get_current_principal
-from fastapi.testclient import TestClient
-
 from tests.modules.app_monitoring.conftest import NOW, TI_MEMBER, FakeAccess
 from tests.modules.dwh_monitoring.conftest import OUTSIDER
 from tests.modules.dwh_monitoring.test_service import FakeReader, card

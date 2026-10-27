@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
+
 from app.modules.supplier_supports.application import normalize as n
 
 D = Decimal

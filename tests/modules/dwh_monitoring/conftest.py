@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+
 from app.infrastructure.data_provider import DataProviderUnavailable
 from app.modules.dwh_monitoring.domain.entities import LoadCycle
 from app.modules.dwh_monitoring.domain.views import ViewSpec

@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
 
 import pytest
-from app.core.config import Settings
 from pydantic import ValidationError
+
+from app.core.config import Settings
 
 
 def test_microsoft_entra_id_settings_are_loaded_as_typed_values() -> None:

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+
 from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.application.notifications import NotificationService
@@ -21,7 +22,6 @@ from app.modules.pqrsf.domain.notifications import (
 )
 from app.modules.pqrsf.domain.tracking import CasePage
 from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
-
 from tests.modules.pqrsf.test_tracking import Setup
 
 BOGOTA = ZoneInfo("America/Bogota")

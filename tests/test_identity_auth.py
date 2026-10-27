@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+from fastapi.testclient import TestClient
+
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.application.service import (
@@ -10,7 +12,6 @@ from app.modules.identity.application.service import (
     AuthenticationRequired,
 )
 from app.modules.identity.infrastructure.entra import TokenSet
-from fastapi.testclient import TestClient
 
 
 def _settings(**kwargs: object) -> Settings:

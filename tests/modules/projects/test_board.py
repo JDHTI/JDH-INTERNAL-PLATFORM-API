@@ -2,6 +2,7 @@ import uuid
 from datetime import date
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.projects.application.dto import (
     CreateEpicCommand,
@@ -14,6 +15,7 @@ from app.modules.projects.application.dto import (
     task_payload,
 )
 from app.modules.projects.domain.entities import POSITION_STEP
+from app.modules.projects.domain.ports import ProjectFilters
 from app.modules.projects.presentation.router import EpicResponse, TaskResponse
 
 
@@ -242,7 +244,6 @@ async def test_deleting_a_project_takes_epics_and_tasks(projects, project_repo, 
 
 
 async def test_project_listing_carries_task_counts(projects, ti, board) -> None:
-    from app.modules.projects.domain.ports import ProjectFilters
 
     _, ana, *_ = ti
     project, epic = board

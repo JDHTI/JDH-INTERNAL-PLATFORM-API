@@ -3,6 +3,7 @@ import json
 
 import httpx
 import pytest
+
 from app.core.errors import DependencyUnavailableError
 from app.modules.mail.domain import OutgoingFile
 from app.modules.mail.infrastructure.graph import GraphMailClient

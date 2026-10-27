@@ -15,8 +15,12 @@ place to read (and change) which endpoints are exceptions.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+
+from app.core.config import settings
 
 READ = "read"
 RELAXED = "relaxed"
@@ -128,8 +132,8 @@ def describe(prefix: str, operations: list[tuple[str, str]]) -> str:
 
 
 def _table_for_current_api() -> str:
-    from app.core.config import settings
-    from app.main import create_app
+    # `app.main` imports the middleware that imports this module, so it cannot come first.
+    from app.main import create_app  # noqa: PLC0415
 
     spec = create_app(settings).openapi()
     operations = [(method.upper(), path) for path, ops in spec["paths"].items() for method in ops]
@@ -143,8 +147,6 @@ def _main(argv: list[str]) -> None:
     if "--write" not in argv:
         print(table)
         return
-    from pathlib import Path
-
     start, end = "<!-- niveles:inicio -->", "<!-- niveles:fin -->"
     path = Path(__file__).resolve().parents[2] / "docs" / "rate-limiting.md"
     text = path.read_text(encoding="utf-8")
@@ -155,8 +157,6 @@ def _main(argv: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    import sys
-
     _main(sys.argv[1:])
 
 

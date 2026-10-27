@@ -17,6 +17,9 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
+
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.entities import clean_nit
 from app.modules.order_validation.domain.entities import OrderLine
@@ -61,6 +64,10 @@ HEADERS: dict[str, str] = {
     "lista de precios fact": "price_list",
     "lista de precios": "price_list",
     "retenido margen": "retained",
+    "vlr imp imptolic": "liquor_tax_value",
+    "valor impuesto licor": "liquor_tax_value",
+    "impuesto licor": "liquor_tax_value",
+    "imptolic": "liquor_tax_value",
 }
 
 REQUIRED = {
@@ -119,7 +126,8 @@ def parse_decimal(value: Any) -> Decimal | None:
     if isinstance(value, int | float | Decimal):
         return Decimal(str(value))
     text = str(value).strip().replace("$", "").replace("%", "").replace(" ", "")
-    if not text:
+    # A lone dash is how the accounting format writes a zero.
+    if not text or text in ("-", "–", "—"):
         return None
     if "," in text and "." in text:
         # The last separator is the decimal one.
@@ -211,6 +219,7 @@ def _line(row_number: int, row: Sequence[Any], positions: dict[str, int]) -> Ord
         order_date = None
         problems.append(f"Fecha ilegible: {cell('order_date')!r}")
     margin_points = number("margin", "Margen")
+    liquor_tax_value = number("liquor_tax_value", "Impuesto al licor")
     supplier_code, supplier_name = _supplier(cell("supplier"))
     return OrderLine(
         row_number=row_number,
@@ -233,6 +242,7 @@ def _line(row_number: int, row: Sequence[Any], positions: dict[str, int]) -> Ord
         description=_text(cell("description")),
         price_list=_code(cell("price_list")),
         retained=_text(cell("retained")),
+        liquor_tax_value=liquor_tax_value,
         problems=tuple(problems),
     )
 
@@ -264,8 +274,6 @@ def lines_from_rows(rows: Iterable[Sequence[Any]]) -> list[OrderLine]:
 
 
 def _xlsx_rows(content: bytes) -> list[list[Any]]:
-    import openpyxl
-    from openpyxl.utils.exceptions import InvalidFileException
 
     try:
         book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)

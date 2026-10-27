@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import openpyxl
 import pytest
+
 from app.core.errors import InvalidInputError
 from app.modules.order_validation.infrastructure.order_file import (
     SpreadsheetOrderReader,
@@ -149,3 +150,35 @@ def test_parse_decimal(value, expected) -> None:
     result = parse_decimal(value)
 
     assert result == (None if expected is None else Decimal(expected))
+
+
+def test_the_liquor_tax_column_is_read_per_line() -> None:
+    header = [*HEADER[:16], "Vlr. imp. IMPTOLIC", HEADER[16]]
+    wine = [*ROW[:16], 6911, ROW[16]]
+    plain = [*ROW[:16], 0, ROW[16]]
+    blank = [*ROW[:16], None, ROW[16]]
+
+    lines = read("Pedidos Retenidos 2.xlsx", workbook(header, wine, plain, blank))
+
+    assert [line.liquor_tax_value for line in lines] == [Decimal("6911"), Decimal("0"), None]
+    assert all(line.retained == "Si" for line in lines)
+
+
+def test_files_without_the_liquor_tax_column_still_read() -> None:
+    [line] = read("Pedidos Retenidos.xlsx", workbook(HEADER, ROW))
+
+    assert line.liquor_tax_value is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("$6,911.", "6911"),
+        ("$12,000.", "12000"),
+        ("$ 6,911.00", "6911.00"),
+        ("-", None),
+        ("—", None),
+    ],
+)
+def test_parse_decimal_reads_currency_text_and_accounting_dashes(value, expected) -> None:
+    assert parse_decimal(value) == (None if expected is None else Decimal(expected))

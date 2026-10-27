@@ -6,10 +6,10 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.app_monitoring.application.service import AppMonitoringService, slugify
 from app.modules.app_monitoring.domain.entities import CheckResult, CheckStatus, Target
-
 from tests.modules.app_monitoring.conftest import NOW, TI_MEMBER, FakeAccess
 from tests.modules.dwh_monitoring.conftest import OUTSIDER
 

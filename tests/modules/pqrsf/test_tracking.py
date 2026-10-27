@@ -4,8 +4,9 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
-from app.modules.pqrsf.application.dto import ImportedCase, ImportedItem, ItemChanges
+from app.modules.pqrsf.application.dto import CaseChanges, ImportedCase, ImportedItem, ItemChanges
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import (
@@ -17,6 +18,7 @@ from app.modules.pqrsf.domain.entities import (
     RequestType,
     Subject,
 )
+from app.modules.pqrsf.domain.sales import InvoiceSeller
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_EVENT_TYPES,
     ActivityFilters,
@@ -36,7 +38,6 @@ from app.modules.pqrsf.domain.tracking import (
 from app.modules.pqrsf.domain.tracking import CaseInput as Input
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
-
 from tests.modules.fakes import FakeDirectory
 
 NOW = datetime(2026, 9, 25, 15, tzinfo=UTC)
@@ -794,8 +795,6 @@ def _claim_request(s, *invoices):
 
 @pytest.mark.asyncio
 async def test_the_sales_executive_comes_from_the_invoice_and_follows_the_case() -> None:
-    from app.modules.pqrsf.domain.sales import InvoiceSeller
-
     s = Setup()
     s.service.sales = FakeSales(
         {"FEV-1020": InvoiceSeller("FEV-1020", "V07", "Carolina Ríos", "Carolina@JDH.com.co")}
@@ -814,8 +813,6 @@ async def test_the_sales_executive_comes_from_the_invoice_and_follows_the_case()
 
 @pytest.mark.asyncio
 async def test_without_sales_data_or_invoice_the_executive_stays_empty() -> None:
-    from app.modules.pqrsf.domain.sales import InvoiceSeller
-
     s = Setup()
     s.service.sales = FakeSales(fail=True)
     failed = await s.service.open_for_request(_claim_request(s, "FEV1"))
@@ -831,15 +828,11 @@ async def test_without_sales_data_or_invoice_the_executive_stays_empty() -> None
 
 @pytest.mark.asyncio
 async def test_typing_the_executive_drops_the_invoice_link() -> None:
-    from app.modules.pqrsf.domain.sales import InvoiceSeller
-
     s = Setup()
     s.service.sales = FakeSales(
         {"FEV-1": InvoiceSeller("FEV-1", "V07", "Carolina Ríos", "carolina@jdh.com.co")}
     )
     case = await s.service.open_for_request(_claim_request(s, "FEV1"))
-
-    from app.modules.pqrsf.application.dto import CaseChanges
 
     view = await s.service.update_case(
         case.id,

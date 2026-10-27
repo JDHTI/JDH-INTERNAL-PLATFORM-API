@@ -6,9 +6,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
+
 from app.modules.app_monitoring.domain.entities import Application, CheckStatus, Target
 from app.modules.app_monitoring.infrastructure.prober import HttpProber, classify_health
-
 from tests.modules.app_monitoring.conftest import NOW
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
@@ -17,10 +19,83 @@ from app.modules.commercial_masters.domain.entities import (
     SupplierProductCode,
     clean_nit,
 )
+from app.modules.commercial_masters.domain.margins import (
+    MARGIN_FIELDS,
+    MARGIN_LABELS,
+    MarginChange,
+    MarginIssue,
+    MarginReport,
+    MarginRow,
+)
 from app.modules.commercial_masters.domain.ports import CommercialMasterRepository, ManagerPolicy
 from app.modules.identity.domain.principal import Principal
 
 MAX_PAGE_SIZE = 200
+MAX_MARGIN_ROWS = 60_000
+MAX_REPORTED_CHANGES = 500
+IMPORT_ACTOR = "importacion"
+_ONE = Decimal(1)
+_SIX_PLACES = Decimal("0.000001")
+# Fields a person may change on a product. State and supplier come from the warehouse and
+# are not editable; every other warehouse field is overwritten by the next sync.
+EDITABLE_PRODUCT_FIELDS = frozenset(
+    {
+        "description",
+        "supplier_sku",
+        "manufacturer",
+        "brand",
+        "category",
+        "subcategory",
+        "product_line",
+        "product_subline",
+        "product_group",
+        "pack_factor",
+        "inventory_unit",
+        "main_barcode",
+        "margin_notes",
+        "liquor_tax",
+        "liquor_tax_coast",
+        "liquor_tax_group",
+        *MARGIN_FIELDS,
+    }
+)
+_TEXT_PRODUCT_FIELDS = frozenset(
+    {
+        "description",
+        "supplier_sku",
+        "manufacturer",
+        "brand",
+        "category",
+        "subcategory",
+        "product_line",
+        "product_subline",
+        "product_group",
+        "inventory_unit",
+        "main_barcode",
+        "margin_notes",
+        "liquor_tax_group",
+    }
+)
+# ProductMargins attribute of each margin column.
+_MARGIN_ATTRIBUTE = {
+    "margin_list": "list",
+    "margin_wholesale": "wholesale",
+    "margin_mass_food": "mass_food",
+    "margin_market": "market",
+    "margin_salsamentarias": "salsamentarias",
+}
+
+
+class MarginReader(Protocol):
+    """Reads an uploaded spreadsheet into margin rows."""
+
+    def read(self, filename: str, content: bytes, sheet: str | None = None) -> list[MarginRow]: ...
+
+
+def _same_margin(left: Decimal | None, right: Decimal | None) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    return left.quantize(_SIX_PLACES) == right.quantize(_SIX_PLACES)
 
 
 def _term(value: str | None) -> str | None:
@@ -35,18 +110,28 @@ def _bounds(page: int, size: int) -> None:
 
 
 class CommercialMasterService:
-    """Read commercial masters and let managers curate supplier margins and NITs."""
+    """Read commercial masters; managers curate supplier NITs, products and their margins."""
 
-    def __init__(self, repository: CommercialMasterRepository, managers: ManagerPolicy) -> None:
+    def __init__(
+        self,
+        repository: CommercialMasterRepository,
+        managers: ManagerPolicy,
+        margin_reader: MarginReader | None = None,
+        max_upload_bytes: int = 20 * 1024 * 1024,
+    ) -> None:
         """Create the service.
 
         Args:
             repository (CommercialMasterRepository): Master persistence port.
-            managers (ManagerPolicy): Decides who may edit supplier data.
+            managers (ManagerPolicy): Decides who may edit supplier and product data.
+            margin_reader (MarginReader | None): Reads uploaded margin files.
+            max_upload_bytes (int): Largest margin file accepted.
         """
 
         self.repository = repository
         self.managers = managers
+        self.margin_reader = margin_reader
+        self.max_upload_bytes = max_upload_bytes
 
     async def list_commercial_suppliers(
         self, query: str | None, is_active: bool | None, page: int, size: int
@@ -70,19 +155,15 @@ class CommercialMasterService:
         code: str,
         *,
         fields: frozenset[str],
-        list_margin_pct: Decimal | None = None,
-        list_margin_notes: str | None = None,
         confirmed_nits: Sequence[str] | None = None,
         primary_nit: str | None = None,
     ) -> CommercialSupplier:
-        """Set the list margin and confirm the legal NITs of a commercial supplier.
+        """Confirm the legal NITs of a commercial supplier.
 
         Args:
             principal (Principal): The caller; must be a manager.
             code (str): Commercial supplier code.
             fields (frozenset[str]): Names sent by the client; omitted ones are untouched.
-            list_margin_pct (Decimal | None): Default list margin as a fraction (0.18).
-            list_margin_notes (str | None): Free-text exceptions to the margin.
             confirmed_nits (Sequence[str] | None): The complete set of confirmed NITs.
             primary_nit (str | None): The primary NIT among them.
 
@@ -97,28 +178,24 @@ class CommercialMasterService:
 
         if not await self.managers.is_manager(principal):
             raise ForbiddenError("No tienes permiso para editar proveedores")
-        changes: dict[str, object] = {}
-        if "list_margin_pct" in fields:
-            if list_margin_pct is not None and not Decimal("0") <= list_margin_pct < Decimal("1"):
-                raise InvalidInputError("El margen lista debe estar entre 0 y 1")
-            changes["list_margin_pct"] = list_margin_pct
-        if "list_margin_notes" in fields:
-            changes["list_margin_notes"] = _term(list_margin_notes)
         nits = None
         if "confirmed_nits" in fields:
             nits = [nit for value in confirmed_nits or () if (nit := clean_nit(value))]
         primary = clean_nit(primary_nit) if "primary_nit" in fields else None
         if primary is not None and nits is not None and primary not in nits:
             raise InvalidInputError("El NIT principal debe estar entre los NIT confirmados")
-        updated = await self.repository.update_commercial_supplier(
-            code.strip(), changes, nits, primary
-        )
+        updated = await self.repository.update_commercial_supplier(code.strip(), {}, nits, primary)
         if updated is None:
             raise NotFoundError("Proveedor comercial no encontrado")
         return updated
 
     async def list_legal_suppliers(
-        self, query: str | None, nit: str | None, is_active: bool | None, page: int, size: int
+        self,
+        query: str | None,
+        nit: str | None,
+        is_active: bool | None,
+        page: int,
+        size: int,
     ) -> Page[LegalSupplier]:
         """Page legal suppliers by name or NIT."""
 
@@ -161,8 +238,9 @@ class CommercialMasterService:
         is_active: bool | None,
         page: int,
         size: int,
+        has_margin: bool | None = None,
     ) -> Page[Product]:
-        """Page products by text/SKU, brand, category and commercial supplier."""
+        """Page products by text/SKU, brand, category, supplier, active flag and margin."""
 
         _bounds(page, size)
         return await self.repository.list_products(
@@ -173,7 +251,180 @@ class CommercialMasterService:
             is_active,
             page,
             size,
+            has_margin,
         )
+
+    # --------------------------------------------------------------- products
+
+    async def _require_manager(self, principal: Principal, what: str) -> None:
+        if not await self.managers.is_manager(principal):
+            raise ForbiddenError(f"No tienes permiso para {what}")
+
+    async def get_product(self, sku: str) -> Product:
+        """One product with its margins, or not found."""
+
+        product = await self.repository.get_product(sku.strip())
+        if product is None:
+            raise NotFoundError("Producto no encontrado")
+        return product
+
+    async def update_product(
+        self, principal: Principal, sku: str, changes: Mapping[str, Any]
+    ) -> Product:
+        """Edit a product and its margins by hand.
+
+        Margins and the liquor tax are never written by the warehouse sync, so they stay.
+        Any other field is overwritten by the next sync of the products.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            sku (str): JDH reference.
+            changes (Mapping[str, Any]): Only the fields to change; ``None`` clears one.
+
+        Returns:
+            Product: The updated product.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            InvalidInputError: If a field is not editable or a value is out of range.
+            NotFoundError: If the product does not exist.
+        """
+
+        await self._require_manager(principal, "editar productos")
+        unknown = sorted(set(changes) - EDITABLE_PRODUCT_FIELDS)
+        if unknown:
+            raise InvalidInputError(f"Campos no editables: {', '.join(unknown)}")
+        values: dict[str, Any] = {}
+        for name, value in changes.items():
+            if name in MARGIN_FIELDS:
+                if value is not None and not Decimal(0) < value < _ONE:
+                    raise InvalidInputError(
+                        f"{MARGIN_LABELS[name]} debe estar entre 0 y 1 (0.18 = 18 %); "
+                        "envía null para dejarlo sin margen"
+                    )
+            elif name in _TEXT_PRODUCT_FIELDS:
+                value = _term(value)
+            elif value is not None and value < 0:
+                raise InvalidInputError(f"{name} no puede ser negativo")
+            values[name] = value
+        if "description" in values and values["description"] is None:
+            raise InvalidInputError("El producto necesita descripción")
+        if not values:
+            return await self.get_product(sku)
+        product = await self.repository.update_product(
+            sku.strip(), values, principal.email, datetime.now(UTC)
+        )
+        if product is None:
+            raise NotFoundError("Producto no encontrado")
+        return product
+
+    async def update_margins(
+        self,
+        principal: Principal,
+        filename: str | None,
+        content: bytes,
+        *,
+        apply: bool,
+        sheet: str | None = None,
+    ) -> MarginReport:
+        """Update product margins from a file; a simulation unless ``apply``.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            filename (str | None): Name of the uploaded file (``.xlsx`` or ``.csv``).
+            content (bytes): The file.
+            apply (bool): Write the changes; otherwise only report them.
+            sheet (str | None): Sheet to read; by default the margin master's own.
+
+        Returns:
+            MarginReport: What changed, what did not match and what was invalid.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            InvalidInputError: If the file is empty, too big or has no margin columns.
+        """
+
+        await self._require_manager(principal, "actualizar márgenes")
+        if self.margin_reader is None:
+            raise InvalidInputError("La lectura de archivos de márgenes no está disponible")
+        if not filename or not filename.strip():
+            raise InvalidInputError("El archivo no tiene nombre")
+        if not content:
+            raise InvalidInputError("El archivo está vacío")
+        if len(content) > self.max_upload_bytes:
+            raise InvalidInputError(
+                f"El archivo supera el máximo de {self.max_upload_bytes // (1024 * 1024)} MB"
+            )
+        rows = self.margin_reader.read(filename.strip(), content, sheet)
+        return await self.apply_margin_rows(rows, principal.email, apply=apply)
+
+    async def apply_margin_rows(
+        self, rows: Sequence[MarginRow], actor: str, *, apply: bool
+    ) -> MarginReport:
+        """Compare margin rows with the products and write the differences.
+
+        Blank cells leave a margin as it is, ``0`` clears it, and a SKU that is not in the
+        masters is reported. A row with an unreadable cell is skipped whole. When a SKU
+        repeats, its last row wins.
+        """
+
+        if not rows:
+            raise InvalidInputError("El archivo no tiene filas con referencia")
+        if len(rows) > MAX_MARGIN_ROWS:
+            raise InvalidInputError(f"El archivo supera el máximo de {MAX_MARGIN_ROWS} filas")
+        by_sku = {row.sku: row for row in rows}
+        duplicated = len(rows) - len(by_sku)
+        products = await self.repository.margins_by_sku(list(by_sku))
+        issues: list[MarginIssue] = []
+        unknown: list[str] = []
+        changes: list[MarginChange] = []
+        updates: list[dict[str, Any]] = []
+        unchanged = 0
+        for sku, row in by_sku.items():
+            if row.problems:
+                issues.extend(MarginIssue(row.row_number, sku, item) for item in row.problems)
+                continue
+            product = products.get(sku)
+            if product is None:
+                unknown.append(sku)
+                continue
+            current = product.margins
+            diff: dict[str, tuple[Decimal | None, Decimal | None]] = {}
+            merged: dict[str, Any] = {"sku": sku}
+            for name in MARGIN_FIELDS:
+                before = getattr(current, _MARGIN_ATTRIBUTE[name])
+                after = row.values.get(name, before) if name in row.values else before
+                merged[name] = after
+                if name in row.values and not _same_margin(before, after):
+                    diff[name] = (before, after)
+            notes_change = None
+            merged["margin_notes"] = current.notes
+            if row.has_notes and row.notes != current.notes:
+                notes_change = (current.notes, row.notes)
+                merged["margin_notes"] = row.notes
+            if not diff and notes_change is None:
+                unchanged += 1
+                continue
+            changes.append(MarginChange(sku, product.description, diff, notes_change))
+            updates.append(merged)
+        if apply and updates:
+            await self.repository.bulk_update_products(updates, actor, datetime.now(UTC))
+        return MarginReport(
+            applied=apply,
+            rows_read=len(rows),
+            updated=len(updates),
+            unchanged=unchanged,
+            duplicated=duplicated,
+            unknown_skus=tuple(unknown),
+            issues=tuple(issues),
+            changes=tuple(changes[:MAX_REPORTED_CHANGES]),
+            changes_truncated=len(changes) > MAX_REPORTED_CHANGES,
+        )
+
+    async def products_with_margins(self) -> list[Product]:
+        """Every product with its margins, active first (to export the template)."""
+
+        return await self.repository.products_with_margins()
 
 
 class MasterLookup:
@@ -230,11 +481,6 @@ class MasterLookup:
         """``{nit: legal name}`` of NITs that exist among the customers."""
 
         return await self.repository.existing_customer_nits(list(dict.fromkeys(nits)))
-
-    async def set_list_margin(self, code: str, pct: Decimal | None, notes: str | None) -> bool:
-        """Set a supplier's default list margin."""
-
-        return await self.repository.set_list_margin(code, pct, notes)
 
     async def save_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

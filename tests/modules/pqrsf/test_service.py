@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.domain.entities import (
@@ -14,8 +15,12 @@ from app.modules.pqrsf.domain.entities import (
     ProductMaster,
     ProductOption,
     RequestType,
+    SanitizedImage,
     Subject,
 )
+from app.modules.pqrsf.domain.tracking import Dependency
+from app.modules.pqrsf.presentation.router import _product_lines
+from app.modules.sites.application.service import SiteService
 from app.modules.sites.domain.entities import Site
 
 NOW = datetime(2026, 9, 25, tzinfo=UTC)
@@ -113,7 +118,6 @@ class FakeSiteRepository:
 def _service(petition: bool = True) -> tuple[PqrsfService, RequestType, Site]:
     request_type = _type(petition)
     site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
-    from app.modules.sites.application.service import SiteService
 
     return (
         PqrsfService(FakePqrsfRepository(request_type), SiteService(FakeSiteRepository(site))),
@@ -364,7 +368,6 @@ class FakeProducts:
 def _claims_service() -> tuple[PqrsfService, RequestType, Site]:
     request_type = replace(_type(), code="queja", name="Queja", allows_document_request=False)
     site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
-    from app.modules.sites.application.service import SiteService
 
     repository = FakePqrsfRepository(request_type, [PRODUCT_SUBJECT, OTHER_SUBJECT])
     service = PqrsfService(
@@ -502,8 +505,6 @@ async def test_product_search_needs_two_characters() -> None:
 
 
 def test_the_form_sends_product_lines_as_json() -> None:
-    from app.modules.pqrsf.presentation.router import _product_lines
-
     [line] = _product_lines(
         '[{"invoice_number": "FE-1", "sku": "9834", "lot": "L1",'
         ' "expiry_date": "2026-12-01", "affected_quantity": 2}]'
@@ -522,8 +523,6 @@ def test_the_form_sends_product_lines_as_json() -> None:
 
 class FakeVideos:
     async def inspect(self, filename, content_type, content):
-        from app.modules.pqrsf.domain.entities import SanitizedImage
-
         return SanitizedImage(filename, "mp4", "video/mp4", content)
 
 
@@ -576,15 +575,12 @@ COMMERCIAL = uuid4()
 
 class FakeAreas(FakePqrsfRepository):
     async def list_areas(self):
-        from app.modules.pqrsf.domain.tracking import Dependency
-
         return [Dependency(COMMERCIAL, "comercial", "Comercial", 1, True, NOW, NOW)]
 
 
 def _area_service(asks_area: bool = True) -> tuple[PqrsfService, RequestType, Site]:
     request_type = replace(_type(), asks_area=asks_area)
     site = Site(uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
-    from app.modules.sites.application.service import SiteService
 
     return (
         PqrsfService(FakeAreas(request_type), SiteService(FakeSiteRepository(site))),

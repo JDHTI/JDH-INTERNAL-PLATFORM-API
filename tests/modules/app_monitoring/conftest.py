@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+
 from app.modules.app_monitoring.application.service import AppMonitoringService
 from app.modules.app_monitoring.domain.entities import (
     Application,
@@ -13,7 +14,6 @@ from app.modules.app_monitoring.domain.entities import (
     CheckStatus,
     Target,
 )
-
 from tests.modules.dwh_monitoring.conftest import TI_MEMBER, FakeAccess
 
 NOW = datetime(2026, 10, 23, 15, 0, tzinfo=UTC)  # 10:00 in Bogota

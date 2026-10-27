@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError
 from app.modules.mail.domain import OutgoingFile
 from app.modules.pqrsf.application.certificates import CertificateService
@@ -17,10 +18,10 @@ from app.modules.pqrsf.domain.certificates import (
     DeliveryFilters,
     ManagerDocument,
 )
-from app.modules.pqrsf.domain.entities import DocumentCategory, DocumentOption
-from app.modules.pqrsf.domain.notifications import DOCUMENT_DELIVERY, FAILED, PENDING
+from app.modules.pqrsf.domain.entities import DocumentCategory, DocumentOption, RequestedDocument
+from app.modules.pqrsf.domain.notifications import DOCUMENT_DELIVERY, FAILED, PENDING, Notification
 from app.modules.sites.application.service import SiteService
-
+from app.modules.sites.domain.entities import Site
 from tests.modules.fakes import FakeDirectory
 from tests.modules.pqrsf.test_feedback import FakeOutbox
 from tests.modules.pqrsf.test_notifications import Env
@@ -204,7 +205,6 @@ class Rig:
         values.update(overrides)
         self.deliveries = DocumentDeliveryService(**values)
         self.request_type = _type()
-        from app.modules.sites.domain.entities import Site
 
         self.site = Site(uuid.uuid4(), "bogota", "Bogotá", True, NOW, NOW, "BG")
         self.service = PqrsfService(
@@ -236,8 +236,6 @@ class Rig:
 
 
 def _documents(type_ids, other):
-    from app.modules.pqrsf.domain.entities import RequestedDocument
-
     async def fake(*args, **kwargs):
         found = [RequestedDocument(i) for i in type_ids]
         return found + ([RequestedDocument(None, other)] if other else [])
@@ -557,8 +555,6 @@ async def test_the_email_carries_the_files_as_they_are_in_the_manager_when_it_le
 
 
 def _delivery_email():
-    from app.modules.pqrsf.domain.notifications import Notification
-
     return Notification(
         id=uuid.uuid4(),
         kind=DOCUMENT_DELIVERY,

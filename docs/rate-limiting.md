@@ -118,6 +118,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/customers` | `read` |  |
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
 | `GET` | `/v1/commercial/products` | `read` |  |
+| `POST` | `/v1/commercial/products/margins` | `relaxed` |  |
+| `GET` | `/v1/commercial/products/margins/template` | `read` |  |
+| `GET` | `/v1/commercial/products/{sku}` | `read` |  |
+| `PATCH` | `/v1/commercial/products/{sku}` | `relaxed` |  |
 | `GET` | `/v1/commercial/suppliers` | `read` |  |
 | `GET` | `/v1/commercial/suppliers/{code}` | `read` |  |
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
@@ -152,6 +156,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/order-validations/{batch_id}` | `relaxed` |  |
 | `GET` | `/v1/order-validations/{batch_id}` | `read` |  |
 | `POST` | `/v1/order-validations/{batch_id}/approvals` | `relaxed` |  |
+| `PUT` | `/v1/order-validations/{batch_id}/margin-threshold` | `relaxed` |  |
 | `GET` | `/v1/order-validations/{batch_id}/orders` | `read` |  |
 | `DELETE` | `/v1/order-validations/{batch_id}/orders/{document}/approval` | `relaxed` |  |
 | `POST` | `/v1/order-validations/{batch_id}/revalidate` | `relaxed` |  |

@@ -6,10 +6,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
 import pytest
+
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.dwh_monitoring.application.service import DwhMonitoringService
 from app.modules.dwh_monitoring.domain.entities import CycleStatus, LoadCycle
-
 from tests.modules.dwh_monitoring.conftest import NOW, OUTSIDER, TI_MEMBER, FakeAccess, person
 
 

@@ -4,13 +4,14 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from app.core.config import Environment, Settings
-from app.main import create_app
-from app.modules.identity.application.service import AuthenticationRequired
-from app.modules.projects.application.live import ProjectLiveService
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from app.core.config import Environment, Settings
+from app.core.errors import NotFoundError
+from app.main import create_app
+from app.modules.identity.application.service import AuthenticationRequired
+from app.modules.projects.application.live import ProjectLiveService
 from tests.modules.projects.conftest import FakeLiveChannel
 
 AREA = SimpleNamespace(id=uuid.uuid4(), slug="ti", responsible_user_id=None)
@@ -35,7 +36,6 @@ class StubIdentity:
 
 class StubProjects:
     async def authorize(self, slug, principal):
-        from app.core.errors import NotFoundError
 
         if slug != "ti":
             raise NotFoundError("Proyectos no está habilitado para esta área")

@@ -4,10 +4,12 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from app.modules.supplier_supports.domain import filters
-from app.modules.supplier_supports.infrastructure import repository as repo
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import aliased
+
+from app.modules.supplier_supports.domain import filters
+from app.modules.supplier_supports.infrastructure import repository as repo
 
 
 def sql(group: dict | None) -> tuple[str, dict]:
@@ -119,7 +121,6 @@ def test_default_and_custom_ordering_always_end_with_the_id(descending) -> None:
 
 
 def test_conflicts_compare_supplier_sku_and_warehouse_and_skip_undated_or_unscoped_rows() -> None:
-    from sqlalchemy.orm import aliased
 
     other = aliased(repo.SupplierSupportModel)
     text = str(
