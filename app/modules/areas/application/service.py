@@ -366,6 +366,19 @@ class AreaService:
 
     # --- Members ---
 
+    async def member_user_ids(self, slug: str) -> list[UUID]:
+        """Identifiers of an area's members, for system jobs that have no caller.
+
+        Args:
+            slug (str): Area slug.
+
+        Returns:
+            list[UUID]: Member user identifiers (not filtered by active status).
+        """
+
+        area = await self._get_area(slug)
+        return [member.user_id for member in await self.repository.list_members(area.id)]
+
     async def list_members(self, slug: str, principal: Principal) -> list[MemberView]:
         """List the members of an area the principal can access.
 

@@ -3,6 +3,9 @@ import pytest
 from app.core.config import Settings
 from app.infrastructure.redis import RedisClient
 
+# This module tests the real counter: the conftest must not replace it with an admit-all.
+REAL_REDIS_LIMITER = True
+
 
 def test_rate_limit_profiles_are_configurable() -> None:
     settings = Settings(

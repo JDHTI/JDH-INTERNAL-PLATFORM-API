@@ -70,6 +70,10 @@ _HEADER_FIELDS = (
     "customer_nit",
     "supplier_name",
     "sales_executive_name",
+    "sales_executive_code",
+    "sales_executive_email",
+    "sales_executive_user_id",
+    "sales_executive_source",
     "requester_name",
     "requester_email",
     "first_read_at",
@@ -124,6 +128,7 @@ def _document_type(model: DocumentTypeModel) -> DocumentType:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        allows_direct_upload=model.allows_direct_upload,
     )
 
 
@@ -200,6 +205,10 @@ def _case(
         customer_nit=model.customer_nit,
         supplier_name=model.supplier_name,
         sales_executive_name=model.sales_executive_name,
+        sales_executive_code=model.sales_executive_code,
+        sales_executive_email=model.sales_executive_email,
+        sales_executive_user_id=model.sales_executive_user_id,
+        sales_executive_source=model.sales_executive_source,
         requester_name=model.requester_name,
         requester_email=model.requester_email,
         request_id=model.request_id,
@@ -305,6 +314,7 @@ def _conditions(filters: CaseFilters, today: date) -> list:
             or_(
                 CaseModel.assignee_user_id == filters.visible_to,
                 CaseModel.created_by_user_id == filters.visible_to,
+                CaseModel.sales_executive_user_id == filters.visible_to,
             )
         )
     return conditions
@@ -509,6 +519,7 @@ class SqlAlchemyCaseRepository:
             model.name = document_type.name
             model.sla_days = document_type.sla_days
             model.is_active = document_type.is_active
+            model.allows_direct_upload = document_type.allows_direct_upload
             try:
                 await session.commit()
             except IntegrityError as exc:

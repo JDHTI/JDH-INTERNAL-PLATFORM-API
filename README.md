@@ -47,6 +47,12 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El formulario público y el contrato de PQRSF están documentados en
   [`docs/pqrsf.md`](docs/pqrsf.md); su página visual debe usar `/pqrsf` fuera
   del layout autenticado.
+- El monitoreo del datawarehouse (TI → Monitoreo → Datawarehouse) vive en
+  `/api/v1/dwh-monitoring`; su carga y su contrato están en
+  [`docs/dwh-monitoring.md`](docs/dwh-monitoring.md).
+- El monitoreo de aplicativos (TI → Monitoreo → Aplicativos) vive en
+  `/api/v1/app-monitoring`, y el tablero general de TI en `/api/v1/monitoring/board`;
+  ver [`docs/app-monitoring.md`](docs/app-monitoring.md).
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
 - En `ENVIRONMENT=prod` se deshabilitan OpenAPI, Swagger UI y ReDoc; también
   se fuerza `debug=False` aunque una variable externa intente activarlo.

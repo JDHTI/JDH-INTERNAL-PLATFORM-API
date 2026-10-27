@@ -19,7 +19,12 @@ from app.core.config import Settings, settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
+from app.core.public_guard import PublicIntakeGuard
+from app.core.rate_limit_middleware import RateLimitMiddleware
+from app.modules.app_monitoring.infrastructure.worker import AppCheckWorker
+from app.modules.dwh_monitoring.infrastructure.worker import MonitoringSyncWorker
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
+from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
 
 
 def create_app(app_settings: Settings | None = None) -> FastAPI:
@@ -33,6 +38,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         resources: GlobalResources | None = None
         mail_worker: EmailIntakeWorker | None = None
+        notification_worker: NotificationWorker | None = None
+        monitoring_worker: MonitoringSyncWorker | None = None
+        app_worker: AppCheckWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
@@ -43,6 +51,35 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 )
                 mail_worker.start()
                 logger.info(f"PQRSF email intake reading {runtime_settings.MAIL_PQRSF_INBOX}")
+            if runtime_settings.PQRSF_NOTIFICATIONS_ENABLED:
+                notification_worker = NotificationWorker(
+                    container.v1_container.pqrsf_notification_service,
+                    wakeup=container.v1_container.pqrsf_wakeup(),
+                )
+                notification_worker.start()
+                logger.info(f"PQRSF notifications sending from {runtime_settings.MAIL_PQRSF_INBOX}")
+            if runtime_settings.DWH_MONITORING_SYNC_ENABLED:
+                monitoring_worker = MonitoringSyncWorker(
+                    container.v1_container.dwh_monitoring_sync_service,
+                    runtime_settings.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
+                    trigger=container.v1_container.dwh_monitoring_trigger(),
+                )
+                monitoring_worker.start()
+                logger.info(
+                    "DWH monitoring copying the monitoreo schema every "
+                    f"{runtime_settings.DWH_MONITORING_SYNC_INTERVAL_SECONDS}s"
+                )
+            if runtime_settings.APP_MONITORING_ENABLED:
+                app_worker = AppCheckWorker(
+                    container.v1_container.app_monitoring_service,
+                    runtime_settings.APP_MONITORING_INTERVAL_SECONDS,
+                    trigger=container.v1_container.app_monitoring_trigger(),
+                )
+                app_worker.start()
+                logger.info(
+                    "App monitoring checking the registered platforms every "
+                    f"{runtime_settings.APP_MONITORING_INTERVAL_SECONDS}s"
+                )
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -57,8 +94,20 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if app_worker is not None:
+                await app_worker.stop()
+            if resources is not None:
+                # Manual checks use it too, so it is closed even with the loop off.
+                # It opens its connections on the first check, so this costs nothing otherwise.
+                await container.v1_container.app_monitoring_prober().close()
+            if monitoring_worker is not None:
+                await monitoring_worker.stop()
+            if notification_worker is not None:
+                await notification_worker.stop()
+                await container.v1_container.pqrsf_holidays().close()
             if mail_worker is not None:
                 await mail_worker.stop()
+            if mail_worker is not None or notification_worker is not None:
                 await container.v1_container.mail_client().close()
             if resources is not None:
                 await shutdown_global_resources(resources)
@@ -79,6 +128,10 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     )
     app.state.container = container
     app.state.settings = runtime_settings
+    # Added before CORS, so CORS wraps them: a 413 or 429 still reaches the browser readable.
+    # Requests go through the public guard first, then the limit of the endpoint's level.
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(PublicIntakeGuard)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_origins,

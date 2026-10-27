@@ -21,7 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
@@ -35,12 +35,18 @@ class RequestTypeModel(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     code: Mapped[str] = mapped_column(String(30), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # One short line shown under the option so the requester knows which type to pick.
+    description: Mapped[str | None] = mapped_column(String(300))
+    # Whether the form asks the requester for the area the request is about.
+    asks_area: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     allows_attachments: Mapped[bool] = mapped_column(nullable=False)
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true")
     prefix: Mapped[str] = mapped_column(String(5), nullable=False, unique=True)
     requires_follow_up: Mapped[bool] = mapped_column(nullable=False, server_default="true")
     sla_days: Mapped[int | None] = mapped_column(Integer)
+    # ``case`` opens a follow-up case; ``acknowledge`` is stored apart and thanked.
+    handling: Mapped[str] = mapped_column(String(12), nullable=False, server_default="case")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -79,7 +85,23 @@ class PqrsfRequestModel(Base):
     city: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(200))
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_subjects.id", ondelete="SET NULL")
+    )
+    cause_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_causes.id", ondelete="SET NULL")
+    )
+    # [{"invoice_number", "sku", "description", "supplier_code", "supplier_name", "lot",
+    #   "expiry_date", "affected_quantity"}, ...]; names are copies taken at submission.
+    products: Mapped[list | None] = mapped_column(JSONB)
+    # ``yes`` | ``no`` | ``unknown``: whether a pickup order was already requested in the ERP.
+    pickup_order_requested: Mapped[str | None] = mapped_column(String(8))
+    pickup_order_number: Mapped[str | None] = mapped_column(String(40))
+    # Area the requester picked; decides only when no cause, subject or category does.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
     document_request: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     document_category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
@@ -167,6 +189,69 @@ class DependencyModel(Base):
     )
 
 
+class SubjectModel(Base):
+    """What a request is about (the "novedad" of the communication channels table)."""
+
+    __tablename__ = "pqrsf_subjects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(300))
+    # Codes of the request types that offer it (``queja``, ``reclamo``…).
+    request_type_codes: Mapped[list[str]] = mapped_column(
+        ARRAY(String(30)), nullable=False, server_default="{}"
+    )
+    # Who attends it when it has no causes, or the cause names none.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    is_other: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CauseModel(Base):
+    """The cause of a subject; it decides the dependency and the treatment route."""
+
+    __tablename__ = "pqrsf_causes"
+    __table_args__ = (
+        Index("ix_pqrsf_causes_subject", "subject_id", "sort_order"),
+        CheckConstraint("route IN ('supplier', 'internal', 'none')", name="ck_pqrsf_causes_route"),
+        CheckConstraint("NOT requires_product OR allows_product", name="ck_pqrsf_causes_product"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    subject_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_subjects.id", ondelete="CASCADE"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(300))
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    # ``supplier``: may be escalated to the manufacturer; ``internal``: a process failure.
+    route: Mapped[str] = mapped_column(String(10), nullable=False, server_default="none")
+    requires_product: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    allows_product: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_other: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class DocumentCategoryModel(Base):
     """Group of document types offered together on the public form.
 
@@ -209,6 +294,9 @@ class DocumentTypeModel(Base):
         UUID(as_uuid=True), ForeignKey("pqrsf_document_categories.id", ondelete="SET NULL")
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    allows_direct_upload: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -258,6 +346,12 @@ class CaseModel(Base):
         Index("ix_pqrsf_cases_received_on", "received_on"),
         Index("ix_pqrsf_cases_due_on", "due_on"),
         Index("ix_pqrsf_cases_created_by", "created_by_user_id"),
+        Index("ix_pqrsf_cases_sales_executive", "sales_executive_user_id"),
+        CheckConstraint(
+            "sales_executive_source IS NULL "
+            "OR sales_executive_source IN ('invoice', 'internal', 'manual')",
+            name="ck_pqrsf_cases_sales_executive_source",
+        ),
         Index(
             "ix_pqrsf_cases_legacy_source_key",
             text("(legacy ->> 'source_key')"),
@@ -297,6 +391,12 @@ class CaseModel(Base):
     customer_nit: Mapped[str | None] = mapped_column(String(30))
     supplier_name: Mapped[str | None] = mapped_column(String(200))
     sales_executive_name: Mapped[str | None] = mapped_column(String(200))
+    # The seller of the invoice (from the sales data), the comercial who filed it, or typed.
+    sales_executive_code: Mapped[str | None] = mapped_column(String(40))
+    sales_executive_email: Mapped[str | None] = mapped_column(String(320))
+    sales_executive_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # ``invoice`` | ``internal`` | ``manual``.
+    sales_executive_source: Mapped[str | None] = mapped_column(String(10))
     requester_name: Mapped[str | None] = mapped_column(String(200))
     requester_email: Mapped[str | None] = mapped_column(String(320))
     request_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -426,6 +526,7 @@ class CaseAttachmentModel(Base):
     __table_args__ = (
         UniqueConstraint("storage_key", name="pqrsf_case_attachments_storage_key_key"),
         Index("ix_pqrsf_case_attachments_case", "case_id", "created_at"),
+        Index("ix_pqrsf_case_attachments_comment", "comment_event_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -441,6 +542,188 @@ class CaseAttachmentModel(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    comment_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_events.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FeedbackModel(Base):
+    """A suggestion or compliment, kept apart from the cases."""
+
+    __tablename__ = "pqrsf_feedback"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="pqrsf_feedback_request_id_key"),
+        UniqueConstraint("email_message_id", name="pqrsf_feedback_email_message_id_key"),
+        Index("ix_pqrsf_feedback_type_created", "request_type_id", "created_at"),
+        Index("ix_pqrsf_feedback_created", "created_at"),
+        Index("ix_pqrsf_feedback_email", "email"),
+        CheckConstraint("origin IN ('public_form', 'email')", name="ck_pqrsf_feedback_origin"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pqrsf_request_types.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    origin: Mapped[str] = mapped_column(String(12), nullable=False)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
+    )
+    email_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_email_messages.id", ondelete="SET NULL")
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    # Area the sender picked on the public form.
+    dependency_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_name: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    reply_notification_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    reply_skipped_reason: Mapped[str | None] = mapped_column(String(40))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FeedbackFileModel(Base):
+    """File metadata of an attachment of a suggestion or compliment."""
+
+    __tablename__ = "pqrsf_feedback_files"
+    __table_args__ = (Index("ix_pqrsf_feedback_files_feedback", "feedback_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    feedback_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_feedback.id", ondelete="CASCADE"), nullable=False
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(10), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CertificateModel(Base):
+    """A document type of the public form answered automatically with a file of the manager."""
+
+    __tablename__ = "pqrsf_certificates"
+    __table_args__ = (
+        UniqueConstraint("document_type_id", name="pqrsf_certificates_document_type_id_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    document_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pqrsf_document_types.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DocumentDeliveryModel(Base):
+    """The log of a request answered automatically with certificates."""
+
+    __tablename__ = "pqrsf_document_deliveries"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="pqrsf_document_deliveries_request_id_key"),
+        Index("ix_pqrsf_document_deliveries_created", "created_at"),
+        Index("ix_pqrsf_document_deliveries_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
+    )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_sites.id", ondelete="SET NULL")
+    )
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_name: Mapped[str | None] = mapped_column(String(200))
+    nit: Mapped[str | None] = mapped_column(String(30))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    manual_items: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    case_code: Mapped[str | None] = mapped_column(String(20))
+    notification_ids: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ItemDeliveryModel(Base):
+    """A requested document of a case answered with a file (linked from the manager or uploaded)."""
+
+    __tablename__ = "pqrsf_item_deliveries"
+    __table_args__ = (
+        Index("ix_pqrsf_item_deliveries_case", "case_id"),
+        Index("ix_pqrsf_item_deliveries_item", "item_id"),
+        CheckConstraint("source IN ('vault', 'upload')", name="ck_pqrsf_item_deliveries_source"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_items.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    attachment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_case_attachments.id", ondelete="SET NULL")
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    notification_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SupplierContactModel(Base):
+    """An address a case wrote to as supplier; suggested again for that supplier."""
+
+    __tablename__ = "pqrsf_supplier_contacts"
+    __table_args__ = (
+        UniqueConstraint("supplier_code", "email", name="pqrsf_supplier_contacts_code_email_key"),
+        Index("ix_pqrsf_supplier_contacts_email", "email"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    supplier_code: Mapped[str] = mapped_column(String(40), nullable=False, server_default="")
+    supplier_name: Mapped[str | None] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(200))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -454,5 +737,65 @@ class MailSyncStateModel(Base):
     mailbox: Mapped[str] = mapped_column(String(320), primary_key=True)
     delta_link: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class NotificationModel(Base):
+    """An email queued from the PQRSF mailbox; a retry never creates a second row."""
+
+    __tablename__ = "pqrsf_notifications"
+    __table_args__ = (
+        UniqueConstraint("dedupe_key", name="pqrsf_notifications_dedupe_key_key"),
+        Index("ix_pqrsf_notifications_due", "status", "next_attempt_at"),
+        Index("ix_pqrsf_notifications_case", "case_id", "kind"),
+        Index("ix_pqrsf_notifications_recipient", "kind", "recipient_email", "created_at"),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed')", name="ck_pqrsf_notifications_status"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    subject: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="SET NULL")
+    )
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SettingModel(Base):
+    """A module-wide setting kept as JSON (the notification timers)."""
+
+    __tablename__ = "pqrsf_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class JobRunModel(Base):
+    """One row per scheduled job and day: the key that stops it from running twice."""
+
+    __tablename__ = "pqrsf_job_runs"
+
+    job: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

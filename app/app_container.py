@@ -27,11 +27,19 @@ WIRED_MODULES = (
     "app.modules.masters.presentation.router",
     "app.modules.pqrsf.presentation.router",
     "app.modules.pqrsf.presentation.tracking_router",
+    "app.modules.pqrsf.presentation.feedback_router",
+    "app.modules.pqrsf.presentation.certificates_router",
+    "app.modules.pqrsf.presentation.deliveries_router",
+    "app.modules.pqrsf.presentation.item_delivery_router",
+    "app.modules.pqrsf.presentation.classification_router",
+    "app.modules.pqrsf.presentation.supplier_messages_router",
     "app.modules.projects.presentation.router",
     "app.modules.commercial_masters.presentation.router",
     "app.modules.supplier_supports.presentation.router",
     "app.modules.supplier_supports.presentation.special_cases_router",
     "app.modules.order_validation.presentation.router",
+    "app.modules.dwh_monitoring.presentation.router",
+    "app.modules.app_monitoring.presentation.router",
 )
 
 

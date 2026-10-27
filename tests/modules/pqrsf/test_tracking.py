@@ -6,15 +6,19 @@ from datetime import UTC, date, datetime
 import pytest
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
-from app.modules.pqrsf.application.dto import ImportedCase, ImportedItem, ItemChanges
+from app.modules.pqrsf.application.dto import CaseChanges, ImportedCase, ImportedItem, ItemChanges
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import (
+    Cause,
+    ClaimedProduct,
     CreateResult,
     PqrsfRequest,
     RequestedDocument,
     RequestType,
+    Subject,
 )
+from app.modules.pqrsf.domain.sales import InvoiceSeller
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_EVENT_TYPES,
     ActivityFilters,
@@ -85,9 +89,13 @@ class FakeRequests:
     def __init__(self, types) -> None:
         self.types = {t.id: t for t in types}
         self.requests: dict[uuid.UUID, PqrsfRequest] = {}
+        self.subjects = []
 
     async def list_request_types(self, active_only=True):
         return list(self.types.values())
+
+    async def list_subjects(self, active_only=True):
+        return self.subjects
 
     async def get_request_type(self, request_type_id):
         return self.types.get(request_type_id)
@@ -180,13 +188,14 @@ class FakeCases:
 
     async def list_activity(self, filters):
         items = [
-            e
-            for e in self.events
+            (position, e)
+            for position, e in enumerate(self.events)
             if (filters.before is None or e.created_at < filters.before)
             and (filters.include_access or e.event_type not in ACCESS_EVENT_TYPES)
         ]
-        items.sort(key=lambda e: e.created_at, reverse=True)
-        return items[: filters.limit]
+        # Two events in the same instant: the one written last comes first.
+        items.sort(key=lambda pair: (pair[1].created_at, pair[0]), reverse=True)
+        return [e for _, e in items[: filters.limit]]
 
     async def has_recent_access(self, event_type, actor_user_id, case_id, since):
         return any(
@@ -328,12 +337,58 @@ async def test_responsible_opening_the_case_marks_it_read() -> None:
     view = await s.service.create_case(s.command(), s.seller)
     await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
 
-    untouched = await s.service.mark_read(view.case.id, s.admin)
-    assert untouched.case.status.code == "recibida"
-
     read = await s.service.mark_read(view.case.id, s.responsible)
+
     assert read.case.status.code == "leida"
     assert read.case.first_read_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_manager_opening_a_received_case_marks_it_read_but_not_for_the_responsible() -> (
+    None
+):
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+
+    by_manager = await s.service.mark_read(view.case.id, s.admin)
+
+    assert by_manager.case.status.code == "leida"
+    assert by_manager.case.first_read_at is None  # that is the responsible's own reading
+    read = [e for e in s.cases.events if e.event_type == EventType.READ]
+    assert [(e.actor_user_id, e.to_status_id) for e in read] == [(s.admin.user_id, s.leida.id)]
+
+    by_responsible = await s.service.mark_read(view.case.id, s.responsible)
+
+    assert by_responsible.case.status.code == "leida" and by_responsible.case.first_read_at
+    read = [e for e in s.cases.events if e.event_type == EventType.READ]
+    assert [e.actor_user_id for e in read] == [s.admin.user_id, s.responsible.user_id]
+    assert read[1].to_status_id is None  # the status was already moved
+
+
+@pytest.mark.asyncio
+async def test_opening_a_case_that_is_not_received_never_changes_its_status() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.change_status(view.case.id, s.en_curso.id, None, s.admin)
+
+    opened = await s.service.mark_read(view.case.id, s.admin)
+
+    assert opened.case.status.code == "en_curso"
+    assert not [e for e in s.cases.events if e.event_type == EventType.READ]
+
+
+@pytest.mark.asyncio
+async def test_someone_who_can_only_see_the_case_does_not_move_its_status() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)  # the seller raised it: view only
+
+    opened = await s.service.mark_read(view.case.id, s.seller)
+
+    assert opened.case.status.code == "recibida"
+    assert [e.event_type for e in s.cases.events if e.actor_user_id == s.seller.user_id][-1] == (
+        EventType.VIEWED
+    )
 
 
 def _types(s: "Setup") -> list[str]:
@@ -345,6 +400,8 @@ async def test_every_opening_is_recorded_once_per_window() -> None:
     s = Setup()
     view = await s.service.create_case(s.command(), s.seller)
 
+    # The first opening by a manager moves the case to read; the next ones are access records.
+    await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.admin)
     await s.service.mark_read(view.case.id, s.seller)
@@ -661,3 +718,127 @@ async def test_unanswered_documents_past_due_are_flagged_and_assignments_keep_na
     assignments = [e for e in s.cases.events if e.event_type == "assigned"]
     assert assignments[-1].data["from_name"] == "cristian@jdh.com.co"
     assert assignments[-1].data["to_name"] == "carolina@jdh.com.co"
+
+
+def _classified(dependency_id):
+    subject_id = uuid.uuid4()
+    cause = Cause(
+        uuid.uuid4(),
+        subject_id,
+        "vencido",
+        "Producto vencido",
+        None,
+        dependency_id,
+        "internal",
+        True,
+        True,
+        False,
+    )
+    subject = Subject(
+        subject_id,
+        "calidad_producto",
+        "Calidad del producto",
+        None,
+        ("peticion",),
+        None,
+        False,
+        (cause,),
+    )
+    return subject, cause
+
+
+@pytest.mark.asyncio
+async def test_a_classified_request_opens_with_the_dependency_of_its_cause() -> None:
+    s = Setup()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    s.cases.dependencies[distribucion.id] = distribucion
+    subject, cause = _classified(distribucion.id)
+    request = replace(
+        _public_request(s.peticion),
+        subject_ref=subject,
+        cause_ref=cause,
+        products=[
+            ClaimedProduct("FE-1", "9834", "L1", date(2026, 12, 1), 2, "Aceite", "P1", "Unilever"),
+            ClaimedProduct("FE-1", "9835", "L2", date(2026, 12, 1), 1, "Jabón", "P1", "Unilever"),
+        ],
+    )
+
+    case = await s.service.open_for_request(request)
+
+    assert case.dependency == distribucion
+    assert case.subject == "Calidad del producto · Producto vencido"
+    assert case.supplier_name == "Unilever"
+
+
+class FakeSales:
+    def __init__(self, sellers=None, fail=False) -> None:
+        self.sellers = sellers or {}
+        self.fail = fail
+        self.asked = None
+
+    async def sellers_of(self, invoice_numbers, customer_nit):
+        self.asked = (list(invoice_numbers), customer_nit)
+        if self.fail:
+            raise RuntimeError("DWH caído")
+        return [self.sellers[n] for n in invoice_numbers if n in self.sellers]
+
+
+def _claim_request(s, *invoices):
+    return replace(
+        _public_request(s.peticion),
+        products=[
+            ClaimedProduct(number, "9834", "L1", date(2026, 12, 1), 1, "Aceite", "P1", "TF")
+            for number in invoices
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sales_executive_comes_from_the_invoice_and_follows_the_case() -> None:
+    s = Setup()
+    s.service.sales = FakeSales(
+        {"FEV-1020": InvoiceSeller("FEV-1020", "V07", "Carolina Ríos", "Carolina@JDH.com.co")}
+    )
+
+    case = await s.service.open_for_request(_claim_request(s, "fev 001020", "FEV-1020", "FEV9"))
+
+    assert s.service.sales.asked == (["FEV-1020", "FEV-9"], "900123456")
+    assert (case.sales_executive_name, case.sales_executive_code) == ("Carolina Ríos", "V07")
+    assert case.sales_executive_email == "carolina@jdh.com.co"
+    assert case.sales_executive_source == "invoice"
+    assert case.sales_executive_user_id == s.seller.user_id
+    detail = await s.service.get_case(case.id, s.seller)
+    assert detail.view.access.can_view and not detail.view.access.can_work
+
+
+@pytest.mark.asyncio
+async def test_without_sales_data_or_invoice_the_executive_stays_empty() -> None:
+    s = Setup()
+    s.service.sales = FakeSales(fail=True)
+    failed = await s.service.open_for_request(_claim_request(s, "FEV1"))
+    assert failed.sales_executive_name is None
+
+    s.service.sales = FakeSales(
+        {"FEV-2": InvoiceSeller("FEV-2", "V9", "Sin Cuenta", "nadie@jdh.com.co")}
+    )
+    unlinked = await s.service.open_for_request(replace(_claim_request(s, "FEV2"), id=uuid.uuid4()))
+    assert unlinked.sales_executive_name == "Sin Cuenta"
+    assert unlinked.sales_executive_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_typing_the_executive_drops_the_invoice_link() -> None:
+    s = Setup()
+    s.service.sales = FakeSales(
+        {"FEV-1": InvoiceSeller("FEV-1", "V07", "Carolina Ríos", "carolina@jdh.com.co")}
+    )
+    case = await s.service.open_for_request(_claim_request(s, "FEV1"))
+
+    view = await s.service.update_case(
+        case.id,
+        CaseChanges(fields=frozenset({"sales_executive_name"}), sales_executive_name="Otra"),
+        s.admin,
+    )
+
+    assert view.case.sales_executive_source == "manual"
+    assert view.case.sales_executive_user_id is None

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from app.modules.pqrsf.domain.entities import RequestType
+from app.modules.pqrsf.domain.entities import Cause, RequestType, Subject
 from app.modules.sites.domain.entities import Site
 
 TEMPLATE = """Tipo: Petición | Queja | Reclamo | Sugerencia | Felicitación
@@ -32,6 +32,8 @@ Sede: (sede o sucursal)
 Nombre: (quien solicita)
 Razón social: (empresa)
 NIT: (de la empresa)
+Novedad: (en quejas y reclamos: Calidad del producto, Comportamiento en la entrega…)
+Causal: (en quejas y reclamos: Producto vencido, Producto trocado…)
 Motivo: (resumen corto)
 Descripción:
 (cuéntanos tu solicitud con el detalle que necesites)"""
@@ -53,6 +55,9 @@ _FIELD_ALIASES = {
     "business_name": {"razon social", "empresa", "cliente"},
     "nit": {"nit"},
     "subject": {"motivo", "asunto"},
+    # The subject and cause of the catalog (the typed «Asunto» stays free text).
+    "novelty": {"novedad"},
+    "cause": {"causal", "causa"},
     "description": {"descripcion", "detalle", "mensaje"},
 }
 _ALIAS_TO_FIELD = {alias: name for name, aliases in _FIELD_ALIASES.items() for alias in aliases}
@@ -93,6 +98,9 @@ class ParsedRequest:
     description: str = ""
     # True when no template field was found: the message was free text.
     free_text: bool = False
+    # Names typed for the subject and cause of the catalog.
+    novelty: str | None = None
+    cause: str | None = None
 
 
 def strip_quoted_reply(body: str) -> str:
@@ -144,6 +152,8 @@ def parse_request(body: str) -> ParsedRequest:
         subject=fields.get("subject"),
         description=text,
         free_text=not fields and description is None,
+        novelty=fields.get("novelty"),
+        cause=fields.get("cause"),
     )
 
 
@@ -256,6 +266,9 @@ class EmailCaseInput:
     message_id: UUID
     # Consecutive of the closed case this message answered, when it starts a new one.
     related_code: str | None = None
+    # Subject and cause of the catalog named in the template; they say who attends it.
+    subject_ref: Subject | None = None
+    cause_ref: Cause | None = None
 
 
 @dataclass(frozen=True)
@@ -272,6 +285,8 @@ class CaseAttachment:
     checksum_sha256: str
     storage_key: str
     created_at: datetime
+    # The timeline comment the file was attached to; empty for files that came by email.
+    comment_event_id: UUID | None = None
 
 
 def case_attachment_key(case_id: UUID, attachment_id: UUID, extension: str) -> str:

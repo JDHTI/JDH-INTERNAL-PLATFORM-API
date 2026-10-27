@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0022_product_margins"
-down_revision: str | None = "0021_order_validation_approvals"
+revision: str = "0029_product_margins"
+down_revision: str | None = "0028_merge_pqrsf_app_monitoring"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

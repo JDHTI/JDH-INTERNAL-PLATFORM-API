@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
-from app.core.rate_limit import rate_limit
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.service import (
@@ -29,7 +28,7 @@ from app.modules.supplier_supports.domain.entities import (
     Tier,
 )
 
-router = APIRouter(dependencies=[Depends(rate_limit("medium"))])
+router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])
 _principal = Depends(get_current_principal)
 

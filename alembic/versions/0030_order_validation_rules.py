@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0023_order_validation_rules"
-down_revision: str | None = "0022_product_margins"
+revision: str = "0030_order_validation_rules"
+down_revision: str | None = "0029_product_margins"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

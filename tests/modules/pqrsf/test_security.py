@@ -5,7 +5,11 @@ import pytest
 from PIL import Image
 
 from app.core.errors import InvalidInputError, PayloadTooLargeError
-from app.modules.pqrsf.infrastructure.security import ClamAVScanner, PillowImageProcessor
+from app.modules.pqrsf.infrastructure.security import (
+    ClamAVScanner,
+    PillowImageProcessor,
+    VideoInspector,
+)
 
 
 def _image_bytes(image_format: str) -> bytes:
@@ -92,3 +96,41 @@ async def test_clamav_accepts_null_terminated_clean_response(monkeypatch) -> Non
     monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
 
     await ClamAVScanner("clamav", 3310, 1).scan(b"clean")
+
+
+MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+MOV = b"\x00\x00\x00\x14ftypqt  " + b"\x00" * 64
+WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "mime", "content", "stored"),
+    [
+        ("avería.mp4", "video/mp4", MP4, "video/mp4"),
+        ("C:\\fotos\\caja.MOV", "video/quicktime", MOV, "video/quicktime"),
+        ("clip.webm", "video/webm", WEBM, "video/webm"),
+    ],
+)
+async def test_video_inspector_accepts_matching_videos(name, mime, content, stored) -> None:
+    video = await VideoInspector(max_bytes=1024).inspect(name, mime, content)
+
+    assert video.content_type == stored
+    assert video.content == content
+    assert "\\" not in video.original_filename
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "mime", "content", "error"),
+    [
+        ("clip.mp4", "video/mp4", MOV, InvalidInputError),
+        ("clip.mp4", "video/quicktime", MP4, InvalidInputError),
+        ("clip.avi", "video/x-msvideo", MP4, InvalidInputError),
+        ("clip.mp4", "video/mp4", b"not a video at all", InvalidInputError),
+        ("clip.mp4", "video/mp4", MP4 + b"\x00" * 2048, PayloadTooLargeError),
+    ],
+)
+async def test_video_inspector_rejects_what_does_not_match(name, mime, content, error) -> None:
+    with pytest.raises(error):
+        await VideoInspector(max_bytes=1024).inspect(name, mime, content)
