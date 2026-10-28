@@ -241,6 +241,63 @@ class SupplierSpecialCaseModel(Base):
     )
 
 
+class SupplierSupportProfileModel(Base):
+    """How one commercial supplier's supports are set up: defaults and file column names.
+
+    ``defaults`` pre-fill the creation form and the bulk load; ``column_map`` says which header
+    of the supplier's own file feeds each field, so the file is uploaded as it arrives.
+    """
+
+    __tablename__ = "supplier_support_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    commercial_supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("commercial_suppliers.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    defaults: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    column_map: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    sheet: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class SupplierSupportAttachmentModel(Base):
+    """A document of the document manager that backs a support (a screenshot of an e-mail...).
+
+    Many to many: one document can back every support of a negotiation, and a support can
+    have several documents. The bytes and the folder live in the documents module.
+    """
+
+    __tablename__ = "supplier_support_documents"
+    __table_args__ = (Index("ix_supplier_support_documents_document", "document_id"),)
+
+    support_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="CASCADE"), primary_key=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    linked_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SupplierSupportTierModel(Base):
     """A volume or sales threshold of a support and the value it unlocks."""
 

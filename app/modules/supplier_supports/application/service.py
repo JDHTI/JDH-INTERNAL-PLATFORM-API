@@ -14,6 +14,7 @@ from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain import filters, vocabulary
 from app.modules.supplier_supports.domain.entities import (
+    Checked,
     Conflict,
     ImportOutcome,
     Issue,
@@ -354,6 +355,7 @@ class SupplierSupportService:
             has_conflicts=bool(row.conflicts),
             derived=derive(data),
             conflicts=row.conflicts,
+            attachment_count=row.attachment_count,
         )
 
     async def get(self, support_id: UUID) -> SupportView:
@@ -379,6 +381,7 @@ class SupplierSupportService:
         needs_review: bool | None = None,
         has_issues: bool | None = None,
         has_conflicts: bool | None = None,
+        has_attachments: bool | None = None,
         effective_only: bool = False,
         include_voided: bool = False,
         sort: Sequence[str] | None = None,
@@ -404,6 +407,7 @@ class SupplierSupportService:
             needs_review (bool | None): Only supports flagged ``pendiente_revision`` (or not).
             has_issues (bool | None): Only supports with (or without) data issues.
             has_conflicts (bool | None): Only supports that overlap another one.
+            has_attachments (bool | None): Only supports with (or without) a supporting document.
             effective_only (bool): Keep the effective support per supplier x client x SKU.
             include_voided (bool): Include voided supports.
             sort (Sequence[str] | None): Ordering keys, ``-`` prefix for descending.
@@ -417,6 +421,69 @@ class SupplierSupportService:
             InvalidInputError: If a field, operator, value or bound is invalid.
         """
 
+        spec = self._spec(
+            match=match,
+            conditions=conditions,
+            customer_nits=customer_nits,
+            supplier_codes=supplier_codes,
+            product_skus=product_skus,
+            q=q,
+            active_on=active_on,
+            validity=validity,
+            state=state,
+            needs_review=needs_review,
+            has_issues=has_issues,
+            has_conflicts=has_conflicts,
+            has_attachments=has_attachments,
+            effective_only=effective_only,
+            include_voided=include_voided,
+            sort=sort,
+            page=page,
+            size=size,
+        )
+        rows, total = await self.repository.search(spec)
+        return SupportPage(items=await self._views(rows), total=total, page=page, size=size)
+
+    async def search_ids(self, limit: int, **criteria: Any) -> list[UUID]:
+        """Ids of the supports a search matches (same ``criteria`` as :meth:`search`).
+
+        Args:
+            limit (int): Most ids to return.
+            **criteria (Any): The keyword arguments of :meth:`search`; paging is ignored.
+
+        Returns:
+            list[UUID]: Matching ids, up to ``limit``.
+
+        Raises:
+            InvalidInputError: If a field, operator, value or bound is invalid.
+        """
+
+        criteria.pop("page", None)
+        criteria.pop("size", None)
+        return await self.repository.search_ids(self._spec(**criteria), limit)
+
+    def _spec(
+        self,
+        *,
+        match: str = "all",
+        conditions: Sequence[Mapping[str, Any]] | None = None,
+        customer_nits: Sequence[str] | None = None,
+        supplier_codes: Sequence[str] | None = None,
+        product_skus: Sequence[str] | None = None,
+        q: str | None = None,
+        active_on: date | None = None,
+        validity: str | None = None,
+        state: str | None = None,
+        needs_review: bool | None = None,
+        has_issues: bool | None = None,
+        has_conflicts: bool | None = None,
+        has_attachments: bool | None = None,
+        effective_only: bool = False,
+        include_voided: bool = False,
+        sort: Sequence[str] | None = None,
+        page: int = 1,
+        size: int = 50,
+    ) -> filters.SearchSpec:
         if page < 1:
             raise InvalidInputError("La página debe ser mayor o igual a 1")
         if not 1 <= size <= MAX_PAGE_SIZE:
@@ -425,7 +492,7 @@ class SupplierSupportService:
             raise InvalidInputError(f"validity debe ser uno de: {', '.join(vocabulary.VALIDITIES)}")
         if state is not None and state not in vocabulary.STATES:
             raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATES)}")
-        spec = filters.SearchSpec(
+        return filters.SearchSpec(
             group=_with_base_filters(
                 filters.parse_group({"match": match, "conditions": list(conditions or [])}),
                 customer_nits,
@@ -444,9 +511,8 @@ class SupplierSupportService:
             sort=filters.parse_sort(sort),
             page=page,
             size=size,
+            has_attachments=has_attachments,
         )
-        rows, total = await self.repository.search(spec)
-        return SupportPage(items=await self._views(rows), total=total, page=page, size=size)
 
     async def can_manage(self, principal: Principal) -> bool:
         """Whether the caller may create, edit, switch and void supports (for UI gating)."""
@@ -529,11 +595,50 @@ class SupplierSupportService:
         prepared = [
             await self._prepare(data, supplier_code=code, strict=True) for data, code in items
         ]
-        now = datetime.now(UTC)
-        created = [
-            await self.repository.create(uuid4(), data, principal.email, now) for data in prepared
-        ]
+        return await self._save_all(principal, prepared)
+
+    async def _save_all(
+        self, principal: Principal, prepared: Sequence[SupportData]
+    ) -> list[SupportView]:
+        created = await self.repository.create_many(
+            [(uuid4(), data) for data in prepared], principal.email, datetime.now(UTC)
+        )
         return [await self.get(support.id) for support in created]
+
+    async def check_many(
+        self, principal: Principal, items: Sequence[tuple[SupportData, str | None]]
+    ) -> list[Checked]:
+        """Run the strict checks of a manual create on every item, collecting each failure.
+
+        Unlike :meth:`create_many`, which stops at the first bad item, this reports them
+        all, so a file can be corrected in one pass. Nothing is written.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            items (Sequence[tuple[SupportData, str | None]]): Inputs with supplier code.
+
+        Returns:
+            list[Checked]: One per item, in order: the normalized data or the error.
+        """
+
+        await self._require_manager(principal)
+        checked: list[Checked] = []
+        for data, code in items:
+            try:
+                checked.append(
+                    Checked(data=await self._prepare(data, supplier_code=code, strict=True))
+                )
+            except InvalidInputError as exc:
+                checked.append(Checked(error=exc.detail))
+        return checked
+
+    async def create_checked(
+        self, principal: Principal, items: Sequence[SupportData]
+    ) -> list[SupportView]:
+        """Save, in one transaction, supports already accepted by :meth:`check_many`."""
+
+        await self._require_manager(principal)
+        return await self._save_all(principal, items)
 
     async def update(
         self,

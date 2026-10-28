@@ -207,6 +207,7 @@ class SupportResponse(_SupportFields):
     unit_basis_source: str
     special_case_id: UUID | None
     has_conflicts: bool
+    attachment_count: int
     conflicts: list[UUID]
     issues: list[IssueResponse]
     tiers: list[TierBody]
@@ -255,6 +256,10 @@ class SearchRequest(BaseModel):
     needs_review: bool | None = None
     has_issues: bool | None = None
     has_conflicts: bool | None = None
+    has_attachments: bool | None = Field(
+        default=None,
+        description="Only supports with (true) or without (false) a supporting document",
+    )
     effective_only: bool = Field(
         default=False, description="Keep the effective support per supplier x client x SKU"
     )
@@ -318,6 +323,7 @@ def _response(view: SupportView) -> SupportResponse:
         state=view.state,  # type: ignore[arg-type]
         needs_review=view.needs_review,
         has_conflicts=view.has_conflicts,
+        attachment_count=view.attachment_count,
         conflicts=list(view.conflicts),
         issues=[_issue(issue) for issue in data.issues],
         tiers=[

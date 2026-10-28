@@ -13,7 +13,7 @@ from app.modules.app_monitoring.application.service import AppMonitoringService
 from app.modules.app_monitoring.infrastructure.prober import HttpProber
 from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyApplicationRepository
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.infrastructure.policies import AreaManagerPolicy
+from app.modules.areas.infrastructure.policies import AreaManagerPolicy, UnrestrictedAreaAccess
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
 from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
@@ -95,8 +95,21 @@ from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
+from app.modules.supplier_supports.application.attachments import SupportAttachmentService
+from app.modules.supplier_supports.application.bulk import SupportBulkService
+from app.modules.supplier_supports.application.profiles import SupportProfileService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.application.special_cases import SpecialCaseService
+from app.modules.supplier_supports.infrastructure.attachments_repository import (
+    SqlAlchemyAttachmentRepository,
+)
+from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
+from app.modules.supplier_supports.infrastructure.document_store import (
+    DocumentManagerSupportStore,
+)
+from app.modules.supplier_supports.infrastructure.profiles_repository import (
+    SqlAlchemyProfileRepository,
+)
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
 from app.modules.supplier_supports.infrastructure.special_cases_repository import (
     SqlAlchemySpecialCaseRepository,
@@ -342,6 +355,54 @@ class V1Container(containers.DeclarativeContainer):
         masters=master_lookup,
         managers=supplier_support_manager_policy,
         calendar=pqrsf_calendar,
+    )
+    supplier_support_profile_repository = providers.Factory(
+        SqlAlchemyProfileRepository, database=database
+    )
+    supplier_support_profile_service = providers.Factory(
+        SupportProfileService,
+        repository=supplier_support_profile_repository,
+        masters=master_lookup,
+        managers=supplier_support_manager_policy,
+    )
+    supplier_support_attachment_repository = providers.Factory(
+        SqlAlchemyAttachmentRepository, database=database
+    )
+    # The supports managers file proofs in BI's space without belonging to BI: this document
+    # service does not check area membership, so it is only reachable through the store, which
+    # runs after the supports' own permission check.
+    unrestricted_area_access = providers.Factory(UnrestrictedAreaAccess, repository=area_repository)
+    supplier_support_document_service = providers.Factory(
+        DocumentService,
+        repository=document_repository,
+        storage=storage,
+        areas=unrestricted_area_access,
+        max_upload_bytes=config.documents.max_upload_bytes,
+        allowed_extensions=config.documents.allowed_extensions,
+        download_url_ttl=config.documents.download_url_ttl,
+    )
+    supplier_support_document_store = providers.Factory(
+        DocumentManagerSupportStore,
+        documents=supplier_support_document_service,
+        area_slug=config.supplier_supports.documents_area_slug,
+        folder_name=config.supplier_supports.documents_folder,
+    )
+    supplier_support_attachment_service = providers.Factory(
+        SupportAttachmentService,
+        supports=supplier_support_service,
+        attachments=supplier_support_attachment_repository,
+        store=supplier_support_document_store,
+        max_supports=config.supplier_supports.max_attach_supports,
+        max_file_bytes=config.documents.max_upload_bytes,
+    )
+    supplier_support_file_reader = providers.Singleton(SpreadsheetSupportReader)
+    supplier_support_bulk_service = providers.Factory(
+        SupportBulkService,
+        supports=supplier_support_service,
+        profiles=supplier_support_profile_service,
+        reader=supplier_support_file_reader,
+        max_upload_bytes=config.supplier_supports.max_upload_bytes,
+        max_rows=config.supplier_supports.max_bulk_rows,
     )
     # --- Retained orders validator (reads the supports master) ---
     order_validation_manager_policy = providers.Factory(

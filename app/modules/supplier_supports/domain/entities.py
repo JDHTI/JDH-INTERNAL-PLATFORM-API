@@ -146,6 +146,7 @@ class SupportRow:
     product_description: str | None = None
     product_brand: str | None = None
     conflicts: tuple[UUID, ...] = ()
+    attachment_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,7 @@ class SupportView:
     has_conflicts: bool
     derived: Derived
     conflicts: tuple[UUID, ...] = ()
+    attachment_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,14 @@ class Conflict:
     supplier_value: Decimal | None
     calc_method: str
     status: str
+
+
+@dataclass(frozen=True)
+class Checked:
+    """A support after the strict checks: its normalized data, or why it was refused."""
+
+    data: SupportData | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
