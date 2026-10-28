@@ -373,12 +373,15 @@ class DocumentService:
             raise DependencyUnavailableError("El almacenamiento de documentos no responde") from exc
         await self.repository.delete_document(document.id)
 
-    async def download_link(self, document_id: UUID, principal: Principal) -> DownloadLink:
+    async def download_link(
+        self, document_id: UUID, principal: Principal, inline: bool = False
+    ) -> DownloadLink:
         """Sign a temporary link that downloads the document.
 
         Args:
             document_id (UUID): The document.
             principal (Principal): The caller.
+            inline (bool): Link that displays the file in the browser instead of saving it.
 
         Returns:
             DownloadLink: Signed URL, the file name it saves as and its validity.
@@ -387,7 +390,7 @@ class DocumentService:
         document = await self._document(document_id, principal)
         filename = download_filename(document)
         url = self.storage.presigned_download_url(
-            document.storage_key, filename, self.download_url_ttl
+            document.storage_key, filename, self.download_url_ttl, inline=inline
         )
         return DownloadLink(url=url, filename=filename, expires_in=self.download_url_ttl)
 

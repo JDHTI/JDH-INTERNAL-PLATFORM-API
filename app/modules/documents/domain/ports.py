@@ -93,13 +93,16 @@ class ObjectStorage(Protocol):
         """
         ...
 
-    def presigned_download_url(self, key: str, filename: str, expires_in: int) -> str:
+    def presigned_download_url(
+        self, key: str, filename: str, expires_in: int, inline: bool = False
+    ) -> str:
         """Sign a temporary download URL.
 
         Args:
             key (str): Object key.
             filename (str): Name the browser saves the file as.
             expires_in (int): Validity in seconds.
+            inline (bool): Display the file in the browser instead of saving it.
 
         Returns:
             str: The signed URL.

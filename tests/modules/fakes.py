@@ -265,5 +265,6 @@ class FakeStorage:
         self.deleted.append(key)
         self.objects.pop(key, None)
 
-    def presigned_download_url(self, key, filename, expires_in):
-        return f"https://s3.test/{key}?filename={filename}&ttl={expires_in}"
+    def presigned_download_url(self, key, filename, expires_in, inline=False):
+        suffix = "&inline=1" if inline else ""
+        return f"https://s3.test/{key}?filename={filename}&ttl={expires_in}{suffix}"
