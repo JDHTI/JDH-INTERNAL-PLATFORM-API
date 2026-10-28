@@ -91,7 +91,7 @@ def test_bulk_reports_errors_and_saves_nothing(client) -> None:
 
     assert body["blocked"] is True and body["applied"] is False
     assert body["errors"] == [
-        {"row_number": 4, "field": None, "message": "Referencia JDH desconocida: 999999"}
+        {"row_number": 4, "field": "product_sku", "message": "Referencia JDH desconocida: 999999"}
     ]
     assert client.post(f"{BASE}/search", json={}).json()["total"] == 0
 

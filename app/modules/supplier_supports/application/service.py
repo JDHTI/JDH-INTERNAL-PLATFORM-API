@@ -103,6 +103,14 @@ EDITABLE_FIELDS = frozenset(
 )
 
 
+class FieldError(InvalidInputError):
+    """An invalid input that belongs to one field of the support (the bulk report names it)."""
+
+    def __init__(self, detail: str, field: str) -> None:
+        super().__init__(detail)
+        self.field = field
+
+
 def _clean(value: str | None) -> str | None:
     return " ".join(value.split()) or None if value else None
 
@@ -175,36 +183,42 @@ class SupplierSupportService:
             ("status", data.status, vocabulary.STATUSES),
         ):
             if value not in allowed:
-                raise InvalidInputError(
-                    f"{name} inválido: {value!r} (válidos: {', '.join(allowed)})"
+                raise FieldError(
+                    f"{name} inválido: {value!r} (válidos: {', '.join(allowed)})", name
                 )
         if data.settlement_method and data.settlement_method not in vocabulary.SETTLEMENTS:
-            raise InvalidInputError(f"settlement_method inválido: {data.settlement_method!r}")
+            raise FieldError(
+                f"settlement_method inválido: {data.settlement_method!r}", "settlement_method"
+            )
         if data.value_unit and data.value_unit not in vocabulary.VALUE_UNITS:
-            raise InvalidInputError(f"value_unit inválido: {data.value_unit!r}")
+            raise FieldError(f"value_unit inválido: {data.value_unit!r}", "value_unit")
         if data.valid_from and data.valid_to and data.valid_to < data.valid_from:
-            raise InvalidInputError("La vigencia final no puede ser anterior a la inicial")
+            raise FieldError("La vigencia final no puede ser anterior a la inicial", "valid_to")
         if data.calc_method in _VALUE_REQUIRED and data.supplier_value is None:
-            raise InvalidInputError(f"{data.calc_method} requiere supplier_value")
+            raise FieldError(f"{data.calc_method} requiere supplier_value", "supplier_value")
         if data.calc_method == "margen_minimo" and data.min_margin_pct is None:
-            raise InvalidInputError("margen_minimo requiere min_margin_pct")
+            raise FieldError("margen_minimo requiere min_margin_pct", "min_margin_pct")
         if data.calc_method == "precio_neto" and data.target_margin_pct is None:
-            raise InvalidInputError("precio_neto requiere target_margin_pct (margen garantizado)")
+            raise FieldError(
+                "precio_neto requiere target_margin_pct (margen garantizado)", "target_margin_pct"
+            )
         if data.calc_method in _PCT_METHODS and data.supplier_value is not None:
             if not Decimal(0) <= data.supplier_value <= Decimal(1):
-                raise InvalidInputError("El porcentaje debe expresarse entre 0 y 1 (0.05 = 5%)")
+                raise FieldError(
+                    "El porcentaje debe expresarse entre 0 y 1 (0.05 = 5%)", "supplier_value"
+                )
         elif data.supplier_value is not None and data.supplier_value < 0:
-            raise InvalidInputError("El valor del proveedor no puede ser negativo")
+            raise FieldError("El valor del proveedor no puede ser negativo", "supplier_value")
         for name in ("target_margin_pct", "list_margin_pct"):
             value = getattr(data, name)
             if value is not None and not Decimal(0) <= value < Decimal(1):
-                raise InvalidInputError(f"{name} debe estar entre 0 y 1")
+                raise FieldError(f"{name} debe estar entre 0 y 1", name)
         if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
-            raise InvalidInputError("jdh_pct debe estar entre -1 y 1")
+            raise FieldError("jdh_pct debe estar entre -1 y 1", "jdh_pct")
         for name in ("reference_cost", "reference_list_price", "pack_factor"):
             value = getattr(data, name)
             if value is not None and value <= 0:
-                raise InvalidInputError(f"{name} debe ser mayor que cero")
+                raise FieldError(f"{name} debe ser mayor que cero", name)
         for tier in data.tiers:
             if tier.threshold_type not in vocabulary.THRESHOLD_TYPES:
                 raise InvalidInputError(f"Tipo de escala inválido: {tier.threshold_type!r}")
@@ -248,7 +262,9 @@ class SupplierSupportService:
             supplier_id = found.get(supplier_code.strip())
             if supplier_id is None:
                 if strict:
-                    raise InvalidInputError(f"Proveedor comercial desconocido: {supplier_code}")
+                    raise FieldError(
+                        f"Proveedor comercial desconocido: {supplier_code}", "supplier_code"
+                    )
                 issues.append(Issue("proveedor_sin_cruce", supplier_code, "supplier"))
         elif supplier_id is not None and (
             previous is None or previous.commercial_supplier_id != supplier_id
@@ -264,7 +280,9 @@ class SupplierSupportService:
             product = (await self.masters.products_by_sku([data.product_sku])).get(data.product_sku)
             if product is None:
                 if strict:
-                    raise InvalidInputError(f"Referencia JDH desconocida: {data.product_sku}")
+                    raise FieldError(
+                        f"Referencia JDH desconocida: {data.product_sku}", "product_sku"
+                    )
                 product_id = None
                 issues.append(Issue("sku_sin_cruce", data.product_sku, "product_sku"))
             else:
@@ -278,7 +296,9 @@ class SupplierSupportService:
             known = await self.masters.customer_names([data.customer_nit])
             if data.customer_nit not in known:
                 if strict:
-                    raise InvalidInputError(f"NIT de cliente desconocido: {data.customer_nit}")
+                    raise FieldError(
+                        f"NIT de cliente desconocido: {data.customer_nit}", "customer_nit"
+                    )
                 issues.append(Issue("nit_sin_cruce", data.customer_nit, "customer_nit"))
             elif not data.customer_name:
                 data = replace(data, customer_name=known[data.customer_nit] or None)
@@ -629,7 +649,7 @@ class SupplierSupportService:
                     Checked(data=await self._prepare(data, supplier_code=code, strict=True))
                 )
             except InvalidInputError as exc:
-                checked.append(Checked(error=exc.detail))
+                checked.append(Checked(error=exc.detail, field=getattr(exc, "field", None)))
         return checked
 
     async def create_checked(

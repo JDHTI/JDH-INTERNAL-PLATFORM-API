@@ -55,10 +55,29 @@ async def test_one_bad_row_blocks_the_whole_load_even_when_applying(bulk, repo, 
 
     assert report.blocked and not report.applied and report.created == []
     assert report.valid == 2 and report.invalid == 1
-    assert [(issue.row_number, issue.message) for issue in report.errors] == [
-        (4, "Referencia JDH desconocida: 999999")
+    assert [(issue.row_number, issue.field, issue.message) for issue in report.errors] == [
+        (4, "product_sku", "Referencia JDH desconocida: 999999")
     ]
     assert repo.items == {}
+
+
+async def test_unknown_masters_and_rule_errors_name_their_field(bulk, manager) -> None:
+    header = (
+        "Tipo,Método de cálculo,Valor Proveedor,Referencia JDH,NIT Cliente,Fecha Inicio,Fecha Fin\n"
+    )
+    rows = (
+        "tactico_cliente,pct_costo,5%,1128,123,01/10/2026,\n"  # unknown client
+        "tactico_cliente,pct_costo,5%,1128,,01/10/2026,01/09/2026\n"  # ends before it starts
+        "tactico_cliente,precio_neto,5000,1128,,01/10/2026,\n"  # net price needs the margin
+    )
+
+    report = await load(bulk, manager, header + rows, supplier_code="233")
+
+    assert [(issue.row_number, issue.field) for issue in report.errors] == [
+        (2, "customer_nit"),
+        (3, "valid_to"),
+        (4, "target_margin_pct"),
+    ]
 
 
 async def test_every_bad_row_is_reported_in_one_pass(bulk, manager) -> None:

@@ -256,7 +256,7 @@ class SupportBulkService:
         accepted: dict[int, SupportData] = {}
         for number, result in zip(ordered, checked, strict=True):
             if result.error is not None or result.data is None:
-                issues.append(RowIssue(number, None, result.error or "Apoyo no válido"))
+                issues.append(RowIssue(number, result.field, result.error or "Apoyo no válido"))
             else:
                 accepted[number] = result.data
         issues.extend(self._repeated(accepted))

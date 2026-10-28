@@ -196,6 +196,8 @@ class Checked:
 
     data: SupportData | None = None
     error: str | None = None
+    # The field the error belongs to, when it is one.
+    field: str | None = None
 
 
 @dataclass(frozen=True)
