@@ -210,6 +210,135 @@ POST /api/v1/supplier-supports/search
   dos filas sin ninguna fecha (son actualizaciones sucesivas de costo) ni filas sin
   cliente, producto ni bodega (programas de todo el proveedor).
 
+## Formulario de creación
+
+`GET /supplier-supports/form-schema` describe el formulario para que la pantalla se arme sola:
+cada campo (`name`, `label`, `group`, `type`, `choices`, `help`) y, por método de cálculo
+(`methods`), cómo se escribe el valor (`value_kind`: `percent`, `money` o `none`), qué campos
+exige (`requires`) y cuáles muestra (`shows`). Siempre se exigen `kind` y `calc_method`. La
+creación es `POST /supplier-supports` y las mismas reglas que en el formulario las aplica el
+servidor. El catálogo vive en `domain/fields.py` y es el mismo de la plantilla de carga masiva.
+
+## Perfil de apoyos por proveedor
+
+Cada proveedor comercial puede tener un **perfil** (`/supplier-support-profiles`) con lo que lo
+distingue, sin programar:
+
+- `defaults`: valores que prellenan el apoyo (`kind`, `calc_method`, `funding`, `value_unit`,
+  `settlement_method`, `program`, `regionals`, `business_units`, `channels`, `jdh_pct`,
+  márgenes, `authorized_by`…). La pantalla de creación los usa de partida y la carga masiva los
+  aplica a toda fila que no traiga su propia columna. Es donde se fija, por ejemplo, la base del
+  % de un proveedor (`pct_costo` o `pct_precio_lista`).
+- `column_map`: campo → encabezados del archivo del proveedor (`{"supplier_value": ["% APOYO"]}`).
+- `sheet`: hoja del libro que se lee.
+
+| Método y ruta | Uso |
+| --- | --- |
+| `GET /supplier-support-profiles` | Perfiles existentes |
+| `GET /supplier-support-profiles/{supplier_code}` | Un perfil (404 si no tiene) |
+| `PUT /supplier-support-profiles/{supplier_code}` | Crea (sin `version`) o reemplaza (con `version`; 409 si cambió) |
+| `DELETE /supplier-support-profiles/{supplier_code}` | Borra el perfil; los apoyos ya creados no se tocan |
+
+Los porcentajes se guardan como fracción en texto (`"0.05"`). Escritura: gestores.
+
+## Carga masiva por archivo
+
+`POST /supplier-supports/bulk` (`multipart/form-data`, campo `file` `.xlsx`/`.csv`). Cada fila
+pasa por las mismas validaciones que un apoyo creado a mano (proveedor, referencia JDH y NIT
+deben existir en los maestros) y la carga es **todo o nada**: si una sola fila falla no se guarda
+ninguna, aunque se pida `apply=true` (`blocked`). El reporte dice todos los errores de una vez
+(fila, campo y motivo) para corregir y volver a subir.
+
+| Parámetro | |
+| --- | --- |
+| `file` | `.xlsx`, `.xlsm` o `.csv` (máximo `SUPPLIER_SUPPORTS_MAX_UPLOAD_MB`, 10 MB, y `SUPPLIER_SUPPORTS_MAX_BULK_ROWS`, 2000 filas) |
+| `apply` | `false` (defecto) simula; `true` guarda si no hay errores |
+| `supplier_code` | Proveedor de las filas sin columna propia; además elige su perfil |
+| `sheet` | Hoja; si falta, la del perfil y luego la primera con encabezados |
+| `defaults`, `column_map` | Objetos JSON (campos del formulario) que prevalecen sobre el perfil en esta carga |
+
+Cómo se lee el archivo:
+
+1. **Encabezados**: se busca entre las primeras 15 filas la que reconozca más campos (mínimo 2).
+   Se reconocen los nombres de la plantilla (`GET /supplier-supports/bulk/template`), sus
+   sinónimos habituales (`SKU JDH`, `% DCTO`, `FECHA INICIAL`…), el mapeo del perfil y el de la
+   petición, sin importar tildes ni mayúsculas. Las columnas que nadie usó se devuelven en
+   `ignored_columns` y las usadas en `mapped_columns`, para armar el mapeo desde la pantalla.
+2. **Valores**: celda de la fila > `defaults` de la petición > `defaults` del perfil. Las
+   columnas cerradas (`Tipo`, `Método de cálculo`…) usan los códigos de `catalogs`.
+3. **Porcentajes**: `5 %`, `5` o `0,05` se leen como 5 %; menor que 1 es fracción y de 1 a 100
+   son puntos. Los métodos que no son porcentaje (`valor_unidad`, `costo_neto`…) leen dinero.
+4. **Fechas**: `dd/mm/aaaa`, `aaaa-mm-dd` o fecha de Excel; vacío, `INDEFINIDO` o `UFN` = sin
+   fecha final. Alcance (`regionals`, `business_units`, `channels`) con varios valores
+   separados por coma, barra o punto y coma; `TODOS` = sin restricción.
+5. Dos filas iguales en el mismo archivo son error (`Fila repetida`). Las escalas (`tiers`)
+   no van en el archivo: se agregan luego por `PATCH`.
+
+La respuesta trae `preview` (las 50 primeras filas válidas), `created` (ids, al aplicar) y
+`with_conflicts` (cuántos de los creados se solapan con apoyos existentes; se permiten y se
+advierten, como siempre). `source` queda como `carga masiva: <archivo>`.
+
+`GET /supplier-supports/bulk/template` baja la plantilla (`.xlsx`: hoja `Apoyos` con las
+columnas, `Instrucciones` y `Valores`); con `supplier_code` sigue el formato del perfil: sus
+encabezados y sin las columnas de valor fijo. `POST /supplier-supports/batch` (JSON) ahora
+también guarda en una sola transacción.
+
+## Soportes de los apoyos (documentos)
+
+Cada apoyo puede tener **documentos de soporte** (en su mayoría capturas de pantalla de correos,
+porque no todos los apoyos se acuerdan por correo). Se suben desde el maestro y quedan en el
+**gestor documental del área de BI** (el maestro de apoyos es de BI), en la carpeta
+`soporte_apoyos`, que se crea sola la primera vez (`SUPPLIER_SUPPORTS_DOCUMENTS_AREA_SLUG`, por
+defecto `bi`, y `SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER`). Los miembros de BI (y los
+administradores) la ven en el gestor como cualquier otra carpeta, con sus documentos
+etiquetados, buscables y descargables ahí; los tipos y el tamaño (25 MB) son los del gestor
+(`png`, `jpg`, `pdf`, `xlsx`, `zip`…). Borrar un documento en el gestor lo desvincula de sus
+apoyos.
+
+Quién hace qué: **subir, vincular y desvincular** es de los gestores de apoyos
+(`SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG`, `comercial`, y administradores), sin necesidad de ser
+miembros de BI. **Ver** los soportes de un apoyo y **abrirlos** desde el maestro lo puede hacer
+quien lea el apoyo (todo usuario autenticado), sin ser miembro de BI: el documento solo se abre
+a través del apoyo al que está vinculado. En el gestor de BI rigen los permisos normales del
+área. Si antes se subieron soportes con otra área configurada,
+`scripts/relocate-support-documents.py [--apply]` los mueve a la carpeta de BI (los vínculos
+con los apoyos no cambian).
+
+Un documento puede respaldar **varios apoyos** (relación N a N): una captura del correo que
+acordó el apoyo de veinte referencias es un solo documento con veinte vínculos. Los apoyos
+se eligen **uno a uno** o **dinámicamente** con los mismos filtros de la lista (referencias,
+clientes, proveedores, estado, texto, condiciones…):
+
+| Método y ruta | Uso |
+| --- | --- |
+| `POST /supplier-supports/{id}/attachments` | Sube uno o varios archivos (`files`) a un apoyo |
+| `POST /supplier-supports/attachments/preview` | Cuántos apoyos alcanza una selección, sin subir nada |
+| `POST /supplier-supports/attachments` | Sube archivos y los vincula a una selección |
+| `GET /supplier-supports/{id}/attachments` | Soportes de un apoyo (`support_count`: a cuántos apoyos respalda cada uno) |
+| `GET /supplier-supports/{id}/attachments/{document_id}/view` | Enlace temporal firmado (5 min) para **mostrar** el archivo en el navegador (`inline: true`: imágenes, PDF); con `?download=true` lo descarga. 404 si el documento no está vinculado a ese apoyo. Pide uno nuevo en vez de guardarlo |
+| `DELETE /supplier-supports/{id}/attachments/{document_id}` | Desvincula; el documento queda en el gestor y en los demás apoyos |
+
+La **selección** es `{"support_ids": [...], "search": {...}}`: ids, una búsqueda o ambas (se
+suman sin repetir). `search` es el cuerpo de `POST /supplier-supports/search`
+(`product_skus`, `supplier_codes`, `customer_nits`, `state`, `q`, `conditions`…; `page`, `size`
+y `sort` se ignoran) y **exige al menos un filtro**, para que una búsqueda vacía no apunte a
+todos los apoyos por error. Los anulados no entran. Máximo `SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS`
+(1000) apoyos por subida: `preview` informa `capped` y `attach` lo rechaza.
+
+`POST /supplier-supports/attachments` es `multipart/form-data`: `files` (hasta 10), `selection`
+(JSON), `document_ids` (JSON: documentos que ya están en `soporte_apoyos`, para vincular a más
+apoyos sin volver a subirlos), `name` (solo con un archivo), `description` y `tags` (separadas
+por coma). **Todo o nada**: si falla un archivo o el vínculo, los archivos que esa llamada ya
+había subido se borran.
+
+Clasificación en el gestor: cada documento lleva la etiqueta `apoyos`, las que se envíen y
+`proveedor <código>` por cada proveedor alcanzado (si son más de 10 no se agregan). Sin `name`,
+el documento se llama como el archivo más la hora, y si choca (todas las capturas pegadas se
+llaman `image.png`) se le agrega un sufijo corto.
+
+En la búsqueda, `has_attachments` (`true`/`false`) lista los apoyos con o sin soporte (para
+encontrar los que faltan), y cada apoyo trae `attachment_count`. Migración `0034`.
+
 ## Migración del Excel
 
 ```bash

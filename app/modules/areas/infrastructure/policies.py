@@ -2,9 +2,60 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.errors import ForbiddenError, NotFoundError
 from app.modules.areas.application.service import AreaService
+from app.modules.areas.domain.entities import Area
+from app.modules.areas.domain.ports import AreaRepository
 from app.modules.identity.domain.principal import Principal
+
+
+class UnrestrictedAreaAccess:
+    """Resolves an area without asking whether the caller belongs to it.
+
+    For a feature that files documents in another area's space *after* its own permission check
+    (for example the supports managers filing proofs in BI's document manager). It must only be
+    wired behind that check: it never authorizes on its own.
+    """
+
+    def __init__(self, repository: AreaRepository) -> None:
+        """Create the access.
+
+        Args:
+            repository (AreaRepository): Where areas are read.
+        """
+
+        self.repository = repository
+
+    async def authorize(self, slug: str, principal: Principal) -> Area:
+        """The area with this slug; membership is not checked.
+
+        Raises:
+            NotFoundError: If there is no such area.
+        """
+
+        area = await self.repository.get_by_slug(slug)
+        if area is None:
+            raise NotFoundError("Área no encontrada")
+        return area
+
+    async def authorize_by_id(self, area_id: UUID, principal: Principal) -> Area:
+        """The area with this identifier; membership is not checked.
+
+        Raises:
+            NotFoundError: If there is no such area.
+        """
+
+        area = await self.repository.get_by_id(area_id)
+        if area is None:
+            raise NotFoundError("Área no encontrada")
+        return area
+
+    async def accessible_area_ids(self, principal: Principal) -> list[UUID] | None:
+        """Every area (the searches of this access are never open to the caller)."""
+
+        return None
 
 
 class AreaManagerPolicy:

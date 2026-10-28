@@ -358,3 +358,4 @@ class SearchSpec:
     sort: tuple[SortKey, ...]
     page: int
     size: int
+    has_attachments: bool | None = None

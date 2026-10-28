@@ -65,18 +65,22 @@ class S3Storage:
     async def delete_object(self, key: str) -> None:
         await asyncio.to_thread(self.client.delete_object, Bucket=self.bucket, Key=key)
 
-    def presigned_download_url(self, key: str, filename: str, expires_in: int) -> str:
+    def presigned_download_url(
+        self, key: str, filename: str, expires_in: int, inline: bool = False
+    ) -> str:
         """Sign a temporary GET URL that downloads the object as ``filename``.
 
+        With ``inline`` the browser displays it (images, PDFs) instead of saving it.
         Signing is local (no network call), so it does not need a thread.
         """
 
+        disposition = "inline" if inline else "attachment"
         return self.presign_client.generate_presigned_url(
             "get_object",
             Params={
                 "Bucket": self.bucket,
                 "Key": key,
-                "ResponseContentDisposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+                "ResponseContentDisposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
             },
             ExpiresIn=expires_in,
         )

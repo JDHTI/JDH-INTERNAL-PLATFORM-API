@@ -172,6 +172,16 @@ class Settings(BaseSettings):
 
     # Members of this area (plus platform admins) manage supplier supports.
     SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
+    # Largest file, and most rows, of a bulk load of supports.
+    SUPPLIER_SUPPORTS_MAX_UPLOAD_MB: int = 10
+    SUPPLIER_SUPPORTS_MAX_BULK_ROWS: int = 2000
+    # Area (document manager) and folder that keep the supporting files of supports: the
+    # supports master belongs to BI, so its proofs are listed in BI's document manager. The
+    # supports managers file them there even when they are not members of that area.
+    SUPPLIER_SUPPORTS_DOCUMENTS_AREA_SLUG: str = "bi"
+    SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER: str = "soporte_apoyos"
+    # Most supports one upload may be linked to.
+    SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS: int = 1000
     # Rows per DWH page and per upsert when syncing the commercial masters.
     MASTERS_SYNC_BATCH_SIZE: int = 2000
     # Largest margin file a manager can upload to update the product margins.
@@ -415,6 +425,11 @@ class Settings(BaseSettings):
             },
             "supplier_supports": {
                 "manager_area_slug": self.SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG,
+                "max_upload_bytes": self.SUPPLIER_SUPPORTS_MAX_UPLOAD_MB * 1024 * 1024,
+                "max_bulk_rows": self.SUPPLIER_SUPPORTS_MAX_BULK_ROWS,
+                "documents_area_slug": self.SUPPLIER_SUPPORTS_DOCUMENTS_AREA_SLUG,
+                "documents_folder": self.SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER,
+                "max_attach_supports": self.SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS,
             },
             "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
             "product_margins": {

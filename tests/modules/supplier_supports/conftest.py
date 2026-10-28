@@ -10,17 +10,28 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.commercial_masters.domain.entities import CommercialSupplier, ProductRef
 from app.modules.identity.domain.principal import Principal
+from app.modules.supplier_supports.application.attachments import SupportAttachmentService
+from app.modules.supplier_supports.application.bulk import SupportBulkService
+from app.modules.supplier_supports.application.profiles import SupportProfileService
 from app.modules.supplier_supports.application.service import SupplierSupportService
+from app.modules.supplier_supports.domain.attachments import (
+    Attachment,
+    FileUpload,
+    StoredDocument,
+    ViewLink,
+)
 from app.modules.supplier_supports.domain.entities import (
     Conflict,
     Support,
     SupportData,
     SupportRow,
 )
-from app.modules.supplier_supports.domain.filters import SearchSpec
+from app.modules.supplier_supports.domain.filters import Group, SearchSpec
+from app.modules.supplier_supports.domain.profiles import Profile
+from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
 
 TODAY = date(2026, 10, 9)
 FAMILIA_ID = uuid4()
@@ -73,6 +84,17 @@ class FakeLookup:
         return {nit: self.customers[nit] for nit in nits if nit in self.customers}
 
 
+def _matches(node, data: SupportData) -> bool:
+    """A tiny evaluator of the filter tree: ``eq``/``in`` on the fields tests use."""
+
+    if isinstance(node, Group):
+        results = [_matches(item, data) for item in node.items]
+        return all(results) if node.match == "all" else any(results)
+    value = "233" if node.field == "supplier.code" else getattr(data, node.field)
+    wanted = node.value if isinstance(node.value, list) else [node.value]
+    return str(value).lower() in [str(item).lower() for item in wanted]
+
+
 class FakeSupportRepository:
     """Keeps supports in a dict, with the version check of the real repository."""
 
@@ -98,6 +120,13 @@ class FakeSupportRepository:
         )
         self.items[support_id] = support
         return support
+
+    async def create_many(self, items, actor: str, now: datetime):
+        keys = [data.source_key for _, data in items if data.source_key]
+        if len(keys) != len(set(keys)):
+            raise ConflictError("duplicado")
+        # All or none, like the real transaction.
+        return [await self.create(support_id, data, actor, now) for support_id, data in items]
 
     async def get(self, support_id: UUID) -> Support | None:
         return self.items.get(support_id)
@@ -140,6 +169,14 @@ class FakeSupportRepository:
         ]
         return rows, len(rows)
 
+    async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]:
+        self.last_search = spec
+        return [
+            item.id
+            for item in self.items.values()
+            if item.data.status != "anulado" and _matches(spec.group, item.data)
+        ][:limit]
+
     async def get_by_source_key(self, source_key: str) -> Support | None:
         return next(
             (item for item in self.items.values() if item.data.source_key == source_key), None
@@ -157,6 +194,149 @@ class FakeSupportRepository:
 
     async def scope_values(self) -> dict[str, list[str]]:
         return {"regionals": ["ANTIOQUIA"], "business_units": [], "channels": [], "programs": []}
+
+
+class FakeProfileRepository:
+    """Keeps profiles by supplier id, with the version check of the real repository."""
+
+    def __init__(self, lookup: FakeLookup) -> None:
+        self.lookup = lookup
+        self.items: dict[UUID, Profile] = {}
+
+    def _named(self, supplier_id: UUID, **changes) -> dict:
+        code, name = self.lookup.names[supplier_id]
+        return {"supplier_code": code, "supplier_name": name, **changes}
+
+    async def list(self) -> list[Profile]:
+        return list(self.items.values())
+
+    async def get(self, supplier_id: UUID) -> Profile | None:
+        return self.items.get(supplier_id)
+
+    async def create(self, profile_id, supplier_id, data, actor, now):
+        if supplier_id in self.items:
+            raise ConflictError("El proveedor ya tiene un perfil; edítalo")
+        profile = Profile(
+            id=profile_id,
+            commercial_supplier_id=supplier_id,
+            data=data,
+            created_by=actor,
+            updated_by=actor,
+            version=1,
+            created_at=now,
+            updated_at=now,
+            **self._named(supplier_id),
+        )
+        self.items[supplier_id] = profile
+        return profile
+
+    async def update(self, supplier_id, data, expected_version, actor, now):
+        current = self.items[supplier_id]
+        if current.version != expected_version:
+            raise ConflictError("El perfil cambió desde que lo abriste; recárgalo")
+        saved = replace(
+            current, data=data, version=current.version + 1, updated_by=actor, updated_at=now
+        )
+        self.items[supplier_id] = saved
+        return saved
+
+    async def delete(self, supplier_id: UUID) -> bool:
+        return self.items.pop(supplier_id, None) is not None
+
+
+class FakeDocumentStore:
+    """The supports folder of the document manager, in memory."""
+
+    def __init__(self) -> None:
+        self.documents: dict[UUID, tuple[str, FileUpload, list[str]]] = {}
+        self.foreign: set[UUID] = set()  # documents that exist in another folder
+        self.fail_on: str | None = None
+        self.tags: list[list[str]] = []
+
+    async def store(self, principal, upload, *, name, description, tags):
+        if self.fail_on and upload.filename == self.fail_on:
+            raise InvalidInputError("Tipo de archivo no permitido")
+        document = StoredDocument(uuid4(), name or upload.filename or "soporte")
+        self.documents[document.id] = (document.name, upload, list(tags))
+        self.tags.append(list(tags))
+        return document
+
+    async def fetch(self, principal, document_id):
+        if document_id in self.foreign:
+            raise InvalidInputError("El documento no está en la carpeta soporte_apoyos")
+        if document_id not in self.documents:
+            raise NotFoundError("Documento no encontrado")
+        return StoredDocument(document_id, self.documents[document_id][0])
+
+    async def discard(self, principal, document_id):
+        self.documents.pop(document_id, None)
+
+    async def view_link(self, principal, document_id, *, inline):
+        name = self.documents[document_id][0]
+        suffix = "inline" if inline else "attachment"
+        return ViewLink(
+            url=f"https://s3.test/{document_id}?{suffix}", filename=name, expires_in=300
+        )
+
+
+class FakeAttachmentRepository:
+    """Links in a set; metadata comes from the fake document store."""
+
+    def __init__(self, repo: FakeSupportRepository, store: FakeDocumentStore) -> None:
+        self.repo = repo
+        self.store = store
+        self.links: dict[tuple[UUID, UUID], str] = {}
+
+    async def link_many(self, pairs, actor, now):
+        new = [pair for pair in pairs if pair not in self.links]
+        self.links.update({pair: actor for pair in new})
+        return len(new)
+
+    async def unlink(self, support_id, document_id):
+        return self.links.pop((support_id, document_id), None) is not None
+
+    async def get_link(self, support_id, document_id):
+        return next(
+            (
+                item
+                for item in await self.list_for_support(support_id)
+                if item.document_id == document_id
+            ),
+            None,
+        )
+
+    async def list_for_support(self, support_id):
+        found = []
+        for (support, document_id), actor in self.links.items():
+            if support != support_id:
+                continue
+            name, upload, _ = self.store.documents[document_id]
+            found.append(
+                Attachment(
+                    document_id=document_id,
+                    name=name,
+                    original_filename=upload.filename or "",
+                    extension=(upload.filename or "x.png").rsplit(".", 1)[-1],
+                    content_type="image/png",
+                    size_bytes=len(upload.content),
+                    uploaded_by=actor,
+                    uploaded_at=datetime(2026, 10, 9, tzinfo=UTC),
+                    linked_by=actor,
+                    linked_at=datetime(2026, 10, 9, tzinfo=UTC),
+                    support_count=sum(1 for (_, doc) in self.links if doc == document_id),
+                )
+            )
+        return found
+
+    async def existing_supports(self, ids):
+        return {
+            item
+            for item in ids
+            if item in self.repo.items and self.repo.items[item].data.status != "anulado"
+        }
+
+    async def supplier_codes(self, ids):
+        return ["233"] if ids else []
 
 
 class FakeManagers:
@@ -195,6 +375,41 @@ def service(repo, lookup) -> SupplierSupportService:
         masters=lookup,
         managers=FakeManagers(["comercial@jdh.com.co"]),
         calendar=FixedCalendar(),
+    )
+
+
+@pytest.fixture
+def profile_repo(lookup) -> FakeProfileRepository:
+    return FakeProfileRepository(lookup)
+
+
+@pytest.fixture
+def profiles(profile_repo, lookup) -> SupportProfileService:
+    return SupportProfileService(
+        repository=profile_repo, masters=lookup, managers=FakeManagers(["comercial@jdh.com.co"])
+    )
+
+
+@pytest.fixture
+def bulk(service, profiles) -> SupportBulkService:
+    return SupportBulkService(
+        supports=service, profiles=profiles, reader=SpreadsheetSupportReader(), max_rows=50
+    )
+
+
+@pytest.fixture
+def doc_store() -> FakeDocumentStore:
+    return FakeDocumentStore()
+
+
+@pytest.fixture
+def attachments(service, repo, doc_store) -> SupportAttachmentService:
+    return SupportAttachmentService(
+        supports=service,
+        attachments=FakeAttachmentRepository(repo, doc_store),
+        store=doc_store,
+        max_supports=5,
+        max_file_bytes=1024,
     )
 
 

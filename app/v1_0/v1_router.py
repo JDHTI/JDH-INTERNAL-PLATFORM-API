@@ -28,6 +28,13 @@ from app.modules.pqrsf.presentation.supplier_messages_router import (
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
 from app.modules.projects.presentation.router import area_router as area_projects_router
 from app.modules.sites.presentation.router import router as sites_router
+from app.modules.supplier_supports.presentation.attachments_router import (
+    router as supports_attachments_router,
+)
+from app.modules.supplier_supports.presentation.bulk_router import router as supports_bulk_router
+from app.modules.supplier_supports.presentation.profiles_router import (
+    router as support_profiles_router,
+)
 from app.modules.supplier_supports.presentation.router import router as supports_router
 from app.modules.supplier_supports.presentation.special_cases_router import (
     router as special_cases_router,
@@ -43,7 +50,19 @@ v1_router.include_router(area_projects_router, prefix="/areas", tags=["projects"
 v1_router.include_router(sites_router, prefix="/sites", tags=["sites"])
 v1_router.include_router(masters_router, prefix="/masters", tags=["masters"])
 v1_router.include_router(commercial_router, prefix="/commercial", tags=["commercial-masters"])
+# The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.
+v1_router.include_router(
+    supports_bulk_router, prefix="/supplier-supports", tags=["supplier-supports"]
+)
+v1_router.include_router(
+    supports_attachments_router, prefix="/supplier-supports", tags=["supplier-supports"]
+)
 v1_router.include_router(supports_router, prefix="/supplier-supports", tags=["supplier-supports"])
+v1_router.include_router(
+    support_profiles_router,
+    prefix="/supplier-support-profiles",
+    tags=["supplier-support-profiles"],
+)
 v1_router.include_router(
     special_cases_router, prefix="/supplier-special-cases", tags=["supplier-special-cases"]
 )

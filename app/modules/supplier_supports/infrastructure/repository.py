@@ -46,11 +46,13 @@ from app.modules.supplier_supports.domain.filters import (
     SortKey,
 )
 from app.modules.supplier_supports.infrastructure.models import (
+    SupplierSupportAttachmentModel,
     SupplierSupportModel,
     SupplierSupportTierModel,
 )
 
 S = SupplierSupportModel
+A = SupplierSupportAttachmentModel
 _SCALAR_FIELDS = tuple(
     item.name
     for item in dataclass_fields(SupportData)
@@ -357,6 +359,34 @@ class SqlAlchemySupportRepository:
                 raise ConflictError("No se pudo guardar el apoyo (referencia duplicada)") from exc
             return _support(model, tiers)
 
+    async def create_many(
+        self, items: Sequence[tuple[UUID, SupportData]], actor: str, now: datetime
+    ) -> list[Support]:
+        """Insert several supports and their tiers in one transaction: all or none."""
+
+        models = []
+        for support_id, data in items:
+            model = SupplierSupportModel(
+                id=support_id,
+                created_by=actor,
+                updated_by=actor,
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+            _apply(model, data)
+            models.append((model, _tier_models(support_id, data.tiers)))
+        async with self.database.session_factory() as session:
+            session.add_all([model for model, _ in models])
+            try:
+                await session.flush()
+                session.add_all([tier for _, tiers in models for tier in tiers])
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar el lote (referencia duplicada)") from exc
+            return [_support(model, tiers) for model, tiers in models]
+
     async def get(self, support_id: UUID) -> Support | None:
         """One support with its tiers."""
 
@@ -377,6 +407,7 @@ class SqlAlchemySupportRepository:
             model, code, name, description, brand = result
             tiers = (await self._tiers(session, [support_id])).get(support_id, [])
             conflicts = await self._conflict_ids(session, [support_id])
+            attachments = await self._attachment_counts(session, [support_id])
             return SupportRow(
                 support=_support(model, tiers),
                 supplier_code=code,
@@ -384,6 +415,7 @@ class SqlAlchemySupportRepository:
                 product_description=description,
                 product_brand=brand,
                 conflicts=tuple(conflicts.get(support_id, ())),
+                attachment_count=attachments.get(support_id, 0),
             )
 
     async def update(
@@ -443,8 +475,9 @@ class SqlAlchemySupportRepository:
             tiers = (await self._tiers(session, [support_id])).get(support_id, [])
             return _support(model, tiers)
 
-    async def search(self, spec: SearchSpec) -> tuple[list[SupportRow], int]:
-        """Filter, sort and page supports; also returns the total of matches."""
+    @staticmethod
+    def _conditions(spec: SearchSpec) -> list[ColumnElement[bool]]:
+        """The WHERE conditions of a search, shared by the page and the id listing."""
 
         conditions: list[ColumnElement[bool]] = [_compile(spec.group)]
         if not spec.include_voided and spec.state != "anulado":
@@ -497,7 +530,32 @@ class SqlAlchemySupportRepository:
             conditions.append(S.id.in_(effective))
         if spec.q:
             conditions.append(_free_text(spec.q))
+        if spec.has_attachments is not None:
+            link = select(literal(1)).where(A.support_id == S.id).exists()
+            conditions.append(link if spec.has_attachments else not_(link))
+        return conditions
 
+    async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]:
+        """Ids of the supports a search matches, up to ``limit``, in the search's order."""
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(S.id)
+                .select_from(S)
+                .outerjoin(
+                    CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id
+                )
+                .outerjoin(ProductModel, ProductModel.id == S.product_id)
+                .where(*self._conditions(spec))
+                .order_by(*_order(spec.sort))
+                .limit(limit)
+            )
+            return [support_id for (support_id,) in rows.all()]
+
+    async def search(self, spec: SearchSpec) -> tuple[list[SupportRow], int]:
+        """Filter, sort and page supports; also returns the total of matches."""
+
+        conditions = self._conditions(spec)
         async with self.database.session_factory() as session:
             total = (
                 await session.execute(
@@ -523,6 +581,7 @@ class SqlAlchemySupportRepository:
             ids = [row[0].id for row in rows]
             tiers = await self._tiers(session, ids)
             conflicts = await self._conflict_ids(session, ids)
+            attachments = await self._attachment_counts(session, ids)
         return (
             [
                 SupportRow(
@@ -532,11 +591,20 @@ class SqlAlchemySupportRepository:
                     product_description=description,
                     product_brand=brand,
                     conflicts=tuple(conflicts.get(model.id, ())),
+                    attachment_count=attachments.get(model.id, 0),
                 )
                 for model, code, name, description, brand in rows
             ],
             int(total),
         )
+
+    async def _attachment_counts(self, session: Any, ids: Sequence[UUID]) -> dict[UUID, int]:
+        if not ids:
+            return {}
+        rows = await session.execute(
+            select(A.support_id, func.count()).where(A.support_id.in_(ids)).group_by(A.support_id)
+        )
+        return {support_id: int(count) for support_id, count in rows.all()}
 
     async def _conflict_ids(self, session: Any, ids: Sequence[UUID]) -> dict[UUID, list[UUID]]:
         found: dict[UUID, list[UUID]] = {}

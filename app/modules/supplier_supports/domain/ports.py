@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.commercial_masters.domain.entities import CommercialSupplier, ProductRef
 from app.modules.identity.domain.principal import Principal
+from app.modules.supplier_supports.domain.attachments import (
+    Attachment,
+    FileUpload,
+    StoredDocument,
+    ViewLink,
+)
 from app.modules.supplier_supports.domain.entities import (
     Conflict,
     Support,
@@ -25,6 +31,10 @@ class SupportRepository(Protocol):
         self, support_id: UUID, data: SupportData, actor: str, now: datetime
     ) -> Support: ...
 
+    async def create_many(
+        self, items: Sequence[tuple[UUID, SupportData]], actor: str, now: datetime
+    ) -> list[Support]: ...
+
     async def get(self, support_id: UUID) -> Support | None: ...
 
     async def get_row(self, support_id: UUID) -> SupportRow | None: ...
@@ -38,6 +48,8 @@ class SupportRepository(Protocol):
     ) -> Support: ...
 
     async def search(self, spec: SearchSpec) -> tuple[list[SupportRow], int]: ...
+
+    async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]: ...
 
     async def get_by_source_key(self, source_key: str) -> Support | None: ...
 
@@ -62,6 +74,54 @@ class MasterLookup(Protocol):
     ) -> dict[UUID, tuple[str, str]]: ...
 
     async def customer_names(self, nits: Sequence[str]) -> dict[str, str]: ...
+
+
+class AttachmentRepository(Protocol):
+    """Persistence of the links between supports and documents."""
+
+    async def link_many(
+        self, pairs: Sequence[tuple[UUID, UUID]], actor: str, now: datetime
+    ) -> int: ...
+
+    async def unlink(self, support_id: UUID, document_id: UUID) -> bool: ...
+
+    async def list_for_support(self, support_id: UUID) -> list[Attachment]: ...
+
+    async def get_link(self, support_id: UUID, document_id: UUID) -> Attachment | None: ...
+
+    async def existing_supports(self, ids: Sequence[UUID]) -> set[UUID]: ...
+
+    async def supplier_codes(self, ids: Sequence[UUID]) -> list[str]: ...
+
+
+class SupportDocumentStore(Protocol):
+    """Keeps support files in the document manager, in the supports folder."""
+
+    async def store(
+        self,
+        principal: Principal,
+        upload: FileUpload,
+        *,
+        name: str | None,
+        description: str | None,
+        tags: Sequence[str],
+    ) -> StoredDocument: ...
+
+    async def fetch(self, principal: Principal, document_id: UUID) -> StoredDocument: ...
+
+    async def discard(self, principal: Principal, document_id: UUID) -> None: ...
+
+    async def view_link(
+        self, principal: Principal, document_id: UUID, *, inline: bool
+    ) -> ViewLink: ...
+
+
+class SupportFileReader(Protocol):
+    """Reads the cells of an uploaded file, one ``(title, rows)`` per sheet."""
+
+    def read(
+        self, filename: str, content: bytes, sheet: str | None = None
+    ) -> list[tuple[str, list[list[Any]]]]: ...
 
 
 class ManagerPolicy(Protocol):
