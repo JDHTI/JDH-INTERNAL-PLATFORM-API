@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.app_container import ApplicationContainer
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import (
     MAX_BATCH,
     MAX_PAGE_SIZE,
@@ -31,6 +32,7 @@ from app.modules.supplier_supports.domain.entities import (
 router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])
 _principal = Depends(get_current_principal)
+_requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -97,6 +99,7 @@ class _SupportFields(BaseModel):
     warehouse: str | None = Field(default=None, max_length=50)
     supplier_value: Decimal | None = None
     jdh_pct: Decimal | None = None
+    jdh_net_cost: Decimal | None = Field(default=None, ge=0, lt=10**12, decimal_places=6)
     value_unit: ValueUnit | None = None
     target_margin_pct: Decimal | None = None
     min_margin_pct: Decimal | None = None
@@ -196,6 +199,7 @@ class SupportResponse(_SupportFields):
     calc_method: str
     funding: str
     status: str
+    commercial_supplier_id: UUID | None
     supplier_code: str | None
     supplier_name: str | None
     product_description: str | None
@@ -315,6 +319,7 @@ def _response(view: SupportView) -> SupportResponse:
     return SupportResponse(
         **values,
         id=support.id,
+        commercial_supplier_id=data.commercial_supplier_id,
         supplier_code=view.supplier_code,
         supplier_name=view.supplier_name,
         product_description=view.product_description,
@@ -383,11 +388,11 @@ async def search_fields(
 @inject
 async def permissions(
     principal: Principal = _principal,
-    service: SupplierSupportService = _service,
+    service: SupportRequestService = _requests,
 ) -> dict[str, bool]:
     """Tell the UI whether to offer write actions (create, edit, switch, void)."""
 
-    return {"can_manage": await service.can_manage(principal)}
+    return await service.permissions(principal)
 
 
 @router.get("/catalogs", summary="Vocabularies and scope values in use")

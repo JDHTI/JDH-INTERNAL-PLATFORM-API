@@ -35,6 +35,9 @@ from app.modules.supplier_supports.presentation.bulk_router import router as sup
 from app.modules.supplier_supports.presentation.profiles_router import (
     router as support_profiles_router,
 )
+from app.modules.supplier_supports.presentation.requests_router import (
+    router as support_requests_router,
+)
 from app.modules.supplier_supports.presentation.router import router as supports_router
 from app.modules.supplier_supports.presentation.special_cases_router import (
     router as special_cases_router,
@@ -57,6 +60,7 @@ v1_router.include_router(
 v1_router.include_router(
     supports_attachments_router, prefix="/supplier-supports", tags=["supplier-supports"]
 )
+v1_router.include_router(support_requests_router, tags=["supplier-support-requests"])
 v1_router.include_router(supports_router, prefix="/supplier-supports", tags=["supplier-supports"])
 v1_router.include_router(
     support_profiles_router,

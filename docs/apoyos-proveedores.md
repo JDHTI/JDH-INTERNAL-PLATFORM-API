@@ -1,4 +1,4 @@
-# Maestro de apoyos de proveedores
+﻿# Maestro de apoyos de proveedores
 
 Reemplaza el libro **«1. MAESTRO APOYOS PROVEEDORES.xlsx»** (22 hojas, 41 tablas,
 un formato distinto por proveedor) por un maestro único, enlazado con los
@@ -143,7 +143,7 @@ apuntan a él (`special_case_id`). Nacen dos: Summar y Sodexo CEDI.
 ## API (`/api/v1`)
 
 Lectura: cualquier usuario autenticado. Escritura: administradores y miembros del
-área `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG` (por defecto `comercial`).
+área `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG` (por defecto `bi`).
 
 | Método y ruta | Uso |
 | --- | --- |
@@ -296,7 +296,7 @@ etiquetados, buscables y descargables ahí; los tipos y el tamaño (25 MB) son l
 apoyos.
 
 Quién hace qué: **subir, vincular y desvincular** es de los gestores de apoyos
-(`SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG`, `comercial`, y administradores), sin necesidad de ser
+(`SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG`, `bi`, y administradores), sin necesidad de ser
 miembros de BI. **Ver** los soportes de un apoyo y **abrirlos** desde el maestro lo puede hacer
 quien lea el apoyo (todo usuario autenticado), sin ser miembro de BI: el documento solo se abre
 a través del apoyo al que está vinculado. En el gestor de BI rigen los permisos normales del
@@ -413,3 +413,7 @@ columna si la página no tiene ningún valor. Cobertura del libro actual (% de a
    «desactualizada»): hoy se importa como histórico `vencido`.
 8. Semántica de regional (Barranquilla, Urabá) y códigos de Kimberly, Aderezos, Azteca
    y Red Bull.
+
+## Solicitudes comerciales y aporte JDH
+
+Comercial consulta el maestro y solicita cambios; BI y administradores gestionan el maestro y aprueban o rechazan. Ver el [contrato de solicitudes JDH](solicitudes-apoyos.md) para las rutas, permisos, costo neto independiente, auditoría y cancelación exclusiva del aporte JDH.

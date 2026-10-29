@@ -36,6 +36,7 @@ WIRED_MODULES = (
     "app.modules.projects.presentation.router",
     "app.modules.commercial_masters.presentation.router",
     "app.modules.supplier_supports.presentation.router",
+    "app.modules.supplier_supports.presentation.requests_router",
     "app.modules.supplier_supports.presentation.bulk_router",
     "app.modules.supplier_supports.presentation.attachments_router",
     "app.modules.supplier_supports.presentation.profiles_router",

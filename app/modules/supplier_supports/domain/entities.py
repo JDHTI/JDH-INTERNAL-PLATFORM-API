@@ -59,6 +59,7 @@ class SupportData:
     warehouse: str | None = None
     supplier_value: Decimal | None = None
     jdh_pct: Decimal | None = None
+    jdh_net_cost: Decimal | None = None
     value_unit: str | None = None
     target_margin_pct: Decimal | None = None
     min_margin_pct: Decimal | None = None

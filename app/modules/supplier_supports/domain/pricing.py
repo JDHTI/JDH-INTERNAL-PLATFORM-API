@@ -79,6 +79,10 @@ def derive(data: SupportData) -> Derived:
     amount = supplier_amount(data)
     net_cost = cost - amount if cost is not None and amount is not None else None
     jdh_amount = listed * data.jdh_pct if listed is not None and data.jdh_pct is not None else None
+    if data.calc_method == "costo_neto" and data.jdh_net_cost is not None:
+        # JDH changes the effective pact, never the supplier-funded amount.
+        jdh_amount = net_cost - data.jdh_net_cost if net_cost is not None else None
+        net_cost = data.jdh_net_cost
 
     min_margin = data.min_margin_pct
     if data.calc_method == "puntos_margen" and data.supplier_value is not None:
