@@ -21,9 +21,10 @@ from app.modules.order_validation.domain.entities import (
     LineResult,
     ManualApproval,
     OrderLine,
+    OrderPolicy,
     StoredLine,
 )
-from app.modules.order_validation.domain.rules import summarize_batch
+from app.modules.order_validation.domain.rules import DEFAULT_POLICY, summarize_batch
 from app.modules.order_validation.infrastructure.models import (
     OrderValidationApprovalModel,
     OrderValidationBatchModel,
@@ -92,12 +93,13 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
 def _apply_counts(
     model: OrderValidationBatchModel,
     items: Sequence[tuple[OrderLine, LineResult]],
-    approved: Collection[str] = (),
+    approved: Collection[str],
+    policy: OrderPolicy,
 ) -> None:
-    """Counts of the file: an order is ready by its lines, a manual approval or the threshold."""
+    """Counts of the file: an order is ready by its lines, a manual approval or its margin."""
 
     lines, orders, ready_lines, ready_orders = summarize_batch(
-        items, approved, model.margin_threshold or Decimal(0)
+        items, approved, model.margin_threshold or Decimal(0), policy
     )
     model.line_count = lines
     model.order_count = orders
@@ -105,40 +107,19 @@ def _apply_counts(
     model.ready_order_count = ready_orders
 
 
-async def _recount(session: Any, batch: OrderValidationBatchModel) -> None:
-    """Counts of a stored file from its lines, its manual approvals and its threshold."""
+async def _recount(session: Any, batch: OrderValidationBatchModel, policy: OrderPolicy) -> None:
+    """Counts of a stored file from its lines, its manual approvals and its threshold.
 
-    rows = (
-        await session.execute(
-            select(
-                L.document,
-                L.row_number,
-                L.unit_price,
-                L.quantity,
-                L.margin_pct,
-                L.status,
-                L.reason,
-                L.required_margin_pct,
-            ).where(L.batch_id == batch.id)
-        )
-    ).all()
+    The whole result of each line is read: the order margin counts each line with its support,
+    and the liquor tax flag holds an order back.
+    """
+
+    models = (await session.execute(select(L).where(L.batch_id == batch.id))).scalars().all()
     approved = (
         (await session.execute(select(A.document).where(A.batch_id == batch.id))).scalars().all()
     )
-    items = [
-        (
-            OrderLine(
-                row_number=row_number,
-                document=document,
-                unit_price=price,
-                quantity=quantity,
-                margin_pct=margin,
-            ),
-            LineResult(status=status, reason=reason, detail="", required_margin_pct=required),
-        )
-        for document, row_number, price, quantity, margin, status, reason, required in rows
-    ]
-    _apply_counts(batch, items, set(approved))
+    items = [(stored.line, stored.result) for stored in map(_stored, models)]
+    _apply_counts(batch, items, set(approved), policy)
 
 
 def _approval(model: OrderValidationApprovalModel) -> ManualApproval:
@@ -153,14 +134,17 @@ def _approval(model: OrderValidationApprovalModel) -> ManualApproval:
 class SqlAlchemyOrderValidationRepository:
     """Store files, lines and results with one short-lived session per operation."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, policy: OrderPolicy = DEFAULT_POLICY) -> None:
         """Create the repository.
 
         Args:
             database (Database): Shared database resource.
+            policy (OrderPolicy): Order-level limits used to count the ready orders; the
+                service must use the same one.
         """
 
         self.database = database
+        self.policy = policy
 
     async def create(
         self,
@@ -183,7 +167,7 @@ class SqlAlchemyOrderValidationRepository:
                 validated_at=now,
                 margin_threshold=margin_threshold,
             )
-            _apply_counts(batch, lines)
+            _apply_counts(batch, lines, (), self.policy)
             session.add(batch)
             await session.flush()
             session.add_all(
@@ -266,7 +250,7 @@ class SqlAlchemyOrderValidationRepository:
                 )
             await session.flush()
             batch.margin_threshold = margin_threshold
-            await _recount(session, batch)
+            await _recount(session, batch, self.policy)
             batch.validated_by = actor
             batch.validated_at = now
             await session.commit()
@@ -282,7 +266,7 @@ class SqlAlchemyOrderValidationRepository:
             if batch is None:
                 return None
             batch.margin_threshold = margin_threshold
-            await _recount(session, batch)
+            await _recount(session, batch, self.policy)
             await session.commit()
             return _batch(batch)
 
@@ -325,7 +309,7 @@ class SqlAlchemyOrderValidationRepository:
             except IntegrityError as exc:
                 await session.rollback()
                 raise ConflictError("Uno de los pedidos ya fue aprobado; recarga la lista") from exc
-            await _recount(session, batch)
+            await _recount(session, batch, self.policy)
             await session.commit()
             return _batch(batch)
 
@@ -343,7 +327,7 @@ class SqlAlchemyOrderValidationRepository:
             )
             if not removed.rowcount:
                 return False
-            await _recount(session, batch)
+            await _recount(session, batch, self.policy)
             await session.commit()
             return True
 

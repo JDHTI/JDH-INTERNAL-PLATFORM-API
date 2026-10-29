@@ -10,6 +10,8 @@ from tests.modules.order_validation.conftest import agreement, line
 
 TODAY = date(2026, 10, 9)
 D = Decimal
+# Isolates the threshold: an order never reaches a 100 % margin, so no tolerance applies.
+NO_TOLERANCE = rules.OrderPolicy(tolerance_min_order_margin=D("1"))
 
 
 def info(**margins) -> ProductInfo:
@@ -234,8 +236,8 @@ def test_missing_data_is_pending_and_lists_what_could_not_be_read() -> None:
 def test_a_full_margin_is_a_line_without_cost_not_a_release() -> None:
     result = decide(margin_pct=D("1"), reference=D("0.18"))
 
-    assert result.status == "pendiente_validacion" and result.reason == "datos_incompletos"
-    assert "no trae costo" in result.detail
+    assert result.status == "pendiente_validacion" and result.reason == "margen_100"
+    assert "no trae costo" in result.detail and "ni a mano" in result.detail
 
 
 def test_order_status_and_batch_counts() -> None:
@@ -297,28 +299,35 @@ def pair(price, quantity, margin, required, reason="sin_acuerdo", document="PV-1
 
 
 def test_the_threshold_acts_on_the_margin_of_the_whole_order() -> None:
-    # 1 000 at 10 % and 3 000 at 20 %: the order margin is 17,5 % against a 20 % target.
+    # 1 000 at 17 % and 3 000 at 20 %: the order margin is 19,25 % against a 20 % target.
     items = [
-        pair("1000", "1", D("0.10"), D("0.20")),
+        pair("1000", "1", D("0.17"), D("0.20")),
         pair("3000", "1", D("0.20"), D("0.20"), "cumple_margen_lista"),
     ]
 
-    assert rules.order_margins(items) == (D("0.175000"), D("0.200000"))
-    assert not rules.release_by_threshold(items, D("0"))
-    assert not rules.release_by_threshold(items, D("0.02"))
-    assert rules.release_by_threshold(items, D("0.025"))
-    assert rules.release_by_threshold(items, D("0.03"))
+    assert rules.order_margins(items) == (D("0.192500"), D("0.200000"))
+    # Without the tolerance (an order at 18 % or more with up to 2 short lines), only the
+    # threshold releases it.
+    assert not rules.release_by_margin(items, D("0"), NO_TOLERANCE)
+    assert not rules.release_by_margin(items, D("0.007"), NO_TOLERANCE)
+    assert rules.release_by_margin(items, D("0.0075"), NO_TOLERANCE) == "margen"
+    assert rules.release_by_margin(items, D("0.03"), NO_TOLERANCE) == "margen"
+    assert rules.release_basis(items, False, D("0.03"), NO_TOLERANCE) == "margen"
+    assert rules.release_basis(items, False, D("0"), NO_TOLERANCE) is None
+    assert rules.release_basis(items, True, D("0"), NO_TOLERANCE) == "manual"
+    # With it, the 19,25 % order passes even with no threshold: the margin rule goes first.
+    assert rules.release_basis(items, False, D("0")) == "tolerancia"
     assert rules.release_basis(items, False, D("0.03")) == "margen"
-    assert rules.release_basis(items, False, D("0")) is None
-    assert rules.release_basis(items, True, D("0")) == "manual"
 
 
 def test_the_threshold_example_of_the_business_19_5_against_20() -> None:
     items = [pair("100", "10", D("0.195"), D("0.20"), "no_cumple_acuerdo")]
 
-    assert not rules.release_by_threshold(items, D("0"))
-    assert rules.release_by_threshold(items, D("0.005"))
-    assert not rules.release_by_threshold([pair("100", "10", D("0.194"), D("0.20"))], D("0.005"))
+    assert not rules.release_by_margin(items, D("0"), NO_TOLERANCE)
+    assert rules.release_by_margin(items, D("0.005"), NO_TOLERANCE)
+    assert not rules.release_by_margin(
+        [pair("100", "10", D("0.194"), D("0.20"))], D("0.005"), NO_TOLERANCE
+    )
 
 
 def test_the_threshold_does_not_rescue_orders_that_need_a_person() -> None:
@@ -330,15 +339,15 @@ def test_the_threshold_does_not_rescue_orders_that_need_a_person() -> None:
         "datos_incompletos",
     ):
         other = pair("1000", "1", D("0.30"), D("0.20"), reason, row=3)
-        assert not rules.release_by_threshold([short, other], D("0.05"))
+        assert not rules.release_by_margin([short, other], D("0.05"))
     # A line with nothing to compare with, or with no cost, keeps the order pending too.
-    assert not rules.release_by_threshold(
+    assert not rules.release_by_margin(
         [short, pair("1000", "1", D("0.30"), None, row=3)], D("0.05")
     )
-    assert not rules.release_by_threshold(
+    assert not rules.release_by_margin(
         [short, pair("1000", "1", D("1"), D("0.20"), row=3)], D("0.05")
     )
-    assert rules.release_by_threshold(
+    assert rules.release_by_margin(
         [short, pair("1000", "1", D("0.30"), D("0.20"), "cumple_margen_lista", row=3)], D("0.05")
     )
 
@@ -434,11 +443,11 @@ def test_the_threshold_never_releases_an_order_with_a_line_missing_the_liquor_ta
     held_result = replace(held[1], liquor_tax=True)
     items = [short, (held[0], held_result)]
 
-    assert not rules.release_by_threshold(items, D("0.05"))
+    assert not rules.release_by_margin(items, D("0.05"))
     assert rules.release_basis(items, False, D("0.05")) is None
     # A pending line that is short on margin and also lacks the tax blocks the order too.
     short_taxed = (short[0], replace(short[1], liquor_tax=True))
-    assert not rules.release_by_threshold([short_taxed], D("0.05"))
+    assert not rules.release_by_margin([short_taxed], D("0.05"))
     # A manual approval can still release it.
     assert rules.release_basis(items, True, D("0")) == "manual"
 
@@ -449,3 +458,126 @@ def test_only_the_threshold_can_release_an_order_whose_margin_falls_short() -> N
     assert not rules.needs_threshold(D("0.25"), D("0.20"))
     assert not rules.needs_threshold(None, D("0.20"))
     assert not rules.needs_threshold(D("0.20"), None)
+
+
+def supported(price, quantity, file_margin, with_support, required, met=True, row=2, **check):
+    """A line decided by a support of cost that brings it from its file margin to another."""
+
+    item = line(unit_price=D(price), quantity=D(quantity), margin_pct=file_margin, row_number=row)
+    support = agreement()
+    outcome = rules.AgreementCheck(
+        support_id=support.id,
+        kind="tactico_cliente",
+        calc_method=check.pop("calc_method", "pct_costo"),
+        program=None,
+        valid_from=None,
+        valid_to=None,
+        needs_review=check.pop("needs_review", False),
+        outcome="cumple" if met else "no_cumple",
+        detail="",
+        effective_margin_pct=with_support,
+        required_margin_pct=required,
+    )
+    result = rules.LineResult(
+        "listo_para_liberar" if met else "pendiente_validacion",
+        "cumple_con_apoyo" if met else "no_cumple_acuerdo",
+        "",
+        support_id=support.id,
+        effective_margin_pct=with_support,
+        required_margin_pct=required,
+        checks=(outcome,),
+    )
+    return item, result
+
+
+def test_the_order_margin_counts_each_line_with_its_support() -> None:
+    # The business case: 0,94 % in the file, but every line is above 20 % with its support.
+    items = [
+        supported("1000", "1", D("0.01"), D("0.22"), D("0.18")),
+        supported("1000", "1", D("-0.05"), D("0.20"), D("0.18"), row=3),
+        pair("2000", "1", D("0.25"), D("0.18"), "cumple_margen_lista", row=4),
+    ]
+
+    margin, required = rules.order_margins(items)
+
+    assert margin == D("0.230000") and required == D("0.180000")
+    assert [rules.line_margin(item, result) for item, result in items] == [
+        D("0.22"),
+        D("0.20"),
+        D("0.25"),
+    ]
+
+
+def test_only_an_active_support_with_money_changes_the_line_margin() -> None:
+    in_review = supported("100", "1", D("0.01"), D("0.22"), D("0.18"), needs_review=True)
+    exception = supported("100", "1", D("0.01"), D("0.22"), D("0.18"), calc_method="margen_minimo")
+    unmet = supported("100", "1", D("0.01"), D("0.15"), D("0.18"), met=False)
+
+    assert rules.line_margin(*in_review) == D("0.01")
+    assert rules.line_margin(*exception) == D("0.01")
+    # A support that falls short still brings its money to the order.
+    assert rules.line_margin(*unmet) == D("0.15")
+    assert rules.points_below_target(*unmet) == D("0.030000")
+
+
+def test_tolerance_releases_an_order_at_18_with_up_to_two_lines_within_4_points() -> None:
+    # Example of the business: target 12 %, line at 8 % (4 points), the order at 18 % or more.
+    good = pair("8000", "1", D("0.20"), D("0.20"), "cumple_margen_lista", row=3)
+    one = [pair("1000", "1", D("0.08"), D("0.12")), good]
+    two = [*one, pair("1000", "1", D("0.09"), D("0.20"), row=4)]
+
+    assert rules.order_margins(one)[0] == D("0.186667")
+    # The order target is above the margin, so only the tolerance releases it.
+    assert rules.release_by_margin(one, D("0")) == "tolerancia"
+    assert rules.release_basis(one, False, D("0")) == "tolerancia"
+    assert rules.release_by_margin(two, D("0")) is None  # 0,09 vs 0,20 is 11 points short
+    two_close = [*one, pair("1000", "1", D("0.17"), D("0.20"), row=4)]
+    assert rules.release_by_margin(two_close, D("0")) == "tolerancia"
+    three_close = [*two_close, pair("1000", "1", D("0.19"), D("0.20"), row=5)]
+    assert rules.order_margins(three_close)[0] >= D("0.18")
+    assert rules.release_by_margin(three_close, D("0")) is None  # three lines below target
+
+
+def test_tolerance_needs_the_order_at_the_minimum_margin() -> None:
+    items = [
+        pair("1000", "1", D("0.08"), D("0.12")),
+        pair("1000", "1", D("0.20"), D("0.20"), "cumple_margen_lista", row=3),
+    ]
+
+    assert rules.order_margins(items) == (D("0.140000"), D("0.160000"))
+    assert rules.release_by_margin(items, D("0")) is None
+    # The limits come from the policy in force.
+    loose = rules.OrderPolicy(tolerance_min_order_margin=D("0.14"))
+    assert rules.release_by_margin(items, D("0"), loose) == "tolerancia"
+
+
+def test_a_line_more_than_4_points_below_its_target_holds_the_order_and_is_flagged() -> None:
+    far = pair("100", "1", D("0.07"), D("0.12"))  # 5 points short
+    big = pair("100000", "1", D("0.40"), D("0.12"), "cumple_margen_lista", row=3)
+    items = [far, big]
+
+    # The order margin is far above its target, yet nothing but a person releases it.
+    assert rules.order_margins(items)[0] > D("0.39")
+    assert rules.release_by_margin(items, D("0.05")) is None
+    assert rules.release_basis(items, False, D("0.05")) is None
+    assert rules.release_basis(items, True, D("0")) == "manual"
+    assert rules.line_alerts(*far) == ("bajo_objetivo",)
+    assert rules.line_alerts(*big) == ()
+    (alert,) = rules.order_alerts(items)
+    assert alert.code == "bajo_objetivo" and alert.row_numbers == (2,)
+    assert "más de 4,00 puntos" in alert.message
+    # Exactly 4 points is still within the tolerance.
+    assert rules.line_alerts(*pair("100", "1", D("0.08"), D("0.12"))) == ()
+
+
+def test_a_full_margin_product_holds_the_order_even_with_a_manual_approval() -> None:
+    full = pair("1000", "1", D("1"), D("0.20"), "margen_100", row=3)
+    items = [pair("1000", "1", D("0.30"), D("0.20"), "cumple_margen_lista"), full]
+
+    assert rules.release_by_margin(items, D("0.05")) is None
+    assert rules.release_basis(items, True, D("0.05")) is None
+    assert rules.summarize_batch(items, {"PV-1"}) == (2, 1, 1, 0)
+    (alert,) = rules.order_alerts(items)
+    assert alert.code == "margen_100" and alert.row_numbers == (3,)
+    # It stays out of the order margin: it carries no cost.
+    assert rules.order_margins(items)[0] == D("0.300000")

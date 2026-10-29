@@ -6,7 +6,8 @@ contra el [maestro de apoyos](apoyos-proveedores.md) y el
 cuáles quedan **listos para liberación** y cuáles quedan **pendientes de validación**, con
 el motivo. Toda la validación es del lado del servidor.
 
-Módulo `order_validation`. Migraciones `0020`, `0021` y `0023`.
+Módulo `order_validation`. Migraciones `0020`, `0021`, `0023`, `0030` a `0032` y `0035`
+(motivo `margen_100`).
 
 ## El archivo
 
@@ -95,7 +96,8 @@ y documentadas, pero el validador las ignora.
 
 | Motivo | Estado | Cuándo |
 | --- | --- | --- |
-| `datos_incompletos` | pendiente | falta proveedor, precio o margen, o el margen es 100 % (la línea no trae costo) |
+| `margen_100` | pendiente | el margen de la línea es 100 % (no trae costo); retiene el pedido entero (ver [Producto con margen 100 %](#producto-con-margen-100-)) |
+| `datos_incompletos` | pendiente | falta proveedor, precio o margen |
 | `falta_impuesto_licor` | pendiente | cumpliría el margen o el apoyo, pero el producto tiene impuesto al licor y la línea no lo trae; manda sobre los dos motivos de abajo |
 | `cumple_con_apoyo` | **listo** | un apoyo activo que aplica se cumple; se muestra el de mayor holgura |
 | `cumple_margen_lista` | **listo** | el margen de la línea ya alcanza el margen del producto para el canal |
@@ -128,12 +130,63 @@ la línea llega con la columna vacía o en 0— la línea sale con `liquor_tax: 
 - Si la línea ya trae el impuesto, o el producto no lo tiene, no hay bandera de ningún tipo y se
   decide como cualquier otra.
 - Un archivo sin la columna (formato anterior) se trata como si el impuesto faltara.
-### Margen general del pedido
+### Margen general del pedido (con apoyos)
 
 Cada pedido trae `margin_pct`: el margen del conjunto de sus líneas, ponderado por valor
-(`precio × cantidad`), que equivale a `1 − Σcosto / Σventas`. Quedan fuera las líneas sin
-precio, cantidad o margen y las de margen 100 % (sin costo). `required_margin_pct` es el
-objetivo ponderado de las líneas que tienen uno.
+(`precio × cantidad`), que equivale a `1 − Σcosto / Σventas`, **con cada línea a su margen con
+apoyo** cuando un apoyo activo con dinero la decidió (`pct_costo`, `costo_neto`, `valor_unidad`,
+`precio_neto`, `pct_precio_lista`), lo cumpla o no: una línea al 1 % en el archivo que el apoyo
+lleva al 22 % suma como 22 %. Un apoyo en revisión, vencido o no evaluable no cuenta, ni las
+excepciones de margen mínimo (no traen dinero). Cada línea trae `order_margin_pct`: el margen
+con el que suma al pedido. Quedan fuera las líneas sin precio, cantidad o margen y las de margen
+100 % (sin costo). `required_margin_pct` es el objetivo ponderado de las líneas que tienen uno.
+
+Antes el pedido se calculaba con el margen del archivo sin apoyos: en «Pedidos Retenidos 2» el
+pedido `PV-02592133` daba 0,94 % (1,94 % con el umbral de 1 punto) con todas sus líneas por
+encima del 19,97 % con apoyo; ahora da 24,07 %. El cálculo es al leer, así que los archivos ya
+subidos lo muestran sin revalidar; sus conteos (`ready_order_count`) se actualizan al revalidar o
+al cambiar el umbral.
+
+### Reglas del pedido
+
+Las reglas, con sus valores vigentes, se publican para los colaboradores en
+`GET /order-validations/rules` (página «Reglas» del validador). Valores configurables:
+
+| Variable | Por defecto | Uso |
+| --- | --- | --- |
+| `ORDER_VALIDATION_MAX_POINTS_BELOW_TARGET` | 4 | puntos máximos por debajo del objetivo de una línea |
+| `ORDER_VALIDATION_TOLERANCE_MIN_ORDER_MARGIN` | 18 | % mínimo del pedido para la tolerancia |
+| `ORDER_VALIDATION_TOLERANCE_MAX_LINES` | 2 | líneas máximas por debajo del objetivo en la tolerancia |
+
+#### Producto con margen 100 %
+
+Una línea con margen 100 % (o más) no trae costo: sale con el motivo `margen_100` y la alerta
+`margen_100`, y **el pedido no se libera de ninguna forma**: ni por sus líneas, ni por su margen,
+ni a mano (`POST .../approvals` responde 409 y no aprueba ninguno de los enviados). Hay que
+corregirlo en el ERP y volver a subir el archivo. Una aprobación manual anterior queda sin efecto
+mientras siga el producto. Se detecta por el margen del archivo, así que también aplica a los
+archivos subidos antes de esta regla (sus líneas dicen `datos_incompletos` hasta revalidar).
+
+#### Línea a más de 4 puntos de su objetivo
+
+Una línea pendiente cuyo margen (con su apoyo) está **más de 4 puntos** por debajo de su margen
+objetivo lleva la alerta `bajo_objetivo` y `points_below_target` (los puntos, como fracción), y el
+pedido **no se libera por su margen**: ni por el umbral ni por la tolerancia. Solo una persona
+puede aprobarlo. Exactamente 4 puntos aún se tolera.
+
+#### Tolerancia: pedido ≥ 18 % con 1 o 2 líneas cerca del objetivo
+
+Un pedido cuyo margen (sin umbral) es **18 % o más** se libera (`release_basis: tolerancia`)
+aunque tenga **hasta 2 líneas** por debajo de su objetivo, si ninguna está a más de 4 puntos.
+Ejemplo: objetivo 12 %, línea al 8 %, pedido al 18 % o más: pasa. Con 3 líneas por debajo, o
+una a más de 4 puntos, queda retenido. Como el umbral, solo aplica a pedidos pendientes por
+margen (`sin_acuerdo`, `no_cumple_acuerdo`).
+
+### Alertas
+
+Cada pedido trae `alerts`: `[{code, label, message, row_numbers}]`, y cada línea sus códigos en
+`alerts`: `margen_100`, `bajo_objetivo` y `falta_impuesto_licor`. Catálogo en
+`GET /order-validations/catalogs` (`alerts`).
 
 ### Margen del pedido y umbral
 
@@ -143,6 +196,8 @@ por margen se libera cuando
 ```
 margen del pedido + umbral  ≥  objetivo del pedido
 ```
+
+y ninguna de sus líneas está a más de 4 puntos de su objetivo.
 
 El **umbral de margen** de cada archivo (`margin_threshold_points`, en puntos, de 0 a 20, por
 defecto 0) siempre se suma al margen de cada pedido, nunca al de una línea. Con umbral `0.5`, un
@@ -162,8 +217,9 @@ pedido al 19,5 % frente a un objetivo de 20 % queda listo. Reglas:
 ### Pedido
 
 Un **pedido** está listo para liberación si **todas** sus líneas lo están, si una persona lo
-**aprobó a mano** o si su **margen** (con el umbral) alcanza el objetivo. `release_basis` dice
-cuál: `lineas`, `manual`, `margen`, o `null` mientras está pendiente.
+**aprobó a mano**, si su **margen** (con el umbral) alcanza el objetivo o si entra en la
+**tolerancia**, salvo que tenga un producto con margen 100 %. `release_basis` dice cuál:
+`lineas`, `manual`, `margen`, `tolerancia`, o `null` mientras está pendiente.
 
 Cuando se libera por `margen`, `released_by_threshold` dice si el margen solo no alcanzaba y lo que
 lo liberó fue el umbral (`margin_pct` por debajo de `required_margin_pct`); marca los pedidos que el umbral libera y el margen
@@ -211,7 +267,8 @@ Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: admi
 | `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: aprueba a mano pedidos pendientes, todo o nada; devuelve el archivo con sus conteos |
 | `DELETE /order-validations/{id}/orders/{document}/approval` | Quita la aprobación manual (204) |
 | `DELETE /order-validations/{id}` | Borra el archivo con sus líneas y aprobaciones (204) |
-| `GET /order-validations/catalogs` | Estados y motivos con su etiqueta |
+| `GET /order-validations/catalogs` | Estados, motivos y alertas con su etiqueta |
+| `GET /order-validations/rules` | Las reglas que aplica el validador, por secciones (`linea`, `pedido`, `aprobacion`), cada una con `code`, `title`, `description`, `effect` (`libera`, `retiene`, `alerta`, `informa`) y `parameters` con los valores vigentes. Abierta a todo usuario autenticado |
 | `GET /order-validations/permissions` | `can_manage` para mostrar u ocultar subir y revalidar |
 
 ## Pendiente de definir con el negocio

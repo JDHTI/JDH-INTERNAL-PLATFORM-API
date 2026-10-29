@@ -92,7 +92,12 @@ def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
 def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
     catalogs = client.get(f"{BASE}/catalogs").json()
-    assert len(catalogs["reasons"]) == 9 and catalogs["statuses"][0]["label"]
+    assert len(catalogs["reasons"]) == 10 and catalogs["statuses"][0]["label"]
+    assert [item["value"] for item in catalogs["alerts"]] == [
+        "margen_100",
+        "bajo_objetivo",
+        "falta_impuesto_licor",
+    ]
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
@@ -153,7 +158,18 @@ def test_orders_carry_the_margin_flag_and_sort(client, source) -> None:
     assert [item["document"] for item in default["items"]] == ["PV-2", "PV-1"]
     pv2 = default["items"][0]
     assert [line["sku"] for line in pv2["lines"]] == ["1128", "28703"]
-    assert pv2["has_liquor_tax"] is True and Decimal(pv2["margin_pct"]) == Decimal("0.075")
+    # 5 % and 10 % in the file, but the support brings the 359 line to 14,5 %: the order margin
+    # counts it with its support, (5 % + 14,5 %) / 2.
+    assert pv2["has_liquor_tax"] is True and Decimal(pv2["margin_pct"]) == Decimal("0.0975")
+    assert [Decimal(line["order_margin_pct"]) for line in pv2["lines"]] == [
+        Decimal("0.05"),
+        Decimal("0.145"),
+    ]
+    # The 1128 line is 13 points below its 18 % and lacks the liquor tax.
+    assert [alert["code"] for alert in pv2["alerts"]] == ["bajo_objetivo", "falta_impuesto_licor"]
+    assert pv2["alerts"][0]["row_numbers"] == [pv2["lines"][0]["row_number"]]
+    assert pv2["lines"][0]["alerts"] == ["bajo_objetivo", "falta_impuesto_licor"]
+    assert Decimal(pv2["lines"][0]["points_below_target"]) == Decimal("0.13")
     # The 359 line aims at its support (14 %), the 233 line at the product margin (18 %).
     assert Decimal(pv2["required_margin_pct"]) == Decimal("0.16")
     assert pv2["without_support_line_count"] == 1 and pv2["ready_line_count"] == 1
@@ -230,3 +246,16 @@ def test_outsiders_cannot_save_the_threshold(client) -> None:
         ).status_code
         == 200
     )
+
+
+def test_the_rules_are_public(client) -> None:
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+
+    response = client.get(f"{BASE}/rules")
+
+    assert response.status_code == 200
+    sections = response.json()
+    assert [section["code"] for section in sections] == ["linea", "pedido", "aprobacion"]
+    rule = sections[1]["rules"][3]
+    assert rule["code"] == "tolerancia" and rule["effect"] == "libera"
+    assert rule["parameters"]["margen_minimo_pedido"] == "18 %"

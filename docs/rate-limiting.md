@@ -153,6 +153,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/order-validations` | `relaxed` |  |
 | `GET` | `/v1/order-validations/catalogs` | `read` |  |
 | `GET` | `/v1/order-validations/permissions` | `read` |  |
+| `GET` | `/v1/order-validations/rules` | `read` |  |
 | `DELETE` | `/v1/order-validations/{batch_id}` | `relaxed` |  |
 | `GET` | `/v1/order-validations/{batch_id}` | `read` |  |
 | `POST` | `/v1/order-validations/{batch_id}/approvals` | `relaxed` |  |

@@ -2,6 +2,7 @@
 
 import re
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
 
@@ -191,6 +192,13 @@ class Settings(BaseSettings):
     ORDER_VALIDATION_MANAGER_AREA_SLUG: str = "comercial"
     ORDER_VALIDATION_MAX_UPLOAD_MB: int = 10
     ORDER_VALIDATION_MAX_LINES: int = 10_000
+    # Order-level release rules, in margin points / percent: a line more than
+    # MAX_POINTS_BELOW_TARGET points below its target holds the order back, and an order at
+    # TOLERANCE_MIN_ORDER_MARGIN % or more is released with up to TOLERANCE_MAX_LINES lines
+    # below their target (each within those points).
+    ORDER_VALIDATION_MAX_POINTS_BELOW_TARGET: Decimal = Decimal("4")
+    ORDER_VALIDATION_TOLERANCE_MIN_ORDER_MARGIN: Decimal = Decimal("18")
+    ORDER_VALIDATION_TOLERANCE_MAX_LINES: int = 2
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -439,6 +447,10 @@ class Settings(BaseSettings):
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,
                 "max_upload_bytes": self.ORDER_VALIDATION_MAX_UPLOAD_MB * 1024 * 1024,
                 "max_lines": self.ORDER_VALIDATION_MAX_LINES,
+                "max_points_below_target": self.ORDER_VALIDATION_MAX_POINTS_BELOW_TARGET / 100,
+                "tolerance_min_order_margin": self.ORDER_VALIDATION_TOLERANCE_MIN_ORDER_MARGIN
+                / 100,
+                "tolerance_max_lines": self.ORDER_VALIDATION_TOLERANCE_MAX_LINES,
             },
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
