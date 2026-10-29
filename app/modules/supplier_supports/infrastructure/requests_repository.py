@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel as C
 from app.modules.supplier_supports.domain.requests import (
     request_mode,
     require_eligible,
@@ -62,6 +63,15 @@ def snapshot(model: S) -> dict[str, Any]:
 
 def serialize(model: Any) -> dict[str, Any]:
     return {column.name: getattr(model, column.name) for column in model.__table__.columns}
+
+
+def named_requests():
+    """Resolve display names in one query, including requests created before this UI."""
+    return (
+        select(R, C.code, C.name)
+        .join(S, S.id == R.support_id)
+        .outerjoin(C, C.id == S.commercial_supplier_id)
+    )
 
 
 class SqlAlchemySupportRequestRepository:
@@ -203,15 +213,18 @@ class SqlAlchemySupportRequestRepository:
             total = await session.scalar(select(func.count()).select_from(R).where(*conditions))
             rows = (
                 await session.execute(
-                    select(R)
+                    named_requests()
                     .where(*conditions)
                     .order_by(R.created_at.desc(), R.id)
                     .offset((page - 1) * size)
                     .limit(size)
                 )
-            ).scalars()
+            ).all()
             return {
-                "items": [serialize(row) for row in rows],
+                "items": [
+                    {**serialize(row), "supplier_code": code, "supplier_name": name}
+                    for row, code, name in rows
+                ],
                 "total": total,
                 "page": page,
                 "size": size,
@@ -222,15 +235,21 @@ class SqlAlchemySupportRequestRepository:
             conditions = [R.id == request_id]
             if owner is not None:
                 conditions.append(R.requested_by_id == owner)
-            model = (await session.execute(select(R).where(*conditions))).scalar_one_or_none()
-            if model is None:
+            result = (await session.execute(named_requests().where(*conditions))).first()
+            if result is None:
                 raise NotFoundError("Solicitud no encontrada")
+            model, code, name = result
             events = (
                 await session.execute(
                     select(E).where(E.request_id == model.id).order_by(E.created_at, E.id)
                 )
             ).scalars()
-            return {**serialize(model), "events": [serialize(event) for event in events]}
+            return {
+                **serialize(model),
+                "supplier_code": code,
+                "supplier_name": name,
+                "events": [serialize(event) for event in events],
+            }
 
     async def decide(
         self,

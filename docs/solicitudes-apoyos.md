@@ -32,6 +32,10 @@ La lista siempre filtra por usuario para Comercial. `mine=true` fuerza ese filtr
 
 Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `porcentaje` o `costo_neto`. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
 
+La lista y el detalle añaden `supplier_name` y `supplier_code`, resueltos desde el
+maestro para mostrar «Apoyo JDH · proveedor» también en solicitudes anteriores.
+Son datos de presentación actuales; no modifican la propuesta ni su snapshot inmutable.
+
 Decimales en texto, finitos, máximo seis decimales. Porcentaje entre -1 y 1 (0.05 = 5 %), costo entre 0 y menos de 10^12. Motivos de 3 a 2000 caracteres, eliminando espacios extremos. Fechas UTC; presentación en `America/Bogota`.
 
 El snapshot conserva identidad, versión, método, proveedor, valores JDH, referencias, unidad/factor, producto, cliente/sucursal, programa, vigencia y estado. Eventos: `id,support_id,request_id,event_type,actor,created_at,reason,before,after`.

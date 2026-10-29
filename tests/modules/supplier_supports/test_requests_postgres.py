@@ -341,6 +341,11 @@ async def test_http_permissions_mine_and_real_workflow(storage):
             duplicate = await client.post(batch_url, json={"items": [batch_item, batch_item]})
             assert duplicate.status_code == 422
             request_url = f"{root}/supplier-support-requests/{request_id}"
+            named = (await client.get(request_url)).json()
+            assert named["supplier_name"] == "Test"
+            assert named["supplier_code"] == str(support.data.commercial_supplier_id)
+            own = (await client.get(root + "/supplier-support-requests?mine=true")).json()
+            assert all(item["supplier_name"] == "Test" for item in own["items"])
             assert (await client.get(request_url)).json()["support"][
                 "supplier_value"
             ] == "80.000000"

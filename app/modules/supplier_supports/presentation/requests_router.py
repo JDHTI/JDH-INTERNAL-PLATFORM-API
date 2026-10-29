@@ -64,6 +64,8 @@ class EventResponse(BaseModel):
 class RequestResponse(BaseModel):
     id: UUID
     support_id: UUID
+    supplier_name: str | None = None
+    supplier_code: str | None = None
     mode: Literal["porcentaje", "costo_neto"]
     value: Decimal
     reason: str
