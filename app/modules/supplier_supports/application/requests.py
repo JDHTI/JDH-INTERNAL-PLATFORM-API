@@ -63,6 +63,16 @@ class SupportRequestService:
             self.calendar.today(),
         )
 
+    async def create_many(self, principal: Principal, items: list[tuple[UUID, int, Decimal, str]]):
+        await self.owner(principal)
+        prepared = [
+            (support_id, version, value, self.reason(reason))
+            for support_id, version, value, reason in items
+        ]
+        return await self.repository.create_many(
+            prepared, principal.user_id, principal.email, self.calendar.today()
+        )
+
     async def search(
         self,
         principal: Principal,

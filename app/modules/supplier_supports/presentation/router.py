@@ -199,6 +199,7 @@ class SupportResponse(_SupportFields):
     calc_method: str
     funding: str
     status: str
+    commercial_supplier_id: UUID | None
     supplier_code: str | None
     supplier_name: str | None
     product_description: str | None
@@ -318,6 +319,7 @@ def _response(view: SupportView) -> SupportResponse:
     return SupportResponse(
         **values,
         id=support.id,
+        commercial_supplier_id=data.commercial_supplier_id,
         supplier_code=view.supplier_code,
         supplier_name=view.supplier_name,
         product_description=view.product_description,

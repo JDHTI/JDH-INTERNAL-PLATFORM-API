@@ -10,7 +10,7 @@ Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`
 - Una solicitud nace `pendiente` y no afecta el maestro. Solo admite una decisión: `aprobada` o `rechazada`. La propuesta no se edita; otro valor exige otra solicitud.
 - Crear o aprobar requiere acuerdo vigente, habilitado y sin revisión pendiente. El rechazo exige motivo y no altera valores.
 - Cancelar JDH limpia exclusivamente su aporte vigente; conserva acuerdo, proveedor y trazabilidad. Anular el acuerdo completo es una operación distinta.
-- Sin solicitudes masivas, notificaciones, retiro de propuestas ni filtro por vendedor en esta entrega.
+- Sin notificaciones, retiro de propuestas ni filtro por vendedor en esta entrega.
 
 ## Permisos y contrato
 
@@ -20,6 +20,7 @@ Rutas relativas al prefijo vigente `/api/v1`:
 | --- | --- |
 | `GET /supplier-supports/permissions` | `can_manage`, `can_request`, `can_review`. |
 | `POST /supplier-supports/{id}/requests` | Crear pendiente: `{version,value,reason}`. |
+| `POST /supplier-supports/requests/batch` | Selección múltiple atómica: `{items:[{support_id,version,value,reason}]}`, de 1 a 100 registros. |
 | `GET /supplier-support-requests` | Lista: `status`, `q`, `page`, `size`, `mine`. |
 | `GET /supplier-support-requests/{id}` | Propuesta, decisión, maestro actual y eventos; admite `mine`. |
 | `POST /supplier-support-requests/{id}/approve` | `{version,support_version}`: confirmar contra versión vigente revisada. |
@@ -47,11 +48,30 @@ PostgreSQL impide UPDATE/DELETE de eventos, borrado de solicitudes, edición de 
 
 ## Frontend
 
-- `/comercial/apoyos`: navegador reutilizado, filtros, detalle y solicitud individual; consulta explícita incluso para usuarios BI.
+- `/comercial/apoyos`: seleccionar acuerdos con checkboxes y solicitar desde la barra de selección; detalle de consulta, incluso para usuarios BI.
 - `/comercial/apoyos/solicitudes`: seguimiento propio.
 - `/bi/solicitudes-apoyos`: pendientes por defecto, filtros, comparación original/actual/propuesta, aprobación, rechazo e historial.
 - Maestro BI: cancelación exclusiva JDH e historial, diferenciados de anular el acuerdo.
 - Refrescar consultas tras cambios; contemplar carga, vacío, errores, permisos y 409 con revisión explícita.
+
+## Selección múltiple y búsqueda de clientes
+
+El lote exige el mismo `commercial_supplier_id` y cliente. Con NIT, permite sucursales
+distintas del mismo cliente; sin NIT, exige igualdad de grupo, nombre y sucursal.
+No permite agrupar proveedores sin identidad. `SupportResponse` expone
+`commercial_supplier_id` para validar la selección en la interfaz; la API vuelve a
+validar todo con bloqueos ordenados. Valores y motivos son individuales, incluso
+cuando el lote combina porcentajes y costos netos. Cada registro conserva su
+solicitud, estado y decisión independientes. Si una fila falla, no se guarda ninguna.
+
+La búsqueda comercial por nombre compara palabras, sin exigir frase continua ni
+orden, y omite diferencias de acentuación. Por ejemplo, «Salamanca Miguel Ángel»
+encuentra «SALAMANCA MEDINA MIGUEL ANGEL». La búsqueda `q` por NIT admite prefijos,
+puntos, espacios y dígito de verificación separado por guion; no adivina el DV de
+una secuencia numérica sin separador. El cliente observado en la base local es
+`80140929`; tiene tres sucursales en el maestro y cuatro acuerdos de apoyo.
+El selector pagina resultados y mantiene errores visibles. No hay corrección
+automática de errores ortográficos como «slamanca».
 
 ## Despliegue y validación
 
@@ -59,7 +79,7 @@ Aplicar `alembic upgrade head`: migración `0036_support_requests`, tras `0035_f
 
 Configurar `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG=bi` si el entorno tenía explícitamente `comercial`; defaults de aplicación, ejemplo y Compose ya usan BI. Cubre también cargas, perfiles, adjuntos y casos especiales. Las solicitudes usan membresía de Comercial; administradores tienen ambas capacidades.
 
-- Suite completa: **974 pruebas pasan**, incluidas seis de PostgreSQL.
+- Suite completa: **982 pruebas pasan**, incluidas catorce de PostgreSQL.
 - Ruff y formato limpios; `git diff --check` correcto.
 - Migración comprobada: subir, bajar y subir; una cabeza Alembic.
 - PostgreSQL: aprobación, cancelación, rechazo, conflictos, dos aprobadores, múltiples pendientes, aislamiento, rollback e inmutabilidad real.

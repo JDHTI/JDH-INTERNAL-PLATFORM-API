@@ -5,6 +5,8 @@
 Comercial consulta el maestro y solicita apoyo JDH sin alterar el acuerdo vigente. BI o un administrador aprueba o rechaza; aprobar actualiza únicamente el registro seleccionado y guarda la decisión con actor, fecha y valores anteriores/nuevos en una transacción.
 
 - Solicitudes separadas del maestro, seguimiento propio (`mine=true`) y bandeja BI con filtros.
+- Solicitud múltiple desde checkboxes: lote atómico de hasta 100 acuerdos del mismo proveedor y cliente; valor y decisión independientes por registro.
+- Búsqueda de clientes por palabras, sin exigir apellidos intermedios ni acentos, y NIT parcial o con formato. Selector paginado y diálogos propios en UI.
 - Porcentaje JDH para los métodos existentes; costo pactado JDH independiente para `costo_neto`, conservando el pacto del proveedor.
 - Cancelación determinista exclusiva de JDH, sin borrar el acuerdo ni el historial.
 - Control de versiones y bloqueos para decisiones concurrentes; 409 exige revisión del valor vigente.
@@ -22,7 +24,7 @@ Comercial consulta el maestro y solicita apoyo JDH sin alterar el acuerdo vigent
 
 ## Pruebas
 
-- [x] Suite completa: 974 pruebas aprobadas, incluidas seis de PostgreSQL.
+- [x] Suite completa: 982 pruebas aprobadas, incluidas catorce de PostgreSQL.
 - [x] Ruff, comprobación de formato y `git diff --check`.
 - [x] Migración PostgreSQL: subir, bajar y volver a subir; una sola cabeza.
 - [x] HTTP y PostgreSQL: permisos, aislamiento, aprobación/rechazo, cancelación, conflictos, concurrencia, rollback e historial inmutable.

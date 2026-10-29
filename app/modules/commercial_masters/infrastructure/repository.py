@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -21,6 +22,7 @@ from app.modules.commercial_masters.domain.entities import (
     ProductMargins,
     ProductRef,
     SupplierProductCode,
+    clean_nit,
 )
 from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
 from app.modules.commercial_masters.infrastructure.models import (
@@ -487,13 +489,28 @@ class SqlAlchemyCommercialMasterRepository:
 
         conditions = []
         if query:
-            conditions.append(
-                or_(
-                    CustomerModel.legal_name.icontains(query, autoescape=True),
-                    CustomerModel.branch_name.icontains(query, autoescape=True),
-                    CustomerModel.nit == query,
+            if re.fullmatch(r"(?=.*\d)[\d\s.,\-]+", query):
+                # NITs in the warehouse have no check digit. Accept punctuation and
+                # an explicitly separated check digit without guessing bare digits.
+                base = re.sub(r"-\s*\d\s*$", "", query)
+                conditions.append(
+                    CustomerModel.nit.startswith(
+                        clean_nit(base) or clean_nit(query), autoescape=True
+                    )
                 )
-            )
+            else:
+                # Names may omit a middle surname or arrive in another word order.
+                # Translate accents without requiring a PostgreSQL extension.
+                def plain(column):
+                    return func.translate(func.lower(column), "áéíóúüñ", "aeiouun")
+
+                for token in query.lower().translate(str.maketrans("áéíóúüñ", "aeiouun")).split():
+                    conditions.append(
+                        or_(
+                            plain(CustomerModel.legal_name).contains(token, autoescape=True),
+                            plain(CustomerModel.branch_name).contains(token, autoescape=True),
+                        )
+                    )
         if nit:
             conditions.append(CustomerModel.nit == nit)
         if channel:

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.supplier_supports.domain.requests import (
     request_mode,
@@ -39,6 +39,8 @@ def snapshot(model: S) -> dict[str, Any]:
         "value_unit",
         "pack_factor",
         "product_sku",
+        "commercial_supplier_id",
+        "customer_group",
         "customer_nit",
         "customer_branch_id",
         "customer_name",
@@ -108,39 +110,75 @@ class SqlAlchemySupportRequestRepository:
         actor: str,
         today: date,
     ) -> dict[str, Any]:
+        return (
+            await self.create_many([(support_id, version, value, reason)], actor_id, actor, today)
+        )[0]
+
+    async def create_many(
+        self, items: list[tuple[UUID, int, Decimal, str]], actor_id: UUID, actor: str, today: date
+    ) -> list[dict[str, Any]]:
+        ids = [item[0] for item in items]
+        if not 1 <= len(items) <= 100 or len(ids) != len(set(ids)):
+            raise InvalidInputError("Selecciona de 1 a 100 acuerdos sin repetir")
         async with self.database.session_factory() as session, session.begin():
-            support = await self._support(session, support_id)
-            self._version(support.version, version)
-            require_eligible(support, today)
-            mode = request_mode(support.calc_method)
-            validate_value(mode, value)
-            model = R(
-                id=uuid4(),
-                support_id=support_id,
-                mode=mode,
-                value=value,
-                reason=reason,
-                requested_by_id=actor_id,
-                requested_by=actor,
-                created_at=datetime.now(UTC),
-                status="pendiente",
-                version=1,
-                support_version=version,
-                snapshot=snapshot(support),
-            )
-            session.add(model)
+            # Consistent lock order prevents competing overlapping batches from deadlocking.
+            supports = {
+                support_id: await self._support(session, support_id)
+                for support_id in sorted(ids, key=str)
+            }
+            scopes = set()
+            for support_id, version, value, _ in items:
+                support = supports[support_id]
+                self._version(support.version, version)
+                require_eligible(support, today)
+                validate_value(request_mode(support.calc_method), value)
+                customer = (
+                    ("nit", support.customer_nit)
+                    if support.customer_nit
+                    else (
+                        "scope",
+                        support.customer_group,
+                        support.customer_name,
+                        support.customer_branch_id,
+                    )
+                )
+                scopes.add((support.commercial_supplier_id, customer))
+            if len(items) > 1 and (
+                len(scopes) != 1 or any(s.commercial_supplier_id is None for s in supports.values())
+            ):
+                raise InvalidInputError("Los acuerdos deben tener el mismo proveedor y cliente")
+            models = []
+            for support_id, version, value, reason in items:
+                support = supports[support_id]
+                model = R(
+                    id=uuid4(),
+                    support_id=support_id,
+                    mode=request_mode(support.calc_method),
+                    value=value,
+                    reason=reason,
+                    requested_by_id=actor_id,
+                    requested_by=actor,
+                    created_at=datetime.now(UTC),
+                    status="pendiente",
+                    version=1,
+                    support_version=version,
+                    snapshot=snapshot(support),
+                )
+                session.add(model)
+                models.append(model)
             await session.flush()
-            self._event(
-                session,
-                support_id,
-                model.id,
-                "solicitada",
-                actor,
-                reason,
-                model.snapshot,
-                {"mode": mode, "value": str(value)},
-            )
-            return serialize(model)
+            for model in models:
+                self._event(
+                    session,
+                    model.support_id,
+                    model.id,
+                    "solicitada",
+                    actor,
+                    model.reason,
+                    model.snapshot,
+                    {"mode": model.mode, "value": str(model.value)},
+                )
+            return [serialize(model) for model in models]
 
     async def search(
         self, owner: UUID | None, status: str | None, q: str | None, page: int, size: int

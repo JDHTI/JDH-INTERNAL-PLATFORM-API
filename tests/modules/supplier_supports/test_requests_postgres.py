@@ -17,10 +17,16 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.config import Environment, Settings
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, InvalidInputError
 from app.infrastructure.database import Database
 from app.main import create_app
-from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel
+from app.modules.commercial_masters.infrastructure.models import (
+    CommercialSupplierModel,
+    CustomerModel,
+)
+from app.modules.commercial_masters.infrastructure.repository import (
+    SqlAlchemyCommercialMasterRepository,
+)
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
@@ -79,6 +85,102 @@ async def propose(requests, support, value="70", actor=None):
         actor.email,
         FixedCalendar().today(),
     )
+
+
+async def test_batch_same_client_across_branches_and_independent_proposals(storage):
+    _, master, requests, support = storage
+    support = await master.update(
+        support.id,
+        replace(support.data, customer_nit="80140929", customer_branch_id="001"),
+        1,
+        "bi",
+        datetime.now(UTC),
+    )
+    other = await master.create(
+        uuid4(),
+        replace(
+            support.data,
+            customer_branch_id="002",
+            product_sku="OTHER",
+            calc_method="pct_costo",
+            supplier_value=D("0.1"),
+        ),
+        "bi",
+        datetime.now(UTC),
+    )
+    actor = person("sales")
+    result = await requests.create_many(
+        [(support.id, 2, D(70), "Costo pactado"), (other.id, 1, D("0.05"), "Porcentaje pedido")],
+        actor.user_id,
+        actor.email,
+        FixedCalendar().today(),
+    )
+    assert len(result) == 2
+    assert [item["mode"] for item in result] == ["costo_neto", "porcentaje"]
+    assert all(item["status"] == "pendiente" for item in result)
+    assert (await master.get(support.id)).data.jdh_net_cost is None
+    assert (await master.get(other.id)).data.jdh_pct is None
+
+
+@pytest.mark.parametrize(
+    "failure", ["client", "supplier", "stale", "value", "duplicate", "no_nit_branch"]
+)
+async def test_batch_validates_every_row_before_saving(storage, failure):
+    _, master, requests, support = storage
+    data = support.data
+    if failure == "client":
+        data = replace(data, customer_nit="different-client")
+    if failure == "supplier":
+        data = replace(data, kind="excepcion_margen", commercial_supplier_id=None)
+    if failure == "no_nit_branch":
+        data = replace(data, customer_branch_id="another-branch")
+    other = await master.create(uuid4(), data, "bi", datetime.now(UTC))
+    actor = person("sales")
+    rows = [
+        (support.id, 1, D(70), "Primera solicitud"),
+        (
+            other.id,
+            99 if failure == "stale" else 1,
+            D(-1) if failure == "value" else D(65),
+            "Segunda solicitud",
+        ),
+    ]
+    if failure == "duplicate":
+        rows[1] = rows[0]
+    before = await requests.search(actor.user_id, None, None, 1, 100)
+    with pytest.raises((InvalidInputError, ConflictError)):
+        await requests.create_many(rows, actor.user_id, actor.email, FixedCalendar().today())
+    assert (await requests.search(actor.user_id, None, None, 1, 100))["total"] == before["total"]
+    assert (await master.get(support.id)).version == 1
+
+
+async def test_customer_search_omitted_surname_accents_nit_format_and_prefix(storage):
+    database, _, _, _ = storage
+    customer_id = uuid4()
+    nit = str(uuid4().int)[:11]
+    async with database.session_factory() as session, session.begin():
+        session.add(
+            CustomerModel(
+                id=customer_id,
+                cliente_key=str(customer_id),
+                company_id=1,
+                nit=nit,
+                legal_name="SALAMANCA MEDINA MIGUEL ANGEL",
+                branch_name="TEXAS BBQ",
+                is_active=True,
+                synced_at=datetime.now(UTC),
+            )
+        )
+    repo = SqlAlchemyCommercialMasterRepository(database)
+    for query in (
+        "SALAMANCA MIGUEL ÁNGEL",
+        "angel salamanca miguel",
+        nit,
+        nit[:6],
+        nit[:3] + "." + nit[3:] + "-5",
+    ):
+        page = await repo.list_customers(query, None, None, None, None, None, 1, 100)
+        assert any(item.id == customer_id for item in page.items), query
 
 
 async def test_approval_cancellation_and_immutable_history(storage):
@@ -226,6 +328,18 @@ async def test_http_permissions_mine_and_real_workflow(storage):
             )
             assert response.status_code == 201, response.text
             request_id = response.json()["id"]
+            batch_item = {
+                "support_id": str(support.id),
+                "version": 1,
+                "value": "65",
+                "reason": "Solicitud por selección",
+            }
+            batch_url = root + "/supplier-supports/requests/batch"
+            batch = await client.post(batch_url, json={"items": [batch_item]})
+            assert batch.status_code == 201, batch.text
+            assert len(batch.json()) == 1 and batch.json()[0]["value"] == "65"
+            duplicate = await client.post(batch_url, json={"items": [batch_item, batch_item]})
+            assert duplicate.status_code == 422
             request_url = f"{root}/supplier-support-requests/{request_id}"
             assert (await client.get(request_url)).json()["support"][
                 "supplier_value"

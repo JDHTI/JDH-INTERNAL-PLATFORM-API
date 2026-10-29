@@ -46,6 +46,10 @@ class SupportRequestRepository(Protocol):
         today: date,
     ) -> dict[str, Any]: ...
 
+    async def create_many(
+        self, items: list[tuple[UUID, int, Decimal, str]], actor_id: UUID, actor: str, today: date
+    ) -> list[dict[str, Any]]: ...
+
     async def search(
         self, owner: UUID | None, status: str | None, q: str | None, page: int, size: int
     ) -> dict[str, Any]: ...

@@ -32,6 +32,15 @@ class RequestBody(VersionBody):
     reason: str = Field(min_length=3, max_length=2000)
 
 
+class BatchRequestItem(RequestBody):
+    support_id: UUID
+
+
+class BatchRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[BatchRequestItem] = Field(min_length=1, max_length=100)
+
+
 class ApproveBody(VersionBody):
     support_version: int = Field(ge=1)
 
@@ -93,6 +102,20 @@ async def create_request(
     service: SupportRequestService = _service,
 ):
     return await service.create(principal, support_id, body.version, body.value, body.reason)
+
+
+@router.post(
+    "/supplier-supports/requests/batch", status_code=201, response_model=list[RequestResponse]
+)
+@inject
+async def create_requests(
+    body: BatchRequestBody,
+    principal: Principal = _principal,
+    service: SupportRequestService = _service,
+):
+    return await service.create_many(
+        principal, [(item.support_id, item.version, item.value, item.reason) for item in body.items]
+    )
 
 
 @router.get("/supplier-support-requests", response_model=RequestPageResponse)
