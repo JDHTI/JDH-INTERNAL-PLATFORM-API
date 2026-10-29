@@ -172,7 +172,7 @@ class Settings(BaseSettings):
     PQRSF_DOCUMENT_EMAIL_MAX_MB: int = 15
 
     # Members of this area (plus platform admins) manage supplier supports.
-    SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "comercial"
+    SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "bi"
     # Largest file, and most rows, of a bulk load of supports.
     SUPPLIER_SUPPORTS_MAX_UPLOAD_MB: int = 10
     SUPPLIER_SUPPORTS_MAX_BULK_ROWS: int = 2000

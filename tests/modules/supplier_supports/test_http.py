@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.requests import SupportRequestService
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/supplier-supports"
@@ -42,6 +43,9 @@ def client(service):
     with (
         container.redis.override(AllowAll()),
         container.v1_container.supplier_support_service.override(service),
+        container.v1_container.supplier_support_request_service.override(
+            SupportRequestService(None, service.managers, service.managers, service.calendar)
+        ),
         TestClient(app) as test_client,
     ):
         yield test_client
@@ -256,8 +260,16 @@ def test_base_search_accepts_client_supplier_and_reference_independently(client,
 
 
 def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
-    assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
+    assert client.get(f"{BASE}/permissions").json() == {
+        "can_manage": True,
+        "can_request": True,
+        "can_review": True,
+    }
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
 
-    assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
+    assert client.get(f"{BASE}/permissions").json() == {
+        "can_manage": False,
+        "can_request": False,
+        "can_review": False,
+    }

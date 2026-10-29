@@ -99,6 +99,7 @@ from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
 from app.modules.supplier_supports.application.bulk import SupportBulkService
 from app.modules.supplier_supports.application.profiles import SupportProfileService
+from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.application.special_cases import SpecialCaseService
 from app.modules.supplier_supports.infrastructure.attachments_repository import (
@@ -112,6 +113,9 @@ from app.modules.supplier_supports.infrastructure.profiles_repository import (
     SqlAlchemyProfileRepository,
 )
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
+from app.modules.supplier_supports.infrastructure.requests_repository import (
+    SqlAlchemySupportRequestRepository,
+)
 from app.modules.supplier_supports.infrastructure.special_cases_repository import (
     SqlAlchemySpecialCaseRepository,
 )
@@ -355,6 +359,19 @@ class V1Container(containers.DeclarativeContainer):
         repository=supplier_support_repository,
         masters=master_lookup,
         managers=supplier_support_manager_policy,
+        calendar=pqrsf_calendar,
+    )
+    supplier_support_request_repository = providers.Factory(
+        SqlAlchemySupportRequestRepository, database=database
+    )
+    supplier_support_requester_policy = providers.Factory(
+        AreaManagerPolicy, areas=area_service, area_slug="comercial"
+    )
+    supplier_support_request_service = providers.Factory(
+        SupportRequestService,
+        repository=supplier_support_request_repository,
+        managers=supplier_support_manager_policy,
+        requesters=supplier_support_requester_policy,
         calendar=pqrsf_calendar,
     )
     supplier_support_profile_repository = providers.Factory(

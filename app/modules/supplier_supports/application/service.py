@@ -79,6 +79,7 @@ EDITABLE_FIELDS = frozenset(
         "product_sku",
         "supplier_value",
         "jdh_pct",
+        "jdh_net_cost",
         "target_margin_pct",
         "min_margin_pct",
         "list_margin_pct",
@@ -215,6 +216,13 @@ class SupplierSupportService:
                 raise FieldError(f"{name} debe estar entre 0 y 1", name)
         if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
             raise FieldError("jdh_pct debe estar entre -1 y 1", "jdh_pct")
+        if data.jdh_net_cost is not None:
+            if data.calc_method != "costo_neto" or not Decimal(0) <= data.jdh_net_cost < Decimal(
+                "1000000000000"
+            ):
+                raise FieldError(
+                    "El costo JDH solo aplica a costo_neto y debe ser no negativo", "jdh_net_cost"
+                )
         for name in ("reference_cost", "reference_list_price", "pack_factor"):
             value = getattr(data, name)
             if value is not None and value <= 0:

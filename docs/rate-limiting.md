@@ -241,6 +241,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/supplier-support-profiles/{supplier_code}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-profiles/{supplier_code}` | `read` |  |
 | `PUT` | `/v1/supplier-support-profiles/{supplier_code}` | `relaxed` |  |
+| `GET` | `/v1/supplier-support-requests` | `read` |  |
+| `GET` | `/v1/supplier-support-requests/{request_id}` | `read` |  |
+| `POST` | `/v1/supplier-support-requests/{request_id}/approve` | `relaxed` |  |
+| `POST` | `/v1/supplier-support-requests/{request_id}/reject` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/attachments` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/attachments/preview` | `relaxed` |  |
@@ -259,6 +263,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/supplier-supports/{support_id}/attachments/{document_id}` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/{support_id}/attachments/{document_id}/view` | `read` |  |
 | `GET` | `/v1/supplier-supports/{support_id}/conflicts` | `read` |  |
+| `GET` | `/v1/supplier-supports/{support_id}/jdh-history` | `read` |  |
+| `DELETE` | `/v1/supplier-supports/{support_id}/jdh-support` | `relaxed` |  |
+| `POST` | `/v1/supplier-supports/{support_id}/requests` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/{support_id}/void` | `relaxed` |  |
 | `GET` | `/v1/users` | `read` |  |
 | `GET` | `/v1/users/me` | `read` |  |

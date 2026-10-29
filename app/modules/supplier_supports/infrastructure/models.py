@@ -48,6 +48,10 @@ class SupplierSupportModel(Base):
 
     __tablename__ = "supplier_supports"
     __table_args__ = (
+        CheckConstraint(
+            "jdh_net_cost IS NULL OR (calc_method = 'costo_neto' AND jdh_net_cost >= 0)",
+            name="ck_support_jdh_net_cost",
+        ),
         CheckConstraint(_in("kind", KINDS), name="ck_supplier_supports_kind"),
         CheckConstraint(_in("funding", FUNDINGS), name="ck_supplier_supports_funding"),
         CheckConstraint(_in("calc_method", CALC_METHODS), name="ck_supplier_supports_calc_method"),
@@ -134,6 +138,7 @@ class SupplierSupportModel(Base):
     calc_method: Mapped[str] = mapped_column(String(30), nullable=False)
     supplier_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     jdh_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    jdh_net_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     value_unit: Mapped[str | None] = mapped_column(String(10))
     target_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
@@ -321,3 +326,59 @@ class SupplierSupportTierModel(Base):
     from_value: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     to_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+
+
+class SupportRequestModel(Base):
+    """An immutable proposal with a single terminal decision."""
+
+    __tablename__ = "supplier_support_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pendiente','aprobada','rechazada')", name="ck_support_request_status"
+        ),
+        CheckConstraint("mode IN ('porcentaje','costo_neto')", name="ck_support_request_mode"),
+        Index("ix_support_requests_owner_created", "requested_by_id", "created_at"),
+        Index("ix_support_requests_status_created", "status", "created_at"),
+        Index("ix_support_requests_support", "support_id"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    support_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="RESTRICT"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pendiente")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    support_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class SupportJdhEventModel(Base):
+    """Append-only audit, including administrative changes and migration baseline."""
+
+    __tablename__ = "supplier_support_jdh_events"
+    __table_args__ = (Index("ix_support_jdh_events_support", "support_id", "created_at"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    support_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="RESTRICT"), nullable=False
+    )
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_support_requests.id", ondelete="RESTRICT")
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

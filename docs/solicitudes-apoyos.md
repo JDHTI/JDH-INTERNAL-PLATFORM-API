@@ -1,73 +1,70 @@
-# Plan: solicitudes de apoyo JDH
+﻿# Solicitudes de apoyo JDH
 
-Estado: planificación aprobada; entrega documental, sin funcionalidad implementada.
+Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`. Frontend coordinado en `internal-platform-ui/supplier-supports-form`, rama `feat/supplier-supports-requests`.
 
-## Decisiones de negocio
+## Comportamiento
 
-- Comercial tendrá un maestro filtrable de solo lectura, inicialmente sin filtro por vendedor.
-- Cada solicitud apunta a un único registro compartido del maestro. No propaga cambios a otras filas por producto o cliente.
-- BI y administradores administran el maestro y resuelven solicitudes; Comercial consulta y solicita. Trasladar a BI los permisos actuales de Comercial para edición, perfiles, cargas y adjuntos.
-- Para `costo_neto`, solicitar un nuevo costo pactado JDH (`jdh_net_cost`), conservando `supplier_value` como costo del proveedor. Para todos los demás métodos, solicitar porcentaje en `jdh_pct`, con su base y convenciones actuales.
-- Solicitar exige acuerdo vigente, habilitado y sin revisión pendiente. Los demás acuerdos siguen consultables.
-- Comercial ve sus solicitudes; BI ve todas. BI aprueba el valor pedido o rechaza con motivo, sin editar la propuesta.
-- Cancelar JDH elimina únicamente su efecto vigente. Conserva acuerdo, aporte del proveedor e historial. Anular el acuerdo completo sigue siendo una acción distinta.
+- Comercial consulta el maestro y solicita un valor para un registro compartido. Inicialmente no se filtra por vendedor. No se propagan cambios a otras filas por producto o cliente.
+- BI y administradores administran el maestro y resuelven solicitudes; Comercial ve sus propias solicitudes.
+- `costo_neto` solicita `jdh_net_cost`: nuevo costo pactado JDH, independiente de `supplier_value`, que conserva el costo del proveedor. Los demás métodos solicitan `jdh_pct`, con su base y semántica actuales.
+- Una solicitud nace `pendiente` y no afecta el maestro. Solo admite una decisión: `aprobada` o `rechazada`. La propuesta no se edita; otro valor exige otra solicitud.
+- Crear o aprobar requiere acuerdo vigente, habilitado y sin revisión pendiente. El rechazo exige motivo y no altera valores.
+- Cancelar JDH limpia exclusivamente su aporte vigente; conserva acuerdo, proveedor y trazabilidad. Anular el acuerdo completo es una operación distinta.
+- Sin solicitudes masivas, notificaciones, retiro de propuestas ni filtro por vendedor en esta entrega.
 
-## Persistencia y consistencia
+## Permisos y contrato
 
-Agregar `jdh_net_cost` al maestro. Crear tabla de solicitudes con acuerdo, modalidad, valor pedido, justificación, solicitante, fecha, fotografía del acuerdo y estado (`pendiente`, `aprobada`, `rechazada`). La propuesta es inmutable: otro valor exige otra solicitud.
+Rutas relativas al prefijo vigente `/api/v1`:
 
-Crear eventos inmutables con actor, fecha UTC, motivo, solicitud relacionada, versión y valores anteriores/nuevos. Registrar creación, aprobación, rechazo, cancelación JDH y modificaciones administrativas del aporte. Ningún PATCH, carga o importación debe eludir la auditoría. Preservar valores existentes mediante una línea base identificada como migración, sin inventar solicitudes históricas.
-
-Aprobar en una transacción: bloquear acuerdo y solicitud, comprobar permisos, estado y versiones, actualizar maestro, resolver solicitud y guardar evento. El fallo de cualquier paso revierte todo. Resolver una solicitud dos veces no vuelve a aplicar el cambio.
-
-Permitir varias solicitudes pendientes. Si cambió el acuerdo, devolver 409; BI recarga, compara propuesta con valor vigente y confirma nuevamente contra esa versión. No cerrar automáticamente las demás solicitudes. Repetir una cancelación ya efectiva no genera otro cambio ni evento.
-
-Conservar el costo del proveedor y mostrar el costo efectivo JDH por separado. Al cancelar JDH vuelve a regir el costo del proveedor. Respetar unidad/caja/kg y conversiones existentes. Mantener separados financiación del proveedor y aporte JDH en cálculos y consumidores, incluido el validador; no atribuir JDH al proveedor. Las solicitudes pendientes o rechazadas no afectan cálculos.
-
-## Contrato API propuesto
-
-Rutas relativas al prefijo vigente; reutilizar arquitectura, errores y paginación del módulo `supplier_supports`.
-
-| Ruta | Comportamiento |
+| Ruta | Uso |
 | --- | --- |
-| `POST /supplier-supports/{id}/requests` | Crear pendiente: valor, motivo y versión consultada. |
-| `GET /supplier-support-requests` | Lista paginada y filtrable: propias para Comercial, todas para BI. |
-| `GET /supplier-support-requests/{id}` | Detalle autorizado, propuesta original y decisión. |
-| `POST /supplier-support-requests/{id}/approve` | Aprobar valor solicitado contra versión vigente revisada. |
-| `POST /supplier-support-requests/{id}/reject` | Rechazar con motivo obligatorio. |
-| `GET /supplier-supports/{id}/jdh-history` | Historial completo para BI; Comercial accede a sus solicitudes. |
-| `DELETE /supplier-supports/{id}/jdh-support` | Cancelación lógica del aporte, con motivo y control de versión. |
+| `GET /supplier-supports/permissions` | `can_manage`, `can_request`, `can_review`. |
+| `POST /supplier-supports/{id}/requests` | Crear pendiente: `{version,value,reason}`. |
+| `GET /supplier-support-requests` | Lista: `status`, `q`, `page`, `size`, `mine`. |
+| `GET /supplier-support-requests/{id}` | Propuesta, decisión, maestro actual y eventos; admite `mine`. |
+| `POST /supplier-support-requests/{id}/approve` | `{version,support_version}`: confirmar contra versión vigente revisada. |
+| `POST /supplier-support-requests/{id}/reject` | `{version,reason}`. |
+| `GET /supplier-supports/{id}/jdh-history` | Array de eventos completos, exclusivo para BI y administradores. |
+| `DELETE /supplier-supports/{id}/jdh-support` | `{version,reason}`: cancelar solo JDH; devuelve maestro actualizado. |
 
-Ampliar `/supplier-supports/permissions` con capacidades de solicitar y resolver, conservando `can_manage`. La autorización se aplica en backend. Mantener lectura existente del maestro y proteger separadamente las solicitudes y eventos.
+La lista siempre filtra por usuario para Comercial. `mine=true` fuerza ese filtro también para BI; usarlo en lista y detalle del contexto Comercial. Buscar por solicitante, motivo, SKU, NIT o nombre del cliente. `size` máximo 100; respuesta `items,total,page,size`.
 
-Los porcentajes mantienen la validación vigente; el costo pactado admite importes no negativos y usa la unidad del acuerdo. Las fechas se presentan en `America/Bogota`.
+Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `porcentaje` o `costo_neto`. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
 
-## Frontend coordinado
+Decimales en texto, finitos, máximo seis decimales. Porcentaje entre -1 y 1 (0.05 = 5 %), costo entre 0 y menos de 10^12. Motivos de 3 a 2000 caracteres, eliminando espacios extremos. Fechas UTC; presentación en `America/Bogota`.
 
-- Reutilizar navegador, filtros, detalle y documentos en `/comercial/apoyos`, con modo explícito de consulta incluso para usuarios que también administran BI.
-- Solicitud individual: modalidad determinada por el acuerdo, valor vigente, unidad/base, valor pedido y justificación.
+El snapshot conserva identidad, versión, método, proveedor, valores JDH, referencias, unidad/factor, producto, cliente/sucursal, programa, vigencia y estado. Eventos: `id,support_id,request_id,event_type,actor,created_at,reason,before,after`.
+
+## Transacciones y trazabilidad
+
+La aprobación bloquea maestro y solicitud, comprueba versiones, vigencia y modalidad, modifica maestro, resuelve solicitud y registra eventos en una transacción. Ante un fallo, nada queda aplicado. Una solicitud resuelta no se aplica otra vez.
+
+Se permiten varias pendientes. Si otra aprobación o edición cambió el acuerdo, responder 409: BI recarga, compara y confirma con la versión actual. Las otras solicitudes siguen pendientes. Cancelar de nuevo un aporte ya vacío no modifica versiones ni agrega eventos.
+
+PostgreSQL impide UPDATE/DELETE de eventos, borrado de solicitudes, edición de propuestas y nuevas decisiones sobre solicitudes resueltas. Un trigger audita cambios del maestro por edición, importación o carga. Tipos: `migracion`, `creacion`, `solicitada`, `aprobada`, `rechazada`, `cancelada`, `actualizacion_maestro`. El evento de decisión y el cambio efectivo del maestro se guardan en la misma transacción.
+
+`derived.net_cost` y sus conversiones usan el costo JDH vigente en `costo_neto`; `derived.supplier_amount` conserva exclusivamente el aporte del proveedor. Cancelar JDH restablece el costo del proveedor. El validador sigue leyendo el valor del proveedor sin atribuirle dinero JDH; archivos anteriores conservan su fotografía. Los demás métodos mantienen las fórmulas existentes de `jdh_pct`.
+
+## Frontend
+
+- `/comercial/apoyos`: navegador reutilizado, filtros, detalle y solicitud individual; consulta explícita incluso para usuarios BI.
 - `/comercial/apoyos/solicitudes`: seguimiento propio.
 - `/bi/solicitudes-apoyos`: pendientes por defecto, filtros, comparación original/actual/propuesta, aprobación, rechazo e historial.
-- Maestro BI: cancelar aporte JDH e historial, diferenciados de anulación del acuerdo.
-- Invalidar listas, detalle y solicitudes tras cambios. Contemplar carga, vacío, error, permisos y 409. Reutilizar componentes y convenciones existentes.
-- Sin solicitudes masivas, notificaciones ni retiro por el solicitante en esta entrega.
+- Maestro BI: cancelación exclusiva JDH e historial, diferenciados de anular el acuerdo.
+- Refrescar consultas tras cambios; contemplar carga, vacío, errores, permisos y 409 con revisión explícita.
 
-## Validación prevista
+## Despliegue y validación
 
-- Permisos: Comercial no modifica ni resuelve; no accede a solicitudes ajenas.
-- Creación/rechazo sin efecto; aprobación porcentual y de costo neto; cancelación y nueva solicitud posterior.
-- Preservar proveedor, alcance y unidad; historial íntegro y reintentos sin duplicación.
-- Dos aprobadores, solicitudes concurrentes, edición administrativa intermedia y rollback.
-- Regresión de cálculos, importación, adjuntos y validador.
-- Migración PostgreSQL: subir, revertir y verificar una sola cabeza Alembic; encadenar tras la cabeza vigente (actualmente 0035).
-- API: pytest, Ruff y formato. UI: TypeScript, ESLint, build y recorrido Comercial/BI, móvil y ambos temas.
+Aplicar `alembic upgrade head`: migración `0036_support_requests`, tras `0035_full_margin_reason`. Crea solicitudes, eventos, triggers y costo JDH independiente. La línea base conserva valores anteriores y aclara que no son solicitudes históricas.
 
-Estas pruebas están planificadas; esta entrega documental no las ejecuta ni certifica funcionalidad.
+Configurar `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG=bi` si el entorno tenía explícitamente `comercial`; defaults de aplicación, ejemplo y Compose ya usan BI. Cubre también cargas, perfiles, adjuntos y casos especiales. Las solicitudes usan membresía de Comercial; administradores tienen ambas capacidades.
 
-## Entrega y convenciones
+- Suite completa: **974 pruebas pasan**, incluidas seis de PostgreSQL.
+- Ruff y formato limpios; `git diff --check` correcto.
+- Migración comprobada: subir, bajar y subir; una cabeza Alembic.
+- PostgreSQL: aprobación, cancelación, rechazo, conflictos, dos aprobadores, múltiples pendientes, aislamiento, rollback e inmutabilidad real.
+- `alembic check` señala siete índices preexistentes ajenos a esta entrega (búsquedas comerciales y `ix_supplier_supports_special_case`); ninguna diferencia en las tablas nuevas. Esos índices no se modifican.
 
-API: rama `feat/module-supplier-supports-requests` desde `master`; commit documental `docs(module-supplier-supports): define JDH support requests and approval workflow`.
+Para integrar, configurar `SUPPORT_REQUEST_TEST_DATABASE_URL` hacia una base desechable migrada a head. Las pruebas dejan auditoría deliberadamente, ya que comprueban que no puede eliminarse. Sin esa variable se omiten.
 
-UI: coordinar con el agente de `internal-platform-ui/supplier-supports-form`, rama `feat/supplier-supports-requests` desde su `master` y commit `docs(supports): plan commercial requests and BI approvals`. La señal pide planificación y documentación, sin implementar funcionalidad todavía.
-
-Referencias de estilo revisadas: API PR #30 y #31; UI PR #36. Títulos y commits convencionales en inglés; descripción de PR en español con Resumen, Notas de despliegue (o Notas) y Pruebas, enlazando ambos frentes. Identificar pruebas pendientes. Esta fase no publica PRs.
+Convenciones revisadas contra API PR #30/#31 y UI #36: commits y títulos en inglés; descripción de PR en español con Resumen, Notas de despliegue y Pruebas. No se hace push ni se publican PRs en esta entrega.
