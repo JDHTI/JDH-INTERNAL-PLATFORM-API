@@ -11,7 +11,7 @@ Comercial consulta el maestro y solicita apoyo JDH sin alterar el acuerdo vigent
 - Cancelación determinista exclusiva de JDH, sin borrar el acuerdo ni el historial.
 - Control de versiones y bloqueos para decisiones concurrentes; 409 exige revisión del valor vigente.
 - Auditoría también de cambios administrativos, protegida contra edición/borrado en PostgreSQL.
-- Frontend hermano: `JDH-INTERNAL-PLATFORM`, rama `feat/supplier-supports-requests`, commit `177184a`.
+- Frontend hermano: `JDH-INTERNAL-PLATFORM`, rama `feat/supplier-supports-requests`, commit `d0691b0`.
 
 ## Notas de despliegue
 
@@ -28,5 +28,5 @@ Comercial consulta el maestro y solicita apoyo JDH sin alterar el acuerdo vigent
 - [x] Ruff, comprobación de formato y `git diff --check`.
 - [x] Migración PostgreSQL: subir, bajar y volver a subir; una sola cabeza.
 - [x] HTTP y PostgreSQL: permisos, aislamiento, aprobación/rechazo, cancelación, conflictos, concurrencia, rollback e historial inmutable.
-- [x] UI: TypeScript, ESLint, build y nueve pruebas (validado en el worktree hermano).
+- [x] UI: TypeScript, ESLint, build y 19 pruebas (validado en el worktree hermano).
 - [ ] Recorrido visual integrado en navegador, móvil y ambos temas.
