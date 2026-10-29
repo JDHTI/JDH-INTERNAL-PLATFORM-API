@@ -73,10 +73,10 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                 ),
                 Rule(
                     "margen_100",
-                    "Producto con margen 100 %",
-                    "Una línea con margen 100 % no trae costo: queda pendiente con alerta y el "
-                    "pedido entero no se libera de ninguna forma, ni por su margen ni con "
-                    "aprobación manual, hasta corregirlo en el ERP y volver a subir el archivo. "
+                    "Margen 100 %, revisar",
+                    "Una línea con margen 100 % no trae costo: queda pendiente con «Margen 100 %, "
+                    "revisar» en el detalle, no cuenta en el margen del pedido y el pedido no se "
+                    "libera por sus líneas ni por su margen; solo con aprobación manual. "
                     "Inflaría el margen acumulado y dejaría pasar pedidos que no deben pasar.",
                     HOLDS,
                 ),
@@ -192,8 +192,8 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     "Aprobación manual",
                     "Quien gestiona puede liberar a mano pedidos pendientes, todos o ninguno, con "
                     "una nota opcional. La aprobación es del pedido: sus líneas conservan su "
-                    "motivo, y volver a validar el archivo la conserva. No se pueden aprobar "
-                    "pedidos con un producto en margen 100 %.",
+                    "motivo, y volver a validar el archivo la conserva. Es la única forma de "
+                    "liberar un pedido con un producto en margen 100 %.",
                     RELEASES,
                 ),
             ),

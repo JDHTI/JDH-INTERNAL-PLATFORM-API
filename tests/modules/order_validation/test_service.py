@@ -395,7 +395,7 @@ def full_margin_report() -> bytes:
     )
 
 
-async def test_an_order_with_a_full_margin_product_cannot_be_approved(
+async def test_an_order_with_a_full_margin_product_is_released_only_by_hand(
     service, source, manager
 ) -> None:
     source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
@@ -409,12 +409,18 @@ async def test_an_order_with_a_full_margin_product_cannot_be_approved(
     full = next(item for item in pv3.lines if item.line.margin_pct == D("1"))
     assert full.result.reason == "margen_100" and pv3.line_alerts[full.id] == ("margen_100",)
 
-    with pytest.raises(ConflictError, match="margen 100 %"):
-        await service.approve(manager, batch.id, ["PV-3"])
-    # All or nothing: a good order sent along is not approved either.
-    with pytest.raises(ConflictError, match="PV-3"):
-        await service.approve(manager, batch.id, ["PV-1", "PV-3"])
+    assert full.result.detail.startswith("Margen 100,00 %, revisar")
     assert (await service.get_batch(batch.id)).ready_order_count == 1
+
+    approved = await service.approve(manager, batch.id, ["PV-3"])
+
+    assert approved.ready_order_count == 2
+    pv3 = next(
+        order for order in (await service.orders(batch.id)).items if order.document == "PV-3"
+    )
+    assert pv3.status == "listo_para_liberar" and pv3.release_basis == "manual"
+    # The line keeps its reason and the alert stays in the breakdown.
+    assert [alert.code for alert in pv3.alerts] == ["margen_100"]
 
 
 def test_the_rule_catalog_carries_the_policy_in_force(service) -> None:

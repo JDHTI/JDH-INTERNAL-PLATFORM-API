@@ -310,16 +310,6 @@ class OrderValidationService:
         missing = [document for document in wanted if document not in orders]
         if missing:
             raise NotFoundError(f"Pedidos que no están en el archivo: {', '.join(missing)}")
-        blocked = [
-            document
-            for document in wanted
-            if any(rules.is_full_margin(item.line) for item in orders[document].lines)
-        ]
-        if blocked:
-            raise ConflictError(
-                f"Estos pedidos tienen productos con margen 100 % y no se pueden aprobar hasta "
-                f"corregirlos: {', '.join(blocked)}; no se aprobó ninguno"
-            )
         settled = [document for document in wanted if orders[document].status != vocabulary.PENDING]
         if settled:
             raise ConflictError(

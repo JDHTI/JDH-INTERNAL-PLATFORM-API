@@ -160,12 +160,16 @@ Las reglas, con sus valores vigentes, se publican para los colaboradores en
 
 #### Producto con margen 100 %
 
-Una línea con margen 100 % (o más) no trae costo: sale con el motivo `margen_100` y la alerta
-`margen_100`, y **el pedido no se libera de ninguna forma**: ni por sus líneas, ni por su margen,
-ni a mano (`POST .../approvals` responde 409 y no aprueba ninguno de los enviados). Hay que
-corregirlo en el ERP y volver a subir el archivo. Una aprobación manual anterior queda sin efecto
-mientras siga el producto. Se detecta por el margen del archivo, así que también aplica a los
-archivos subidos antes de esta regla (sus líneas dicen `datos_incompletos` hasta revalidar).
+Una línea con margen 100 % (o más) no trae costo: sale con el motivo y la alerta `margen_100`
+(«Margen 100 %, revisar»), no cuenta en el margen del pedido y **el pedido no se libera solo**:
+ni por sus líneas ni por su margen. **Sí se puede aprobar a mano**, después de revisarlo; la
+línea conserva su motivo y su alerta. Se detecta por el margen del archivo, así que también
+aplica a los archivos subidos antes de esta regla (sus líneas dicen `datos_incompletos` hasta
+revalidar).
+
+Las alertas (`margen_100`, `bajo_objetivo`, `falta_impuesto_licor`) son para el **desglose** de
+cada referencia en el detalle del pedido; en la vista general el pedido solo dice su estado
+(«Pendiente de validación»).
 
 #### Línea a más de 4 puntos de su objetivo
 
@@ -218,7 +222,7 @@ pedido al 19,5 % frente a un objetivo de 20 % queda listo. Reglas:
 
 Un **pedido** está listo para liberación si **todas** sus líneas lo están, si una persona lo
 **aprobó a mano**, si su **margen** (con el umbral) alcanza el objetivo o si entra en la
-**tolerancia**, salvo que tenga un producto con margen 100 %. `release_basis` dice cuál:
+**tolerancia**; con un producto en margen 100 %, solo a mano. `release_basis` dice cuál:
 `lineas`, `manual`, `margen`, `tolerancia`, o `null` mientras está pendiente.
 
 Cuando se libera por `margen`, `released_by_threshold` dice si el margen solo no alcanzaba y lo que

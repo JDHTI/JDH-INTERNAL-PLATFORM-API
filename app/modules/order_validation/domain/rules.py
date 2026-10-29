@@ -414,13 +414,13 @@ def _decide(
 
     if is_full_margin(line):
         # A 100 % margin is a line with no cost in the order, not a profitable one, and it would
-        # carry the margin of the whole order: the order is held back (see release_basis).
+        # carry the margin of the whole order: only a person releases it (see release_basis).
         return LineResult(
             status=vocabulary.PENDING,
             reason=FULL_MARGIN,
             detail=(
-                f"Producto con margen {pct(line.margin_pct)}: la línea no trae costo. El pedido "
-                "no se libera, ni a mano, hasta corregirlo"
+                f"Margen {pct(line.margin_pct)}, revisar: la línea no trae costo. El pedido solo "
+                "se libera con aprobación manual"
             ),
             effective_margin_pct=_round(line.margin_pct),
         )
@@ -626,8 +626,8 @@ def order_alerts(
     points_text = points(policy.max_points_below_target)
     messages = {
         FULL_MARGIN: (
-            "Hay productos con margen 100 %: el pedido no se libera, ni a mano, hasta corregirlo "
-            "(inflan el margen acumulado del pedido)"
+            "Margen 100 %, revisar: hay productos sin costo; el pedido solo se libera con "
+            "aprobación manual (inflarían el margen acumulado del pedido)"
         ),
         "bajo_objetivo": (
             f"Hay productos a más de {points_text} puntos por debajo de su margen objetivo: el "
@@ -747,14 +747,14 @@ def release_basis(
 ) -> str | None:
     """Why an order is ready: ``manual``, all its ``lineas``, its ``margen`` or ``tolerancia``.
 
-    An order with a 100 % margin product is never ready, not even with a manual approval given
-    before the product was found: it has to be corrected and the file uploaded again.
+    An order with a 100 % margin product is only ready with a manual approval: neither its
+    lines nor its margin release it.
     """
 
-    if any(is_full_margin(line) for line, _ in items):
-        return None
     if approved:
         return RELEASE_MANUAL
+    if any(is_full_margin(line) for line, _ in items):
+        return None
     if order_status(result.status for _, result in items) == vocabulary.READY:
         return RELEASE_LINES
     return release_by_margin(items, threshold, policy)

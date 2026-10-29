@@ -237,7 +237,7 @@ def test_a_full_margin_is_a_line_without_cost_not_a_release() -> None:
     result = decide(margin_pct=D("1"), reference=D("0.18"))
 
     assert result.status == "pendiente_validacion" and result.reason == "margen_100"
-    assert "no trae costo" in result.detail and "ni a mano" in result.detail
+    assert "no trae costo" in result.detail and "Margen 100,00 %, revisar" in result.detail
 
 
 def test_order_status_and_batch_counts() -> None:
@@ -570,13 +570,15 @@ def test_a_line_more_than_4_points_below_its_target_holds_the_order_and_is_flagg
     assert rules.line_alerts(*pair("100", "1", D("0.08"), D("0.12"))) == ()
 
 
-def test_a_full_margin_product_holds_the_order_even_with_a_manual_approval() -> None:
+def test_a_full_margin_product_is_only_released_by_hand() -> None:
     full = pair("1000", "1", D("1"), D("0.20"), "margen_100", row=3)
     items = [pair("1000", "1", D("0.30"), D("0.20"), "cumple_margen_lista"), full]
 
     assert rules.release_by_margin(items, D("0.05")) is None
-    assert rules.release_basis(items, True, D("0.05")) is None
-    assert rules.summarize_batch(items, {"PV-1"}) == (2, 1, 1, 0)
+    assert rules.release_basis(items, False, D("0.05")) is None
+    assert rules.release_basis(items, True, D("0")) == "manual"
+    assert rules.summarize_batch(items) == (2, 1, 1, 0)
+    assert rules.summarize_batch(items, {"PV-1"}) == (2, 1, 1, 1)
     (alert,) = rules.order_alerts(items)
     assert alert.code == "margen_100" and alert.row_numbers == (3,)
     # It stays out of the order margin: it carries no cost.

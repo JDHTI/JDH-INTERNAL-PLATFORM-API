@@ -39,7 +39,7 @@ REASON_LABELS = {
     "acuerdo_no_evaluable": "Apoyo no evaluable por pedido",
     "acuerdo_vencido": "Apoyo fuera de vigencia",
     "sin_acuerdo": "Sin apoyo registrado",
-    "margen_100": "Producto con margen 100 %",
+    "margen_100": "Margen 100 %, revisar",
     "datos_incompletos": "Datos incompletos en el archivo",
 }
 
@@ -50,7 +50,7 @@ RELEASE_BASES = ("lineas", "margen", "tolerancia", "manual")
 ALERTS = ("margen_100", "bajo_objetivo", "falta_impuesto_licor")
 
 ALERT_LABELS = {
-    "margen_100": "Producto con margen 100 %",
+    "margen_100": "Margen 100 %, revisar",
     "bajo_objetivo": "Producto muy por debajo de su margen objetivo",
     "falta_impuesto_licor": "Falta el impuesto al licor",
 }
