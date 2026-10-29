@@ -167,6 +167,31 @@ class LineResult:
 
 
 @dataclass(frozen=True)
+class OrderPolicy:
+    """Order-level release rules the business tunes (fractions: 0.18 = 18 %, 0.04 = 4 points).
+
+    - ``max_points_below_target``: a line further than this below its target holds the whole
+      order back, whatever its margin.
+    - ``tolerance_min_order_margin`` and ``tolerance_max_lines``: an order whose margin reaches
+      the minimum is released with up to that many lines below their target (each within
+      ``max_points_below_target``).
+    """
+
+    max_points_below_target: Decimal = Decimal("0.04")
+    tolerance_min_order_margin: Decimal = Decimal("0.18")
+    tolerance_max_lines: int = 2
+
+
+@dataclass(frozen=True)
+class OrderAlert:
+    """A warning on an order, with the lines behind it."""
+
+    code: str
+    message: str
+    row_numbers: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class StoredLine:
     """A line of a batch with its latest result."""
 
@@ -244,6 +269,11 @@ class OrderView:
     # Released by its margin, but only thanks to the threshold: the margin alone fell short.
     released_by_threshold: bool = False
     has_liquor_tax: bool = False
+    # Warnings for a person: a 100 % margin product, a product far below its target...
+    alerts: tuple[OrderAlert, ...] = ()
+    # Per line id: the margin it brings to the order and its alert codes.
+    line_margins: dict[UUID, Decimal | None] = field(default_factory=dict)
+    line_alerts: dict[UUID, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def first(self) -> OrderLine:

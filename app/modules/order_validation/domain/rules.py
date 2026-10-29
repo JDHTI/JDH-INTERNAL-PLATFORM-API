@@ -25,7 +25,9 @@ from app.modules.order_validation.domain.entities import (
     AgreementCheck,
     CustomerScope,
     LineResult,
+    OrderAlert,
     OrderLine,
+    OrderPolicy,
     ProductInfo,
 )
 from app.modules.supplier_supports.domain.validity import validity_on
@@ -39,6 +41,8 @@ QUANTUM = Decimal("0.000001")
 APPLIES = "aplica"
 OUT_OF_DATE = "fuera_de_vigencia"
 OUT_OF_SCOPE = "fuera_de_alcance"
+FULL_MARGIN = "margen_100"
+DEFAULT_POLICY = OrderPolicy()
 
 _BASIS = {
     "margin_list": "lista",
@@ -337,7 +341,7 @@ def decide(
     A line is ready when an active agreement covering it on the order date is met, or when
     its margin already reaches the product's margin for the channel. Anything else is left
     pending for a person, with the reason. The margin threshold does not act on lines: it acts
-    on the margin of the whole order (``release_by_threshold``). A product with liquor tax is
+    on the margin of the whole order (``release_by_margin``). A product with liquor tax is
     flagged, whatever the decision, only when the line does not carry the tax: the ``Vlr. imp.
     IMPTOLIC`` of the file is empty or 0, or the file has no such column.
 
@@ -408,12 +412,16 @@ def _decide(
             detail="; ".join((f"Falta {', '.join(missing)} en el archivo", *line.problems)),
         )
 
-    if line.margin_pct >= ONE:
-        # A 100 % margin is a line with no cost in the order, not a profitable one.
+    if is_full_margin(line):
+        # A 100 % margin is a line with no cost in the order, not a profitable one, and it would
+        # carry the margin of the whole order: only a person releases it (see release_basis).
         return LineResult(
             status=vocabulary.PENDING,
-            reason="datos_incompletos",
-            detail=f"Margen del pedido {pct(line.margin_pct)}: la línea no trae costo",
+            reason=FULL_MARGIN,
+            detail=(
+                f"Margen {pct(line.margin_pct)}, revisar: la línea no trae costo. El pedido solo "
+                "se libera con aprobación manual"
+            ),
             effective_margin_pct=_round(line.margin_pct),
         )
 
@@ -496,13 +504,64 @@ def _result(
     )
 
 
+def is_full_margin(line: OrderLine) -> bool:
+    """Whether a line comes with a 100 % margin (or more): it carries no cost."""
+
+    return line.margin_pct is not None and line.margin_pct >= ONE
+
+
 def _amount(line: OrderLine) -> Decimal | None:
     """Sales of a line that carries a cost, or `None` when it cannot be weighted."""
 
     if line.unit_price is None or line.quantity is None or line.margin_pct is None:
         return None
     amount = line.unit_price * line.quantity
-    return None if amount <= ZERO or line.margin_pct >= ONE else amount
+    return None if amount <= ZERO or is_full_margin(line) else amount
+
+
+def line_margin(line: OrderLine, result: LineResult) -> Decimal | None:
+    """The margin a line brings to its order: with its support when one decided it.
+
+    The file gives each line's margin without the supplier's money. When an active support
+    with money for the line (cost, net cost, per unit, net price, list price) decided it, met or
+    not, the line's margin is the one with that support: a line at 1 % that the support brings
+    to 22 % counts as 22 %. A support pending review, out of date or not evaluable does not
+    count; neither do minimum-margin exceptions, which bring no money.
+    """
+
+    if line.margin_pct is None:
+        return None
+    if result.support_id is not None and result.effective_margin_pct is not None:
+        deciding = next(
+            (item for item in result.checks if item.support_id == result.support_id), None
+        )
+        if (
+            deciding is not None
+            and not deciding.needs_review
+            and deciding.outcome in ("cumple", "no_cumple")
+            and deciding.calc_method in _AMOUNT_METHODS
+        ):
+            return result.effective_margin_pct
+    return line.margin_pct
+
+
+def points_below_target(line: OrderLine, result: LineResult) -> Decimal | None:
+    """How far a line's margin (with its support) falls below its target; `None` when not below."""
+
+    margin = line_margin(line, result)
+    if margin is None or result.required_margin_pct is None or is_full_margin(line):
+        return None
+    gap = (result.required_margin_pct - margin).quantize(QUANTUM)
+    return gap if gap > ZERO else None
+
+
+def _far_below(line: OrderLine, result: LineResult, policy: OrderPolicy) -> bool:
+    """A pending line further below its target than the policy tolerates."""
+
+    if result.status == vocabulary.READY:
+        return False
+    gap = points_below_target(line, result)
+    return gap is not None and gap > policy.max_points_below_target.quantize(QUANTUM)
 
 
 def order_margins(
@@ -511,9 +570,10 @@ def order_margins(
     """General margin of an order and its target, weighted by amount.
 
     ``1 - sum(cost) / sum(sales)`` with each line's cost taken as ``price x quantity x
-    (1 - margin)`` is the amount-weighted average of the line margins. Lines with no price,
-    quantity or margin, and lines that carry no cost (100 % margin), are left out. The target
-    is weighted the same way over the lines that have one.
+    (1 - margin)`` is the amount-weighted average of the line margins, each one with its support
+    when a support decided the line (:func:`line_margin`). Lines with no price, quantity or
+    margin, and lines that carry no cost (100 % margin), are left out. The target is weighted the
+    same way over the lines that have one.
 
     Returns:
         tuple[Decimal | None, Decimal | None]: The order margin and the weighted target;
@@ -523,10 +583,11 @@ def order_margins(
     sales = weighted = target_sales = target_weighted = ZERO
     for line, result in lines:
         amount = _amount(line)
-        if amount is None or line.margin_pct is None:
+        margin = line_margin(line, result)
+        if amount is None or margin is None:
             continue
         sales += amount
-        weighted += amount * line.margin_pct
+        weighted += amount * margin
         if result.required_margin_pct is not None:
             target_sales += amount
             target_weighted += amount * result.required_margin_pct
@@ -535,6 +596,52 @@ def order_margins(
     return (
         _round(weighted / sales),
         _round(target_weighted / target_sales) if target_sales else None,
+    )
+
+
+def line_alerts(
+    line: OrderLine, result: LineResult, policy: OrderPolicy = DEFAULT_POLICY
+) -> tuple[str, ...]:
+    """The alert codes of one line (see :data:`vocabulary.ALERTS`)."""
+
+    codes = []
+    if is_full_margin(line):
+        codes.append(FULL_MARGIN)
+    if _far_below(line, result, policy):
+        codes.append("bajo_objetivo")
+    if result.liquor_tax:
+        codes.append("falta_impuesto_licor")
+    return tuple(codes)
+
+
+def order_alerts(
+    items: Sequence[tuple[OrderLine, LineResult]], policy: OrderPolicy = DEFAULT_POLICY
+) -> tuple[OrderAlert, ...]:
+    """The warnings of an order, each with the rows behind it."""
+
+    rows: dict[str, list[int]] = {}
+    for line, result in items:
+        for code in line_alerts(line, result, policy):
+            rows.setdefault(code, []).append(line.row_number)
+    points_text = points(policy.max_points_below_target)
+    messages = {
+        FULL_MARGIN: (
+            "Margen 100 %, revisar: hay productos sin costo; el pedido solo se libera con "
+            "aprobación manual (inflarían el margen acumulado del pedido)"
+        ),
+        "bajo_objetivo": (
+            f"Hay productos a más de {points_text} puntos por debajo de su margen objetivo: el "
+            "pedido no se libera por su margen"
+        ),
+        "falta_impuesto_licor": (
+            "Hay productos con impuesto al licor que la línea no trae: el pedido no se libera por "
+            "su margen"
+        ),
+    }
+    return tuple(
+        OrderAlert(code=code, message=messages[code], row_numbers=tuple(rows[code]))
+        for code in vocabulary.ALERTS
+        if code in rows
     )
 
 
@@ -573,58 +680,84 @@ def by_supplier(agreements: Iterable[Agreement]) -> Mapping[str | None, list[Agr
 _SHORT_REASONS = ("sin_acuerdo", "no_cumple_acuerdo")
 RELEASE_LINES = "lineas"
 RELEASE_ORDER_MARGIN = "margen"
+RELEASE_TOLERANCE = "tolerancia"
 RELEASE_MANUAL = "manual"
 
 
-def release_by_threshold(items: Iterable[tuple[OrderLine, LineResult]], threshold: Decimal) -> bool:
+def release_by_margin(
+    items: Iterable[tuple[OrderLine, LineResult]],
+    threshold: Decimal,
+    policy: OrderPolicy = DEFAULT_POLICY,
+) -> str | None:
     """Whether the margin of the whole order releases an order pending only for its margin.
 
-    The threshold is margin points added to the margin of the whole order (0 is the margin
-    alone, which is always checked): the order is released when
-    ``order margin + threshold >= order target``, both weighted by amount (see
-    :func:`order_margins`). It never rescues an order with a line that is pending for another
-    reason (incomplete data, a support in review or out of date, not evaluable) or that has no
-    margin to compare with: those need a person.
+    Two ways, both over the order margin with supports (:func:`order_margins`):
+
+    - ``margen``: ``order margin + threshold >= order target``. The threshold is margin points
+      added to the order margin (0 is the margin alone, always checked).
+    - ``tolerancia``: the order margin alone reaches ``policy.tolerance_min_order_margin`` (18 %)
+      and at most ``policy.tolerance_max_lines`` (2) lines are below their target.
+
+    Neither rescues an order with a line pending for another reason (incomplete data, a support in
+    review or out of date, not evaluable), with no margin to compare with, without the liquor tax
+    it owes, with a 100 % margin, or with a line further than ``policy.max_points_below_target``
+    (4 points) below its target: those need a person.
 
     Args:
         items (Iterable[tuple[OrderLine, LineResult]]): The lines of one order.
         threshold (Decimal): Margin points, as a fraction (0.005 = 0,5 points).
+        policy (OrderPolicy): The order-level limits.
 
     Returns:
-        bool: ``True`` when the order margin, with the threshold, reaches its target.
+        str | None: :data:`RELEASE_ORDER_MARGIN`, :data:`RELEASE_TOLERANCE` or ``None``.
     """
 
     pairs = list(items)
     if threshold < ZERO or not pairs:
-        return False
+        return None
+    short = 0
     for line, result in pairs:
-        if result.liquor_tax:
-            # Missing liquor tax: no margin makes up for it, only a person can release it.
-            return False
+        if result.liquor_tax or is_full_margin(line):
+            # No margin makes up for these: only a person can release the order.
+            return None
         if result.status == vocabulary.READY:
             continue
         if result.reason not in _SHORT_REASONS or result.required_margin_pct is None:
-            return False
-        if _amount(line) is None:
-            return False
+            return None
+        if _amount(line) is None or _far_below(line, result, policy):
+            return None
+        short += 1
     margin, required = order_margins(pairs)
     if margin is None or required is None:
-        return False
-    return (margin + threshold).quantize(QUANTUM) >= required.quantize(QUANTUM)
+        return None
+    if (margin + threshold).quantize(QUANTUM) >= required.quantize(QUANTUM):
+        return RELEASE_ORDER_MARGIN
+    if 0 < short <= policy.tolerance_max_lines and margin.quantize(
+        QUANTUM
+    ) >= policy.tolerance_min_order_margin.quantize(QUANTUM):
+        return RELEASE_TOLERANCE
+    return None
 
 
 def release_basis(
-    items: Sequence[tuple[OrderLine, LineResult]], approved: bool, threshold: Decimal
+    items: Sequence[tuple[OrderLine, LineResult]],
+    approved: bool,
+    threshold: Decimal,
+    policy: OrderPolicy = DEFAULT_POLICY,
 ) -> str | None:
-    """Why an order is ready: ``manual`` approval, all its ``lineas``, or its ``margen``, or not."""
+    """Why an order is ready: ``manual``, all its ``lineas``, its ``margen`` or ``tolerancia``.
+
+    An order with a 100 % margin product is only ready with a manual approval: neither its
+    lines nor its margin release it.
+    """
 
     if approved:
         return RELEASE_MANUAL
+    if any(is_full_margin(line) for line, _ in items):
+        return None
     if order_status(result.status for _, result in items) == vocabulary.READY:
         return RELEASE_LINES
-    if release_by_threshold(items, threshold):
-        return RELEASE_ORDER_MARGIN
-    return None
+    return release_by_margin(items, threshold, policy)
 
 
 def needs_threshold(margin: Decimal | None, required: Decimal | None) -> bool:
@@ -639,11 +772,12 @@ def summarize_batch(
     items: Iterable[tuple[OrderLine, LineResult]],
     approved: Collection[str] = (),
     threshold: Decimal = ZERO,
+    policy: OrderPolicy = DEFAULT_POLICY,
 ) -> tuple[int, int, int, int]:
     """Counts of a batch: lines, orders, ready lines and ready orders.
 
-    An order is ready when all its lines are, when a person approved it, or when the margin
-    threshold releases it. Its lines keep their own status either way.
+    An order is ready when all its lines are, when a person approved it, or when its margin
+    releases it (see :func:`release_basis`). Its lines keep their own status either way.
     """
 
     orders: dict[str, list[tuple[OrderLine, LineResult]]] = {}
@@ -656,6 +790,6 @@ def summarize_batch(
     ready_orders = sum(
         1
         for document, pairs in orders.items()
-        if release_basis(pairs, document in approved, threshold) is not None
+        if release_basis(pairs, document in approved, threshold, policy) is not None
     )
     return line_count, len(orders), ready_lines, ready_orders

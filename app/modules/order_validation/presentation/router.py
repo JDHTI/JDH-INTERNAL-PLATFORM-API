@@ -20,13 +20,18 @@ from app.modules.order_validation.application.service import (
     MAX_PAGE_SIZE,
     OrderValidationService,
 )
+from app.modules.order_validation.domain import rules
 from app.modules.order_validation.domain.entities import (
     AgreementCheck,
     Batch,
     OrderView,
     StoredLine,
 )
-from app.modules.order_validation.domain.vocabulary import REASON_LABELS, STATUS_LABELS
+from app.modules.order_validation.domain.vocabulary import (
+    ALERT_LABELS,
+    REASON_LABELS,
+    STATUS_LABELS,
+)
 
 router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.order_validation_service])
@@ -43,8 +48,11 @@ Reason = Literal[
     "acuerdo_no_evaluable",
     "acuerdo_vencido",
     "sin_acuerdo",
+    "margen_100",
     "datos_incompletos",
 ]
+ReleaseBasis = Literal["lineas", "margen", "tolerancia", "manual"]
+AlertCode = Literal["margen_100", "bajo_objetivo", "falta_impuesto_licor"]
 
 
 class BatchResponse(BaseModel):
@@ -117,7 +125,25 @@ class LineResponse(BaseModel):
     liquor_tax_value: Decimal | None
     liquor_tax: bool
     liquor_tax_amount: Decimal | None
+    order_margin_pct: Decimal | None = Field(
+        description="The margin this line brings to the order margin: with its support when an "
+        "active support with money decided it, else the file's"
+    )
+    points_below_target: Decimal | None = Field(
+        description="Margin points (as a fraction) below its target, with its support; null when "
+        "it is not below"
+    )
+    alerts: list[AlertCode]
     checks: list[CheckResponse]
+
+
+class AlertResponse(BaseModel):
+    """A warning on an order and the file rows behind it."""
+
+    code: AlertCode
+    label: str
+    message: str
+    row_numbers: list[int]
 
 
 class ManualApprovalResponse(BaseModel):
@@ -167,10 +193,11 @@ class OrderResponse(BaseModel):
     margin_pct: Decimal | None
     required_margin_pct: Decimal | None
     margin_with_threshold_pct: Decimal | None
-    release_basis: Literal["lineas", "margen", "manual"] | None
+    release_basis: ReleaseBasis | None
     released_by_threshold: bool
     without_support_line_count: int
     has_liquor_tax: bool
+    alerts: list[AlertResponse]
     lines: list[LineResponse]
 
 
@@ -194,10 +221,29 @@ class CatalogItem(BaseModel):
 
 
 class CatalogsResponse(BaseModel):
-    """Statuses and reasons the screens show."""
+    """Statuses, reasons and alerts the screens show."""
 
     statuses: list[CatalogItem]
     reasons: list[CatalogItem]
+    alerts: list[CatalogItem]
+
+
+class RuleResponse(BaseModel):
+    """One rule of the validator, as people read it."""
+
+    code: str
+    title: str
+    description: str
+    effect: Literal["libera", "retiene", "alerta", "informa"]
+    parameters: dict[str, str]
+
+
+class RuleSectionResponse(BaseModel):
+    """A group of rules."""
+
+    code: str
+    title: str
+    rules: list[RuleResponse]
 
 
 class PermissionsResponse(BaseModel):
@@ -240,7 +286,7 @@ def _check(item: AgreementCheck) -> CheckResponse:
     )
 
 
-def _line(item: StoredLine) -> LineResponse:
+def _line(item: StoredLine, order: OrderView) -> LineResponse:
     line, result = item.line, item.result
     return LineResponse(
         id=item.id,
@@ -267,6 +313,9 @@ def _line(item: StoredLine) -> LineResponse:
         liquor_tax_value=line.liquor_tax_value,
         liquor_tax=result.liquor_tax,
         liquor_tax_amount=result.liquor_tax_amount,
+        order_margin_pct=order.line_margins.get(item.id),
+        points_below_target=rules.points_below_target(line, result),
+        alerts=list(order.line_alerts.get(item.id, ())),  # type: ignore[arg-type]
         checks=[_check(check) for check in result.checks],
     )
 
@@ -294,7 +343,16 @@ def _order(order: OrderView) -> OrderResponse:
         released_by_threshold=order.released_by_threshold,
         without_support_line_count=order.without_support_line_count,
         has_liquor_tax=order.has_liquor_tax,
-        lines=[_line(item) for item in order.lines],
+        alerts=[
+            AlertResponse(
+                code=alert.code,  # type: ignore[arg-type]
+                label=ALERT_LABELS[alert.code],
+                message=alert.message,
+                row_numbers=list(alert.row_numbers),
+            )
+            for alert in order.alerts
+        ],
+        lines=[_line(item, order) for item in order.lines],
         manual_approval=(
             None
             if order.manual_approval is None
@@ -327,6 +385,38 @@ async def catalogs(
     """Line and order statuses, and the reasons behind them, with their labels."""
 
     return CatalogsResponse.model_validate(service.catalogs())
+
+
+@router.get(
+    "/rules",
+    response_model=list[RuleSectionResponse],
+    summary="The rules the validator applies",
+)
+@inject
+async def validation_rules(
+    _: Principal = _principal,
+    service: OrderValidationService = _service,
+) -> list[RuleSectionResponse]:
+    """Every rule, in the order it is applied and with the values in force, for the public
+    «Reglas» page of the validator. Open to every user."""
+
+    return [
+        RuleSectionResponse(
+            code=section.code,
+            title=section.title,
+            rules=[
+                RuleResponse(
+                    code=rule.code,
+                    title=rule.title,
+                    description=rule.description,
+                    effect=rule.effect,  # type: ignore[arg-type]
+                    parameters=dict(rule.parameters),
+                )
+                for rule in section.rules
+            ],
+        )
+        for section in service.rule_catalog()
+    ]
 
 
 @router.post(

@@ -24,6 +24,7 @@ REASONS = (
     "acuerdo_no_evaluable",  # there is an agreement, but it cannot be checked per order
     "acuerdo_vencido",  # an agreement covers the line, but not on the order date
     "sin_acuerdo",  # no agreement covers the line
+    "margen_100",  # the line has a 100 % margin: no cost, it would inflate the order margin
     "datos_incompletos",  # the file row lacks the supplier, price or margin
 )
 
@@ -38,7 +39,20 @@ REASON_LABELS = {
     "acuerdo_no_evaluable": "Apoyo no evaluable por pedido",
     "acuerdo_vencido": "Apoyo fuera de vigencia",
     "sin_acuerdo": "Sin apoyo registrado",
+    "margen_100": "Margen 100 %, revisar",
     "datos_incompletos": "Datos incompletos en el archivo",
+}
+
+# Why an order is ready for release.
+RELEASE_BASES = ("lineas", "margen", "tolerancia", "manual")
+
+# Warnings raised on an order (and on the lines behind them) for a person to look at.
+ALERTS = ("margen_100", "bajo_objetivo", "falta_impuesto_licor")
+
+ALERT_LABELS = {
+    "margen_100": "Margen 100 %, revisar",
+    "bajo_objetivo": "Producto muy por debajo de su margen objetivo",
+    "falta_impuesto_licor": "Falta el impuesto al licor",
 }
 
 # Result of checking one agreement against one line.

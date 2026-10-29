@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain import rules, vocabulary
+from app.modules.order_validation.domain.catalog import Section, catalog
 from app.modules.order_validation.domain.entities import (
     Batch,
     BatchPage,
@@ -18,6 +19,7 @@ from app.modules.order_validation.domain.entities import (
     ManualApproval,
     OrderLine,
     OrderPage,
+    OrderPolicy,
     OrderView,
     StoredLine,
 )
@@ -98,6 +100,7 @@ class OrderValidationService:
         calendar: Calendar,
         max_upload_bytes: int,
         max_lines: int,
+        policy: OrderPolicy = rules.DEFAULT_POLICY,
     ) -> None:
         """Create the service.
 
@@ -109,6 +112,8 @@ class OrderValidationService:
             calendar (Calendar): Business-day clock, for lines with no order date.
             max_upload_bytes (int): Largest file accepted.
             max_lines (int): Most lines accepted per file.
+            policy (OrderPolicy): Order-level limits (tolerance, points below target). The
+                repository must count with the same one.
         """
 
         self.repository = repository
@@ -118,6 +123,7 @@ class OrderValidationService:
         self.calendar = calendar
         self.max_upload_bytes = max_upload_bytes
         self.max_lines = max_lines
+        self.policy = policy
 
     async def _require_manager(self, principal: Principal) -> None:
         if not await self.managers.is_manager(principal):
@@ -356,7 +362,7 @@ class OrderValidationService:
         for document, lines in documents.items():
             pairs = [(item.line, item.result) for item in lines]
             margin, required = rules.order_margins(pairs)
-            basis = rules.release_basis(pairs, document in approvals, threshold)
+            basis = rules.release_basis(pairs, document in approvals, threshold, self.policy)
             orders.append(
                 OrderView(
                     document=document,
@@ -375,6 +381,14 @@ class OrderValidationService:
                         and rules.needs_threshold(margin, required)
                     ),
                     has_liquor_tax=any(item.result.liquor_tax for item in lines),
+                    alerts=rules.order_alerts(pairs, self.policy),
+                    line_margins={
+                        item.id: rules.line_margin(item.line, item.result) for item in lines
+                    },
+                    line_alerts={
+                        item.id: rules.line_alerts(item.line, item.result, self.policy)
+                        for item in lines
+                    },
                 )
             )
         return orders
@@ -464,6 +478,11 @@ class OrderValidationService:
             threshold_released_count=threshold_released,
         )
 
+    def rule_catalog(self) -> tuple[Section, ...]:
+        """The rules the validator applies, with the values in force, for people to read."""
+
+        return catalog(self.policy)
+
     @staticmethod
     def catalogs() -> dict[str, list[dict[str, str]]]:
         """Statuses and reasons with the labels the screens show."""
@@ -484,6 +503,10 @@ class OrderValidationService:
                     ),
                 }
                 for value in vocabulary.REASONS
+            ],
+            "alerts": [
+                {"value": value, "label": vocabulary.ALERT_LABELS[value]}
+                for value in vocabulary.ALERTS
             ],
         }
 

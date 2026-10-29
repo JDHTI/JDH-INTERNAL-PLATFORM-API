@@ -44,6 +44,7 @@ from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
 from app.modules.order_validation.application.service import OrderValidationService
+from app.modules.order_validation.domain.entities import OrderPolicy
 from app.modules.order_validation.infrastructure.agreements import SqlAlchemyAgreementSource
 from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
 from app.modules.order_validation.infrastructure.repository import (
@@ -410,8 +411,15 @@ class V1Container(containers.DeclarativeContainer):
         areas=area_service,
         area_slug=config.order_validation.manager_area_slug,
     )
+    # The service decides and the repository counts the ready orders: both use this policy.
+    order_validation_policy = providers.Singleton(
+        OrderPolicy,
+        max_points_below_target=config.order_validation.max_points_below_target,
+        tolerance_min_order_margin=config.order_validation.tolerance_min_order_margin,
+        tolerance_max_lines=config.order_validation.tolerance_max_lines,
+    )
     order_validation_repository = providers.Factory(
-        SqlAlchemyOrderValidationRepository, database=database
+        SqlAlchemyOrderValidationRepository, database=database, policy=order_validation_policy
     )
     order_validation_agreements = providers.Factory(SqlAlchemyAgreementSource, database=database)
     order_validation_reader = providers.Singleton(SpreadsheetOrderReader)
@@ -424,6 +432,7 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         max_upload_bytes=config.order_validation.max_upload_bytes,
         max_lines=config.order_validation.max_lines,
+        policy=order_validation_policy,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.

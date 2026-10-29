@@ -380,3 +380,66 @@ async def test_the_page_tells_whether_the_threshold_releases_any_order(
     # The orders it releases are the same that carry the per-order mark.
     page = await service.orders(batch.id, sort="file")
     assert [order.document for order in page.items if order.released_by_threshold] == ["PV-1"]
+
+
+def full_margin_report() -> bytes:
+    """PV-1 is fine; PV-3 has a product at 100 % margin next to a good one."""
+
+    def row(document: str, sku: int, margin: float) -> list:
+        values = list(ROW)
+        values[2], values[9], values[13] = document, sku, margin
+        return values
+
+    return workbook(
+        HEADER, row("PV-1", 18294, 10.0), row("PV-3", 18294, 10.0), row("PV-3", 28703, 100.0)
+    )
+
+
+async def test_an_order_with_a_full_margin_product_is_released_only_by_hand(
+    service, source, manager
+) -> None:
+    source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
+    batch = await service.upload(manager, "Pedidos.xlsx", full_margin_report())
+
+    pv3 = next(
+        order for order in (await service.orders(batch.id)).items if order.document == "PV-3"
+    )
+    assert pv3.status == "pendiente_validacion" and pv3.release_basis is None
+    assert [alert.code for alert in pv3.alerts] == ["margen_100"]
+    full = next(item for item in pv3.lines if item.line.margin_pct == D("1"))
+    assert full.result.reason == "margen_100" and pv3.line_alerts[full.id] == ("margen_100",)
+
+    assert full.result.detail.startswith("Margen 100,00 %, revisar")
+    assert (await service.get_batch(batch.id)).ready_order_count == 1
+
+    approved = await service.approve(manager, batch.id, ["PV-3"])
+
+    assert approved.ready_order_count == 2
+    pv3 = next(
+        order for order in (await service.orders(batch.id)).items if order.document == "PV-3"
+    )
+    assert pv3.status == "listo_para_liberar" and pv3.release_basis == "manual"
+    # The line keeps its reason and the alert stays in the breakdown.
+    assert [alert.code for alert in pv3.alerts] == ["margen_100"]
+
+
+def test_the_rule_catalog_carries_the_policy_in_force(service) -> None:
+    sections = service.rule_catalog()
+
+    codes = [rule.code for section in sections for rule in section.rules]
+    assert {
+        "margen_100",
+        "falta_impuesto_licor",
+        "margen_pedido",
+        "tolerancia",
+        "bajo_objetivo",
+    } <= set(codes)
+    tolerance = next(
+        rule for section in sections for rule in section.rules if rule.code == "tolerancia"
+    )
+    assert tolerance.parameters == {
+        "margen_minimo_pedido": "18 %",
+        "lineas_maximas": "2",
+        "puntos_maximos": "4",
+    }
+    assert "18 %" in tolerance.description and "4 puntos" in tolerance.description
