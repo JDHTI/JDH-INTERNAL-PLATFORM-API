@@ -10,6 +10,7 @@ from app.modules.pqrsf.application.dto import CaseChanges, ImportedCase, Importe
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import (
+    AreaRef,
     Cause,
     ClaimedProduct,
     CreateResult,
@@ -25,6 +26,7 @@ from app.modules.pqrsf.domain.tracking import (
     CaseFilters,
     CasePage,
     CaseStatus,
+    CatalogRef,
     Dependency,
     DocumentType,
     EventType,
@@ -768,6 +770,127 @@ async def test_a_classified_request_opens_with_the_dependency_of_its_cause() -> 
     assert case.dependency == distribucion
     assert case.subject == "Calidad del producto · Producto vencido"
     assert case.supplier_name == "Unilever"
+
+
+def _classified_request(s, distribucion):
+    subject, cause = _classified(distribucion.id)
+    return replace(
+        _public_request(s.peticion),
+        subject_ref=subject,
+        cause_ref=cause,
+        area=AreaRef(distribucion.id, distribucion.code, distribucion.name),
+        products=[
+            ClaimedProduct("FE-1", "9834", "L1", date(2026, 12, 1), 2, "Aceite", "P1", "Unilever"),
+            ClaimedProduct("FE-2", "9835", "L2", date(2026, 11, 1), 1, "Jabón", None, None),
+        ],
+        pickup_order_requested="no",
+        delivery_date=date(2026, 9, 20),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_case_keeps_the_classification_and_products_of_its_request() -> None:
+    s = Setup()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    s.cases.dependencies[distribucion.id] = distribucion
+    request = _classified_request(s, distribucion)
+
+    case = await s.service.open_for_request(request)
+
+    assert case.requested_area == CatalogRef(distribucion.id, "distribucion", "Distribución")
+    assert case.subject_ref == CatalogRef(
+        request.subject_ref.id, "calidad_producto", "Calidad del producto"
+    )
+    assert case.cause_ref.name == "Producto vencido"
+    assert case.route == "internal"
+    assert (case.pickup_order_requested, case.pickup_order_number) == ("no", None)
+    assert case.delivery_date == date(2026, 9, 20)
+    assert [(p.sku, p.source, p.sort_order) for p in case.products] == [
+        ("9834", "request", 0),
+        ("9835", "request", 1),
+    ]
+    assert case.products[0].supplier_name == "Unilever"
+    assert case.products[1].supplier_code is None
+
+
+@pytest.mark.asyncio
+async def test_the_pickup_order_and_delivery_date_are_completed_on_the_case() -> None:
+    s = Setup()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    s.cases.dependencies[distribucion.id] = distribucion
+    case = await s.service.open_for_request(_classified_request(s, distribucion))
+
+    view = await s.service.update_case(
+        case.id,
+        CaseChanges(
+            fields=frozenset({"pickup_order_requested", "pickup_order_number", "delivery_date"}),
+            pickup_order_requested="yes",
+            pickup_order_number=" OR-981 ",
+            delivery_date=date(2026, 9, 21),
+        ),
+        s.admin,
+    )
+
+    assert view.case.pickup_order_requested == "yes"
+    assert view.case.pickup_order_number == "OR-981"
+    assert view.case.delivery_date == date(2026, 9, 21)
+    assert len(view.case.products) == 2
+    [event] = [e for e in s.cases.events if e.event_type == EventType.UPDATED]
+    assert event.data["fields"] == [
+        "pickup_order_requested",
+        "pickup_order_number",
+        "delivery_date",
+    ]
+
+    # Answering that it was not requested clears the number.
+    view = await s.service.update_case(
+        case.id,
+        CaseChanges(fields=frozenset({"pickup_order_requested"}), pickup_order_requested="no"),
+        s.admin,
+    )
+    assert (view.case.pickup_order_requested, view.case.pickup_order_number) == ("no", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            CaseChanges(fields=frozenset({"pickup_order_number"}), pickup_order_number="OR-1"),
+            "solo si ya se solicitó",
+        ),
+        (
+            CaseChanges(fields=frozenset({"delivery_date"}), delivery_date=date(2026, 10, 1)),
+            "no puede ser futura",
+        ),
+        (
+            CaseChanges(fields=frozenset({"supplier_name"}), supplier_name="Otro proveedor"),
+            "sale de los productos",
+        ),
+    ],
+)
+async def test_the_follow_up_of_the_products_is_validated(changes, message) -> None:
+    s = Setup()
+    distribucion = Dependency(uuid.uuid4(), "distribucion", "Distribución", 2, True, NOW, NOW)
+    s.cases.dependencies[distribucion.id] = distribucion
+    case = await s.service.open_for_request(_classified_request(s, distribucion))
+
+    with pytest.raises(InvalidInputError, match=message):
+        await s.service.update_case(case.id, changes, s.admin)
+
+
+@pytest.mark.asyncio
+async def test_a_case_without_products_keeps_a_typed_supplier() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.admin)
+
+    updated = await s.service.update_case(
+        view.case.id,
+        CaseChanges(fields=frozenset({"supplier_name"}), supplier_name="Team Foods"),
+        s.admin,
+    )
+
+    assert updated.case.supplier_name == "Team Foods"
 
 
 class FakeSales:

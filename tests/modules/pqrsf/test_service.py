@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -396,6 +396,7 @@ def _claim(request_type: RequestType, site: Site, **overrides) -> dict[str, obje
         "cause_id": EXPIRED.id,
         "products": [_line()],
         "pickup_order_requested": "no",
+        "delivery_date": date(2026, 1, 15),
     }
     return {**values, **overrides}
 
@@ -413,6 +414,7 @@ async def test_a_claim_takes_subject_cause_and_products_with_master_data() -> No
     [product] = request.products
     assert (product.description, product.supplier_name) == ("Aceite suavizante", "Unilever Andina")
     assert request.pickup_order_requested == "no"
+    assert request.delivery_date == date(2026, 1, 15)
 
 
 @pytest.mark.asyncio
@@ -429,6 +431,8 @@ async def test_a_claim_takes_subject_cause_and_products_with_master_data() -> No
         ({"pickup_order_requested": None}, "orden de recogida"),
         ({"pickup_order_number": "OR-55"}, "solo si ya la solicitaste"),
         ({"cause_id": NO_PRODUCT.id}, "no admite productos"),
+        ({"delivery_date": None}, "fecha de entrega del pedido"),
+        ({"delivery_date": date.today() + timedelta(days=2)}, "no puede ser futura"),
     ],
 )
 async def test_a_claim_is_validated_against_the_catalog(overrides, message) -> None:
@@ -439,10 +443,34 @@ async def test_a_claim_is_validated_against_the_catalog(overrides, message) -> N
 
 
 @pytest.mark.asyncio
+async def test_the_delivery_date_goes_only_with_products() -> None:
+    service, request_type, site = _claims_service()
+    values = _claim(
+        request_type,
+        site,
+        cause_id=OTHER_CAUSE.id,
+        products=[],
+        pickup_order_requested=None,
+        description="Llegó con olor extraño",
+    )
+
+    with pytest.raises(InvalidInputError, match="solo se indica con productos"):
+        await _create(service, request_type, site, values)
+
+    created = await _create(service, request_type, site, {**values, "delivery_date": None})
+    assert created.request.delivery_date is None
+
+
+@pytest.mark.asyncio
 async def test_other_requires_a_description() -> None:
     service, request_type, site = _claims_service()
     values = _claim(
-        request_type, site, cause_id=OTHER_CAUSE.id, products=[], pickup_order_requested=None
+        request_type,
+        site,
+        cause_id=OTHER_CAUSE.id,
+        products=[],
+        pickup_order_requested=None,
+        delivery_date=None,
     )
 
     with pytest.raises(InvalidInputError, match="Otro"):
@@ -464,6 +492,7 @@ async def test_a_subject_without_causes_takes_none() -> None:
         cause_id=None,
         products=[],
         pickup_order_requested=None,
+        delivery_date=None,
         subject="Cobro doble",
         description="Nos facturaron dos veces",
     )
