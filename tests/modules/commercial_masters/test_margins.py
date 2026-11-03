@@ -2,15 +2,19 @@
 
 import io
 from decimal import Decimal
+from uuid import uuid4
 
 import openpyxl
 import pytest
 
 from app.core.errors import InvalidInputError
+from app.modules.commercial_masters.domain.entities import Product, ProductMargins
 from app.modules.commercial_masters.domain.margins import channel_field, parse_margin
 from app.modules.commercial_masters.infrastructure.margins_file import (
     SpreadsheetMarginReader,
+    parse_tax,
     rows_from_sheet,
+    template_workbook,
 )
 
 D = Decimal
@@ -162,3 +166,109 @@ def test_csv_and_unsupported_files() -> None:
         reader.read("m.xls", b"x")
     with pytest.raises(InvalidInputError, match="Excel válido"):
         reader.read("m.xlsx", b"not a zip")
+
+
+def _master_workbook() -> bytes:
+    """The margin master's layout: product sheet with IMPTOLIC and the IMPUESTOS table."""
+
+    book = openpyxl.Workbook()
+    products = book.active
+    products.title = "Margen Producto "
+    products.append(["Referencia", "Desc. item", "Estado", "IMPTOLIC", "Margen Lista 1"])
+    products.append([18973, "Juniper Moscow Mule", "Activo", 4036, 0.28])
+    products.append([12013, "Vino Cavic", "Activo", 0, 0.57])
+    products.append([3144, "Aragan", "Activo", 0, 0.2])
+    taxes = book.create_sheet("Margen Proveedor-Impuestos")
+    taxes.append(["ESTRUCTURA DE MARGEN", *[None] * 7, "IMPUESTOS"])
+    taxes.append(
+        [
+            "Proveedor",
+            "Margen Food Service",
+            "Margen Mayoristas",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "Sku",
+            "Descripción",
+            "Nacional",
+            "Costa",
+            "Grupo impositivo",
+        ]
+    )
+    taxes.append(["1 - 3M", 0.2, 0.13, *[None] * 5, 18973, "Juniper", 4036, 4144, "0509"])
+    taxes.append([None] * 8 + [12013, "Vino", 6911, 6911, "0503"])
+    taxes.append([None] * 8 + [21700, "Juniper x12", 48432, 49728, "0509"])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_the_master_carries_the_liquor_tax_by_regional() -> None:
+    rows = SpreadsheetMarginReader().read("Maestro Margen.xlsx", _master_workbook())
+
+    by_sku = {row.sku: row for row in rows}
+    assert by_sku["18973"].taxes == {
+        "liquor_tax": D("4036"),
+        "liquor_tax_coast": D("4144"),
+        "liquor_tax_group": "0509",
+    }
+    # The IMPUESTOS table wins over IMPTOLIC 0.
+    assert by_sku["12013"].taxes["liquor_tax"] == D("6911")
+    # IMPTOLIC 0 with no row in the table clears every liquor tax field.
+    assert by_sku["3144"].taxes == {
+        "liquor_tax": None,
+        "liquor_tax_coast": None,
+        "liquor_tax_group": None,
+    }
+    # A SKU only in the table becomes a row of its own (no margins).
+    assert by_sku["21700"].values == {} and by_sku["21700"].taxes["liquor_tax_coast"] == D("49728")
+    # The supplier block of the tax sheet is not read as product margins.
+    assert "1 - 3M" not in by_sku
+
+
+def test_the_template_follows_the_master_layout() -> None:
+    item = Product(
+        id=uuid4(),
+        sku="18973",
+        supplier_sku=None,
+        description="Juniper",
+        state="Activo",
+        is_active=True,
+        commercial_supplier_code="1",
+        manufacturer=None,
+        brand=None,
+        category=None,
+        subcategory=None,
+        product_line=None,
+        pack_factor=None,
+        inventory_unit="UNID",
+        main_barcode=None,
+        margins=ProductMargins(list=D("0.28")),
+        liquor_tax=D("4036"),
+        liquor_tax_coast=D("4144"),
+        liquor_tax_group="0509",
+    )
+
+    content = template_workbook([item])
+
+    rows = SpreadsheetMarginReader().read("plantilla.xlsx", content)
+    assert rows[0].values["margin_list"] == D("0.28")
+    assert rows[0].taxes["liquor_tax_coast"] == D("4144")
+    book = openpyxl.load_workbook(io.BytesIO(content))
+    assert book.sheetnames == ["Margen Producto", "Margen Proveedor-Impuestos", "Instrucciones"]
+    assert book["Margen Proveedor-Impuestos"]["I2"].value == "Sku"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (4036, (True, D("4036"))),
+        ("6.911,00", (True, D("6911.00"))),
+        (0, (True, None)),
+        (None, (False, None)),
+    ],
+)
+def test_parse_tax(value, expected) -> None:
+    assert parse_tax(value) == expected

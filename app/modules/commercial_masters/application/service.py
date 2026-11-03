@@ -20,6 +20,7 @@ from app.modules.commercial_masters.domain.entities import (
     clean_nit,
 )
 from app.modules.commercial_masters.domain.margins import (
+    LIQUOR_TAX_FIELDS,
     MARGIN_FIELDS,
     MARGIN_LABELS,
     MarginChange,
@@ -36,6 +37,7 @@ MAX_REPORTED_CHANGES = 500
 IMPORT_ACTOR = "importacion"
 _ONE = Decimal(1)
 _SIX_PLACES = Decimal("0.000001")
+_FOUR_PLACES = Decimal("0.0001")
 # Fields a person may change on a product. State and supplier come from the warehouse and
 # are not editable; every other warehouse field is overwritten by the next sync.
 EDITABLE_PRODUCT_FIELDS = frozenset(
@@ -96,6 +98,12 @@ def _same_margin(left: Decimal | None, right: Decimal | None) -> bool:
     if left is None or right is None:
         return left is None and right is None
     return left.quantize(_SIX_PLACES) == right.quantize(_SIX_PLACES)
+
+
+def _same_tax(left: Decimal | str | None, right: Decimal | str | None) -> bool:
+    if isinstance(left, Decimal) and isinstance(right, Decimal):
+        return left.quantize(_FOUR_PLACES) == right.quantize(_FOUR_PLACES)
+    return left == right
 
 
 def _term(value: str | None) -> str | None:
@@ -402,10 +410,17 @@ class CommercialMasterService:
             if row.has_notes and row.notes != current.notes:
                 notes_change = (current.notes, row.notes)
                 merged["margin_notes"] = row.notes
-            if not diff and notes_change is None:
+            tax_diff: dict[str, tuple[Any, Any]] = {}
+            for name in LIQUOR_TAX_FIELDS:
+                before = getattr(product, name)
+                after = row.taxes.get(name, before)
+                merged[name] = after
+                if name in row.taxes and not _same_tax(before, after):
+                    tax_diff[name] = (before, after)
+            if not diff and notes_change is None and not tax_diff:
                 unchanged += 1
                 continue
-            changes.append(MarginChange(sku, product.description, diff, notes_change))
+            changes.append(MarginChange(sku, product.description, diff, notes_change, tax_diff))
             updates.append(merged)
         if apply and updates:
             await self.repository.bulk_update_products(updates, actor, datetime.now(UTC))

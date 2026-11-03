@@ -298,6 +298,39 @@ async def test_applying_writes_the_merged_margins_of_the_changed_products(servic
     assert set(by_sku["7244"]) == set(by_sku["1569"])
 
 
+async def test_liquor_tax_by_regional_is_compared_and_written(service, repo) -> None:
+    repo.products["18973"] = product("18973", liquor_tax=D("4036"))
+
+    report = await service.apply_margin_rows(
+        rows(
+            MarginRow(
+                2,
+                "18973",
+                taxes={
+                    "liquor_tax": D("4036"),
+                    "liquor_tax_coast": D("4144"),
+                    "liquor_tax_group": "0509",
+                },
+            ),
+            MarginRow(3, "7244", {"margin_list": D("0.2")}),
+        ),
+        "importacion",
+        apply=True,
+    )
+
+    by_sku = {change.sku: change for change in report.changes}
+    assert by_sku["18973"].taxes == {
+        "liquor_tax_coast": (None, D("4144")),
+        "liquor_tax_group": (None, "0509"),
+    }
+    assert by_sku["18973"].changes == {}
+    _, written, _ = repo.calls[-1]
+    written = {row["sku"]: row for row in written}
+    assert written["18973"]["liquor_tax_coast"] == D("4144")
+    # Every row carries the same columns; a product without tax keeps none.
+    assert written["7244"]["liquor_tax"] is None and set(written["7244"]) == set(written["18973"])
+
+
 async def test_rows_with_unreadable_cells_are_skipped_whole(service, repo) -> None:
     report = await service.apply_margin_rows(
         rows(MarginRow(2, "7244", {"margin_list": D("0.2")}, problems=("Margen inválido: 'x'",))),
