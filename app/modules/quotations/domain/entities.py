@@ -71,6 +71,8 @@ class LastSale:
     vat_pct: Decimal | None = None
     supplier_code: str | None = None
     pack_factor: Decimal | None = None
+    # State of the item in SIESA today (``consumo.productos.estado``).
+    is_active: bool = True
 
 
 @dataclass(frozen=True)
@@ -88,12 +90,21 @@ class ItemInfo:
 
 @dataclass(frozen=True)
 class CostInfo:
-    """Current average cost of a SKU (customer's operation center, else all warehouses)."""
+    """The two costs of a SKU the rule compares, as the warehouse has them today.
+
+    ``quote_cost`` is the highest supplier quotation in force (gross cost with ICUI and IBUA);
+    ``discarded_quote`` the highest one left out for being far above the last cost.
+    ``inventory_cost`` is the average cost of the list's warehouse (rounded to pesos).
+    """
 
     sku: str
-    cost: Decimal
-    is_global: bool
-    cut_date: date | None = None
+    quote_cost: Decimal | None = None
+    discarded_quote: Decimal | None = None
+    inventory_cost: Decimal | None = None
+    stock: Decimal | None = None
+    product_line: str | None = None
+    is_active: bool = True
+    snapshot_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -125,8 +136,9 @@ class ProductMaster:
     pack_factor: Decimal | None = None
     supplier_code: str | None = None
     margins: dict[str, Decimal | None] = field(default_factory=dict)
-    # National liquor tax per unit (IMPTOLIC), when the price list has no value of its own.
+    # Liquor tax per unit by regional (margin master), when the price list has no value.
     liquor_tax: Decimal | None = None
+    liquor_tax_coast: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -246,8 +258,8 @@ class QuotationLine:
     value_tax_key: str | None
     value_tax_name: str | None
     value_tax_amount: Decimal | None
+    # The cost the rule uses: the highest of quotation and inventory, times the list factor.
     cost: Decimal | None
-    cost_is_global: bool
     target_margin_pct: Decimal | None
     margin_basis: str | None
     min_margin_pct: Decimal | None
@@ -264,6 +276,17 @@ class QuotationLine:
     problems: tuple[str, ...] = ()
     # ``historico`` (from the sales window) or ``agregado`` (added by the advisor).
     origin: str = "historico"
+    quote_cost: Decimal | None = None
+    discarded_quote_cost: Decimal | None = None
+    inventory_cost: Decimal | None = None
+    # ``cotizacion`` or ``inventario``: which one set ``cost``.
+    cost_source: str | None = None
+    # Price at the target margin (with the support), rounded as the list family does.
+    optimal_price: Decimal | None = None
+    # The last price leaves the margin (with support) under the minimum: review and update.
+    below_target: bool = False
+    # Inactive in SIESA: shown to be replaced, never exported.
+    is_active: bool = True
 
     @property
     def support_amount(self) -> Decimal:
@@ -292,6 +315,7 @@ class Quotation:
     window_months: int
     status: str
     activation_date: date | None
+    # The list the files write to: the customer's (update) or a new one (creation).
     export_price_list_id: str | None
     warnings: tuple[str, ...]
     built_at: datetime
@@ -306,8 +330,19 @@ class Quotation:
     created_at: datetime
     updated_by: str
     updated_at: datetime
-    generated_at: datetime | None = None
-    generated_by: str | None = None
+    list_action: str = "actualizacion"
+    new_list_name: str | None = None
+    # ``nacional`` or ``costa`` (billing operation center 004): which liquor tax applies.
+    regional: str = "nacional"
+    price_family: str = "generales"
+    stock_source: str | None = None
+    below_target_count: int = 0
+    confirmed_at: datetime | None = None
+    confirmed_by: str | None = None
+    validated_at: datetime | None = None
+    validated_by: str | None = None
+    # Why the approver sent it back, or the advisor withdrew it.
+    review_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +377,21 @@ class CustomerOption:
     @property
     def is_active(self) -> bool:
         return self.active_branch_count > 0
+
+
+@dataclass(frozen=True)
+class TemplateRow:
+    """One row of the quotation workbook the advisor uploads back.
+
+    ``new_price`` and ``new_margin_pct`` are what the cells say (``None`` when blank);
+    ``problem`` is set when a cell could not be read.
+    """
+
+    row_number: int
+    sku: str
+    new_price: Decimal | None = None
+    new_margin_pct: Decimal | None = None
+    problem: str | None = None
 
 
 @dataclass(frozen=True)

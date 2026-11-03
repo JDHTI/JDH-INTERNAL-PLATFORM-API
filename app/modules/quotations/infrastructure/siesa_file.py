@@ -4,6 +4,8 @@ Fixed-width ASCII, one record per line, every line ended by CRLF. The layout is 
 dictionary of the importer (``t661_imp_tablas`` / ``t662_imp_campos`` in the SIESA database):
 
 - ``0000`` start and ``9999`` end (18 characters);
+- ``0112`` price list header, version 01 (101 characters), only when the update creates the
+  list: it goes first and leaves an existing list untouched;
 - ``0126`` price, version 03 (254 characters);
 - ``0127`` value tax of a price, version 03 (175 characters), right after its ``0126``.
 
@@ -18,10 +20,18 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from app.core.errors import InvalidInputError
-from app.modules.quotations.domain.export import ExportRow, ExportTaxRow, PriceListExport
+from app.modules.quotations.domain.export import (
+    ExportRow,
+    ExportTaxRow,
+    NewPriceList,
+    PriceListExport,
+)
 
 _MONEY_LIMIT = Decimal(10) ** 15
 _REPLACE_EXISTING = "1"
+_CREATE_ONLY = "0"
+# Every list in SIESA is of type 1, with prices before taxes and no suggested price.
+_LIST_TYPE = "1"
 
 
 def money(value: Decimal) -> str:
@@ -82,6 +92,26 @@ class SiesaPriceFileWriter:
             + " " * 60
         )
 
+    def price_list(self, number_: int, new_list: NewPriceList) -> str:
+        """``0112`` v01: create the list (``0`` in position 19 never overwrites one)."""
+
+        line = (
+            self._head(number_, "0112", "01")
+            + _CREATE_ONLY
+            + text(new_list.price_list_id, 3, "La lista de precios")
+            + text(new_list.description, 40, "La descripción de la lista")
+            + text(new_list.currency, 3, "La moneda")
+            + _LIST_TYPE
+            + "0"  # prices without taxes
+            + "0"  # no suggested price
+            + " " * 3  # no base list
+            + money(Decimal(0))  # base factor
+            + "0000.0000"  # base precision
+            + "0"  # does not apply the base list per item
+        )
+        assert len(line) == 101, len(line)
+        return line
+
     def price(self, number_: int, row: ExportRow) -> str:
         line = (
             self._head(number_, "0126", "03")
@@ -110,12 +140,14 @@ class SiesaPriceFileWriter:
         return line
 
     def write(self, export: PriceListExport) -> bytes:
-        """The whole file: start, each price followed by its taxes, end."""
+        """The whole file: start, the new list (if any), each price and its taxes, end."""
 
         taxes: dict[tuple[str, str], list[ExportTaxRow]] = {}
         for tax in export.taxes:
             taxes.setdefault((tax.price_list_id, tax.sku), []).append(tax)
         lines = [self._head(1, "0000", "01")]
+        if export.new_list is not None:
+            lines.append(self.price_list(len(lines) + 1, export.new_list))
         for row in export.rows:
             lines.append(self.price(len(lines) + 1, row))
             for tax in taxes.get((row.price_list_id, row.sku), ()):

@@ -54,11 +54,12 @@ class SqlAlchemyQuotationMasterSource:
                             ProductModel.pack_factor,
                             ProductModel.commercial_supplier_code,
                             ProductModel.liquor_tax,
+                            ProductModel.liquor_tax_coast,
                             *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
                         ).where(ProductModel.sku.in_(unique[start : start + _CHUNK]))
                     )
                 ).all()
-                for sku, description, unit, vat, pack, supplier, liquor, *margins in rows:
+                for sku, description, unit, vat, pack, supplier, liquor, coast, *margins in rows:
                     result[sku] = ProductMaster(
                         sku=sku,
                         description=description,
@@ -68,6 +69,7 @@ class SqlAlchemyQuotationMasterSource:
                         supplier_code=supplier,
                         margins=dict(zip(MARGIN_FIELDS, margins, strict=True)),
                         liquor_tax=liquor,
+                        liquor_tax_coast=coast,
                     )
         return result
 

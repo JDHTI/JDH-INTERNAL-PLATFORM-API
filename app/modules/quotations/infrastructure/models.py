@@ -36,8 +36,15 @@ class QuotationModel(Base):
 
     __tablename__ = "quotations"
     __table_args__ = (
-        CheckConstraint("status IN ('borrador', 'generado')", name="ck_quotations_status"),
+        CheckConstraint(
+            "status IN ('borrador', 'pendiente_validacion', 'creada', 'actualizada')",
+            name="ck_quotations_status",
+        ),
         CheckConstraint("window_months IN (6, 12)", name="ck_quotations_window"),
+        CheckConstraint(
+            "list_action IN ('actualizacion', 'creacion')", name="ck_quotations_list_action"
+        ),
+        CheckConstraint("regional IN ('nacional', 'costa')", name="ck_quotations_regional"),
         Index("ix_quotations_owner_created", "created_by_id", "created_at"),
         Index("ix_quotations_customer", "customer_nit"),
         Index("ix_quotations_status", "status"),
@@ -71,8 +78,17 @@ class QuotationModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    generated_by: Mapped[str | None] = mapped_column(String(320))
+    list_action: Mapped[str] = mapped_column(String(20), nullable=False, default="actualizacion")
+    new_list_name: Mapped[str | None] = mapped_column(String(40))
+    regional: Mapped[str] = mapped_column(String(10), nullable=False, default="nacional")
+    price_family: Mapped[str] = mapped_column(String(20), nullable=False, default="generales")
+    stock_source: Mapped[str | None] = mapped_column(Text)
+    below_target_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_by: Mapped[str | None] = mapped_column(String(320))
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    validated_by: Mapped[str | None] = mapped_column(String(320))
+    review_note: Mapped[str | None] = mapped_column(Text)
 
 
 class QuotationLineModel(Base):
@@ -110,7 +126,13 @@ class QuotationLineModel(Base):
     value_tax_name: Mapped[str | None] = mapped_column(Text)
     value_tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
-    cost_is_global: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quote_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    discarded_quote_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    inventory_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    cost_source: Mapped[str | None] = mapped_column(String(20))
+    optimal_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    below_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     target_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     margin_basis: Mapped[str | None] = mapped_column(String(20))
     min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))

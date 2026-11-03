@@ -1,13 +1,13 @@
 """Warehouse reads of the quoter: bounded, parameterized and mapped."""
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
 
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderUnavailable
-from app.modules.quotations.infrastructure import dwh_source
+from app.modules.quotations.domain import pricing
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
 
 
@@ -22,16 +22,7 @@ class FakeConnection:
         self.timeout = timeout
         if self.fail:
             raise DataProviderUnavailable("down")
-        if 'max("fecha_corte")' in query:
-            return [{"f": date(2026, 11, 3)}]
         return self.rows
-
-
-@pytest.fixture(autouse=True)
-def forget_cut_date():
-    dwh_source._CUT_CACHE.clear()
-    yield
-    dwh_source._CUT_CACHE.clear()
 
 
 async def test_last_sales_bound_by_customer_and_window() -> None:
@@ -52,6 +43,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
                 "iva_venta_pct": Decimal(19),
                 "cod_proveedor": "359",
                 "factor_empaque": Decimal(45),
+                "estado": "I",
             }
         ]
     )
@@ -65,37 +57,60 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert connection.timeout == 30.0
     assert sales[0].net_price.quantize(Decimal("0.01")) == Decimal("3323.36")
     assert sales[0].unit == "UNID" and sales[0].sale_unit == "C45"
+    assert not sales[0].is_active
 
 
-async def test_costs_fall_back_to_every_warehouse() -> None:
+async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> None:
+    snapshot = datetime(2026, 11, 3, 8, 18)
     connection = FakeConnection(
         [
             {
-                "referencia": "2537",
-                "costo_co": None,
-                "costo_global": Decimal("3500"),
-                "fecha_corte": date(2026, 11, 3),
+                "sku": "12779",
+                "linea": "DESPENSA",
+                "estado": "A",
+                "costo_cot": None,
+                "costo_descartado": Decimal("80552"),
+                "costo_inv": Decimal("2049"),
+                "existencia": Decimal(0),
+                "foto": snapshot,
             },
             {
-                "referencia": "1485",
-                "costo_co": Decimal("2297.85"),
-                "costo_global": Decimal("2400"),
-                "fecha_corte": date(2026, 11, 3),
+                "sku": "1081",
+                "linea": "REFRIGERADOS",
+                "estado": "I",
+                "costo_cot": Decimal("13104"),
+                "costo_descartado": None,
+                "costo_inv": None,
+                "existencia": None,
+                "foto": None,
             },
         ]
     )
     source = WarehouseQuotationSource(connection)
 
-    costs = await source.costs(["2537", "1485"], "001")
+    costs = await source.costs(["12779", "1081"], pricing.stock_plan("10U", "003"))
 
-    assert costs["2537"].is_global and costs["2537"].cost == Decimal("3500")
-    assert not costs["1485"].is_global and costs["1485"].cost == Decimal("2297.85")
-    assert costs["2537"].cut_date == date(2026, 11, 3)
-    # The cut date is read once and then bound as a literal, so the SKU index is used.
-    assert connection.queries[1][1] == (["2537", "1485"], "001", date(2026, 11, 3))
-    await source.costs(["2537"], "001")
-    assert sum('max("fecha_corte")' in query for query, _ in connection.queries) == 1
-    assert await source.costs([], "001") == {}
+    query, args = connection.queries[0]
+    assert '"consumo"."inventario_fecha"' in query
+    assert '"consumo"."cotizaciones_proveedores"' in query
+    assert "es_vigente" in query and "percentile_cont" in query
+    assert args[:5] == (["12779", "1081"], "003", "BTA9", "BTA8", False)
+    assert args[6:] == ("800245795", Decimal(3))
+    assert costs["12779"].discarded_quote == Decimal("80552")
+    assert costs["12779"].quote_cost is None and costs["12779"].inventory_cost == Decimal("2049")
+    assert costs["12779"].snapshot_date == date(2026, 11, 3)
+    assert costs["1081"].quote_cost == Decimal("13104") and not costs["1081"].is_active
+    await source.costs(["1"], pricing.stock_plan("1", None))
+    # List 1 takes the highest cost among its warehouses.
+    assert connection.queries[1][1][4] is True and "BAQ10" in connection.queries[1][1][5]
+    assert await source.costs([], pricing.stock_plan("1", None)) == {}
+
+
+async def test_price_list_exists() -> None:
+    assert await WarehouseQuotationSource(FakeConnection([{"?column?": 1}])).price_list_exists(
+        "C01"
+    )
+    assert not await WarehouseQuotationSource(FakeConnection()).price_list_exists("C02")
 
 
 async def test_sellers_match_the_email_lower_case() -> None:

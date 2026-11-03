@@ -22,9 +22,11 @@ from app.modules.quotations.domain.entities import (
     QuotationLine,
     QuotationPage,
     Seller,
+    TemplateRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.export import PriceListExport
+from app.modules.quotations.domain.pricing import StockPlan
 
 
 class WarehouseSource(Protocol):
@@ -36,9 +38,9 @@ class WarehouseSource(Protocol):
 
     async def last_sales(self, nit: str, months: int) -> list[LastSale]: ...
 
-    async def costs(
-        self, skus: Sequence[str], operation_center: str | None
-    ) -> dict[str, CostInfo]: ...
+    async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]: ...
+
+    async def price_list_exists(self, price_list_id: str) -> bool: ...
 
     async def list_prices(
         self, price_list_id: str, skus: Sequence[str]
@@ -107,6 +109,8 @@ class QuotationRepository(Protocol):
 
 
 class ManagerPolicy(Protocol):
+    """Who quotes (commercial area) or who validates (approvers); admins are both."""
+
     async def is_manager(self, principal: Principal) -> bool: ...
 
 
@@ -118,3 +122,13 @@ class ExportWriter(Protocol):
     """Turns a price list update into a file."""
 
     def write(self, export: PriceListExport) -> bytes: ...
+
+
+class TemplateFile(Protocol):
+    """The quotation as a workbook the advisor edits in bulk, and its reading back."""
+
+    def write(self, detail: QuotationDetail) -> bytes: ...
+
+    def read(self, filename: str, content: bytes) -> list[TemplateRow]: ...
+
+    def quotation_id(self, content: bytes) -> UUID | None: ...
