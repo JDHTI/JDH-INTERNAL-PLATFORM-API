@@ -27,6 +27,7 @@ from app.modules.pqrsf.presentation.supplier_messages_router import (
 )
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
 from app.modules.projects.presentation.router import area_router as area_projects_router
+from app.modules.quotations.presentation.router import router as quotations_router
 from app.modules.sites.presentation.router import router as sites_router
 from app.modules.supplier_supports.presentation.attachments_router import (
     router as supports_attachments_router,
@@ -73,6 +74,7 @@ v1_router.include_router(
 v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
+v1_router.include_router(quotations_router, prefix="/quotations", tags=["quotations"])
 v1_router.include_router(dwh_monitoring_router, prefix="/dwh-monitoring", tags=["dwh-monitoring"])
 v1_router.include_router(app_monitoring_router, prefix="/app-monitoring", tags=["app-monitoring"])
 v1_router.include_router(monitoring_board_router, prefix="/monitoring", tags=["monitoring"])

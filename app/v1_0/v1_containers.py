@@ -94,6 +94,13 @@ from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseR
 from app.modules.projects.application.live import ProjectLiveService
 from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
+from app.modules.quotations.application.service import QuotationService
+from app.modules.quotations.domain.entities import QuotationPolicy
+from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
+from app.modules.quotations.infrastructure.masters import SqlAlchemyQuotationMasterSource
+from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
+from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
+from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
@@ -450,6 +457,40 @@ class V1Container(containers.DeclarativeContainer):
         max_upload_bytes=config.order_validation.max_upload_bytes,
         max_lines=config.order_validation.max_lines,
         policy=order_validation_policy,
+    )
+    # --- Quoter (Comercial → Cotizador): live DWH reads plus the supports of the validator ---
+    quotation_manager_policy = providers.Factory(
+        AreaManagerPolicy,
+        areas=area_service,
+        area_slug=config.quotations.manager_area_slug,
+    )
+    quotation_policy = providers.Singleton(
+        QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
+    )
+    quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
+    quotation_warehouse_source = providers.Factory(
+        WarehouseQuotationSource,
+        connection=data_provider,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.quotations.dwh_timeout,
+    )
+    quotation_master_source = providers.Factory(SqlAlchemyQuotationMasterSource, database=database)
+    quotation_workbook_writer = providers.Singleton(PriceListWorkbookWriter)
+    quotation_flat_file_writer = providers.Singleton(
+        SiesaPriceFileWriter, company=config.quotations.siesa_company
+    )
+    quotation_service = providers.Factory(
+        QuotationService,
+        repository=quotation_repository,
+        warehouse=quotation_warehouse_source,
+        masters=quotation_master_source,
+        supports=order_validation_agreements,
+        managers=quotation_manager_policy,
+        calendar=pqrsf_calendar,
+        workbook=quotation_workbook_writer,
+        flat_file=quotation_flat_file_writer,
+        policy=quotation_policy,
+        max_lines=config.quotations.max_lines,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.
