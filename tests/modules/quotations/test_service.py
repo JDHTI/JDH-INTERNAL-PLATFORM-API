@@ -1,6 +1,7 @@
 """Use cases of the quoter."""
 
 import io
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -277,6 +278,22 @@ async def test_refresh_keeps_prices_and_reprices_with_the_new_cost(
     assert line.new_price == Decimal("4000") and line.cost == Decimal("3514.0000")
     assert line.cost_source == "cotizacion" and line.compliance == "bajo_minimo"
     assert refreshed.quotation.version == 3
+
+
+async def test_refresh_sends_a_list_one_customer_to_creation(
+    service, advisor, warehouse, repository
+) -> None:
+    warehouse.branch_rows[NIT] = [branch(price_list_id="1", price_list_name="GENERAL")]
+    quotation = (await service.create(advisor, NIT, 6)).quotation
+    # A quotation stored before list creation existed says it updates list 1.
+    stored = repository.items[quotation.id]
+    repository.items[quotation.id] = replace(
+        stored, quotation=replace(stored.quotation, list_action="actualizacion")
+    )
+
+    refreshed = await service.refresh(advisor, quotation.id, 1)
+
+    assert refreshed.quotation.list_action == "creacion"
 
 
 async def test_added_skus_are_priced_kept_on_refresh_and_removable(

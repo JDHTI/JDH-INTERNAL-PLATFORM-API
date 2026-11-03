@@ -680,8 +680,11 @@ class QuotationService:
         prices = {line.sku: line.new_price for line in detail.lines if line.new_price is not None}
         lines = [rules.reprice(line, prices.get(line.sku)) for line in lines]
         fields = self._customer_fields(context)
-        if detail.quotation.price_list_id == context.price_list_id:
-            # The advisor's choice stands while the customer keeps its list.
+        if (
+            detail.quotation.price_list_id == context.price_list_id
+            and context.price_list_id != vocabulary.GENERAL_PRICE_LIST
+        ):
+            # The advisor's choice stands while the customer keeps its list (never list 1).
             fields.pop("list_action")
         quotation = replace(
             self._touched(detail.quotation, lines, principal.email),

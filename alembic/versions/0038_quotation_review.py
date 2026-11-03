@@ -54,6 +54,8 @@ def upgrade() -> None:
     op.add_column("quotations", sa.Column("review_note", sa.Text()))
     for name in ("list_action", "regional", "price_family", "below_target_count"):
         op.alter_column("quotations", name, server_default=None)
+    # List 1 is never updated from a quotation: its customers get a new list.
+    op.execute("UPDATE quotations SET list_action = 'creacion' WHERE price_list_id = '1'")
     op.create_check_constraint(
         "ck_quotations_list_action", "quotations", "list_action IN ('actualizacion', 'creacion')"
     )
