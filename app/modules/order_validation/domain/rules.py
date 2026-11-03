@@ -44,7 +44,7 @@ OUT_OF_SCOPE = "fuera_de_alcance"
 FULL_MARGIN = "margen_100"
 DEFAULT_POLICY = OrderPolicy()
 
-_BASIS = {
+BASIS = {
     "margin_list": "lista",
     "margin_wholesale": "mayoristas",
     "margin_salsamentarias": "salsamentarias",
@@ -54,7 +54,7 @@ _BASIS_LABEL = {
     "mayoristas": "margen mayoristas",
     "salsamentarias": "margen salsamentarias",
 }
-_AMOUNT_METHODS = ("pct_costo", "costo_neto", "valor_unidad", "precio_neto", "pct_precio_lista")
+AMOUNT_METHODS = ("pct_costo", "costo_neto", "valor_unidad", "precio_neto", "pct_precio_lista")
 
 
 def pct(value: Decimal | None) -> str:
@@ -124,7 +124,7 @@ def scope_of(
     return APPLIES
 
 
-def _share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
+def share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
     """Supplier amount as a share of the cost, and how it was obtained.
 
     Returns:
@@ -161,7 +161,7 @@ def _share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
     return None, f"método {method} sin importe por unidad"
 
 
-def _required(agreement: Agreement, reference: Decimal | None) -> Decimal | None:
+def required_margin(agreement: Agreement, reference: Decimal | None) -> Decimal | None:
     """Margin the line must reach with the support: the one agreed, else the product's."""
 
     for value in (
@@ -199,7 +199,7 @@ def reference_margin(
     if not channel and customer and customer.channels:
         channel = sorted(customer.channels)[0]
     field_name = channel_field(channel)
-    basis = _BASIS[field_name]
+    basis = BASIS[field_name]
     if product is None:
         return None, basis
     return product.margins.get(field_name), basis
@@ -264,13 +264,13 @@ def check(
             "Margen del pedido",
             "mínimo pactado",
         )
-    if method not in _AMOUNT_METHODS:
+    if method not in AMOUNT_METHODS:
         return _outcome(agreement, "no_evaluable", f"Método {method} no evaluable por pedido")
 
-    share, how = _share_of_cost(agreement)
+    share, how = share_of_cost(agreement)
     if share is None:
         return _outcome(agreement, "no_evaluable", f"No se puede evaluar: {how}")
-    required = _required(agreement, reference)
+    required = required_margin(agreement, reference)
     if required is None:
         return _outcome(
             agreement,
@@ -539,7 +539,7 @@ def line_margin(line: OrderLine, result: LineResult) -> Decimal | None:
             deciding is not None
             and not deciding.needs_review
             and deciding.outcome in ("cumple", "no_cumple")
-            and deciding.calc_method in _AMOUNT_METHODS
+            and deciding.calc_method in AMOUNT_METHODS
         ):
             return result.effective_margin_pct
     return line.margin_pct

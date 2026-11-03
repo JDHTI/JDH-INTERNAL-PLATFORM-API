@@ -200,6 +200,16 @@ class Settings(BaseSettings):
     ORDER_VALIDATION_TOLERANCE_MIN_ORDER_MARGIN: Decimal = Decimal("18")
     ORDER_VALIDATION_TOLERANCE_MAX_LINES: int = 2
 
+    # Quoter: members of this area (plus platform admins) quote customers' price lists. A new
+    # price may leave the margin at most MAX_POINTS_BELOW_TARGET points below the target.
+    QUOTATIONS_MANAGER_AREA_SLUG: str = "comercial"
+    QUOTATIONS_MAX_POINTS_BELOW_TARGET: Decimal = Decimal("1")
+    QUOTATIONS_MAX_LINES: int = 3000
+    # Seconds per warehouse query of the quoter (the pool default is DWH_COMMAND_TIMEOUT).
+    QUOTATIONS_DWH_TIMEOUT_SECONDS: float = 30.0
+    # SIESA company written in the import file (``f_cia``).
+    QUOTATIONS_SIESA_COMPANY: str = "001"
+
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
     # with an Exchange Application Access Policy.
@@ -451,6 +461,13 @@ class Settings(BaseSettings):
                 "tolerance_min_order_margin": self.ORDER_VALIDATION_TOLERANCE_MIN_ORDER_MARGIN
                 / 100,
                 "tolerance_max_lines": self.ORDER_VALIDATION_TOLERANCE_MAX_LINES,
+            },
+            "quotations": {
+                "manager_area_slug": self.QUOTATIONS_MANAGER_AREA_SLUG,
+                "max_points_below_target": self.QUOTATIONS_MAX_POINTS_BELOW_TARGET / 100,
+                "max_lines": self.QUOTATIONS_MAX_LINES,
+                "dwh_timeout": self.QUOTATIONS_DWH_TIMEOUT_SECONDS,
+                "siesa_company": self.QUOTATIONS_SIESA_COMPANY,
             },
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,

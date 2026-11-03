@@ -94,12 +94,16 @@ class DataProviderConnection:
         except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
             raise DataProviderUnavailable("Data provider health check failed") from exc
 
-    async def fetch(self, query: str, *args: object) -> Sequence[asyncpg.Record]:
+    async def fetch(
+        self, query: str, *args: object, timeout: float | None = None
+    ) -> Sequence[asyncpg.Record]:
         """Execute a parameterized read-only query on the provider.
 
         Args:
             query (str): SQL statement with asyncpg positional parameters.
             *args (object): Values bound to the SQL statement.
+            timeout (float | None): Seconds for this query; ``None`` keeps the pool's
+                command timeout.
 
         Returns:
             Sequence[asyncpg.Record]: Rows returned by the provider.
@@ -115,7 +119,7 @@ class DataProviderConnection:
         try:
             async with pool.acquire() as connection:
                 async with connection.transaction(readonly=True):
-                    return await connection.fetch(query, *args)
+                    return await connection.fetch(query, *args, timeout=timeout)
         except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
             raise DataProviderUnavailable("Data provider query failed") from exc
 

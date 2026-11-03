@@ -227,6 +227,20 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/public/pqrsf/catalogs` | `read` |  |
 | `GET` | `/v1/public/pqrsf/products` | `read` |  |
 | `POST` | `/v1/public/pqrsf/requests` | `strict` | Abierto a cualquiera: además tamaño, tope global y CAPTCHA (public_guard) |
+| `GET` | `/v1/quotations` | `read` |  |
+| `POST` | `/v1/quotations` | `relaxed` |  |
+| `GET` | `/v1/quotations/customers` | `read` |  |
+| `GET` | `/v1/quotations/permissions` | `read` |  |
+| `GET` | `/v1/quotations/rules` | `read` |  |
+| `DELETE` | `/v1/quotations/{quotation_id}` | `relaxed` |  |
+| `GET` | `/v1/quotations/{quotation_id}` | `read` |  |
+| `GET` | `/v1/quotations/{quotation_id}/export.txt` | `read` |  |
+| `GET` | `/v1/quotations/{quotation_id}/export.xlsx` | `read` |  |
+| `POST` | `/v1/quotations/{quotation_id}/generate` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
+| `PUT` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
+| `DELETE` | `/v1/quotations/{quotation_id}/lines/{sku}` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |
 | `GET` | `/v1/sites` | `read` |  |
 | `POST` | `/v1/sites` | `relaxed` |  |

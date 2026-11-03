@@ -53,6 +53,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El monitoreo de aplicativos (TI → Monitoreo → Aplicativos) vive en
   `/api/v1/app-monitoring`, y el tablero general de TI en `/api/v1/monitoring/board`;
   ver [`docs/app-monitoring.md`](docs/app-monitoring.md).
+- El cotizador del área comercial (Comercial → Cotizador) vive en `/api/v1/quotations`:
+  arma la lista de precios de un cliente desde el DWH, la cruza con el maestro de márgenes y
+  de apoyos y genera el Excel y el plano de SIESA; ver [`docs/cotizador.md`](docs/cotizador.md).
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
 - En `ENVIRONMENT=prod` se deshabilitan OpenAPI, Swagger UI y ReDoc; también
   se fuerza `debug=False` aunque una variable externa intente activarlo.
