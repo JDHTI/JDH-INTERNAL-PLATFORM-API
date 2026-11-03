@@ -134,6 +134,37 @@ class CaseItem:
         return difference is not None and difference > 0
 
 
+@dataclass(frozen=True)
+class CatalogRef:
+    """An entry of a catalog (area, subject, cause) as the case shows it."""
+
+    id: UUID
+    code: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CaseProduct:
+    """A product line of a case: what the requester sent, never edited afterwards.
+
+    ``source`` says where the line came from: ``request`` (public form), ``internal`` or
+    ``email``. Description and supplier are copies of the product master at submission.
+    """
+
+    id: UUID
+    case_id: UUID
+    source: str
+    invoice_number: str
+    sku: str
+    lot: str
+    expiry_date: date
+    affected_quantity: int
+    description: str | None
+    supplier_code: str | None
+    supplier_name: str | None
+    sort_order: int
+
+
 @dataclass
 class CaseEvent:
     """An immutable entry of the PQRSF history.
@@ -217,6 +248,19 @@ class TrackingCase:
     sales_executive_email: str | None = None
     sales_executive_user_id: UUID | None = None
     sales_executive_source: str | None = None
+    # Classification, copied from the request when the case opens: the area the requester
+    # picked, the subject and cause, and the route of that cause (``supplier``,
+    # ``internal`` or ``none``).
+    requested_area: CatalogRef | None = None
+    subject_ref: CatalogRef | None = None
+    cause_ref: CatalogRef | None = None
+    route: str | None = None
+    # Follow-up of the products: the pickup order (``yes`` | ``no`` | ``unknown`` and its
+    # number, often known later) and when the order was delivered.
+    pickup_order_requested: str | None = None
+    pickup_order_number: str | None = None
+    delivery_date: date | None = None
+    products: list[CaseProduct] = field(default_factory=list)
 
     @property
     def is_closed(self) -> bool:

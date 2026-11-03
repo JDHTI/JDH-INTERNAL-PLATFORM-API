@@ -46,12 +46,18 @@ _FIELDS = {
     "received_on": "la fecha de recepción",
     "site_id": "la sede",
     "dependency_id": "la dependencia",
+    # The case edit records the attribute it changed, not the id sent.
+    "site": "la sede",
+    "dependency": "la dependencia",
     "customer_name": "el cliente",
     "customer_nit": "el NIT",
     "supplier_name": "el proveedor",
     "sales_executive_name": "el ejecutivo comercial",
     "requester_name": "el solicitante",
     "requester_email": "el correo del solicitante",
+    "pickup_order_requested": "la orden de recogida",
+    "pickup_order_number": "el número de la orden de recogida",
+    "delivery_date": "la fecha de entrega",
 }
 
 

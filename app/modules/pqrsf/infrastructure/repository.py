@@ -205,6 +205,7 @@ def _request(
         pickup_order_requested=model.pickup_order_requested,
         pickup_order_number=model.pickup_order_number,
         area=area_ref(area),
+        delivery_date=model.delivery_date,
     )
 
 
@@ -492,6 +493,7 @@ class SqlAlchemyPqrsfRepository:
             products=_product_rows(request.products),
             pickup_order_requested=request.pickup_order_requested,
             pickup_order_number=request.pickup_order_number,
+            delivery_date=request.delivery_date,
             dependency_id=request.area.id if request.area else None,
             idempotency_key=request.idempotency_key,
             idempotency_hash=request.idempotency_hash,

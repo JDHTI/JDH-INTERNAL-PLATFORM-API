@@ -114,6 +114,11 @@ class CaseChanges:
     sales_executive_name: str | None = None
     requester_name: str | None = None
     requester_email: str | None = None
+    # Follow-up of the products: whether the pickup order was requested, its number and
+    # when the order was delivered.
+    pickup_order_requested: str | None = None
+    pickup_order_number: str | None = None
+    delivery_date: date | None = None
 
 
 @dataclass(frozen=True)

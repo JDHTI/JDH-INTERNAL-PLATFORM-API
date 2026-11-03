@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Container
+from collections.abc import Callable, Container
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
@@ -28,6 +28,7 @@ from app.modules.pqrsf.domain.entities import (
     HANDLING_ACKNOWLEDGE,
     HANDLING_CASE,
     MAX_TYPE_DESCRIPTION,
+    PICKUP_ORDER_ANSWERS,
     PqrsfRequest,
     RequestType,
     clean_multiline,
@@ -60,8 +61,10 @@ from app.modules.pqrsf.domain.tracking import (
     CaseFilters,
     CaseInput,
     CaseItem,
+    CaseProduct,
     CaseStatus,
     CaseSummary,
+    CatalogRef,
     Dependency,
     DocumentType,
     EventType,
@@ -752,6 +755,7 @@ class CaseTrackingService:
             dict.fromkeys(p.supplier_name for p in request.products if p.supplier_name)
         )
         case.supplier_name = ", ".join(suppliers)[:200] or None
+        _classify_from_request(case, request)
         await self._seller_from_invoices(case, request)
         # The cause picked (or the category of the documents) says who attends it.
         dependency = (
@@ -1188,6 +1192,10 @@ class CaseTrackingService:
         apply("description", clean_optional(changes.description, "descripción", 10_000))
         apply("customer_name", clean_optional(changes.customer_name, "cliente", 200))
         apply("customer_nit", clean_optional(changes.customer_nit, "NIT", 30))
+        if "supplier_name" in fields and case.products:
+            supplier_name = clean_optional(changes.supplier_name, "proveedor", 200)
+            if supplier_name != case.supplier_name:
+                raise InvalidInputError("El proveedor sale de los productos del caso")
         apply("supplier_name", clean_optional(changes.supplier_name, "proveedor", 200))
         apply(
             "sales_executive_name",
@@ -1217,12 +1225,46 @@ class CaseTrackingService:
                         "Hay documentos respondidos antes de esa fecha de recepción"
                     )
             apply("received_on", changes.received_on)
+        self._apply_follow_up(case, changes, apply, changed)
         if not changed:
             return await self._view(case, principal, await self.managers.is_manager(principal))
         self._refresh_dates(case)
         event = self._event(case.id, EventType.UPDATED, principal.user_id, data={"fields": changed})
         stored = await self.repository.save_case(case, [event])
         return await self._view(stored, principal, await self.managers.is_manager(principal))
+
+    def _apply_follow_up(
+        self,
+        case: TrackingCase,
+        changes: CaseChanges,
+        apply: Callable[[str, object], None],
+        changed: list[str],
+    ) -> None:
+        """Apply the pickup order and the delivery date of the products.
+
+        The number of the pickup order goes only when it was requested; answering ``no``
+        or ``unknown`` clears it.
+        """
+
+        fields = changes.fields
+        if "pickup_order_requested" in fields:
+            answer = changes.pickup_order_requested
+            if answer is not None and answer not in PICKUP_ORDER_ANSWERS:
+                raise InvalidInputError("Indica si ya se solicitó la orden de recogida")
+            apply("pickup_order_requested", answer)
+        if "pickup_order_number" in fields:
+            number = clean_optional(changes.pickup_order_number, "número de orden de recogida", 40)
+            if number and case.pickup_order_requested != "yes":
+                raise InvalidInputError("El número de orden de recogida va solo si ya se solicitó")
+            apply("pickup_order_number", number)
+        if case.pickup_order_requested != "yes" and case.pickup_order_number is not None:
+            # Not sent, but it no longer applies: it goes with the answer that changed.
+            case.pickup_order_number = None
+            changed.append("pickup_order_number")
+        if "delivery_date" in fields:
+            if changes.delivery_date and changes.delivery_date > self.calendar.today():
+                raise InvalidInputError("La fecha de entrega no puede ser futura")
+            apply("delivery_date", changes.delivery_date)
 
     async def assign(
         self, case_id: UUID, assignee_user_id: UUID | None, note: str | None, principal: Principal
@@ -1774,6 +1816,40 @@ class CaseTrackingService:
             case.closed_at = datetime(closed_on.year, closed_on.month, closed_on.day, tzinfo=UTC)
         event = self._event(case.id, EventType.CREATED, None, data={"origin": "import"})
         return await self.repository.create_case(case, event, number=command.number)
+
+
+def _classify_from_request(case: TrackingCase, request: PqrsfRequest) -> None:
+    """Copy what the requester picked and sent: area, subject, cause, route and products."""
+
+    if request.area is not None:
+        case.requested_area = CatalogRef(request.area.id, request.area.code, request.area.name)
+    if request.subject_ref is not None:
+        subject = request.subject_ref
+        case.subject_ref = CatalogRef(subject.id, subject.code, subject.name)
+    if request.cause_ref is not None:
+        cause = request.cause_ref
+        case.cause_ref = CatalogRef(cause.id, cause.code, cause.name)
+        case.route = cause.route
+    case.pickup_order_requested = request.pickup_order_requested
+    case.pickup_order_number = request.pickup_order_number
+    case.delivery_date = request.delivery_date
+    case.products = [
+        CaseProduct(
+            id=uuid4(),
+            case_id=case.id,
+            source="request",
+            invoice_number=product.invoice_number,
+            sku=product.sku,
+            lot=product.lot,
+            expiry_date=product.expiry_date,
+            affected_quantity=product.affected_quantity,
+            description=product.description,
+            supplier_code=product.supplier_code,
+            supplier_name=product.supplier_name,
+            sort_order=position,
+        )
+        for position, product in enumerate(request.products)
+    ]
 
 
 def _clean_name(value: str, max_length: int = 120) -> str:

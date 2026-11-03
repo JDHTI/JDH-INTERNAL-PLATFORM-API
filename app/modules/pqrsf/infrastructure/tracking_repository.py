@@ -9,6 +9,7 @@ from sqlalchemy import Select, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
@@ -19,8 +20,10 @@ from app.modules.pqrsf.domain.tracking import (
     CaseFilters,
     CaseItem,
     CasePage,
+    CaseProduct,
     CaseStatus,
     CaseSummary,
+    CatalogRef,
     CountBucket,
     Dependency,
     DocumentType,
@@ -34,11 +37,14 @@ from app.modules.pqrsf.infrastructure.models import (
     CaseEventModel,
     CaseItemModel,
     CaseModel,
+    CaseProductModel,
     CaseSequenceModel,
     CaseStatusModel,
+    CauseModel,
     DependencyModel,
     DocumentTypeModel,
     RequestTypeModel,
+    SubjectModel,
 )
 from app.modules.pqrsf.infrastructure.repository import request_type_from_model
 from app.modules.sites.domain.entities import Site
@@ -79,6 +85,10 @@ _HEADER_FIELDS = (
     "first_read_at",
     "closed_at",
     "legacy",
+    "route",
+    "pickup_order_requested",
+    "pickup_order_number",
+    "delivery_date",
 )
 _ITEM_FIELDS = (
     "description",
@@ -178,14 +188,62 @@ def _event(model: CaseEventModel) -> CaseEvent:
     )
 
 
+def _ref(model: DependencyModel | SubjectModel | CauseModel | None) -> CatalogRef | None:
+    return CatalogRef(id=model.id, code=model.code, name=model.name) if model else None
+
+
+def _product(model: CaseProductModel) -> CaseProduct:
+    return CaseProduct(
+        id=model.id,
+        case_id=model.case_id,
+        source=model.source,
+        invoice_number=model.invoice_number,
+        sku=model.sku,
+        lot=model.lot,
+        expiry_date=model.expiry_date,
+        affected_quantity=model.affected_quantity,
+        description=model.description,
+        supplier_code=model.supplier_code,
+        supplier_name=model.supplier_name,
+        sort_order=model.sort_order,
+    )
+
+
+def _product_model(product: CaseProduct) -> CaseProductModel:
+    return CaseProductModel(
+        id=product.id,
+        case_id=product.case_id,
+        source=product.source,
+        invoice_number=product.invoice_number,
+        sku=product.sku,
+        lot=product.lot,
+        expiry_date=product.expiry_date,
+        affected_quantity=product.affected_quantity,
+        description=product.description,
+        supplier_code=product.supplier_code,
+        supplier_name=product.supplier_name,
+        sort_order=product.sort_order,
+    )
+
+
 def _case(
     model: CaseModel,
     request_type: RequestTypeModel,
     status: CaseStatusModel,
     site: SiteModel | None,
     dependency: DependencyModel | None,
+    area: DependencyModel | None = None,
+    subject: SubjectModel | None = None,
+    cause: CauseModel | None = None,
 ) -> TrackingCase:
     return TrackingCase(
+        requested_area=_ref(area),
+        subject_ref=_ref(subject),
+        cause_ref=_ref(cause),
+        route=model.route,
+        pickup_order_requested=model.pickup_order_requested,
+        pickup_order_number=model.pickup_order_number,
+        delivery_date=model.delivery_date,
         id=model.id,
         code=model.code,
         number=model.number,
@@ -241,6 +299,12 @@ def _event_model(event: CaseEvent) -> CaseEventModel:
     )
 
 
+def _set_classification(model: CaseModel, case: TrackingCase) -> None:
+    model.requested_area_id = case.requested_area.id if case.requested_area else None
+    model.subject_id = case.subject_ref.id if case.subject_ref else None
+    model.cause_id = case.cause_ref.id if case.cause_ref else None
+
+
 def _item_model(item: CaseItem) -> CaseItemModel:
     model = CaseItemModel(
         id=item.id,
@@ -252,12 +316,25 @@ def _item_model(item: CaseItem) -> CaseItemModel:
     return model
 
 
+_AREA = aliased(DependencyModel)
 _CASE_QUERY: Select = (
-    select(CaseModel, RequestTypeModel, CaseStatusModel, SiteModel, DependencyModel)
+    select(
+        CaseModel,
+        RequestTypeModel,
+        CaseStatusModel,
+        SiteModel,
+        DependencyModel,
+        _AREA,
+        SubjectModel,
+        CauseModel,
+    )
     .join(RequestTypeModel, CaseModel.request_type_id == RequestTypeModel.id)
     .join(CaseStatusModel, CaseModel.status_id == CaseStatusModel.id)
     .outerjoin(SiteModel, CaseModel.site_id == SiteModel.id)
     .outerjoin(DependencyModel, CaseModel.dependency_id == DependencyModel.id)
+    .outerjoin(_AREA, CaseModel.requested_area_id == _AREA.id)
+    .outerjoin(SubjectModel, CaseModel.subject_id == SubjectModel.id)
+    .outerjoin(CauseModel, CaseModel.cause_id == CauseModel.id)
 )
 
 
@@ -595,9 +672,11 @@ class SqlAlchemyCaseRepository:
             )
             for name in _HEADER_FIELDS:
                 setattr(model, name, getattr(case, name))
+            _set_classification(model, case)
             session.add(model)
             await session.flush()
             session.add_all([_item_model(item) for item in case.items])
+            session.add_all([_product_model(product) for product in case.products])
             session.add(_event_model(event))
             try:
                 await session.commit()
@@ -629,6 +708,21 @@ class SqlAlchemyCaseRepository:
             items[model.case_id].append(_item(model, document_type))
         return items
 
+    async def _load_products(
+        self, session: AsyncSession, case_ids: list[UUID]
+    ) -> dict[UUID, list[CaseProduct]]:
+        if not case_ids:
+            return {}
+        rows = await session.scalars(
+            select(CaseProductModel)
+            .where(CaseProductModel.case_id.in_(case_ids))
+            .order_by(CaseProductModel.case_id, CaseProductModel.sort_order, CaseProductModel.id)
+        )
+        products: dict[UUID, list[CaseProduct]] = {case_id: [] for case_id in case_ids}
+        for model in rows.all():
+            products[model.case_id].append(_product(model))
+        return products
+
     async def _one(self, condition) -> TrackingCase | None:
         async with self.database.session_factory() as session:
             row = (await session.execute(_CASE_QUERY.where(condition))).one_or_none()
@@ -636,6 +730,7 @@ class SqlAlchemyCaseRepository:
                 return None
             case = _case(*row)
             case.items = (await self._load_items(session, [case.id]))[case.id]
+            case.products = (await self._load_products(session, [case.id]))[case.id]
             return case
 
     async def get_case(self, case_id: UUID) -> TrackingCase | None:
@@ -713,8 +808,10 @@ class SqlAlchemyCaseRepository:
             total = int(await session.scalar(count_query) or 0)
             cases = [_case(*row) for row in (await session.execute(query)).all()]
             items = await self._load_items(session, [c.id for c in cases])
+            products = await self._load_products(session, [c.id for c in cases])
             for case in cases:
                 case.items = items[case.id]
+                case.products = products[case.id]
             return CasePage(items=cases, total=total, page=page, size=size)
 
     async def summarize(self, filters: CaseFilters, today: date) -> CaseSummary:
@@ -801,6 +898,9 @@ class SqlAlchemyCaseRepository:
             model.status_id = case.status.id
             model.site_id = case.site.id if case.site else None
             model.dependency_id = case.dependency.id if case.dependency else None
+            # The product lines are what the requester sent: saving the case never
+            # rewrites them.
+            _set_classification(model, case)
 
             stored = {
                 m.id: m
