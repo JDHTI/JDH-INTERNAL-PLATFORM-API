@@ -1,0 +1,2 @@
+# SIESA import files are fixed-width with CRLF endings: keep the golden fixtures byte for byte.
+tests/modules/quotations/fixtures/*.txt binary
