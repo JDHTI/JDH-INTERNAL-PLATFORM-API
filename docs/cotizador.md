@@ -221,7 +221,7 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada** o **inactiva** |
 | `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos |
 | `GET /quotations/{id}/template.xlsx` | La plantilla con los datos de la cotización |
-| `POST /quotations/{id}/template` | `multipart/form-data`: `file` y `version`. Devuelve `template_result: {updated, cleared, added, unchanged, not_found, inactive, skipped: [{sku, reason, row_number}]}` |
+| `POST /quotations/{id}/template` | `multipart/form-data`: `file` y `version`. Devuelve `template_result: {updated, cleared, added, unchanged, not_found, inactive, skipped: [{sku, reason, row_number}]}`: listas de SKU, salvo `unchanged`, que es el **número** de filas sin cambio |
 | `POST /quotations/{id}/confirm` | `{version, list_action?, price_list_id?, new_list_name?, activation_date?}` → `pendiente_validacion`. 422 si alguna no cumple, si la lista 1 se quiere actualizar, si la creación no trae código o el código existe |
 | `POST /quotations/{id}/return` | `{version, note}` → `borrador`. Quien valida debe escribir la nota |
 | `POST /quotations/{id}/validate` | `{version}` → `actualizada` o `creada`. Solo quien valida |
