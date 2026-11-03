@@ -74,6 +74,19 @@ class LastSale:
 
 
 @dataclass(frozen=True)
+class ItemInfo:
+    """A warehouse item (``consumo.productos``), for a SKU the customer has not bought."""
+
+    sku: str
+    description: str | None = None
+    unit: str | None = None
+    vat_pct: Decimal | None = None
+    supplier_code: str | None = None
+    pack_factor: Decimal | None = None
+    is_active: bool = True
+
+
+@dataclass(frozen=True)
 class CostInfo:
     """Current average cost of a SKU (customer's operation center, else all warehouses)."""
 
@@ -112,6 +125,8 @@ class ProductMaster:
     pack_factor: Decimal | None = None
     supplier_code: str | None = None
     margins: dict[str, Decimal | None] = field(default_factory=dict)
+    # National liquor tax per unit (IMPTOLIC), when the price list has no value of its own.
+    liquor_tax: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -217,7 +232,8 @@ class QuotationLine:
     pack_factor: Decimal | None
     supplier_code: str | None
     supplier_name: str | None
-    last_price: Decimal
+    # ``None`` for a SKU the advisor added: the customer has not bought it in the window.
+    last_price: Decimal | None
     last_gross_price: Decimal | None
     last_discount_pct: Decimal | None
     last_sale_date: date | None
@@ -246,6 +262,8 @@ class QuotationLine:
     variation_pct: Decimal | None = None
     compliance: str | None = None
     problems: tuple[str, ...] = ()
+    # ``historico`` (from the sales window) or ``agregado`` (added by the advisor).
+    origin: str = "historico"
 
     @property
     def support_amount(self) -> Decimal:

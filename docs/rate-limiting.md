@@ -237,7 +237,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/export.txt` | `read` |  |
 | `GET` | `/v1/quotations/{quotation_id}/export.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/generate` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `PUT` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
+| `DELETE` | `/v1/quotations/{quotation_id}/lines/{sku}` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |
 | `GET` | `/v1/sites` | `read` |  |

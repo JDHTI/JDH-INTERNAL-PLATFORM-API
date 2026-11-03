@@ -13,6 +13,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
     CustomerPage,
+    ItemInfo,
     LastSale,
     ListPrice,
     ProductMaster,
@@ -46,6 +47,8 @@ class WarehouseSource(Protocol):
     async def value_tax_keys(self, skus: Sequence[str]) -> dict[str, ValueTaxKey]: ...
 
     async def sellers(self, email: str) -> list[Seller]: ...
+
+    async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]: ...
 
 
 class MasterSource(Protocol):

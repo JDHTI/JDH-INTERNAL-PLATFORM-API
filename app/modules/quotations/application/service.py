@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -18,6 +18,8 @@ from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
     CustomerContext,
     CustomerPage,
+    ItemInfo,
+    LastSale,
     Quotation,
     QuotationDetail,
     QuotationLine,
@@ -172,29 +174,29 @@ class QuotationService:
         shared = await self.warehouse.price_list_customers(draft.price_list_id)
         return rules.customer_context(nit, branches, shared)
 
-    async def _build(
-        self, context: CustomerContext, months: int
+    async def _price(
+        self,
+        context: CustomerContext,
+        sales: Sequence[LastSale],
+        added: Mapping[str, ItemInfo],
+        start: int = 1,
     ) -> tuple[list[QuotationLine], date | None]:
-        sales = await self.warehouse.last_sales(context.nit, months)
-        if not sales:
-            raise InvalidInputError(f"El cliente no tiene ventas en los últimos {months} meses")
-        if len(sales) > self.max_lines:
-            raise InvalidInputError(
-                f"El cliente tiene {len(sales)} referencias; el máximo es {self.max_lines}"
-            )
-        skus = [sale.sku for sale in sales]
+        """Price the SKUs of the sales window and the ones the advisor added, in that order."""
+
+        sold = {sale.sku: sale for sale in sales}
+        skus = [*sold, *(sku for sku in added if sku not in sold)]
+        if not skus:
+            return [], None
         products = await self.masters.products(skus)
-        codes = sorted(
-            {
-                code
-                for code in (
-                    (products[sale.sku].supplier_code if sale.sku in products else None)
-                    or sale.supplier_code
-                    for sale in sales
-                )
-                if code
-            }
-        )
+
+        def supplier_of(sku: str) -> str | None:
+            product = products.get(sku)
+            source = sold.get(sku) or added.get(sku)
+            return (product.supplier_code if product else None) or (
+                source.supplier_code if source else None
+            )
+
+        codes = sorted({code for code in map(supplier_of, skus) if code})
         costs = await self.warehouse.costs(skus, context.billing_center_code)
         prices = await self.warehouse.list_prices(context.price_list_id, skus)
         taxes = await self.warehouse.value_tax_keys(skus)
@@ -203,26 +205,27 @@ class QuotationService:
         names = await self.masters.supplier_names(codes)
         today = self.calendar.today()
         lines: list[QuotationLine] = []
-        for position, sale in enumerate(sales, start=1):
-            product = products.get(sale.sku)
-            supplier = (product.supplier_code if product else None) or sale.supplier_code
+        for position, sku in enumerate(skus, start=start):
+            supplier = supplier_of(sku)
             lines.append(
                 rules.build_line(
                     position,
-                    sale,
+                    sku,
+                    sold.get(sku),
+                    item=added.get(sku),
                     nit=context.nit,
                     channel=context.channel,
                     scope=scopes.get(context.nit),
-                    product=product,
+                    product=products.get(sku),
                     supplier_name=names.get(supplier or ""),
-                    cost=costs.get(sale.sku),
-                    list_price=prices.get(sale.sku),
-                    tax=taxes.get(sale.sku),
+                    cost=costs.get(sku),
+                    list_price=prices.get(sku),
+                    tax=taxes.get(sku),
                     agreements=[
                         item
                         for item in agreements
                         if item.supplier_code in (supplier, None)
-                        and item.product_sku in (sale.sku, None)
+                        and item.product_sku in (sku, None)
                     ],
                     policy=self.policy,
                     day=today,
@@ -231,6 +234,40 @@ class QuotationService:
             )
         cut = max((cost.cut_date for cost in costs.values() if cost.cut_date), default=None)
         return lines, cut
+
+    async def _build(
+        self, context: CustomerContext, months: int, added: Sequence[str] = ()
+    ) -> tuple[list[QuotationLine], date | None]:
+        """Lines of the sales window plus the SKUs the advisor had added."""
+
+        sales = await self.warehouse.last_sales(context.nit, months)
+        sold = {sale.sku for sale in sales}
+        extra = [sku for sku in added if sku not in sold]
+        if len(sales) + len(extra) > self.max_lines:
+            raise InvalidInputError(
+                f"El cliente tiene {len(sales) + len(extra)} referencias; "
+                f"el máximo es {self.max_lines}"
+            )
+        items = await self.warehouse.items(extra) if extra else {}
+        return await self._price(context, sales, items)
+
+    @staticmethod
+    def _stored_context(quotation: Quotation) -> CustomerContext:
+        """The customer as the quotation keeps it, to price SKUs without asking the warehouse."""
+
+        return CustomerContext(
+            nit=quotation.customer_nit,
+            name=quotation.customer_name,
+            channel_code=quotation.channel_code,
+            channel=quotation.channel,
+            price_list_id=quotation.price_list_id,
+            price_list_name=quotation.price_list_name,
+            price_list_customers=quotation.price_list_customers,
+            billing_center_code=quotation.billing_center_code,
+            salesperson_code=quotation.salesperson_code,
+            salesperson_name=quotation.salesperson_name,
+            warnings=quotation.warnings,
+        )
 
     async def create(
         self, principal: Principal, customer_nit: str, window_months: int
@@ -252,6 +289,9 @@ class QuotationService:
         nit = normalize_nit(customer_nit)
         context = await self._context(nit)
         lines, cut = await self._build(context, window_months)
+        if not lines:
+            # A customer without sales in the window is quoted with the SKUs the advisor adds.
+            context = replace(context, warnings=(*context.warnings, "sin_ventas"))
         now = datetime.now(UTC)
         total, changed, below = rules.counts(lines)
         quotation = Quotation(
@@ -383,7 +423,10 @@ class QuotationService:
         detail = await self.get(principal, quotation_id)
         self._check_version(detail.quotation, version)
         context = await self._context(detail.quotation.customer_nit)
-        lines, cut = await self._build(context, detail.quotation.window_months)
+        added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
+        lines, cut = await self._build(context, detail.quotation.window_months, added)
+        if not lines:
+            context = replace(context, warnings=(*context.warnings, "sin_ventas"))
         prices = {line.sku: line.new_price for line in detail.lines if line.new_price is not None}
         lines = [rules.reprice(line, prices.get(line.sku)) for line in lines]
         quotation = replace(
@@ -402,6 +445,69 @@ class QuotationService:
             cost_cut_date=cut,
             max_points_below_target=self.policy.max_points_below_target,
         )
+        return await self.repository.save(quotation, lines, version, replace_lines=True)
+
+    async def add_lines(
+        self, principal: Principal, quotation_id: UUID, version: int, skus: Sequence[str]
+    ) -> QuotationDetail:
+        """Add SKUs the customer has not bought, to quote them too.
+
+        Each one is priced like the others (cost, target margin, supports, liquor tax) and has
+        no last price. Unknown, inactive or repeated SKUs are refused, and nothing is added.
+
+        Args:
+            principal (Principal): The advisor.
+            quotation_id (UUID): Quotation.
+            version (int): Version the caller read.
+            skus (Sequence[str]): JDH references.
+
+        Returns:
+            QuotationDetail: The quotation with the new lines at the end, back to draft.
+        """
+
+        detail = await self.get(principal, quotation_id)
+        self._check_version(detail.quotation, version)
+        wanted = list(dict.fromkeys(sku.strip() for sku in skus if sku and sku.strip()))
+        if not wanted:
+            raise InvalidInputError("Indica las referencias a agregar")
+        present = {line.sku for line in detail.lines}
+        repeated = [sku for sku in wanted if sku in present]
+        if repeated:
+            raise InvalidInputError(f"Ya están en la cotización: {', '.join(repeated[:10])}")
+        if len(detail.lines) + len(wanted) > self.max_lines:
+            raise InvalidInputError(f"La cotización admite máximo {self.max_lines} referencias")
+        items = await self.warehouse.items(wanted)
+        missing = [sku for sku in wanted if sku not in items]
+        if missing:
+            raise InvalidInputError(f"No existen en el maestro: {', '.join(missing[:10])}")
+        inactive = [sku for sku in wanted if not items[sku].is_active]
+        if inactive:
+            raise InvalidInputError(f"Están inactivas en SIESA: {', '.join(inactive[:10])}")
+        start = max((line.position for line in detail.lines), default=0) + 1
+        added, _ = await self._price(
+            self._stored_context(detail.quotation), [], {sku: items[sku] for sku in wanted}, start
+        )
+        lines = [*detail.lines, *added]
+        quotation = self._touched(detail.quotation, lines, principal.email)
+        return await self.repository.save(quotation, lines, version, replace_lines=True)
+
+    async def remove_line(
+        self, principal: Principal, quotation_id: UUID, version: int, sku: str
+    ) -> QuotationDetail:
+        """Take out a SKU the advisor added. Sales-window SKUs stay: leave their price empty."""
+
+        detail = await self.get(principal, quotation_id)
+        self._check_version(detail.quotation, version)
+        line = next((item for item in detail.lines if item.sku == sku), None)
+        if line is None:
+            raise NotFoundError(f"La referencia {sku} no está en la cotización")
+        if line.origin != vocabulary.ADDED:
+            raise InvalidInputError(
+                "Solo se quitan referencias agregadas; para no actualizar una del histórico, "
+                "deja vacío su precio nuevo"
+            )
+        lines = [item for item in detail.lines if item.sku != sku]
+        quotation = self._touched(detail.quotation, lines, principal.email)
         return await self.repository.save(quotation, lines, version, replace_lines=True)
 
     async def generate(

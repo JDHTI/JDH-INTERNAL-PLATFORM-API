@@ -16,6 +16,7 @@ from app.modules.quotations.domain.entities import (
     CostInfo,
     CustomerOption,
     CustomerPage,
+    ItemInfo,
     LastSale,
     ListPrice,
     ProductMaster,
@@ -96,6 +97,10 @@ class FakeWarehouse:
         self.seller_rows: dict[str, list[Seller]] = {
             MANAGER: [Seller("0051", "PEREZ ANA", MANAGER)]
         }
+        self.item_rows: dict[str, ItemInfo] = {
+            "26278": ItemInfo("26278", "Ginebra Selva x700ml", "UNID", Decimal(5), "359"),
+            "9999": ItemInfo("9999", "Inactiva", "UNID", Decimal(19), "359", None, False),
+        }
         self.list_customers = 28113
         self.down = False
         self.calls: list[tuple] = []
@@ -134,6 +139,10 @@ class FakeWarehouse:
     async def sellers(self, email):
         self._check()
         return list(self.seller_rows.get(email, []))
+
+    async def items(self, skus):
+        self._check()
+        return {sku: self.item_rows[sku] for sku in skus if sku in self.item_rows}
 
 
 class FakeMasters:

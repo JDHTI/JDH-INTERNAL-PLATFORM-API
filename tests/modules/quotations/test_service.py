@@ -25,7 +25,7 @@ async def test_create_builds_every_sku_with_cost_support_and_target(
     warehouse.sales[NIT].append(sale("12014", "12141", supplier_code="359"))
     masters.catalog["12014"] = product("12014", description="Vino tetrapack")
     warehouse.prices["12014"] = ListPrice("12014", Decimal("12141"), Decimal("6911"))
-    warehouse.taxes["12014"] = ValueTaxKey("12014", "0005", "IMPOCONSUMO")
+    warehouse.taxes["12014"] = ValueTaxKey("12014", "0011", "LICORES IMPOR")
     supports.items.append(agreement(supplier_value=Decimal("0.05"), product_sku="2537"))
 
     detail = await service.create(advisor, "900.315.138-1", 12)
@@ -38,7 +38,7 @@ async def test_create_builds_every_sku_with_cost_support_and_target(
     first, second = detail.lines
     assert first.sku == "2537" and first.supplier_name == "LOCERIA COLOMBIANA S.A."
     assert first.support is not None and first.support.amount == Decimal("150")
-    assert second.value_tax_key == "0005" and second.value_tax_amount == Decimal("6911")
+    assert second.value_tax_key == "0011" and second.value_tax_amount == Decimal("6911")
     assert "sin_costo" in second.problems
     assert ("last_sales", NIT, 12) in warehouse.calls
     assert ("costs", ("2537", "12014"), "001") in warehouse.calls
@@ -51,9 +51,6 @@ async def test_create_checks_access_window_customer_and_sales(service, advisor, 
         await service.create(advisor, NIT, 3)
     with pytest.raises(NotFoundError):
         await service.create(advisor, "111", 6)
-    warehouse.sales[NIT] = []
-    with pytest.raises(InvalidInputError, match="no tiene ventas"):
-        await service.create(advisor, NIT, 6)
     warehouse.down = True
     with pytest.raises(DependencyUnavailableError):
         await service.create(advisor, NIT, 6)
@@ -127,8 +124,53 @@ async def test_refresh_keeps_prices_and_reprices_with_the_new_cost(
 
     line = refreshed.lines[0]
     assert line.new_price == Decimal("4000") and line.cost == Decimal("3500")
-    assert line.compliance == "bajo_minimo" and "costo_global" in line.problems
+    assert line.compliance == "bajo_minimo" and line.cost_is_global
     assert refreshed.quotation.version == 3
+
+
+async def test_added_skus_are_priced_kept_on_refresh_and_removable(
+    service, advisor, warehouse, masters
+) -> None:
+    masters.catalog["26278"] = product("26278", liquor_tax=Decimal("42451"))
+    warehouse.cost_rows["26278"] = CostInfo("26278", Decimal("60000"), False)
+    warehouse.taxes["26278"] = ValueTaxKey("26278", "0024", "LICORES NAL")
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+
+    with pytest.raises(InvalidInputError, match="No existen"):
+        await service.add_lines(advisor, quotation.id, 1, ["26278", "404"])
+    with pytest.raises(InvalidInputError, match="inactivas"):
+        await service.add_lines(advisor, quotation.id, 1, ["9999"])
+    with pytest.raises(InvalidInputError, match="Ya están"):
+        await service.add_lines(advisor, quotation.id, 1, ["2537"])
+    added = await service.add_lines(advisor, quotation.id, 1, [" 26278 ", "26278"])
+
+    line = added.lines[-1]
+    assert [item.sku for item in added.lines] == ["2537", "26278"]
+    assert line.origin == "agregado" and line.position == 2 and line.last_price is None
+    assert line.value_tax_key == "0024" and line.value_tax_amount == Decimal("42451")
+    assert added.quotation.line_count == 2 and added.quotation.version == 2
+
+    priced = await service.update_lines(
+        advisor, quotation.id, 2, [LineChange("26278", Decimal("80000"))]
+    )
+    refreshed = await service.refresh(advisor, quotation.id, priced.quotation.version)
+    kept = next(item for item in refreshed.lines if item.sku == "26278")
+    assert kept.origin == "agregado" and kept.new_price == Decimal("80000")
+
+    with pytest.raises(InvalidInputError, match="Solo se quitan"):
+        await service.remove_line(advisor, quotation.id, refreshed.quotation.version, "2537")
+    removed = await service.remove_line(advisor, quotation.id, refreshed.quotation.version, "26278")
+    assert [item.sku for item in removed.lines] == ["2537"]
+
+
+async def test_customer_without_sales_starts_empty(service, advisor, warehouse) -> None:
+    warehouse.sales[NIT] = []
+
+    detail = await service.create(advisor, NIT, 6)
+
+    assert detail.lines == () and "sin_ventas" in detail.quotation.warnings
+    added = await service.add_lines(advisor, detail.quotation.id, 1, ["26278"])
+    assert added.lines[0].position == 1
 
 
 async def test_customers_mine_uses_the_seller_linked_by_email(service, advisor, warehouse) -> None:

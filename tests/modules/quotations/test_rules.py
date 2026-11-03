@@ -5,7 +5,13 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.modules.quotations.domain import rules
-from app.modules.quotations.domain.entities import CostInfo, ListPrice, QuotationPolicy
+from app.modules.quotations.domain.entities import (
+    CostInfo,
+    ItemInfo,
+    ListPrice,
+    QuotationPolicy,
+    ValueTaxKey,
+)
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, product, sale
 
@@ -16,6 +22,7 @@ DAY = date(2026, 11, 3)
 def build(agreements=(), cost="3000", channel="HOTELES Y CLUBES", item=None, price="4000"):
     return rules.build_line(
         1,
+        "2537",
         sale(price=price),
         nit=NIT,
         channel=channel,
@@ -146,8 +153,56 @@ def test_customer_without_channel_or_list() -> None:
     assert set(context.warnings) == {"cliente_inactivo", "sin_canal", "sin_lista"}
 
 
-def test_price_with_taxes_adds_vat_and_value_tax() -> None:
-    line = build()
-    taxed = rules.reprice(line, Decimal("1000"))
+def test_price_with_taxes_adds_only_the_liquor_tax() -> None:
+    plain = rules.reprice(build(), Decimal("1000"))
+    liquor = rules.build_line(
+        1,
+        "12014",
+        sale("12014", "12141"),
+        nit=NIT,
+        channel="RESTAURANTES",
+        scope=None,
+        product=product("12014", liquor_tax=Decimal("6500")),
+        supplier_name=None,
+        cost=CostInfo("12014", Decimal("9000"), True),
+        list_price=ListPrice("12014", Decimal("12141"), Decimal("6911")),
+        tax=ValueTaxKey("12014", "0011", "IMPUESTO AL CONSUMO LICORES IMPOR IVA 5%"),
+        agreements=[],
+        policy=POLICY,
+        day=DAY,
+        line_id=uuid4(),
+    )
 
-    assert rules.price_with_taxes(taxed) == Decimal("1190.0000")
+    # VAT is not shown: 1000 stays 1000.
+    assert rules.price_with_taxes(plain) == Decimal("1000.0000")
+    assert liquor.value_tax_key == "0011" and liquor.value_tax_amount == Decimal("6911")
+    assert rules.price_with_taxes(liquor) == Decimal("19052.0000")
+    # A global cost is a flag, no longer a notice on the line.
+    assert liquor.cost_is_global and liquor.problems == ()
+
+
+def test_liquor_tax_falls_back_to_the_master_value() -> None:
+    line = rules.build_line(
+        1,
+        "26278",
+        None,
+        item=ItemInfo("26278", "Ginebra", "UNID", Decimal(5), "359"),
+        nit=NIT,
+        channel="RESTAURANTES",
+        scope=None,
+        product=product("26278", liquor_tax=Decimal("42451")),
+        supplier_name=None,
+        cost=CostInfo("26278", Decimal("60000"), False),
+        list_price=None,
+        tax=ValueTaxKey("26278", "0024", "LICORES NAL"),
+        agreements=[],
+        policy=POLICY,
+        day=DAY,
+        line_id=uuid4(),
+    )
+
+    assert line.value_tax_amount == Decimal("42451") and line.origin == "agregado"
+    assert line.last_price is None and line.current_margin_pct is None
+    assert line.unit == "UNID" and line.min_price == Decimal("74074.0741")
+    priced = rules.reprice(line, Decimal("80000"))
+    assert priced.compliance == "cumple" and priced.variation_pct is None

@@ -22,12 +22,16 @@ COMPLIANCE_LABELS = {
     NO_COST: "Sin costo",
 }
 
+# Where a line comes from.
+HISTORY = "historico"
+ADDED = "agregado"
+ORIGINS = (HISTORY, ADDED)
+ORIGIN_LABELS = {HISTORY: "Histórico", ADDED: "Agregado"}
+
 PROBLEM_LABELS = {
     "sin_costo": "Sin costo actual",
-    "costo_global": "Costo promedio de todas las bodegas (el CO del cliente no tiene existencia)",
     "sin_margen_objetivo": "El producto no tiene margen para el canal",
     "producto_no_sincronizado": "La referencia no está en el maestro de productos",
-    "sin_precio_lista": "Sin precio vigente en la lista del cliente",
     "apoyo_condicionado": "El apoyo exige una cantidad mínima",
     "apoyo_en_revision": "Hay un apoyo en revisión que no se aplica",
     "apoyo_fuera_bodega": "Hay un apoyo de una bodega puntual que no se aplica",
@@ -40,6 +44,7 @@ WARNING_LABELS = {
     "co_distintos": "Las sucursales del cliente facturan desde centros de operación distintos",
     "lista_compartida": "La lista de precios es compartida: un cambio afecta a otros clientes",
     "sin_lista": "El cliente no tiene lista de precios: se usa la lista 1",
+    "sin_ventas": "El cliente no tiene ventas en la ventana: agrega las referencias a cotizar",
 }
 
 BASIS_LABELS = {

@@ -2,7 +2,8 @@
 
 - ``quotations``: one customer (NIT), the sales window and the state of the price list update.
 - ``quotation_lines``: one SKU each, with the snapshot it was priced with (last sale, cost,
-  target margin, support) and the advisor's new price.
+  target margin, support) and the advisor's new price. ``origin`` tells a SKU from the sales
+  window (``historico``) from one the advisor added (``agregado``, no last sale).
 """
 
 from collections.abc import Sequence
@@ -72,7 +73,7 @@ def upgrade() -> None:
         sa.Column("pack_factor", sa.Numeric(14, 4)),
         sa.Column("supplier_code", sa.Text()),
         sa.Column("supplier_name", sa.Text()),
-        sa.Column("last_price", sa.Numeric(18, 4), nullable=False),
+        sa.Column("last_price", sa.Numeric(18, 4)),
         sa.Column("last_gross_price", sa.Numeric(18, 4)),
         sa.Column("last_discount_pct", sa.Numeric(10, 6)),
         sa.Column("last_sale_date", sa.Date()),
@@ -101,7 +102,9 @@ def upgrade() -> None:
         sa.Column("variation_pct", sa.Numeric(14, 6)),
         sa.Column("compliance", sa.String(20)),
         sa.Column("problems", postgresql.ARRAY(sa.Text()), nullable=False),
+        sa.Column("origin", sa.String(20), nullable=False),
         sa.UniqueConstraint("quotation_id", "sku", name="uq_quotation_lines_sku"),
+        sa.CheckConstraint("origin IN ('historico', 'agregado')", name="ck_quotation_lines_origin"),
     )
     op.create_index("ix_quotation_lines_position", "quotation_lines", ["quotation_id", "position"])
 

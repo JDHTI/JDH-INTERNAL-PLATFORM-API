@@ -39,6 +39,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
     CustomerContext,
+    ItemInfo,
     LastSale,
     ListPrice,
     ProductMaster,
@@ -316,10 +317,16 @@ def pick_support(
 # ------------------------------------------------------------------ lines
 
 
+def _first(*values):
+    return next((value for value in values if value is not None), None)
+
+
 def build_line(
     position: int,
-    sale: LastSale,
+    sku: str,
+    sale: LastSale | None,
     *,
+    item: ItemInfo | None = None,
     nit: str,
     channel: str | None,
     scope: CustomerScope | None,
@@ -333,27 +340,30 @@ def build_line(
     day: date,
     line_id: UUID,
 ) -> QuotationLine:
-    """Price one SKU from its last sale, current cost, target margin and supports."""
+    """Price one SKU from its last sale (if any), current cost, target margin and supports.
+
+    A SKU the advisor adds has no last sale: it comes with the warehouse item (``item``) and
+    is priced from scratch. Only the liquor tax is carried as a tax (VAT is not shown).
+    """
 
     problems: list[str] = []
     if product is None:
         problems.append("producto_no_sincronizado")
-    supplier_code = (product.supplier_code if product else None) or sale.supplier_code
+    source = sale if sale is not None else item
+    supplier_code = _first(
+        product.supplier_code if product else None, source.supplier_code if source else None
+    )
     field_name = channel_field(channel)
     product_target = product.margins.get(field_name) if product else None
     basis = BASIS.get(field_name, "lista")
     cost_value = cost.cost if cost else None
     if cost is None:
         problems.append("sin_costo")
-    elif cost.is_global:
-        problems.append("costo_global")
-    if list_price is None or list_price.price is None:
-        problems.append("sin_precio_lista")
 
     support, candidates, support_problems = pick_support(
         agreements,
         nit=nit,
-        sku=sale.sku,
+        sku=sku,
         supplier_code=supplier_code,
         channel=channel,
         scope=scope,
@@ -369,41 +379,53 @@ def build_line(
         problems.append("sin_margen_objetivo")
     amount = support.amount if support and support.amount is not None else ZERO
     floor = minimum_margin(target, policy)
-    tax_amount = list_price.value_tax_amount if list_price else None
+    # The liquor tax of the customer's list; the master's national value when the list has none.
+    tax_amount = None
+    if tax is not None:
+        tax_amount = _first(
+            list_price.value_tax_amount if list_price else None,
+            product.liquor_tax if product else None,
+        )
+    last_price = money(sale.net_price) if sale else None
     return QuotationLine(
         id=line_id,
         position=position,
-        sku=sale.sku,
-        description=(product.description if product else None) or sale.description,
+        sku=sku,
+        description=_first(
+            product.description if product else None, source.description if source else None
+        ),
         # The SIESA unit id (``UNID``) the import file needs; the master copy keeps its name.
-        unit=sale.unit or (product.unit if product else None),
-        pack_factor=(product.pack_factor if product else None) or sale.pack_factor,
+        unit=_first(source.unit if source else None, product.unit if product else None),
+        pack_factor=_first(
+            product.pack_factor if product else None, source.pack_factor if source else None
+        ),
         supplier_code=supplier_code,
         supplier_name=supplier_name,
-        last_price=money(sale.net_price),
-        last_gross_price=money(sale.gross_price),
-        last_discount_pct=sale.discount_pct,
-        last_sale_date=sale.sale_date,
-        last_document=sale.document,
-        last_sale_unit=sale.sale_unit,
-        last_quantity=sale.quantity,
-        sales_in_window=sale.sales_in_window,
+        last_price=last_price,
+        last_gross_price=money(sale.gross_price) if sale else None,
+        last_discount_pct=sale.discount_pct if sale else None,
+        last_sale_date=sale.sale_date if sale else None,
+        last_document=sale.document if sale else None,
+        last_sale_unit=sale.sale_unit if sale else None,
+        last_quantity=sale.quantity if sale else None,
+        sales_in_window=sale.sales_in_window if sale else 0,
         list_price=money(list_price.price) if list_price else None,
-        vat_pct=(product.vat_pct if product and product.vat_pct is not None else sale.vat_pct),
-        value_tax_key=tax.key if tax else None,
-        value_tax_name=tax.name if tax else None,
-        value_tax_amount=money(tax_amount) if tax and tax_amount else None,
+        vat_pct=_first(product.vat_pct if product else None, source.vat_pct if source else None),
+        value_tax_key=tax.key if tax and tax_amount else None,
+        value_tax_name=tax.name if tax and tax_amount else None,
+        value_tax_amount=money(tax_amount) if tax_amount else None,
         cost=money(cost_value),
         cost_is_global=bool(cost and cost.is_global),
         target_margin_pct=ratio(target),
         margin_basis=basis if target is not None else None,
         min_margin_pct=floor,
-        current_margin_pct=margin(sale.net_price, cost_value),
-        current_margin_with_support_pct=margin(sale.net_price, cost_value, amount),
+        current_margin_pct=margin(last_price, cost_value),
+        current_margin_with_support_pct=margin(last_price, cost_value, amount),
         min_price=minimum_price(cost_value, amount, floor),
         support=support,
         support_candidates=candidates,
         problems=tuple(dict.fromkeys(problems)),
+        origin=vocabulary.HISTORY if sale is not None else vocabulary.ADDED,
     )
 
 
@@ -430,12 +452,13 @@ def reprice(line: QuotationLine, new_price: Decimal | None) -> QuotationLine:
     return replace(priced, compliance=compliance(priced))
 
 
-def price_with_taxes(line: QuotationLine) -> Decimal:
-    """New price (or last price) plus VAT and the value tax, for display."""
+def price_with_taxes(line: QuotationLine) -> Decimal | None:
+    """New price (else last price) plus the liquor tax, for display. VAT is not added."""
 
-    base = line.new_price if line.new_price is not None else line.last_price
-    vat = (line.vat_pct or ZERO) / HUNDRED
-    return money(base * (ONE + vat) + (line.value_tax_amount or ZERO))
+    base = _first(line.new_price, line.last_price)
+    if base is None:
+        return None
+    return money(base + (line.value_tax_amount or ZERO))
 
 
 def counts(lines: Sequence[QuotationLine]) -> tuple[int, int, int]:

@@ -19,6 +19,7 @@ from app.infrastructure.data_provider import DataProviderConnection, DataProvide
 from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
+    ItemInfo,
     LastSale,
     ListPrice,
     Seller,
@@ -217,7 +218,8 @@ class WarehouseQuotationSource:
         }
 
     async def value_tax_keys(self, skus: Sequence[str]) -> dict[str, ValueTaxKey]:
-        """The sale tax charged as a value (impoconsumo, liquor) of each SKU, if any."""
+        """The liquor consumption tax of each SKU, if any (keys ``0011`` imported, ``0024``
+        national). Other value taxes (impoconsumo) and VAT are not part of the quotation."""
 
         if not skus:
             return {}
@@ -225,7 +227,8 @@ class WarehouseQuotationSource:
             'SELECT DISTINCT ON ("sku") "sku", "llave_impuesto_id", "llave_impuesto"'
             f" FROM {self._view('producto_impuestos')}"
             ' WHERE "sku" = ANY($1::text[]) AND "indicador" = \'venta\''
-            ' AND "tipo_calculo" = \'valor\' ORDER BY "sku", "llave_impuesto_id"',
+            " AND \"tipo_calculo\" = 'valor' AND \"clase_impuesto\" ILIKE '%licor%'"
+            ' ORDER BY "sku", "llave_impuesto_id"',
             list(skus),
         )
         return {
@@ -249,6 +252,30 @@ class WarehouseQuotationSource:
             Seller(str(row["codigo"]).strip(), row["nombre"], (row["correo"] or "").lower())
             for row in rows
         ]
+
+    async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]:
+        """Description, SIESA unit id, VAT, supplier and pack of each SKU (``productos``)."""
+
+        if not skus:
+            return {}
+        rows = await self._fetch(
+            'SELECT "sku", "descripcion", "unidad_inventario_id", "iva_venta_pct",'
+            ' "cod_proveedor", "factor_empaque", "estado"'
+            f' FROM {self._view("productos")} WHERE "sku" = ANY($1::text[])',
+            list(skus),
+        )
+        return {
+            str(row["sku"]).strip(): ItemInfo(
+                sku=str(row["sku"]).strip(),
+                description=row["descripcion"],
+                unit=_strip(row["unidad_inventario_id"]),
+                vat_pct=_decimal(row["iva_venta_pct"]),
+                supplier_code=_strip(row["cod_proveedor"]),
+                pack_factor=_decimal(row["factor_empaque"]),
+                is_active=row["estado"] == "A",
+            )
+            for row in rows
+        }
 
 
 def _strip(value: object) -> str | None:

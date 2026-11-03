@@ -30,6 +30,7 @@ from app.modules.quotations.domain.entities import (
 from app.modules.quotations.domain.vocabulary import (
     BASIS_LABELS,
     COMPLIANCE_LABELS,
+    ORIGIN_LABELS,
     PROBLEM_LABELS,
     STATUS_LABELS,
     WARNING_LABELS,
@@ -106,6 +107,11 @@ class LinesRequest(BaseModel):
     lines: list[LineChangeRequest] = Field(min_length=1, max_length=5000)
 
 
+class AddLinesRequest(BaseModel):
+    version: int = Field(ge=1)
+    skus: list[str] = Field(min_length=1, max_length=200)
+
+
 class VersionRequest(BaseModel):
     version: int = Field(ge=1)
 
@@ -154,7 +160,7 @@ class LineResponse(BaseModel):
     pack_factor: Decimal | None
     supplier_code: str | None
     supplier_name: str | None
-    last_price: Decimal
+    last_price: Decimal | None
     last_gross_price: Decimal | None
     last_discount_pct: Decimal | None
     last_sale_date: date | None
@@ -184,9 +190,11 @@ class LineResponse(BaseModel):
     variation_pct: Decimal | None
     compliance: Compliance | None
     compliance_label: str | None
-    price_with_taxes: Decimal
+    price_with_taxes: Decimal | None
     problems: list[str]
     problem_labels: list[str]
+    origin: Literal["historico", "agregado"]
+    origin_label: str
 
 
 class SummaryResponse(BaseModel):
@@ -307,6 +315,8 @@ def _line(line: QuotationLine) -> LineResponse:
         price_with_taxes=rules.price_with_taxes(line),
         problems=list(line.problems),
         problem_labels=[PROBLEM_LABELS.get(code, code) for code in line.problems],
+        origin=line.origin,  # type: ignore[arg-type]
+        origin_label=ORIGIN_LABELS.get(line.origin, line.origin),
     )
 
 
@@ -510,6 +520,36 @@ async def update_lines(
 
     changes = [LineChange(item.sku, item.new_price) for item in body.lines]
     return _detail(await service.update_lines(principal, quotation_id, body.version, changes))
+
+
+@router.post("/{quotation_id}/lines", response_model=QuotationResponse, summary="Add SKUs to quote")
+@inject
+async def add_lines(
+    quotation_id: UUID,
+    body: AddLinesRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Add SKUs the customer has not bought (``origin: agregado``, no last price), priced
+    like the rest. All or nothing: an unknown, inactive or repeated SKU is 422."""
+
+    return _detail(await service.add_lines(principal, quotation_id, body.version, body.skus))
+
+
+@router.delete(
+    "/{quotation_id}/lines/{sku}", response_model=QuotationResponse, summary="Remove an added SKU"
+)
+@inject
+async def remove_line(
+    quotation_id: UUID,
+    sku: str,
+    version: int = Query(ge=1),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Only SKUs the advisor added; a sales-window SKU stays (leave its new price empty)."""
+
+    return _detail(await service.remove_line(principal, quotation_id, version, sku))
 
 
 @router.post(
