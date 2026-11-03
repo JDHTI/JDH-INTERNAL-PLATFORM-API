@@ -10,7 +10,7 @@ from app.modules.pqrsf.domain.timeline import (
     describe,
     supplier_addresses,
 )
-from app.modules.pqrsf.domain.tracking import CaseEvent, CaseStatus
+from app.modules.pqrsf.domain.tracking import CaseEvent, CaseStatus, EventType
 
 NOW = datetime(2026, 10, 26, tzinfo=UTC)
 ANA = DirectoryUser(uuid4(), "ana@jdh.com.co", "Ana Pérez")
@@ -150,8 +150,6 @@ def test_supplier_addresses_come_from_the_messages_sent() -> None:
 
 
 def test_every_event_type_reads_in_spanish() -> None:
-    from app.modules.pqrsf.domain.tracking import EventType
-
     inbox = describe(_event(EventType.INBOX_OPENED, ANA), ANA, CONTEXT)
     unknown = describe(_event("something_new", ANA), ANA, CONTEXT)
 
