@@ -137,7 +137,7 @@ siguen abriendo. Decimales en texto; márgenes y variación como fracción (`0.1
 | `POST /quotations/{id}/generate` | `{version, activation_date?, price_list_id?}`: valida la regla y deja la cotización `generado` con la fecha de activación (por defecto mañana) y la lista destino (por defecto la del cliente). 422 si no hay líneas con precio nuevo o alguna no cumple |
 | `GET /quotations/{id}/export.xlsx` | El Excel (solo `generado`; si no, 409) |
 | `GET /quotations/{id}/export.txt` | El plano SIESA (solo `generado`; si no, 409) |
-| `POST /quotations/{id}/lines` | `{version, skus: ["26278", …]}` (1 a 200): agrega referencias que el cliente no compró, al final y con `origin: agregado`. Todo o nada: 422 si alguna no existe en `consumo.productos`, está inactiva o ya está en la cotización. 409 por versión. Vuelve a `borrador` |
+| `POST /quotations/{id}/lines` | Pegar una lista: `{version, text: "26278\n12014\n…"}` (columna de Excel, o separadas por coma, punto y coma, tabulador o espacio; `2537.0` se lee `2537`) y/o `{skus: [...]}`; hasta 500 por vez. Las que **ya están** se revalidan (costo, objetivo, apoyo e impuesto de hoy) conservando su precio nuevo; las **nuevas** se agregan al final con `origin: agregado`; las que no existen o están inactivas se informan y se omiten. Devuelve la cotización con `import_result: {added, revalidated, not_found, inactive, repeated}`. 422 solo si ninguna sirve. 409 por versión. Vuelve a `borrador` |
 | `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada** y devuelve la cotización; 422 si es del histórico, 404 si no está |
 | `DELETE /quotations/{id}` | 204. Quien la creó o un administrador |
 
@@ -190,6 +190,25 @@ El usuario del DWH debe leer en `consumo`: `ventas`, `clientes`, `productos`,
 El histórico de un cliente con cientos de sucursales tarda de 1 a 6 segundos y, con el DWH
 ocupado, hasta 27. Por eso el cotizador tiene su propio tiempo límite y no usa los 10 segundos
 de `DWH_COMMAND_TIMEOUT_SECONDS`; `DataProviderConnection.fetch` acepta `timeout` por consulta.
+
+## Rendimiento al agregar
+
+Buscar productos para agregarlos usa el maestro local (`GET /commercial/products`), con índices
+trigrama sobre SKU y descripción: 20 a 115 ms. Agregar o revalidar consulta el DWH (ítem,
+costo, precio de lista e impuesto) y el maestro de apoyos **en paralelo**. La fecha del último
+corte de inventario se recuerda 10 minutos: calcularla recorre toda la vista
+`inventario_corte` (~900 mil filas), y con la fecha fija el costo se lee por el índice de la
+referencia. Solo se insertan las líneas nuevas y se actualizan, en un solo lote, las
+revalidadas; el resto de la cotización no se reescribe.
+
+| Operación (cotización de 120 líneas, DWH real) | Tiempo |
+| --- | --- |
+| Pegar 10 referencias (5 nuevas, 3 revalidadas, 1 inexistente, 1 repetida) | 447 ms |
+| Pegar las mismas 10 otra vez (8 revalidadas) | 153 ms |
+| Guardar 5 precios | 73 ms |
+
+Con el DWH en frío (primera consulta del día o tras un rato sin uso) la primera llamada puede
+tardar más; la UI debe mostrar las filas pegadas de inmediato como «Agregando…».
 
 ## Validación (2026-11-03)
 

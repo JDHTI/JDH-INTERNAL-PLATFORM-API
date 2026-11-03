@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Sequence
+from datetime import date
 from decimal import Decimal
 
 from app.core.errors import DependencyUnavailableError
@@ -28,6 +30,9 @@ from app.modules.quotations.domain.entities import (
 
 logger = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Latest inventory snapshot date by schema: (monotonic time read, date).
+_CUT_CACHE: dict[str, tuple[float, date]] = {}
+_CUT_TTL_SECONDS = 600
 
 
 class WarehouseQuotationSource:
@@ -168,21 +173,21 @@ class WarehouseQuotationSource:
 
         if not skus:
             return {}
-        view = self._view("inventario_corte")
+        cut = await self._last_cut()
+        if cut is None:
+            return {}
         rows = await self._fetch(
-            f'WITH ult AS (SELECT max("fecha_corte") AS f FROM {view}),'
-            ' stock AS (SELECT "referencia", "co_bodega", "existencia", "costo_prom_unit_ins"'
-            f' FROM {view} WHERE "fecha_corte" = (SELECT f FROM ult) AND "existencia" > 0'
-            ' AND "referencia" = ANY($1::text[]))'
-            ' SELECT "referencia",'
+            'SELECT "referencia",'
             ' sum("existencia" * "costo_prom_unit_ins") FILTER (WHERE "co_bodega" = $2)'
             ' / nullif(sum("existencia") FILTER (WHERE "co_bodega" = $2), 0) AS costo_co,'
             ' sum("existencia" * "costo_prom_unit_ins") / nullif(sum("existencia"), 0)'
-            " AS costo_global,"
-            " (SELECT f FROM ult) AS fecha_corte"
-            ' FROM stock GROUP BY "referencia"',
+            " AS costo_global"
+            f" FROM {self._view('inventario_corte')}"
+            ' WHERE "fecha_corte" = $3 AND "existencia" > 0 AND "referencia" = ANY($1::text[])'
+            ' GROUP BY "referencia"',
             list(skus),
             operation_center or "",
+            cut,
         )
         result: dict[str, CostInfo] = {}
         for row in rows:
@@ -191,8 +196,29 @@ class WarehouseQuotationSource:
             if cost is None:
                 continue
             sku = str(row["referencia"]).strip()
-            result[sku] = CostInfo(sku, cost, own is None, row["fecha_corte"])
+            result[sku] = CostInfo(sku, cost, own is None, cut)
         return result
+
+    async def _last_cut(self) -> date | None:
+        """Date of the latest inventory snapshot, remembered for a few minutes.
+
+        ``max(fecha_corte)`` scans the whole snapshot view (~900 k rows); with the date as a
+        literal the cost query uses the SKU index. The snapshot of the day is loaded once in
+        the morning, so a short memory never serves a stale cost.
+        """
+
+        key = self.schema
+        cached = _CUT_CACHE.get(key)
+        now = time.monotonic()
+        if cached and now - cached[0] < _CUT_TTL_SECONDS:
+            return cached[1]
+        rows = await self._fetch(
+            f'SELECT max("fecha_corte") AS f FROM {self._view("inventario_corte")}'
+        )
+        cut = rows[0]["f"] if rows else None
+        if cut is not None:
+            _CUT_CACHE[key] = (now, cut)
+        return cut
 
     async def list_prices(self, price_list_id: str, skus: Sequence[str]) -> dict[str, ListPrice]:
         """Price in force and value tax of each SKU in a list, per inventory unit."""

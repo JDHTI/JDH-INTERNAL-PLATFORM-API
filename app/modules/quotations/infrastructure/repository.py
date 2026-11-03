@@ -7,7 +7,7 @@ from dataclasses import fields
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import bindparam, delete, func, or_, select, update
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
@@ -174,6 +174,8 @@ class SqlAlchemyQuotationRepository:
         lines: Sequence[QuotationLine],
         expected_version: int,
         replace_lines: bool = False,
+        inserted: Sequence[QuotationLine] = (),
+        removed: Sequence[UUID] = (),
     ) -> QuotationDetail:
         """Write the header and lines if nobody changed the quotation meanwhile.
 
@@ -183,6 +185,8 @@ class SqlAlchemyQuotationRepository:
                 ``replace_lines``.
             expected_version (int): The version the caller read.
             replace_lines (bool): Delete the current lines and insert ``lines``.
+            inserted (Sequence[QuotationLine]): New lines to insert.
+            removed (Sequence[UUID]): Lines to delete.
 
         Returns:
             QuotationDetail: The quotation as stored.
@@ -211,15 +215,30 @@ class SqlAlchemyQuotationRepository:
                     await session.execute(
                         L.__table__.insert(), [_line_values(quotation.id, line) for line in lines]
                     )
-            else:
+            elif lines:
+                # One executemany for every changed line, not a statement per line.
+                rows = []
                 for line in lines:
                     data = _line_values(quotation.id, line)
-                    data.pop("id")
-                    await session.execute(
-                        update(L)
-                        .where(L.id == line.id, L.quotation_id == quotation.id)
-                        .values(**data)
-                    )
+                    data["line_id"] = data.pop("id")
+                    data["owner_id"] = data.pop("quotation_id")
+                    rows.append(data)
+                table = L.__table__
+                await session.execute(
+                    update(table).where(
+                        table.c.id == bindparam("line_id"),
+                        table.c.quotation_id == bindparam("owner_id"),
+                    ),
+                    rows,
+                )
+            if removed:
+                await session.execute(
+                    delete(L).where(L.quotation_id == quotation.id, L.id.in_(list(removed)))
+                )
+            if inserted:
+                await session.execute(
+                    L.__table__.insert(), [_line_values(quotation.id, line) for line in inserted]
+                )
         detail = await self.get(quotation.id)
         if detail is None:  # pragma: no cover - deleted right after the commit
             raise NotFoundError("Cotización no encontrada")

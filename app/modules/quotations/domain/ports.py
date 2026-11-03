@@ -99,6 +99,8 @@ class QuotationRepository(Protocol):
         lines: Sequence[QuotationLine],
         expected_version: int,
         replace_lines: bool = False,
+        inserted: Sequence[QuotationLine] = (),
+        removed: Sequence[UUID] = (),
     ) -> QuotationDetail: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...

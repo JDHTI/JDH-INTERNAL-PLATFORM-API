@@ -12,7 +12,7 @@ from app.core.errors import (
     InvalidInputError,
     NotFoundError,
 )
-from app.modules.quotations.application.service import LineChange, normalize_nit
+from app.modules.quotations.application.service import LineChange, normalize_nit, parse_skus
 from app.modules.quotations.domain.entities import CostInfo, ListPrice, ValueTaxKey
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, product, sale
@@ -136,15 +136,12 @@ async def test_added_skus_are_priced_kept_on_refresh_and_removable(
     warehouse.taxes["26278"] = ValueTaxKey("26278", "0024", "LICORES NAL")
     quotation = (await service.create(advisor, NIT, 12)).quotation
 
-    with pytest.raises(InvalidInputError, match="No existen"):
-        await service.add_lines(advisor, quotation.id, 1, ["26278", "404"])
-    with pytest.raises(InvalidInputError, match="inactivas"):
-        await service.add_lines(advisor, quotation.id, 1, ["9999"])
-    with pytest.raises(InvalidInputError, match="Ya están"):
-        await service.add_lines(advisor, quotation.id, 1, ["2537"])
-    added = await service.add_lines(advisor, quotation.id, 1, [" 26278 ", "26278"])
+    with pytest.raises(InvalidInputError, match="Ninguna referencia.*no existen: 404.*inactivas"):
+        await service.add_lines(advisor, quotation.id, 1, ["404, 9999"])
+    added, result = await service.add_lines(advisor, quotation.id, 1, [" 26278 ", "26278", "404"])
 
     line = added.lines[-1]
+    assert result.added == ("26278",) and result.not_found == ("404",) and result.repeated == 1
     assert [item.sku for item in added.lines] == ["2537", "26278"]
     assert line.origin == "agregado" and line.position == 2 and line.last_price is None
     assert line.value_tax_key == "0024" and line.value_tax_amount == Decimal("42451")
@@ -153,6 +150,18 @@ async def test_added_skus_are_priced_kept_on_refresh_and_removable(
     priced = await service.update_lines(
         advisor, quotation.id, 2, [LineChange("26278", Decimal("80000"))]
     )
+    # Pasting again revalidates with today's cost and keeps the advisor's price.
+    warehouse.cost_rows["26278"] = CostInfo("26278", Decimal("70000"), False)
+    again, result = await service.add_lines(
+        advisor, quotation.id, priced.quotation.version, ["26278\n2537"]
+    )
+    kept = next(item for item in again.lines if item.sku == "26278")
+    assert result.revalidated == ("26278", "2537") and result.added == ()
+    assert kept.cost == Decimal("70000") and kept.new_price == Decimal("80000")
+    assert kept.compliance == "bajo_minimo" and kept.id == line.id
+    history = next(item for item in again.lines if item.sku == "2537")
+    assert history.origin == "historico" and history.last_price == Decimal("4000")
+    priced = again
     refreshed = await service.refresh(advisor, quotation.id, priced.quotation.version)
     kept = next(item for item in refreshed.lines if item.sku == "26278")
     assert kept.origin == "agregado" and kept.new_price == Decimal("80000")
@@ -169,8 +178,18 @@ async def test_customer_without_sales_starts_empty(service, advisor, warehouse) 
     detail = await service.create(advisor, NIT, 6)
 
     assert detail.lines == () and "sin_ventas" in detail.quotation.warnings
-    added = await service.add_lines(advisor, detail.quotation.id, 1, ["26278"])
+    added, _ = await service.add_lines(advisor, detail.quotation.id, 1, ["26278"])
     assert added.lines[0].position == 1
+
+
+def test_pasted_lists_from_excel_or_commas() -> None:
+    column = "26278\r\n12014\r\n\r\n2537.0\r\n26278\r\n"
+    assert parse_skus([column]) == (["26278", "12014", "2537"], 1)
+    assert parse_skus(["26278, 12014;2537\t1485 'A-01'"]) == (
+        ["26278", "12014", "2537", "1485", "A-01"],
+        0,
+    )
+    assert parse_skus(["", " , ;"]) == ([], 0)
 
 
 async def test_customers_mine_uses_the_seller_linked_by_email(service, advisor, warehouse) -> None:

@@ -194,7 +194,9 @@ class FakeRepository:
         ]
         return QuotationPage(tuple(items[(page - 1) * size : page * size]), len(items), page, size)
 
-    async def save(self, quotation, lines, expected_version, replace_lines=False):
+    async def save(
+        self, quotation, lines, expected_version, replace_lines=False, inserted=(), removed=()
+    ):
         current = self.items.get(quotation.id)
         if current is None:
             raise NotFoundError("Cotización no encontrada")
@@ -204,7 +206,10 @@ class FakeRepository:
             stored = tuple(lines)
         else:
             by_id = {line.id: line for line in lines}
-            stored = tuple(by_id.get(line.id, line) for line in current.lines)
+            stored = tuple(
+                by_id.get(line.id, line) for line in current.lines if line.id not in removed
+            )
+        stored = tuple(sorted((*stored, *inserted), key=lambda line: line.position))
         self.items[quotation.id] = QuotationDetail(quotation, stored)
         return self.items[quotation.id]
 

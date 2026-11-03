@@ -7,6 +7,7 @@ import pytest
 
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderUnavailable
+from app.modules.quotations.infrastructure import dwh_source
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
 
 
@@ -21,7 +22,16 @@ class FakeConnection:
         self.timeout = timeout
         if self.fail:
             raise DataProviderUnavailable("down")
+        if 'max("fecha_corte")' in query:
+            return [{"f": date(2026, 11, 3)}]
         return self.rows
+
+
+@pytest.fixture(autouse=True)
+def forget_cut_date():
+    dwh_source._CUT_CACHE.clear()
+    yield
+    dwh_source._CUT_CACHE.clear()
 
 
 async def test_last_sales_bound_by_customer_and_window() -> None:
@@ -80,7 +90,11 @@ async def test_costs_fall_back_to_every_warehouse() -> None:
 
     assert costs["2537"].is_global and costs["2537"].cost == Decimal("3500")
     assert not costs["1485"].is_global and costs["1485"].cost == Decimal("2297.85")
-    assert connection.queries[0][1] == (["2537", "1485"], "001")
+    assert costs["2537"].cut_date == date(2026, 11, 3)
+    # The cut date is read once and then bound as a literal, so the SKU index is used.
+    assert connection.queries[1][1] == (["2537", "1485"], "001", date(2026, 11, 3))
+    await source.costs(["2537"], "001")
+    assert sum('max("fecha_corte")' in query for query, _ in connection.queries) == 1
     assert await source.costs([], "001") == {}
 
 

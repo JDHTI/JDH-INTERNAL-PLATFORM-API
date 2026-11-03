@@ -108,6 +108,31 @@ def test_quote_price_generate_and_download(client) -> None:
     assert client.get(f"{BASE}/{quotation['id']}").status_code == 404
 
 
+def test_paste_adds_revalidates_and_reports(client) -> None:
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+
+    pasted = client.post(
+        f"{BASE}/{quotation['id']}/lines",
+        json={"version": 1, "text": "26278\r\n2537\r\n404\r\n26278"},
+    )
+
+    assert pasted.status_code == 200
+    body = pasted.json()
+    assert body["import_result"] == {
+        "added": ["26278"],
+        "revalidated": ["2537"],
+        "not_found": ["404"],
+        "inactive": [],
+        "repeated": 1,
+    }
+    assert [line["origin"] for line in body["lines"]] == ["historico", "agregado"]
+    assert body["lines"][1]["origin_label"] == "Agregado" and body["lines"][1]["last_price"] is None
+    removed = client.delete(f"{BASE}/{quotation['id']}/lines/26278", params={"version": 2})
+    assert removed.status_code == 200 and len(removed.json()["lines"]) == 1
+    nothing = client.post(f"{BASE}/{quotation['id']}/lines", json={"version": 3, "text": "404"})
+    assert nothing.status_code == 422 and "404" in nothing.json()["detail"]
+
+
 def test_errors_are_spanish_and_typed(client, warehouse) -> None:
     assert client.post(BASE, json={"customer_nit": NIT, "window_months": 3}).status_code == 422
     assert client.post(BASE, json={"customer_nit": "111"}).status_code == 404

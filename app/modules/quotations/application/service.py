@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -40,6 +41,89 @@ from app.modules.quotations.domain.ports import (
 
 MAX_PAGE_SIZE = 100
 MAX_PRICE = Decimal(10) ** 15
+# SKUs one paste may carry.
+MAX_PASTED_SKUS = 500
+# Excel columns arrive one per line; lists may use commas, semicolons, tabs or spaces.
+_SEPARATORS = re.compile(r"[\s,;|]+")
+# A number cell copied from Excel may come as ``26278.0``.
+_EXCEL_INTEGER = re.compile(r"^(\d+)\.0+$")
+
+
+def parse_skus(values: Sequence[str]) -> tuple[list[str], int]:
+    """SKUs of a pasted list, in order and without repeats.
+
+    Args:
+        values (Sequence[str]): SKUs or chunks of pasted text.
+
+    Returns:
+        tuple[list[str], int]: The unique SKUs and how many repeats were dropped.
+    """
+
+    tokens: list[str] = []
+    for value in values:
+        for token in _SEPARATORS.split(value or ""):
+            token = token.strip().strip("'\"")
+            if token:
+                match = _EXCEL_INTEGER.match(token)
+                tokens.append(match.group(1) if match else token)
+    unique = list(dict.fromkeys(tokens))
+    return unique, len(tokens) - len(unique)
+
+
+@dataclass(frozen=True)
+class ImportResult:
+    """What a pasted list did: SKUs added, revalidated, unknown, inactive and repeats."""
+
+    added: tuple[str, ...]
+    revalidated: tuple[str, ...]
+    not_found: tuple[str, ...]
+    inactive: tuple[str, ...]
+    repeated: int
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """A SKU to price: its place in the quotation and where its data comes from."""
+
+    sku: str
+    position: int
+    line_id: UUID
+    sale: LastSale | None = None
+    item: ItemInfo | None = None
+
+
+def _entry_of(line: QuotationLine) -> _Entry:
+    """Rebuild a stored line's source, to price it again without asking for its last sale."""
+
+    if line.origin == vocabulary.HISTORY and line.last_price is not None:
+        sale = LastSale(
+            sku=line.sku,
+            sale_date=line.last_sale_date or date.min,
+            document=line.last_document,
+            sale_unit=line.last_sale_unit,
+            quantity=line.last_quantity or Decimal(1),
+            gross_price=line.last_gross_price or line.last_price,
+            net_price=line.last_price,
+            discount_pct=line.last_discount_pct,
+            sales_in_window=line.sales_in_window,
+            description=line.description,
+            unit=line.unit,
+            vat_pct=line.vat_pct,
+            supplier_code=line.supplier_code,
+            pack_factor=line.pack_factor,
+        )
+        return _Entry(line.sku, line.position, line.id, sale=sale)
+    item = ItemInfo(
+        sku=line.sku,
+        description=line.description,
+        unit=line.unit,
+        vat_pct=line.vat_pct,
+        supplier_code=line.supplier_code,
+        pack_factor=line.pack_factor,
+    )
+    return _Entry(line.sku, line.position, line.id, item=item)
+
+
 _LIST_ID = re.compile(r"^[A-Za-z0-9]{1,3}$")
 
 
@@ -175,44 +259,46 @@ class QuotationService:
         return rules.customer_context(nit, branches, shared)
 
     async def _price(
-        self,
-        context: CustomerContext,
-        sales: Sequence[LastSale],
-        added: Mapping[str, ItemInfo],
-        start: int = 1,
+        self, context: CustomerContext, entries: Sequence[_Entry]
     ) -> tuple[list[QuotationLine], date | None]:
-        """Price the SKUs of the sales window and the ones the advisor added, in that order."""
+        """Price SKUs (from the sales window or added) keeping each entry's id and position.
 
-        sold = {sale.sku: sale for sale in sales}
-        skus = [*sold, *(sku for sku in added if sku not in sold)]
-        if not skus:
+        The product copy goes first (it gives the supplier of each SKU); then the warehouse
+        reads and the supports are fetched at the same time.
+        """
+
+        if not entries:
             return [], None
+        skus = [entry.sku for entry in entries]
+        sources = {entry.sku: entry.sale or entry.item for entry in entries}
         products = await self.masters.products(skus)
 
         def supplier_of(sku: str) -> str | None:
             product = products.get(sku)
-            source = sold.get(sku) or added.get(sku)
+            source = sources.get(sku)
             return (product.supplier_code if product else None) or (
                 source.supplier_code if source else None
             )
 
         codes = sorted({code for code in map(supplier_of, skus) if code})
-        costs = await self.warehouse.costs(skus, context.billing_center_code)
-        prices = await self.warehouse.list_prices(context.price_list_id, skus)
-        taxes = await self.warehouse.value_tax_keys(skus)
-        agreements = await self.supports.agreements(codes, skus, [context.nit])
-        scopes = await self.supports.customers([context.nit])
-        names = await self.masters.supplier_names(codes)
+        costs, prices, taxes, agreements, scopes, names = await asyncio.gather(
+            self.warehouse.costs(skus, context.billing_center_code),
+            self.warehouse.list_prices(context.price_list_id, skus),
+            self.warehouse.value_tax_keys(skus),
+            self.supports.agreements(codes, skus, [context.nit]),
+            self.supports.customers([context.nit]),
+            self.masters.supplier_names(codes),
+        )
         today = self.calendar.today()
         lines: list[QuotationLine] = []
-        for position, sku in enumerate(skus, start=start):
-            supplier = supplier_of(sku)
+        for entry in entries:
+            sku, supplier = entry.sku, supplier_of(entry.sku)
             lines.append(
                 rules.build_line(
-                    position,
+                    entry.position,
                     sku,
-                    sold.get(sku),
-                    item=added.get(sku),
+                    entry.sale,
+                    item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
                     scope=scopes.get(context.nit),
@@ -229,7 +315,7 @@ class QuotationService:
                     ],
                     policy=self.policy,
                     day=today,
-                    line_id=uuid4(),
+                    line_id=entry.line_id,
                 )
             )
         cut = max((cost.cut_date for cost in costs.values() if cost.cut_date), default=None)
@@ -249,7 +335,15 @@ class QuotationService:
                 f"el máximo es {self.max_lines}"
             )
         items = await self.warehouse.items(extra) if extra else {}
-        return await self._price(context, sales, items)
+        entries = [
+            _Entry(sale.sku, position, uuid4(), sale=sale)
+            for position, sale in enumerate(sales, start=1)
+        ]
+        entries += [
+            _Entry(sku, len(entries) + offset, uuid4(), item=items[sku])
+            for offset, sku in enumerate((sku for sku in extra if sku in items), start=1)
+        ]
+        return await self._price(context, entries)
 
     @staticmethod
     def _stored_context(quotation: Quotation) -> CustomerContext:
@@ -448,48 +542,73 @@ class QuotationService:
         return await self.repository.save(quotation, lines, version, replace_lines=True)
 
     async def add_lines(
-        self, principal: Principal, quotation_id: UUID, version: int, skus: Sequence[str]
-    ) -> QuotationDetail:
-        """Add SKUs the customer has not bought, to quote them too.
+        self, principal: Principal, quotation_id: UUID, version: int, values: Sequence[str]
+    ) -> tuple[QuotationDetail, ImportResult]:
+        """Add or revalidate the SKUs of a pasted list.
 
-        Each one is priced like the others (cost, target margin, supports, liquor tax) and has
-        no last price. Unknown, inactive or repeated SKUs are refused, and nothing is added.
+        ``values`` may be SKUs or whole pasted text (an Excel column, or SKUs separated by
+        commas, semicolons, tabs or spaces). SKUs already in the quotation are revalidated:
+        cost, target, supports and liquor tax as they are now, keeping their new price. New
+        ones are priced and added at the end (``agregado``). Unknown and inactive SKUs are
+        reported and skipped; the rest still goes in.
 
         Args:
             principal (Principal): The advisor.
             quotation_id (UUID): Quotation.
             version (int): Version the caller read.
-            skus (Sequence[str]): JDH references.
+            values (Sequence[str]): SKUs or pasted text.
 
         Returns:
-            QuotationDetail: The quotation with the new lines at the end, back to draft.
+            tuple[QuotationDetail, ImportResult]: The quotation (back to draft) and what was
+            done with each SKU.
         """
 
         detail = await self.get(principal, quotation_id)
         self._check_version(detail.quotation, version)
-        wanted = list(dict.fromkeys(sku.strip() for sku in skus if sku and sku.strip()))
+        wanted, repeated = parse_skus(values)
         if not wanted:
-            raise InvalidInputError("Indica las referencias a agregar")
-        present = {line.sku for line in detail.lines}
-        repeated = [sku for sku in wanted if sku in present]
-        if repeated:
-            raise InvalidInputError(f"Ya están en la cotización: {', '.join(repeated[:10])}")
-        if len(detail.lines) + len(wanted) > self.max_lines:
+            raise InvalidInputError("Pega o escribe las referencias a agregar")
+        if len(wanted) > MAX_PASTED_SKUS:
+            raise InvalidInputError(f"Se admiten máximo {MAX_PASTED_SKUS} referencias por vez")
+        present = {line.sku: line for line in detail.lines}
+        existing = [sku for sku in wanted if sku in present]
+        new = [sku for sku in wanted if sku not in present]
+        items = await self.warehouse.items(new) if new else {}
+        not_found = [sku for sku in new if sku not in items]
+        inactive = [sku for sku in new if sku in items and not items[sku].is_active]
+        valid = [sku for sku in new if sku in items and items[sku].is_active]
+        if len(detail.lines) + len(valid) > self.max_lines:
             raise InvalidInputError(f"La cotización admite máximo {self.max_lines} referencias")
-        items = await self.warehouse.items(wanted)
-        missing = [sku for sku in wanted if sku not in items]
-        if missing:
-            raise InvalidInputError(f"No existen en el maestro: {', '.join(missing[:10])}")
-        inactive = [sku for sku in wanted if not items[sku].is_active]
-        if inactive:
-            raise InvalidInputError(f"Están inactivas en SIESA: {', '.join(inactive[:10])}")
+        if not existing and not valid:
+            raise InvalidInputError(
+                "Ninguna referencia se pudo agregar"
+                + (f"; no existen: {', '.join(not_found[:10])}" if not_found else "")
+                + (f"; inactivas en SIESA: {', '.join(inactive[:10])}" if inactive else "")
+            )
         start = max((line.position for line in detail.lines), default=0) + 1
-        added, _ = await self._price(
-            self._stored_context(detail.quotation), [], {sku: items[sku] for sku in wanted}, start
-        )
-        lines = [*detail.lines, *added]
+        entries = [_entry_of(present[sku]) for sku in existing] + [
+            _Entry(sku, start + offset, uuid4(), item=items[sku])
+            for offset, sku in enumerate(valid)
+        ]
+        priced, _ = await self._price(self._stored_context(detail.quotation), entries)
+        kept = {sku: present[sku].new_price for sku in existing}
+        by_sku = {line.sku: rules.reprice(line, kept.get(line.sku)) for line in priced}
+        lines = [by_sku.get(line.sku, line) for line in detail.lines]
+        lines += [by_sku[sku] for sku in valid]
         quotation = self._touched(detail.quotation, lines, principal.email)
-        return await self.repository.save(quotation, lines, version, replace_lines=True)
+        saved = await self.repository.save(
+            quotation,
+            [by_sku[sku] for sku in existing],
+            version,
+            inserted=[by_sku[sku] for sku in valid],
+        )
+        return saved, ImportResult(
+            added=tuple(valid),
+            revalidated=tuple(existing),
+            not_found=tuple(not_found),
+            inactive=tuple(inactive),
+            repeated=repeated,
+        )
 
     async def remove_line(
         self, principal: Principal, quotation_id: UUID, version: int, sku: str
@@ -508,7 +627,7 @@ class QuotationService:
             )
         lines = [item for item in detail.lines if item.sku != sku]
         quotation = self._touched(detail.quotation, lines, principal.email)
-        return await self.repository.save(quotation, lines, version, replace_lines=True)
+        return await self.repository.save(quotation, [], version, removed=[line.id])
 
     async def generate(
         self,
@@ -650,9 +769,12 @@ def _price(value: Decimal | None, sku: str) -> Decimal | None:
 
 __all__ = [
     "MAX_PAGE_SIZE",
+    "MAX_PASTED_SKUS",
     "ExportFile",
+    "ImportResult",
     "LineChange",
     "Permissions",
     "QuotationService",
     "normalize_nit",
+    "parse_skus",
 ]

@@ -17,6 +17,7 @@ from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.quotations.application.service import (
     MAX_PAGE_SIZE,
+    MAX_PASTED_SKUS,
     LineChange,
     QuotationService,
 )
@@ -108,8 +109,25 @@ class LinesRequest(BaseModel):
 
 
 class AddLinesRequest(BaseModel):
+    """SKUs to add or revalidate: a list, pasted text, or both."""
+
     version: int = Field(ge=1)
-    skus: list[str] = Field(min_length=1, max_length=200)
+    skus: list[str] = Field(default_factory=list, max_length=MAX_PASTED_SKUS)
+    text: str | None = Field(
+        default=None,
+        max_length=20_000,
+        description="Pasted list: an Excel column or SKUs separated by commas, ; or spaces",
+    )
+
+
+class ImportResultResponse(BaseModel):
+    """What the pasted list did, SKU by SKU."""
+
+    added: list[str]
+    revalidated: list[str]
+    not_found: list[str]
+    inactive: list[str]
+    repeated: int
 
 
 class VersionRequest(BaseModel):
@@ -236,6 +254,8 @@ class QuotationResponse(SummaryResponse):
     generated_by: str | None
     updated_by: str
     lines: list[LineResponse]
+    # Only on POST /{id}/lines: what the pasted list did.
+    import_result: ImportResultResponse | None = None
 
 
 class QuotationPageResponse(BaseModel):
@@ -522,7 +542,9 @@ async def update_lines(
     return _detail(await service.update_lines(principal, quotation_id, body.version, changes))
 
 
-@router.post("/{quotation_id}/lines", response_model=QuotationResponse, summary="Add SKUs to quote")
+@router.post(
+    "/{quotation_id}/lines", response_model=QuotationResponse, summary="Add or revalidate SKUs"
+)
 @inject
 async def add_lines(
     quotation_id: UUID,
@@ -530,10 +552,22 @@ async def add_lines(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Add SKUs the customer has not bought (``origin: agregado``, no last price), priced
-    like the rest. All or nothing: an unknown, inactive or repeated SKU is 422."""
+    """Paste a list of SKUs (an Excel column or separated by commas): the ones already in the
+    quotation are revalidated keeping their new price, the rest are added at the end
+    (``origin: agregado``). Unknown and inactive SKUs are reported in ``import_result`` and
+    skipped; 422 only when none could be used."""
 
-    return _detail(await service.add_lines(principal, quotation_id, body.version, body.skus))
+    values = [*body.skus, *([body.text] if body.text else [])]
+    detail, result = await service.add_lines(principal, quotation_id, body.version, values)
+    response = _detail(detail)
+    response.import_result = ImportResultResponse(
+        added=list(result.added),
+        revalidated=list(result.revalidated),
+        not_found=list(result.not_found),
+        inactive=list(result.inactive),
+        repeated=result.repeated,
+    )
+    return response
 
 
 @router.delete(
