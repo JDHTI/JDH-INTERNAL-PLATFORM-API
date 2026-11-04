@@ -12,12 +12,13 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.feedback import Feedback, FeedbackFile, FeedbackFilters
 
-router = APIRouter(prefix="/pqrsf/feedback")
+router = APIRouter(prefix="/pqrsf/feedback", dependencies=[Depends(require_permission("pqrsf"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.pqrsf_feedback_service])
 _principal = Depends(get_current_principal)
 

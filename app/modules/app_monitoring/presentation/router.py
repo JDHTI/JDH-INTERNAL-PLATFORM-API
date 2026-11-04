@@ -18,12 +18,13 @@ from app.app_container import ApplicationContainer
 from app.modules.app_monitoring.application.board import MonitoringBoardService
 from app.modules.app_monitoring.application.service import MAX_PAGE_SIZE, AppMonitoringService
 from app.modules.app_monitoring.domain.entities import Application, CheckResult, Target
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.dwh_monitoring.presentation.router import CargaResponse, _carga
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 
-router = APIRouter()
-board_router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("monitoreo"))])
+board_router = APIRouter(dependencies=[Depends(require_permission("monitoreo"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.app_monitoring_service])
 _board = Depends(Provide[ApplicationContainer.v1_container.monitoring_board_service])
 _principal = Depends(get_current_principal)

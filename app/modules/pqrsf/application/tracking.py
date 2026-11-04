@@ -156,15 +156,28 @@ class CaseTrackingService:
 
     # --- Access ---
 
-    def _access(self, case: TrackingCase, principal: Principal, is_manager: bool) -> CaseAccess:
+    def _access(
+        self,
+        case: TrackingCase,
+        principal: Principal,
+        is_manager: bool,
+        reads_all: bool = False,
+    ) -> CaseAccess:
         if is_manager:
             return CaseAccess(can_view=True, can_work=True, can_assign=True, can_delete=True)
         if case.assignee_user_id == principal.user_id:
             return CaseAccess(can_view=True, can_work=True, can_assign=False)
-        if principal.user_id in (case.created_by_user_id, case.sales_executive_user_id):
-            # Who filed it and the executive who sold the invoice follow it and comment.
+        if reads_all or principal.user_id in (
+            case.created_by_user_id,
+            case.sales_executive_user_id,
+        ):
+            # Who filed it and the executive who sold the invoice follow it and comment;
+            # read on the module (or a moderator) sees every case without working it.
             return CaseAccess(can_view=True, can_work=False, can_assign=False)
         return CaseAccess(can_view=False, can_work=False, can_assign=False)
+
+    async def _reads_all(self, principal: Principal, is_manager: bool) -> bool:
+        return is_manager or await self.managers.can_read(principal)
 
     async def _load(
         self, case_id: UUID, principal: Principal
@@ -173,7 +186,9 @@ class CaseTrackingService:
         if case is None:
             raise NotFoundError("Caso PQRSF no encontrado")
         is_manager = await self.managers.is_manager(principal)
-        access = self._access(case, principal, is_manager)
+        access = self._access(
+            case, principal, is_manager, await self._reads_all(principal, is_manager)
+        )
         if not access.can_view:
             raise ForbiddenError("Este caso no está asignado a ti")
         return case, access, is_manager
@@ -197,12 +212,13 @@ class CaseTrackingService:
         ids = {c.assignee_user_id for c in cases} | {c.created_by_user_id for c in cases}
         users = await self.people.get_users(i for i in ids if i is not None)
         today = self.calendar.today()
+        reads_all = await self._reads_all(principal, is_manager) if cases else is_manager
         return [
             CaseView(
                 case=case,
                 assignee=users.get(case.assignee_user_id) if case.assignee_user_id else None,
                 created_by=users.get(case.created_by_user_id) if case.created_by_user_id else None,
-                access=self._access(case, principal, is_manager),
+                access=self._access(case, principal, is_manager, reads_all),
                 is_overdue=case.is_overdue(today),
                 overdue_item_ids=frozenset(
                     item.id
@@ -979,7 +995,7 @@ class CaseTrackingService:
         is_manager = await self.managers.is_manager(principal)
         if mine:
             filters = replace(filters, assignee_user_id=principal.user_id, unassigned=False)
-        if not is_manager:
+        if not await self._reads_all(principal, is_manager):
             filters = replace(filters, visible_to=principal.user_id)
         return filters, is_manager
 

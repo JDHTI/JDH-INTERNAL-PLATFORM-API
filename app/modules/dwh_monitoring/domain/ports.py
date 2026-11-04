@@ -59,4 +59,7 @@ class MonitoringAccess(Protocol):
     """Who may read the monitoring screens."""
 
     async def is_manager(self, principal: Any) -> bool:
-        """Whether the caller is a platform administrator or a member of the owning area."""
+        """Whether the caller may manage the module (ask for a load)."""
+
+    async def can_read(self, principal: Any) -> bool:
+        """Whether the caller may read the screens."""

@@ -30,35 +30,47 @@ class AreaRef(Protocol):
 class AreaAccess(Protocol):
     """Answer area access questions without reading the areas module's tables."""
 
-    async def authorize(self, slug: str, principal: Principal) -> AreaRef:
-        """Return the area when the principal may use its space.
+    async def authorize(
+        self, slug: str, principal: Principal, module: str | None = None, action: str = "read"
+    ) -> AreaRef:
+        """Return the area when the principal may use ``module`` of its space.
 
         Args:
             slug (str): Area slug.
             principal (Principal): The caller.
+            module (str | None): Module of the permission catalog.
+            action (str): ``read`` or ``manage``.
 
         Returns:
             AreaRef: The authorized area.
         """
         ...
 
-    async def authorize_by_id(self, area_id: UUID, principal: Principal) -> AreaRef:
-        """Return the area by identifier when the principal may use its space.
+    async def authorize_by_id(
+        self, area_id: UUID, principal: Principal, module: str | None = None, action: str = "read"
+    ) -> AreaRef:
+        """Return the area by identifier when the principal may use ``module`` of it.
 
         Args:
             area_id (UUID): Area identifier.
             principal (Principal): The caller.
+            module (str | None): Module of the permission catalog.
+            action (str): ``read`` or ``manage``.
 
         Returns:
             AreaRef: The authorized area.
         """
         ...
 
-    async def accessible_area_ids(self, principal: Principal) -> list[UUID] | None:
-        """List the areas whose space the principal may use.
+    async def accessible_area_ids(
+        self, principal: Principal, module: str | None = None, action: str = "read"
+    ) -> list[UUID] | None:
+        """List the areas where the principal may use ``module``.
 
         Args:
             principal (Principal): The caller.
+            module (str | None): Module of the permission catalog.
+            action (str): ``read`` or ``manage``.
 
         Returns:
             list[UUID] | None: Area identifiers, or ``None`` meaning every area.

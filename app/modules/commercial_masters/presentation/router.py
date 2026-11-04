@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.commercial_masters.application.service import (
     MAX_PAGE_SIZE,
     CommercialMasterService,
@@ -22,7 +23,15 @@ from app.modules.commercial_masters.infrastructure.margins_file import template_
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(
+            require_permission(
+                "maestros", "apoyos", "casos-especiales", "cotizador", "validador-pedidos"
+            )
+        )
+    ]
+)
 _service = Depends(Provide[ApplicationContainer.v1_container.commercial_master_service])
 _principal = Depends(get_current_principal)
 

@@ -690,6 +690,10 @@ class ManagerPolicy(Protocol):
         """Whether the caller manages PQRSF."""
         ...
 
+    async def can_read(self, principal: Principal) -> bool:
+        """Whether the caller reads every case (read on the module, or a moderator)."""
+        ...
+
 
 class BusinessCalendar(Protocol):
     """Local dates and non-working days used for due dates."""

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
 from app.core.errors import InvalidInputError
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.bulk import SupportBulkService
@@ -25,7 +26,7 @@ from app.modules.supplier_supports.domain import fields
 from app.modules.supplier_supports.domain.bulk import BulkReport
 from app.modules.supplier_supports.infrastructure.bulk_file import template_workbook
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("apoyos"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_bulk_service])
 _principal = Depends(get_current_principal)
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

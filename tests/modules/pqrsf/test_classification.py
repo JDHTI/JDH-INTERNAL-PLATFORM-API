@@ -49,6 +49,9 @@ class FakeManagers:
     async def is_manager(self, principal):
         return self.manager
 
+    async def can_read(self, principal):
+        return self.manager
+
 
 def _service(manager: bool = True) -> ClassificationService:
     return ClassificationService(FakeRequests(), FakeCases(), FakeManagers(manager))

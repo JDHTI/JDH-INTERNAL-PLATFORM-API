@@ -34,6 +34,9 @@ class FakeAccess:
     async def is_manager(self, principal: Principal) -> bool:
         return principal.is_platform_admin or principal.email in self.members
 
+    async def can_read(self, principal: Principal) -> bool:
+        return principal.is_moderator or await self.is_manager(principal)
+
 
 class FakeSource:
     """The warehouse views, as rows keyed by contract column name."""

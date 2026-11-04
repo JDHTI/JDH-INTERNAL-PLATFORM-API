@@ -264,6 +264,7 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_manage": True,
         "can_request": True,
         "can_review": True,
+        "can_read": True,
     }
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
@@ -272,4 +273,5 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_manage": False,
         "can_request": False,
         "can_review": False,
+        "can_read": False,
     }

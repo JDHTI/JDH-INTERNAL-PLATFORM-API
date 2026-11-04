@@ -11,12 +11,15 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.domain.certificates import DeliveryFilters, DocumentDelivery
 
-router = APIRouter(prefix="/pqrsf/document-deliveries")
+router = APIRouter(
+    prefix="/pqrsf/document-deliveries", dependencies=[Depends(require_permission("pqrsf"))]
+)
 _service = Depends(Provide[ApplicationContainer.v1_container.pqrsf_delivery_service])
 _principal = Depends(get_current_principal)
 

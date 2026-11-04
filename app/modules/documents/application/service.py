@@ -1,8 +1,9 @@
 """Document management use cases, segmented by area.
 
 Rules:
-- Every operation first asks the areas module whether the caller may use the
-  area's space (member, responsible or platform administrator).
+- Every operation first asks the areas module for the ``documentos`` module of
+  the area: ``read`` to list, search and download; ``manage`` to create, edit,
+  delete and color tags.
 - PostgreSQL is the index (names, tags, search); object storage keeps the
   bytes under ``areas/{area_id}/{folder_id}/{document_id}.{ext}``.
 - Upload validates extension and size, stores the object, then indexes it; if
@@ -61,6 +62,11 @@ from app.modules.documents.domain.ports import (
 )
 from app.modules.identity.domain.principal import Principal
 
+# Module key of the document manager in the permission catalog, and its two actions.
+MODULE = "documentos"
+READ = "read"
+MANAGE = "manage"
+
 _DUPLICATE_DOCUMENT = "Ya existe un documento con ese nombre en la carpeta"
 _DUPLICATE_FOLDER = "Ya existe una carpeta con ese nombre en el área"
 
@@ -110,12 +116,17 @@ class DocumentService:
             raise NotFoundError("Carpeta no encontrada en esta área")
         return folder
 
-    async def _document(self, document_id: UUID, principal: Principal) -> Document:
+    async def _document(
+        self, document_id: UUID, principal: Principal, action: str = READ
+    ) -> Document:
         document = await self.repository.get_document(document_id)
         if document is None:
             raise NotFoundError("Documento no encontrado")
-        await self.areas.authorize_by_id(document.area_id, principal)
+        await self.areas.authorize_by_id(document.area_id, principal, MODULE, action)
         return document
+
+    async def _area(self, area_slug: str, principal: Principal, action: str = READ):
+        return await self.areas.authorize(area_slug, principal, MODULE, action)
 
     async def _discard_object(self, key: str) -> None:
         try:
@@ -136,7 +147,7 @@ class DocumentService:
             list[FolderView]: Folders ordered by name.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal)
         rows = await self.repository.list_folders(area.id)
         return [FolderView(folder=f, document_count=n) for f, n in rows]
 
@@ -155,7 +166,7 @@ class DocumentService:
             FolderView: The created, empty folder.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         name = clean_text(name, "nombre", 150)
         if await self.repository.folder_name_taken(area.id, name):
             raise ConflictError(_DUPLICATE_FOLDER)
@@ -187,7 +198,7 @@ class DocumentService:
             FolderView: The updated folder.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         folder = await self._folder(area.id, folder_id)
         if "name" in fields and name is not None:
             folder.name = clean_text(name, "nombre", 150)
@@ -211,7 +222,7 @@ class DocumentService:
             None
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         folder = await self._folder(area.id, folder_id)
         if await self.repository.count_folder_documents(folder.id):
             raise ConflictError("La carpeta tiene documentos: elimínalos antes de borrarla")
@@ -232,11 +243,9 @@ class DocumentService:
         """
 
         if query.area_slug:
-            area_ids: list[UUID] | None = [
-                (await self.areas.authorize(query.area_slug, principal)).id
-            ]
+            area_ids: list[UUID] | None = [(await self._area(query.area_slug, principal)).id]
         else:
-            area_ids = await self.areas.accessible_area_ids(principal)
+            area_ids = await self.areas.accessible_area_ids(principal, MODULE)
         page = max(query.page, 1)
         size = min(max(query.size, 1), 100)
         filters = SearchFilters(
@@ -278,7 +287,7 @@ class DocumentService:
             Document: The indexed document.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         folder = await self._folder(area.id, folder_id)
 
         original_filename, extension = split_filename(command.filename)
@@ -341,7 +350,7 @@ class DocumentService:
             Document: The updated document.
         """
 
-        document = await self._document(document_id, principal)
+        document = await self._document(document_id, principal, MANAGE)
         if "name" in command.fields and command.name is not None:
             document.name = clean_text(command.name, "nombre", 255)
             if await self.repository.document_name_taken(
@@ -365,7 +374,7 @@ class DocumentService:
             None
         """
 
-        document = await self._document(document_id, principal)
+        document = await self._document(document_id, principal, MANAGE)
         try:
             await self.storage.delete_object(document.storage_key)
         except Exception as exc:
@@ -407,7 +416,7 @@ class DocumentService:
             list[TagColor]: Colors ordered by tag; tags without one are absent.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal)
         return await self.repository.list_tag_colors(area.id)
 
     async def set_tag_color(
@@ -425,7 +434,7 @@ class DocumentService:
             TagColor: The stored color.
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         return await self.repository.save_tag_color(
             area.id, normalize_tag(tag), normalize_color(color), principal.email
         )
@@ -442,5 +451,5 @@ class DocumentService:
             None
         """
 
-        area = await self.areas.authorize(area_slug, principal)
+        area = await self._area(area_slug, principal, MANAGE)
         await self.repository.delete_tag_color(area.id, normalize_tag(tag))

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.special_cases import (
@@ -19,7 +20,7 @@ from app.modules.supplier_supports.application.special_cases import (
 )
 from app.modules.supplier_supports.domain.special_cases import SpecialCaseData, SpecialCaseView
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("casos-especiales", "apoyos"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.special_case_service])
 _principal = Depends(get_current_principal)
 
