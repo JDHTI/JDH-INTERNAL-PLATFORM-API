@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
+
+from app.core.errors import InvalidInputError
 
 
 class Visibility(StrEnum):
@@ -103,6 +105,10 @@ class Employee:
     synced_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Contact data the person keeps (completar perfil, /perfil/contacto).
+    mobile_phone: str | None = None
+    landline_phone: str | None = None
+    show_mobile_in_directory: bool = False
 
     @property
     def is_synced(self) -> bool:
@@ -219,6 +225,74 @@ class SyncRun:
     error_code: str | None = None
     error_message: str | None = None
     triggered_by: str | None = None
+
+
+WEEKDAYS = ("LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "DOMINGO")
+MAX_SLOTS = 42
+# What completar perfil still asks for.
+PENDING_SITE = "sede"
+PENDING_CONTACT = "contacto"
+
+
+@dataclass(frozen=True)
+class ScheduleSlot:
+    """One contact window of a person: a weekday and a time range."""
+
+    day: str
+    start: time
+    end: time
+
+
+def validate_schedule(slots: list[ScheduleSlot]) -> list[ScheduleSlot]:
+    """Check a weekly contact schedule and return it ordered.
+
+    Args:
+        slots (list[ScheduleSlot]): The windows.
+
+    Returns:
+        list[ScheduleSlot]: By weekday, then start time.
+
+    Raises:
+        InvalidInputError: Unknown day, a window that ends before it starts, windows that
+            overlap on the same day, or too many windows.
+    """
+
+    if len(slots) > MAX_SLOTS:
+        raise InvalidInputError(f"El horario admite máximo {MAX_SLOTS} franjas")
+    for slot in slots:
+        if slot.day not in WEEKDAYS:
+            raise InvalidInputError(f"Día no válido: {slot.day}")
+        if slot.end <= slot.start:
+            raise InvalidInputError("Cada franja debe terminar después de empezar")
+    ordered = sorted(slots, key=lambda s: (WEEKDAYS.index(s.day), s.start))
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        if previous.day == current.day and current.start < previous.end:
+            raise InvalidInputError(f"Las franjas del {current.day.lower()} se cruzan")
+    return ordered
+
+
+def clean_phone(value: str | None, field: str) -> str | None:
+    """A phone number as typed, or ``None`` when blank.
+
+    Args:
+        value (str | None): What the person typed.
+        field (str): Field name for the error.
+
+    Returns:
+        str | None: Digits, spaces, ``+``, ``-``, ``(`` and ``)`` kept; at most 30.
+
+    Raises:
+        InvalidInputError: When it has other characters, or too few digits.
+    """
+
+    text = " ".join((value or "").split())
+    if not text:
+        return None
+    if len(text) > 30 or any(char not in "0123456789 +-()" for char in text):
+        raise InvalidInputError(f"El {field} solo admite números, espacios, +, - y paréntesis")
+    if sum(char.isdigit() for char in text) < 7:
+        raise InvalidInputError(f"El {field} debe tener al menos 7 dígitos")
+    return text
 
 
 def is_public(is_active: bool, visibility: Visibility | str, auto_visible: bool) -> bool:

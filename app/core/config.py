@@ -5,6 +5,7 @@ from datetime import UTC, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, computed_field, model_validator
@@ -264,6 +265,17 @@ class Settings(BaseSettings):
     APP_MONITORING_ENABLED: bool = False
     APP_MONITORING_INTERVAL_SECONDS: int = 60
     APP_MONITORING_RETENTION_DAYS: int = 30
+
+    # Notifications of the general view (the bell): Strapi ingests each publication with
+    # this shared secret (empty = ingestion off); a loop sends the scheduled ones.
+    NOTIFICATIONS_INGEST_SECRET: SecretStr = SecretStr("")
+    NOTIFICATIONS_DISPATCH_ENABLED: bool = False
+    NOTIFICATIONS_DISPATCH_INTERVAL_SECONDS: int = 60
+    NOTIFICATIONS_TIMEZONE: str = "America/Bogota"
+    # Web Push (VAPID). Off while any of the three is empty.
+    PUSH_VAPID_PUBLIC_KEY: str = ""
+    PUSH_VAPID_PRIVATE_KEY: SecretStr = SecretStr("")
+    PUSH_VAPID_SUBJECT: str = ""
 
     # Areas where the project manager is switched on (comma-separated slugs).
     PROJECTS_AREA_SLUGS: str = "ti"
@@ -546,6 +558,12 @@ class Settings(BaseSettings):
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
             },
+            "notifications": {
+                "timezone": self.NOTIFICATIONS_TIMEZONE,
+                "vapid_public_key": self.PUSH_VAPID_PUBLIC_KEY,
+                "vapid_private_key": self.PUSH_VAPID_PRIVATE_KEY.get_secret_value(),
+                "vapid_subject": self.PUSH_VAPID_SUBJECT,
+            },
             "directory": {
                 "tenant_id": self.DIRECTORY_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,
                 "client_id": self.DIRECTORY_GRAPH_CLIENT_ID,
@@ -630,6 +648,22 @@ class Settings(BaseSettings):
             for address in self.RATE_LIMIT_TRUSTED_PROXY_IPS.split(",")
             if address.strip()
         )
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """The trusted proxies as networks: an address is a /32 (or /128), a CIDR a network.
+
+        On intranet.jdh.local it is the subnet of the edge Docker network, so Caddy and the
+        UI's server rendering both forward the browser's address.
+        """
+
+        networks = []
+        for entry in self.trusted_proxy_ips:
+            try:
+                networks.append(ip_network(entry, strict=False))
+            except ValueError:
+                continue
+        return tuple(networks)
 
 
 def _split_lower(value: str) -> list[str]:
