@@ -5,6 +5,7 @@ from datetime import UTC, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, computed_field, model_validator
@@ -630,6 +631,22 @@ class Settings(BaseSettings):
             for address in self.RATE_LIMIT_TRUSTED_PROXY_IPS.split(",")
             if address.strip()
         )
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """The trusted proxies as networks: an address is a /32 (or /128), a CIDR a network.
+
+        On intranet.jdh.local it is the subnet of the edge Docker network, so Caddy and the
+        UI's server rendering both forward the browser's address.
+        """
+
+        networks = []
+        for entry in self.trusted_proxy_ips:
+            try:
+                networks.append(ip_network(entry, strict=False))
+            except ValueError:
+                continue
+        return tuple(networks)
 
 
 def _split_lower(value: str) -> list[str]:

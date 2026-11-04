@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any
 
 from sqlalchemy import (
@@ -15,6 +15,8 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    Time,
+    UniqueConstraint,
     func,
     text,
 )
@@ -23,7 +25,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database import Base
 
-__all__ = ["DirectoryEmployeeModel", "DirectorySiteModel", "DirectorySyncRunModel"]
+__all__ = [
+    "DirectoryContactScheduleModel",
+    "DirectoryEmployeeModel",
+    "DirectorySiteModel",
+    "DirectorySyncRunModel",
+]
 
 _TZ = DateTime(timezone=True)
 
@@ -96,6 +103,11 @@ class DirectoryEmployeeModel(Base):
     photo_etag: Mapped[str | None] = mapped_column(String(200))
     photo_content_type: Mapped[str | None] = mapped_column(String(100))
     photo_updated_at: Mapped[datetime | None] = mapped_column(_TZ)
+    mobile_phone: Mapped[str | None] = mapped_column(String(30))
+    landline_phone: Mapped[str | None] = mapped_column(String(30))
+    show_mobile_in_directory: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     search_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     synced_at: Mapped[datetime | None] = mapped_column(_TZ)
     created_at: Mapped[datetime] = mapped_column(_TZ, nullable=False, server_default=func.now())
@@ -107,6 +119,33 @@ class DirectoryEmployeeModel(Base):
     manager: Mapped[DirectoryEmployeeModel | None] = relationship(
         remote_side=[id], lazy="raise", foreign_keys=[manager_id]
     )
+
+
+class DirectoryContactScheduleModel(Base):
+    """One contact window of a person (weekday and time range)."""
+
+    __tablename__ = "directory_contact_schedules"
+    __table_args__ = (
+        UniqueConstraint(
+            "employee_id", "day", "start_time", name="uq_directory_contact_schedules_slot"
+        ),
+        CheckConstraint(
+            "day IN ('LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO', 'DOMINGO')",
+            name="ck_directory_contact_schedules_day",
+        ),
+        CheckConstraint("end_time > start_time", name="ck_directory_contact_schedules_range"),
+        Index("ix_directory_contact_schedules_employee_id", "employee_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("directory_employees.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    day: Mapped[str] = mapped_column(String(10), nullable=False)
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
 
 
 class DirectorySyncRunModel(Base):

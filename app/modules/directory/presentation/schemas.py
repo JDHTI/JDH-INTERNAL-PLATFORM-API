@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.modules.directory.application.service import SyncStatus
-from app.modules.directory.domain.entities import Employee, Site, SyncRun
+from app.modules.directory.domain.entities import Employee, ScheduleSlot, Site, SyncRun
 
 VisibilityValue = Literal["auto", "shown", "hidden"]
 
@@ -45,8 +45,9 @@ class EmployeeSummary(BaseModel):
 
 
 class BirthdaySummary(EmployeeSummary):
-    """An employee in the birthdays of a month (the year of birth is not shown)."""
+    """An employee among the birthdays (the year of birth is not shown)."""
 
+    birth_month: int
     birth_day: int
 
 
@@ -64,6 +65,9 @@ class EmployeeDetail(EmployeeSummary):
     birth_month: int | None
     birth_day: int | None
     manager: EmployeeRefResponse | None
+    landline_phone: str | None
+    # Only when the person chose to show it in the directory.
+    mobile_phone: str | None
 
 
 class AdminEmployee(EmployeeDetail):
@@ -144,10 +148,63 @@ class PageResponse[T](BaseModel):
 
 
 class BirthdaysResponse(BaseModel):
-    """Employees born in a month, by day."""
+    """Employees with a birth date, by month and day; ``month`` is null for the whole year."""
 
-    month: int
+    month: int | None
     items: list[BirthdaySummary]
+
+
+Weekday = Literal["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "DOMINGO"]
+
+
+class ScheduleSlotModel(BaseModel):
+    """One contact window: weekday and ``HH:MM`` range."""
+
+    dia: Weekday
+    inicio: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    fin: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+class ScheduleModel(BaseModel):
+    """The weekly contact schedule (the intranet's contract)."""
+
+    franjas: list[ScheduleSlotModel] = Field(max_length=42)
+
+
+class SiteOption(BaseModel):
+    id: UUID
+    nombre: str
+
+
+class OnboardingResponse(BaseModel):
+    """What completar perfil still asks, prefilled (the intranet's contract, camelCase)."""
+
+    pendientes: list[Literal["sede", "contacto"]]
+    siteId: UUID | None  # noqa: N815 - the intranet's field names
+    mobilePhone: str  # noqa: N815
+    landlinePhone: str  # noqa: N815
+    showInDirectory: bool  # noqa: N815
+    sedes: list[SiteOption]
+
+
+class OnboardingRequest(BaseModel):
+    """Only the fields sent change."""
+
+    siteId: UUID | None = None  # noqa: N815
+    mobilePhone: str | None = Field(None, max_length=30)  # noqa: N815
+    landlinePhone: str | None = Field(None, max_length=30)  # noqa: N815
+    showInDirectory: bool | None = None  # noqa: N815
+
+    def as_changes(self) -> dict[str, Any]:
+        """Sent fields by employee attribute."""
+
+        names = {
+            "siteId": "site_id",
+            "mobilePhone": "mobile_phone",
+            "landlinePhone": "landline_phone",
+            "showInDirectory": "show_mobile_in_directory",
+        }
+        return {names[key]: value for key, value in self.model_dump(exclude_unset=True).items()}
 
 
 class EmployeeChanges(BaseModel):
@@ -239,6 +296,32 @@ def detail(employee: Employee) -> dict[str, Any]:
             if manager
             else None
         ),
+        "landline_phone": employee.landline_phone,
+        "mobile_phone": employee.mobile_phone if employee.show_mobile_in_directory else None,
+    }
+
+
+def schedule(slots: list[ScheduleSlot]) -> dict[str, Any]:
+    """The contact schedule in the intranet's shape."""
+
+    return {
+        "franjas": [
+            {"dia": s.day, "inicio": s.start.strftime("%H:%M"), "fin": s.end.strftime("%H:%M")}
+            for s in slots
+        ]
+    }
+
+
+def onboarding(employee: Employee, pending: list[str], sites: list[Site]) -> dict[str, Any]:
+    """Completar perfil's prefill."""
+
+    return {
+        "pendientes": pending,
+        "siteId": employee.site.id if employee.site else None,
+        "mobilePhone": employee.mobile_phone or "",
+        "landlinePhone": employee.landline_phone or "",
+        "showInDirectory": employee.show_mobile_in_directory,
+        "sedes": [{"id": s.id, "nombre": s.name} for s in sites],
     }
 
 

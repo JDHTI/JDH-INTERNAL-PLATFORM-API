@@ -12,14 +12,19 @@ from zoneinfo import ZoneInfo
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.directory.application.schedule import next_run_at
 from app.modules.directory.domain.entities import (
+    PENDING_CONTACT,
+    PENDING_SITE,
     PHOTO_SIZES,
     SYNCED_FIELDS,
     Employee,
     RunStatus,
     RunTrigger,
+    ScheduleSlot,
     Site,
     SyncRun,
     Visibility,
+    clean_phone,
+    validate_schedule,
 )
 from app.modules.directory.domain.ports import DirectoryRepository, PhotoStorage, SyncRunRepository
 from app.modules.directory.domain.search import search_terms
@@ -186,20 +191,118 @@ class DirectoryService:
             )
         return employee
 
-    async def birthdays(self, month: int | None = None) -> tuple[int, list[Employee]]:
-        """Public employees born in a month, by day.
+    async def birthdays(self, month: int | None = None) -> tuple[int | None, list[Employee]]:
+        """Public employees with a birth date, by month and day.
 
         Args:
-            month (int | None): 1 to 12; the current month when ``None``.
+            month (int | None): 1 to 12; ``None`` is the whole year in one answer.
 
         Returns:
-            tuple[int, list[Employee]]: The month and its employees.
+            tuple[int | None, list[Employee]]: The month asked and its employees.
         """
 
-        month = month or self.today().month
-        if not 1 <= month <= 12:
+        if month is not None and not 1 <= month <= 12:
             raise InvalidInputError("El mes debe estar entre 1 y 12")
         return month, await self.repository.birthdays(month)
+
+    # ------------------------------------------------------------- my profile
+
+    async def onboarding(self, principal: Principal) -> tuple[Employee, list[str], list[Site]]:
+        """What completar perfil still asks the caller, and the sites to choose from.
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            tuple[Employee, list[str], list[Site]]: Their employee, the pending sections
+                (``sede`` without a site, ``contacto`` without a mobile) and active sites.
+        """
+
+        employee = await self.my_employee(principal)
+        return employee, _pending(employee), await self.repository.list_sites(False)
+
+    async def save_onboarding(
+        self, principal: Principal, fields: dict[str, Any]
+    ) -> tuple[Employee, list[str], list[Site]]:
+        """Save the caller's site and contact data.
+
+        Args:
+            principal (Principal): The caller.
+            fields (dict[str, Any]): ``site_id``, ``mobile_phone``, ``landline_phone``,
+                ``show_mobile_in_directory``; only those sent change.
+
+        Returns:
+            tuple[Employee, list[str], list[Site]]: As ``onboarding`` after saving.
+
+        Raises:
+            InvalidInputError: Nothing sent, an unknown or inactive site, a bad phone.
+        """
+
+        employee = await self.my_employee(principal)
+        changes: dict[str, Any] = {}
+        if "site_id" in fields:
+            site = await self.repository.get_site(fields["site_id"]) if fields["site_id"] else None
+            if site is None or not site.is_active:
+                raise InvalidInputError("La sede no existe o no está activa")
+            changes["site_id"] = site.id
+        for name, label in (("mobile_phone", "celular"), ("landline_phone", "teléfono fijo")):
+            if name in fields:
+                changes[name] = clean_phone(fields[name], label)
+        if "show_mobile_in_directory" in fields:
+            changes["show_mobile_in_directory"] = bool(fields["show_mobile_in_directory"])
+        if not changes:
+            raise InvalidInputError("No hay datos para guardar")
+        await self.repository.update_employee(employee.id, changes)
+        return await self.onboarding(principal)
+
+    async def my_schedule(self, principal: Principal) -> list[ScheduleSlot]:
+        """The caller's contact windows.
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            list[ScheduleSlot]: By weekday and start.
+        """
+
+        employee = await self.my_employee(principal)
+        return validate_schedule(await self.repository.get_schedule(employee.id))
+
+    async def set_my_schedule(
+        self, principal: Principal, slots: list[ScheduleSlot]
+    ) -> list[ScheduleSlot]:
+        """Replace the caller's contact windows.
+
+        Args:
+            principal (Principal): The caller.
+            slots (list[ScheduleSlot]): The new windows; an empty list clears them.
+
+        Returns:
+            list[ScheduleSlot]: The saved windows, ordered.
+
+        Raises:
+            InvalidInputError: Unknown day, a window that ends before it starts or that
+                overlaps another of the same day.
+        """
+
+        employee = await self.my_employee(principal)
+        ordered = validate_schedule(slots)
+        await self.repository.replace_schedule(employee.id, ordered)
+        return ordered
+
+    async def schedule(self, employee_id: UUID, *, admin: bool = False) -> list[ScheduleSlot]:
+        """The contact windows of an employee of the public directory.
+
+        Args:
+            employee_id (UUID): The employee.
+            admin (bool): Whether the caller is an administrator.
+
+        Returns:
+            list[ScheduleSlot]: By weekday and start.
+        """
+
+        employee = await self.get_employee(employee_id, admin=admin)
+        return validate_schedule(await self.repository.get_schedule(employee.id))
 
     async def new_hires(self, limit: int = 6) -> list[Employee]:
         """Newest public employees by hire date, up to today.
@@ -474,6 +577,15 @@ class DirectoryService:
         if birth_date is not None and birth_date >= self.today():
             raise InvalidInputError("La fecha de nacimiento debe ser anterior a hoy")
         return changes
+
+
+def _pending(employee: Employee) -> list[str]:
+    pending = []
+    if employee.site is None:
+        pending.append(PENDING_SITE)
+    if not employee.mobile_phone:
+        pending.append(PENDING_CONTACT)
+    return pending
 
 
 def _check_page(page: int, size: int) -> None:

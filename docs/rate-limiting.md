@@ -142,8 +142,13 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/directory/employees` | `read` |  |
 | `GET` | `/v1/directory/employees/birthdays` | `read` |  |
 | `GET` | `/v1/directory/employees/me` | `read` |  |
+| `GET` | `/v1/directory/employees/me/contact-schedule` | `read` |  |
+| `PUT` | `/v1/directory/employees/me/contact-schedule` | `relaxed` |  |
+| `GET` | `/v1/directory/employees/me/onboarding` | `read` |  |
+| `POST` | `/v1/directory/employees/me/onboarding` | `relaxed` |  |
 | `GET` | `/v1/directory/employees/new-hires` | `read` |  |
 | `GET` | `/v1/directory/employees/{employee_id}` | `read` |  |
+| `GET` | `/v1/directory/employees/{employee_id}/contact-schedule` | `read` |  |
 | `GET` | `/v1/directory/employees/{employee_id}/photo` | `read` |  |
 | `GET` | `/v1/directory/employees/{employee_id}/team` | `read` |  |
 | `GET` | `/v1/directory/sites` | `read` |  |

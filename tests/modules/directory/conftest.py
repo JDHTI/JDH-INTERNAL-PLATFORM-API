@@ -99,6 +99,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.employees: dict[uuid.UUID, Employee] = {}
         self.sites: dict[uuid.UUID, Site] = {}
+        self.schedules: dict[uuid.UUID, list] = {}
 
     def add_site(self, name, address=None, is_active=True) -> Site:
         site = Site(uuid.uuid4(), name, address, is_active, NOW, NOW)
@@ -162,9 +163,15 @@ class FakeRepository:
         rows = [
             e
             for e in self.employees.values()
-            if e.is_public and e.birth_date and e.birth_date.month == month
+            if e.is_public and e.birth_date and (month is None or e.birth_date.month == month)
         ]
-        return sorted(rows, key=lambda e: (e.birth_date.day, e.full_name))
+        return sorted(rows, key=lambda e: (e.birth_date.month, e.birth_date.day, e.full_name))
+
+    async def get_schedule(self, employee_id):
+        return list(self.schedules.get(employee_id, []))
+
+    async def replace_schedule(self, employee_id, slots):
+        self.schedules[employee_id] = list(slots)
 
     async def new_hires(self, today, limit):
         rows = [

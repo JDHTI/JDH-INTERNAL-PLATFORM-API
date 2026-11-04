@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -11,16 +12,34 @@ from redis.exceptions import RedisError
 from app.core.errors import DependencyUnavailableError
 
 
+def _trusted(address: str, networks) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in networks)
+
+
 def client_ip(request: Request) -> str:
-    """Resolve the client address without trusting arbitrary forwarded headers."""
+    """Resolve the client address without trusting arbitrary forwarded headers.
+
+    ``X-Forwarded-For`` counts only when the peer is a trusted proxy (an address or a
+    network of ``RATE_LIMIT_TRUSTED_PROXY_IPS``: Caddy, or the UI rendering a page). The
+    chain is read from the right, skipping trusted hops, so a client cannot pick its own
+    address by sending the header itself.
+    """
 
     settings = request.app.state.settings
     peer = request.client.host if request.client else "unknown"
-    if peer in settings.trusted_proxy_ips:
-        forwarded = request.headers.get("X-Forwarded-For", "")
-        if forwarded:
-            return forwarded.split(",", 1)[0].strip() or peer
-    return peer
+    networks = settings.trusted_proxy_networks
+    if not _trusted(peer, networks):
+        return peer
+    hops = [hop.strip() for hop in request.headers.get("X-Forwarded-For", "").split(",")]
+    hops = [hop for hop in hops if hop]
+    for hop in reversed(hops):
+        if not _trusted(hop, networks):
+            return hop
+    return hops[0] if hops else peer
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time
 from typing import Any
 from uuid import UUID
 
@@ -10,15 +11,21 @@ from fastapi import APIRouter, Depends, Header, Query, Response, status
 
 from app.app_container import ApplicationContainer
 from app.modules.directory.application.service import MAX_PAGE_SIZE, DirectoryService
+from app.modules.directory.domain.entities import ScheduleSlot
 from app.modules.directory.presentation.schemas import (
     BirthdaysResponse,
     EmployeeDetail,
     EmployeeSummary,
     ItemsResponse,
     NewHireSummary,
+    OnboardingRequest,
+    OnboardingResponse,
     PageResponse,
+    ScheduleModel,
     SiteResponse,
     detail,
+    onboarding,
+    schedule,
     site,
     summary,
 )
@@ -61,6 +68,54 @@ async def my_employee(
     return detail(await service.my_employee(principal))
 
 
+@router.get("/employees/me/onboarding", response_model=OnboardingResponse)
+@inject
+async def get_onboarding(
+    principal: Principal = _principal, service: DirectoryService = _service
+) -> dict[str, Any]:
+    """Qué le falta a quien llama (sede, contacto) y las sedes para elegir."""
+
+    return onboarding(*await service.onboarding(principal))
+
+
+@router.post("/employees/me/onboarding", response_model=OnboardingResponse)
+@inject
+async def save_onboarding(
+    body: OnboardingRequest,
+    principal: Principal = _principal,
+    service: DirectoryService = _service,
+) -> dict[str, Any]:
+    """Guarda sede y contacto propios; solo cambia lo enviado."""
+
+    return onboarding(*await service.save_onboarding(principal, body.as_changes()))
+
+
+@router.get("/employees/me/contact-schedule", response_model=ScheduleModel)
+@inject
+async def get_my_schedule(
+    principal: Principal = _principal, service: DirectoryService = _service
+) -> dict[str, Any]:
+    """Horario de contacto propio (vacío si aún no lo define)."""
+
+    return schedule(await service.my_schedule(principal))
+
+
+@router.put("/employees/me/contact-schedule", response_model=ScheduleModel)
+@inject
+async def set_my_schedule(
+    body: ScheduleModel,
+    principal: Principal = _principal,
+    service: DirectoryService = _service,
+) -> dict[str, Any]:
+    """Reemplaza el horario propio; 422 si una franja se cruza o termina antes de empezar."""
+
+    slots = [
+        ScheduleSlot(slot.dia, time.fromisoformat(slot.inicio), time.fromisoformat(slot.fin))
+        for slot in body.franjas
+    ]
+    return schedule(await service.set_my_schedule(principal, slots))
+
+
 @router.get("/employees/birthdays", response_model=BirthdaysResponse)
 @inject
 async def birthdays(
@@ -68,12 +123,19 @@ async def birthdays(
     _: Principal = _principal,
     service: DirectoryService = _service,
 ) -> dict[str, Any]:
-    """Cumpleaños del mes (el actual por defecto), por día."""
+    """Cumpleaños por mes y día; sin ``month``, el año completo en una sola respuesta."""
 
     chosen, items = await service.birthdays(month)
     return {
         "month": chosen,
-        "items": [{**summary(item), "birth_day": item.birth_date.day} for item in items],
+        "items": [
+            {
+                **summary(item),
+                "birth_month": item.birth_date.month,
+                "birth_day": item.birth_date.day,
+            }
+            for item in items
+        ],
     }
 
 
@@ -113,6 +175,18 @@ async def team(
     """Compañeros del mismo departamento."""
 
     return {"items": [summary(item) for item in await service.team(employee_id, limit)]}
+
+
+@router.get("/employees/{employee_id}/contact-schedule", response_model=ScheduleModel)
+@inject
+async def employee_schedule(
+    employee_id: UUID,
+    principal: Principal = _principal,
+    service: DirectoryService = _service,
+) -> dict[str, Any]:
+    """Horario de contacto de un empleado del directorio público."""
+
+    return schedule(await service.schedule(employee_id, admin=principal.is_platform_admin))
 
 
 @router.get(
