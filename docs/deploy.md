@@ -28,9 +28,13 @@ Todo lo que no es código vive en `~/apps/platform/api.env` (`chmod 600`, no ver
 La plantilla es `deploy/api.env.example`. Lo mínimo es:
 
 - **Dependencias.** Contraseñas de Postgres, Redis y MinIO.
-- **SSO.** El registro de la plataforma en `ENTRA_*`. El redirect URI
-  `https://intranet.jdh.local/api/v1/auth/callback` debe estar registrado como **Web** en ese
-  registro de Entra, y el API debe exponer el scope `access_as_user`.
+- **SSO.** El registro de la intranet (`404211b8-…`) en `ENTRA_*`, el mismo del directorio. Ya
+  tiene registrado como **Web** el redirect URI `https://intranet.jdh.local/api/v1/auth/callback`.
+  - No expone un API propio. Por eso `ENTRA_API_SCOPE` va vacío: la sesión es el ID token, cuya
+    audiencia es el client id, y el inicio de sesión pide `User.Read` para leer `/me`, como hacía
+    Better Auth.
+  - Si algún día el registro expone `access_as_user`, se ponen `ENTRA_API_AUDIENCE` y
+    `ENTRA_API_SCOPE` y la sesión pasa a ser el token del API.
 - **Origen y cookies.** `AUTH_COOKIE_SECURE=true` y `CORS_ORIGINS=https://intranet.jdh.local`.
 - **Directorio.** El registro de la intranet en `DIRECTORY_GRAPH_*`, que tiene `User.Read.All`.
 - **DWH.** `DWH_*` para maestros, cotizador y validador.

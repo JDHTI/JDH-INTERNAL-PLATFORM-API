@@ -32,11 +32,54 @@ class EntraTokenExpired(EntraTokenError):
 
 @dataclass(frozen=True, slots=True)
 class TokenSet:
-    """Tokens returned by the authorization-code or refresh-token flow."""
+    """Tokens returned by the authorization-code or refresh-token flow.
+
+    ``access_token`` is the session token kept in the cookie: the API access token, or
+    the ID token when the app registration exposes no API scope. ``graph_token`` is the
+    Microsoft Graph token of the ID-token mode (``User.Read``), used once to read the profile.
+    """
 
     access_token: str
     refresh_token: str | None
     expires_in: int
+    graph_token: str | None = None
+
+
+GRAPH_SCOPES = "openid profile email offline_access User.Read"
+
+
+def session_tokens(payload: dict[str, Any], id_token_session: bool) -> TokenSet:
+    """Pick the session token out of an Entra token response.
+
+    Args:
+        payload (dict[str, Any]): JSON of the token endpoint.
+        id_token_session (bool): Whether the ID token is the session token.
+
+    Returns:
+        TokenSet: The tokens.
+
+    Raises:
+        EntraTokenError: When the token the session needs is missing.
+    """
+
+    if id_token_session:
+        session = payload.get("id_token")
+        if not session:
+            raise EntraTokenError("Entra did not return an ID token")
+        return TokenSet(
+            access_token=session,
+            refresh_token=payload.get("refresh_token"),
+            expires_in=max(1, int(payload.get("expires_in", 3600))),
+            graph_token=payload.get("access_token"),
+        )
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise EntraTokenError("Entra did not return an access token")
+    return TokenSet(
+        access_token=access_token,
+        refresh_token=payload.get("refresh_token"),
+        expires_in=max(1, int(payload.get("expires_in", 3600))),
+    )
 
 
 class EntraClient:
@@ -80,16 +123,30 @@ class EntraClient:
             )
 
     @property
+    def id_token_session(self) -> bool:
+        """Whether the session is the ID token (no API scope exposed by the registration)."""
+
+        return not self.api_scope
+
+    @property
     def api_scope_value(self) -> str:
         """Return the configured API audience and delegated scope pair."""
 
         return f"{self.audience.rstrip('/')}/{self.api_scope}"
 
+    @property
+    def scopes(self) -> str:
+        """Scopes asked at sign-in and on every refresh."""
+
+        if self.id_token_session:
+            return GRAPH_SCOPES
+        return f"{self.api_scope_value} openid profile email offline_access"
+
     def authorization_url(self, state: str, code_challenge: str) -> str:
         """Build the authorization-code URL used by the browser SSO redirect."""
 
         self.ensure_configured()
-        scope = f"openid profile email offline_access {self.api_scope_value}"
+        scope = self.scopes
         query = urlencode(
             {
                 "client_id": self.client_id,
@@ -114,7 +171,7 @@ class EntraClient:
             "code": code,
             "redirect_uri": self.redirect_uri,
             "code_verifier": code_verifier,
-            "scope": f"{self.api_scope_value} openid profile email offline_access",
+            "scope": self.scopes,
         }
         if self.client_secret:
             data["client_secret"] = self.client_secret
@@ -128,7 +185,7 @@ class EntraClient:
             "client_id": self.client_id,
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "scope": f"{self.api_scope_value} openid profile email offline_access",
+            "scope": self.scopes,
         }
         if self.client_secret:
             data["client_secret"] = self.client_secret
@@ -143,15 +200,7 @@ class EntraClient:
             raise EntraError("Entra token endpoint is unavailable") from exc
         if response.status_code >= 400:
             raise EntraTokenError("Entra rejected the token exchange")
-        payload = response.json()
-        access_token = payload.get("access_token")
-        if not access_token:
-            raise EntraTokenError("Entra did not return an access token")
-        return TokenSet(
-            access_token=access_token,
-            refresh_token=payload.get("refresh_token"),
-            expires_in=max(1, int(payload.get("expires_in", 3600))),
-        )
+        return session_tokens(response.json(), self.id_token_session)
 
     async def _get_jwks(self) -> dict[str, Any]:
         if self._jwks is not None and self._jwks_expires_at > time.monotonic():
@@ -222,15 +271,28 @@ class EntraClient:
             access_token=token,
         )
 
-    async def profile(self, identity: IdentityToken) -> EntraProfile:
-        """Read profile and optional photo through Graph using delegated OBO."""
+    async def profile(
+        self, identity: IdentityToken, graph_token: str | None = None
+    ) -> EntraProfile:
+        """Read profile and optional photo through Graph.
+
+        Args:
+            identity (IdentityToken): The validated session token.
+            graph_token (str | None): Graph token of the sign-in (ID-token mode); without
+                it the API access token is exchanged on behalf of the user. In ID-token
+                mode without it, the token claims are the profile.
+
+        Returns:
+            EntraProfile: Name, email, job title and photo.
+        """
 
         name = identity.name or identity.email or identity.object_id
         email = identity.email
         job_title: str | None = None
         photo: bytes | None = None
         photo_content_type: str | None = None
-        graph_token = await self._on_behalf_of(identity.access_token)
+        if graph_token is None and not self.id_token_session:
+            graph_token = await self._on_behalf_of(identity.access_token)
         if graph_token:
             headers = {"Authorization": f"Bearer {graph_token}"}
             try:
