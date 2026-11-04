@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.pqrsf.application.comments import UploadedFile
@@ -24,6 +25,7 @@ from app.modules.pqrsf.presentation.tracking_router import (
 )
 
 router = APIRouter(prefix="/pqrsf")
+_READ_GATE = Depends(require_permission("pqrsf"))
 _messages = Depends(Provide[ApplicationContainer.v1_container.pqrsf_supplier_message_service])
 _principal = Depends(get_current_principal)
 
@@ -196,6 +198,7 @@ async def retry_supplier_message(
 
 @router.get(
     "/supplier-contacts",
+    dependencies=[_READ_GATE],
     response_model=list[SupplierContactResponse],
     summary="Supplier addresses already used",
 )

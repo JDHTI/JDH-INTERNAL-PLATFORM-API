@@ -51,6 +51,9 @@ class Managers:
     async def is_manager(self, who: Principal) -> bool:
         return who.is_platform_admin
 
+    async def can_read(self, who: Principal) -> bool:
+        return who.is_platform_admin or who.is_moderator
+
 
 class Repo:
     def __init__(self) -> None:

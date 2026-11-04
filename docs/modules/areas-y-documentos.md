@@ -29,12 +29,16 @@ tabla `users`. Ambos módulos reciben al usuario como `Principal`
 
 ## Acceso
 
-- **Administradores de plataforma** (rol `admin` de `identity`): crean y editan
-  áreas, roles y miembros, y ven todas las áreas.
-- **Miembros y responsable de un área**: ven el área, su equipo y su catálogo
-  de roles, y gestionan carpetas y documentos de esa área.
-- Cualquier otra persona recibe 403 en esa área, y la búsqueda sin área solo
-  recorre las áreas propias.
+El modelo completo está en [`docs/permissions.md`](../permissions.md).
+
+- **Administradores de plataforma** (roles `owner` y `admin` de `identity`): crean y editan
+  áreas, roles, permisos y miembros, y ven todas las áreas. Un `moderator` las ve todas sin
+  editar.
+- **Miembros y responsable de un área**: ven el área, su equipo y su catálogo de roles. El
+  gestor documental es el módulo `documentos`: `read` lista y descarga, `manage` crea, edita y
+  borra. El responsable lo gestiona siempre.
+- Cualquier otra persona recibe 403 en esa área, y la búsqueda sin área solo recorre las áreas
+  donde la persona puede leer documentos.
 
 ## Modelo
 

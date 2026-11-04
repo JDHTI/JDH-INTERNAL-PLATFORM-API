@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile,
 from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.quotations.application.service import (
@@ -42,6 +43,7 @@ from app.modules.quotations.domain.vocabulary import (
 )
 
 router = APIRouter()
+_READ_GATE = Depends(require_permission("cotizador"))
 _service = Depends(Provide[ApplicationContainer.v1_container.quotation_service])
 _principal = Depends(get_current_principal)
 
@@ -499,7 +501,12 @@ async def permissions(
     )
 
 
-@router.get("/rules", response_model=list[RuleSectionResponse], summary="The quoter's rules")
+@router.get(
+    "/rules",
+    dependencies=[_READ_GATE],
+    response_model=list[RuleSectionResponse],
+    summary="The quoter's rules",
+)
 @inject
 async def quotation_rules(
     _: Principal = _principal,
@@ -526,7 +533,12 @@ async def quotation_rules(
     ]
 
 
-@router.get("/customers", response_model=CustomerPageResponse, summary="Customers to quote")
+@router.get(
+    "/customers",
+    dependencies=[_READ_GATE],
+    response_model=CustomerPageResponse,
+    summary="Customers to quote",
+)
 @inject
 async def customers(
     scope: Literal["mine", "all"] = Query(default="mine"),
@@ -564,6 +576,7 @@ async def customers(
 
 @router.post(
     "",
+    dependencies=[_READ_GATE],
     response_model=QuotationResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Build a quotation of a customer",
@@ -580,7 +593,9 @@ async def create_quotation(
     return _detail(await service.create(principal, body.customer_nit, body.window_months))
 
 
-@router.get("", response_model=QuotationPageResponse, summary="List quotations")
+@router.get(
+    "", dependencies=[_READ_GATE], response_model=QuotationPageResponse, summary="List quotations"
+)
 @inject
 async def list_quotations(
     mine: bool = Query(default=True),
@@ -611,7 +626,12 @@ async def list_quotations(
     )
 
 
-@router.get("/{quotation_id}", response_model=QuotationResponse, summary="Get a quotation")
+@router.get(
+    "/{quotation_id}",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Get a quotation",
+)
 @inject
 async def get_quotation(
     quotation_id: UUID,
@@ -621,7 +641,12 @@ async def get_quotation(
     return _detail(await service.get(principal, quotation_id))
 
 
-@router.put("/{quotation_id}/lines", response_model=QuotationResponse, summary="Set new prices")
+@router.put(
+    "/{quotation_id}/lines",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Set new prices",
+)
 @inject
 async def update_lines(
     quotation_id: UUID,
@@ -646,7 +671,10 @@ def _skipped(item: Skipped) -> SkippedResponse:
 
 
 @router.post(
-    "/{quotation_id}/lines", response_model=QuotationResponse, summary="Add or revalidate SKUs"
+    "/{quotation_id}/lines",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Add or revalidate SKUs",
 )
 @inject
 async def add_lines(
@@ -674,7 +702,10 @@ async def add_lines(
 
 
 @router.delete(
-    "/{quotation_id}/lines/{sku}", response_model=QuotationResponse, summary="Remove an added SKU"
+    "/{quotation_id}/lines/{sku}",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Remove an added SKU",
 )
 @inject
 async def remove_line(
@@ -691,7 +722,10 @@ async def remove_line(
 
 
 @router.post(
-    "/{quotation_id}/refresh", response_model=QuotationResponse, summary="Rebuild from the DWH"
+    "/{quotation_id}/refresh",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Rebuild from the DWH",
 )
 @inject
 async def refresh_quotation(
@@ -706,7 +740,10 @@ async def refresh_quotation(
 
 
 @router.post(
-    "/{quotation_id}/confirm", response_model=QuotationResponse, summary="Send to validation"
+    "/{quotation_id}/confirm",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Send to validation",
 )
 @inject
 async def confirm_quotation(
@@ -732,7 +769,12 @@ async def confirm_quotation(
     )
 
 
-@router.post("/{quotation_id}/return", response_model=QuotationResponse, summary="Back to draft")
+@router.post(
+    "/{quotation_id}/return",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Back to draft",
+)
 @inject
 async def return_quotation(
     quotation_id: UUID,
@@ -746,7 +788,12 @@ async def return_quotation(
     return _detail(await service.return_to_draft(principal, quotation_id, body.version, body.note))
 
 
-@router.post("/{quotation_id}/validate", response_model=QuotationResponse, summary="Validate")
+@router.post(
+    "/{quotation_id}/validate",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Validate",
+)
 @inject
 async def validate_quotation(
     quotation_id: UUID,
@@ -762,6 +809,7 @@ async def validate_quotation(
 
 @router.get(
     "/{quotation_id}/template.xlsx",
+    dependencies=[_READ_GATE],
     response_class=Response,
     responses={
         200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
@@ -782,6 +830,7 @@ async def download_template(
 
 @router.post(
     "/{quotation_id}/template",
+    dependencies=[_READ_GATE],
     response_model=QuotationResponse,
     summary="Upload the edited quotation workbook",
     description=(
@@ -828,6 +877,7 @@ def _file(content: bytes, filename: str, media_type: str) -> Response:
 
 @router.get(
     "/{quotation_id}/export.xlsx",
+    dependencies=[_READ_GATE],
     response_class=Response,
     responses={
         200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
@@ -848,6 +898,7 @@ async def export_workbook(
 
 @router.get(
     "/{quotation_id}/export.txt",
+    dependencies=[_READ_GATE],
     response_class=Response,
     responses={200: {"content": {"text/plain": {}}}},
     summary="Download the SIESA import file",
@@ -865,7 +916,10 @@ async def export_flat_file(
 
 
 @router.delete(
-    "/{quotation_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a quotation"
+    "/{quotation_id}",
+    dependencies=[_READ_GATE],
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a quotation",
 )
 @inject
 async def delete_quotation(

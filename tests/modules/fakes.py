@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.core.errors import ConflictError, NotFoundError
-from app.modules.areas.domain.entities import Area, AreaMember, AreaRole
+from app.modules.areas.domain.entities import Area, AreaMember, AreaRole, PermissionEvent
 from app.modules.documents.domain.entities import Document, DocumentFolder, TagColor
 from app.modules.documents.domain.ports import SearchFilters
 from app.modules.identity.domain.principal import DirectoryUser, Principal
@@ -15,9 +15,16 @@ from app.modules.identity.domain.principal import DirectoryUser, Principal
 NOW = datetime(2026, 9, 23, tzinfo=UTC)
 
 
-def principal(email: str = "ana@jdh.com.co", admin: bool = False, user_id=None) -> Principal:
+def principal(
+    email: str = "ana@jdh.com.co", admin: bool = False, user_id=None, role: str | None = None
+) -> Principal:
+    role = role or ("admin" if admin else "user")
     return Principal(
-        user_id=user_id or uuid.uuid4(), email=email, display_name=None, is_platform_admin=admin
+        user_id=user_id or uuid.uuid4(),
+        email=email,
+        display_name=None,
+        is_platform_admin=role in ("owner", "admin"),
+        role=role,
     )
 
 
@@ -66,6 +73,44 @@ class FakeAreaRepository:
         self.roles: dict[uuid.UUID, AreaRole] = {}
         self.members: dict[uuid.UUID, AreaMember] = {}
         self.areas_with_folders: set[uuid.UUID] = set()
+        self.permissions: dict[uuid.UUID, dict[str, str]] = {}
+        self.events: list[PermissionEvent] = []
+        # Roles start with the whole area, as migration 0041 left every existing role, so the
+        # module tests keep "a member manages the area". The real repository starts them
+        # empty; permission tests replace the grants explicitly (or set this to ``None``).
+        self.default_grants: dict[str, str] | None = {"*": "manage"}
+
+    async def get_role_permissions(self, role_ids):
+        return {role_id: dict(self.permissions.get(role_id, {})) for role_id in role_ids}
+
+    async def replace_role_permissions(self, role_id, grants):
+        self.permissions[role_id] = {grant.module: grant.action for grant in grants}
+
+    async def record_event(
+        self, action, *, actor_user_id, area_id=None, target_user_id=None, role_id=None, detail=None
+    ):
+        self.events.append(
+            PermissionEvent(
+                uuid.uuid4(),
+                NOW,
+                action,
+                actor_user_id,
+                area_id,
+                target_user_id,
+                role_id,
+                detail or {},
+            )
+        )
+
+    async def list_events(self, *, area_id, target_user_id, action, offset, limit):
+        rows = [
+            e
+            for e in reversed(self.events)
+            if (area_id is None or e.area_id == area_id)
+            and (target_user_id is None or e.target_user_id == target_user_id)
+            and (action is None or e.action == action)
+        ]
+        return rows[offset : offset + limit], len(rows)
 
     async def list_areas(self):
         return sorted(self.areas.values(), key=lambda a: (a.sort_order, a.name))
@@ -130,6 +175,8 @@ class FakeAreaRepository:
     async def create_role(self, area_id, name):
         role = AreaRole(uuid.uuid4(), area_id, name, NOW, NOW)
         self.roles[role.id] = role
+        if self.default_grants is not None:
+            self.permissions[role.id] = dict(self.default_grants)
         return role
 
     async def save_role(self, role):

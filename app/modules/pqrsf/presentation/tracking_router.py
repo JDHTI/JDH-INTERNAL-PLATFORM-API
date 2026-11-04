@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.app_container import ApplicationContainer
 from app.core.errors import InvalidInputError
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.pqrsf.application.case_attachments import CaseAttachmentService
@@ -55,6 +56,7 @@ from app.modules.sites.domain.entities import Site
 # Interactive inbox behind a session: the limit is per IP and offices share one
 # behind NAT, so it uses the relaxed profile.
 router = APIRouter(prefix="/pqrsf")
+_READ_GATE = Depends(require_permission("pqrsf"))
 _tracking = Depends(Provide[ApplicationContainer.v1_container.pqrsf_tracking_service])
 _pqrsf = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 _case_files = Depends(Provide[ApplicationContainer.v1_container.pqrsf_case_attachment_service])
@@ -1011,7 +1013,12 @@ async def export_cases(
     )
 
 
-@router.get("/cases/suggestions", response_model=list[str], summary="Free-text suggestions")
+@router.get(
+    "/cases/suggestions",
+    dependencies=[_READ_GATE],
+    response_model=list[str],
+    summary="Free-text suggestions",
+)
 @inject
 async def case_suggestions(
     field: Literal["customer", "supplier", "sales_executive", "requester"],

@@ -1,0 +1,166 @@
+# Production API on intranet.jdh.local. Run it through deploy/deploy.sh.
+#
+# Caddy is not here: it lives in the edge stack (compose project `intranet-jdh`, owned by
+# INTRANET-JDH-API deploy/) together with Strapi and the intranet's Postgres. The API joins
+# that stack's network so Caddy reaches it as `platform-api:8000` (https://intranet.jdh.local/
+# api/v1/*). Its own dependencies (Postgres, Redis, MinIO, ClamAV) stay in this project's
+# private network and publish no port.
+#
+# Secrets and per-server values come from ~/apps/platform/api.env (see deploy/api.env.example).
+name: internal-platform-api
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-api: &api
+  build:
+    context: ..
+    target: runtime
+    labels:
+      org.opencontainers.image.revision: ${GIT_SHA:-unknown}
+  image: internal-platform-api:latest
+  env_file:
+    - ${PLATFORM_API_ENV:?run it through deploy/deploy.sh}
+  environment:
+    ENVIRONMENT: prod
+    PORT: 8000
+    API_PREFIX: /api
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in api.env}@postgres:5432/${POSTGRES_DB:-internal_platform}
+    REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in api.env}@redis:6379/0
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-platform}
+    S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+    S3_BUCKET: ${S3_BUCKET:-internal-platform}
+    PQRSF_CLAMAV_HOST: clamav
+    PQRSF_CLAMAV_PORT: 3310
+    # deploy.sh resolves Caddy's address when api.env leaves it empty.
+    RATE_LIMIT_TRUSTED_PROXY_IPS: ${RATE_LIMIT_TRUSTED_PROXY_IPS:-}
+  logging: *logging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in api.env}
+      POSTGRES_DB: ${POSTGRES_DB:-internal_platform}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in api.env}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in api.env}
+    logging: *logging
+
+  clamav:
+    image: ${CLAMAV_IMAGE:-clamav/clamav:1.4.6}
+    restart: unless-stopped
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+    logging: *logging
+
+  # S3-compatible storage. RustFS, as the intranet used: the MinIO images are no longer
+  # published (quay.io and Docker Hub refuse them). The service keeps the name `minio` so
+  # S3_ENDPOINT_URL and the variables stay the same.
+  minio:
+    image: rustfs/rustfs:1.0.1
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${MINIO_ROOT_USER:-platform}
+      RUSTFS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    logging: *logging
+
+  minio-init:
+    image: amazon/aws-cli:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - -ec
+      - |
+        aws --endpoint-url http://minio:9000 s3api head-bucket --bucket "$${S3_BUCKET}" 2>/dev/null \
+          || aws --endpoint-url http://minio:9000 s3api create-bucket --bucket "$${S3_BUCKET}"
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-platform}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET:-internal-platform}
+    restart: "no"
+
+  # One-shot: deploy.sh runs it before starting the API.
+  migrate:
+    <<: *api
+    command: ["poetry", "run", "alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["tools"]
+
+  api:
+    <<: *api
+    container_name: platform-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      default: {}
+      edge:
+        aliases:
+          - platform-api
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  clamav_data:
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-intranet-jdh_default}

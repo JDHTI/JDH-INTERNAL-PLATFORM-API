@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import delete, exists, func, or_, select
@@ -9,8 +10,20 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
-from app.modules.areas.domain.entities import Area, AreaMember, AreaRole
-from app.modules.areas.infrastructure.models import AreaMemberModel, AreaModel, AreaRoleModel
+from app.modules.areas.domain.entities import (
+    Area,
+    AreaMember,
+    AreaRole,
+    PermissionEvent,
+    RolePermission,
+)
+from app.modules.areas.infrastructure.models import (
+    AreaMemberModel,
+    AreaModel,
+    AreaRoleModel,
+    AreaRolePermissionModel,
+    PermissionEventModel,
+)
 
 
 def _area(m: AreaModel) -> Area:
@@ -364,6 +377,136 @@ class SqlAlchemyAreaRepository:
         async with self.database.session_factory() as session:
             query = select(exists().where(AreaMemberModel.role_id == role_id))
             return bool((await session.execute(query)).scalar())
+
+    # --- Role permissions and the permissions log ---
+
+    async def get_role_permissions(self, role_ids: Iterable[UUID]) -> dict[UUID, dict[str, str]]:
+        """The grants of several area roles.
+
+        Args:
+            role_ids (Iterable[UUID]): Roles to load.
+
+        Returns:
+            dict[UUID, dict[str, str]]: Per role, module (or ``*``) -> action.
+        """
+
+        ids = list(dict.fromkeys(role_ids))
+        result: dict[UUID, dict[str, str]] = {role_id: {} for role_id in ids}
+        if not ids:
+            return result
+        async with self.database.session_factory() as session:
+            rows = await session.scalars(
+                select(AreaRolePermissionModel).where(AreaRolePermissionModel.role_id.in_(ids))
+            )
+            for row in rows:
+                result[row.role_id][row.module] = row.action
+        return result
+
+    async def replace_role_permissions(self, role_id: UUID, grants: list[RolePermission]) -> None:
+        """Replace every grant of a role in one transaction.
+
+        Args:
+            role_id (UUID): The role.
+            grants (list[RolePermission]): The new grants, one per module.
+        """
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                delete(AreaRolePermissionModel).where(AreaRolePermissionModel.role_id == role_id)
+            )
+            session.add_all(
+                AreaRolePermissionModel(role_id=role_id, module=grant.module, action=grant.action)
+                for grant in grants
+            )
+            await session.commit()
+
+    async def record_event(
+        self,
+        action: str,
+        *,
+        actor_user_id: UUID | None,
+        area_id: UUID | None = None,
+        target_user_id: UUID | None = None,
+        role_id: UUID | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """Append an entry to the permissions log.
+
+        Args:
+            action (str): What happened (``member_added``, ``role_permissions_set``...).
+            actor_user_id (UUID | None): Who did it.
+            area_id (UUID | None): Area involved.
+            target_user_id (UUID | None): Person affected.
+            role_id (UUID | None): Role involved.
+            detail (dict | None): Before/after values.
+        """
+
+        async with self.database.session_factory() as session:
+            session.add(
+                PermissionEventModel(
+                    action=action,
+                    actor_user_id=actor_user_id,
+                    area_id=area_id,
+                    target_user_id=target_user_id,
+                    role_id=role_id,
+                    detail=detail or {},
+                )
+            )
+            await session.commit()
+
+    async def list_events(
+        self,
+        *,
+        area_id: UUID | None,
+        target_user_id: UUID | None,
+        action: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[PermissionEvent], int]:
+        """A page of the permissions log, newest first, and the total.
+
+        Args:
+            area_id (UUID | None): Only this area.
+            target_user_id (UUID | None): Only this person.
+            action (str | None): Only this kind of change.
+            offset (int): Rows to skip.
+            limit (int): Rows to return.
+
+        Returns:
+            tuple[list[PermissionEvent], int]: The page and the total.
+        """
+
+        conditions = []
+        if area_id is not None:
+            conditions.append(PermissionEventModel.area_id == area_id)
+        if target_user_id is not None:
+            conditions.append(PermissionEventModel.target_user_id == target_user_id)
+        if action:
+            conditions.append(PermissionEventModel.action == action)
+        async with self.database.session_factory() as session:
+            total = await session.scalar(
+                select(func.count()).select_from(PermissionEventModel).where(*conditions)
+            )
+            rows = await session.scalars(
+                select(PermissionEventModel)
+                .where(*conditions)
+                .order_by(PermissionEventModel.at.desc(), PermissionEventModel.id)
+                .offset(offset)
+                .limit(limit)
+            )
+            return [
+                PermissionEvent(
+                    id=row.id,
+                    at=row.at,
+                    action=row.action,
+                    actor_user_id=row.actor_user_id,
+                    area_id=row.area_id,
+                    target_user_id=row.target_user_id,
+                    role_id=row.role_id,
+                    detail=dict(row.detail or {}),
+                )
+                for row in rows
+            ], int(total or 0)
 
     # --- Members ---
 

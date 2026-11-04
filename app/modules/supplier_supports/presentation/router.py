@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.requests import SupportRequestService
@@ -30,6 +31,7 @@ from app.modules.supplier_supports.domain.entities import (
 )
 
 router = APIRouter()
+_READ_GATE = Depends(require_permission("apoyos", "solicitudes-apoyos"))
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])
 _principal = Depends(get_current_principal)
 _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
@@ -355,7 +357,12 @@ def _issue(issue: Issue) -> IssueResponse:
     return IssueResponse(code=issue.code, detail=issue.detail, field=issue.field)
 
 
-@router.post("/search", response_model=SupportPageResponse, summary="Search supports")
+@router.post(
+    "/search",
+    dependencies=[_READ_GATE],
+    response_model=SupportPageResponse,
+    summary="Search supports",
+)
 @inject
 async def search_supports(
     body: SearchRequest,
@@ -373,7 +380,7 @@ async def search_supports(
     )
 
 
-@router.get("/search/fields", summary="Filterable fields and operators")
+@router.get("/search/fields", dependencies=[_READ_GATE], summary="Filterable fields and operators")
 @inject
 async def search_fields(
     _: Principal = _principal,
@@ -395,7 +402,7 @@ async def permissions(
     return await service.permissions(principal)
 
 
-@router.get("/catalogs", summary="Vocabularies and scope values in use")
+@router.get("/catalogs", dependencies=[_READ_GATE], summary="Vocabularies and scope values in use")
 @inject
 async def catalogs(
     _: Principal = _principal,
@@ -406,7 +413,13 @@ async def catalogs(
     return await service.catalogs()
 
 
-@router.post("", response_model=SupportResponse, status_code=201, summary="Create a support")
+@router.post(
+    "",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    status_code=201,
+    summary="Create a support",
+)
 @inject
 async def create_support(
     body: SupportCreate,
@@ -420,7 +433,11 @@ async def create_support(
 
 
 @router.post(
-    "/batch", response_model=list[SupportResponse], status_code=201, summary="Create supports"
+    "/batch",
+    dependencies=[_READ_GATE],
+    response_model=list[SupportResponse],
+    status_code=201,
+    summary="Create supports",
 )
 @inject
 async def create_supports(
@@ -436,7 +453,12 @@ async def create_supports(
     return [_response(view) for view in views]
 
 
-@router.get("/{support_id}", response_model=SupportResponse, summary="Get a support")
+@router.get(
+    "/{support_id}",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    summary="Get a support",
+)
 @inject
 async def get_support(
     support_id: UUID,
@@ -448,7 +470,12 @@ async def get_support(
     return _response(await service.get(support_id))
 
 
-@router.patch("/{support_id}", response_model=SupportResponse, summary="Update a support")
+@router.patch(
+    "/{support_id}",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    summary="Update a support",
+)
 @inject
 async def update_support(
     support_id: UUID,
@@ -472,7 +499,12 @@ async def update_support(
     return _response(view)
 
 
-@router.post("/{support_id}/void", response_model=SupportResponse, summary="Void a support")
+@router.post(
+    "/{support_id}/void",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    summary="Void a support",
+)
 @inject
 async def void_support(
     support_id: UUID,
@@ -490,6 +522,7 @@ async def void_support(
 
 @router.get(
     "/{support_id}/conflicts",
+    dependencies=[_READ_GATE],
     response_model=list[ConflictResponse],
     summary="Supports overlapping this one",
 )

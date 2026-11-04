@@ -83,6 +83,16 @@ el ciclo de vida. No crees contenedores ni clientes globales dentro de routers.
 `app/core/container.py` únicamente conserva un import de compatibilidad; el
 nuevo código debe importar desde `app.app_container`.
 
+## Permisos
+
+Un módulo del espacio de trabajo se registra en el catálogo
+(`app/modules/areas/domain/catalog.py`) con las áreas donde existe. Su router exige
+lectura con `require_permission("<módulo>")`
+(`app/modules/areas/presentation/dependencies.py`), a nivel de router o por endpoint si
+expone un `GET /permissions` que debe responder `false`. Las escrituras las decide el
+servicio con un `PermissionPolicy(areas, área, módulo)` inyectado desde
+`v1_containers.py`. Detalle en [`permissions.md`](permissions.md).
+
 ## Modelos y Alembic
 
 Importa los modelos del módulo desde un registro controlado antes de generar

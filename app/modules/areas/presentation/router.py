@@ -1,7 +1,9 @@
 """HTTP endpoints for areas, their role catalog and their members.
 
-Reading is open to anyone with access to the area (member, responsible or
-platform administrator); every write requires a platform administrator.
+Reading is open to anyone with access to the area (member, responsible, moderator
+or platform administrator); every write requires a platform administrator. The
+grants of each role (``/roles/{role_id}/permissions``) decide what members may read
+or manage in each module of the area.
 """
 
 from __future__ import annotations
@@ -57,6 +59,24 @@ class AreaResponse(BaseModel):
     is_responsible: bool
     created_at: datetime
     updated_at: datetime
+    # Module key -> read | manage the caller holds in this area (the menu hides the rest).
+    my_modules: dict[str, str] = {}
+
+
+class GrantRequest(BaseModel):
+    module: str = Field(min_length=1, max_length=60, examples=["pqrsf", "*"])
+    action: str = Field(pattern="^(read|manage)$")
+
+
+class RolePermissionsRequest(BaseModel):
+    """The full set of grants of the role; ``*`` is the whole area."""
+
+    grants: list[GrantRequest] = Field(max_length=100)
+
+
+class RolePermissionsResponse(BaseModel):
+    role: RoleRefResponse
+    grants: list[GrantRequest]
 
 
 class AreaCreateRequest(BaseModel):
@@ -215,6 +235,48 @@ async def delete_role(
     slug: str, role_id: UUID, principal: Principal = _principal, service: AreaService = _service
 ) -> None:
     await service.delete_role(slug, role_id, principal)
+
+
+@router.get(
+    "/{slug}/roles/{role_id}/permissions",
+    response_model=RolePermissionsResponse,
+    summary="Grants of a role",
+)
+@inject
+async def get_role_permissions(
+    slug: str, role_id: UUID, principal: Principal = _principal, service: AreaService = _service
+) -> dict:
+    """Permisos de un rol del área (administradores y moderadores)."""
+
+    role, grants = await service.get_role_permissions(slug, role_id, principal)
+    return {
+        "role": {"id": role.id, "name": role.name},
+        "grants": [{"module": g.module, "action": g.action} for g in grants],
+    }
+
+
+@router.put(
+    "/{slug}/roles/{role_id}/permissions",
+    response_model=RolePermissionsResponse,
+    summary="Replace the grants of a role",
+)
+@inject
+async def set_role_permissions(
+    slug: str,
+    role_id: UUID,
+    payload: RolePermissionsRequest,
+    principal: Principal = _principal,
+    service: AreaService = _service,
+) -> dict:
+    """Reemplaza los permisos del rol; 422 si un módulo no existe en el área."""
+
+    role, grants = await service.set_role_permissions(
+        slug, role_id, [(g.module, g.action) for g in payload.grants], principal
+    )
+    return {
+        "role": {"id": role.id, "name": role.name},
+        "grants": [{"module": g.module, "action": g.action} for g in grants],
+    }
 
 
 # --- Members ---

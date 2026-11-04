@@ -16,12 +16,13 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.dwh_monitoring.application.service import MAX_PAGE_SIZE, DwhMonitoringService
 from app.modules.dwh_monitoring.domain.entities import LoadCycle
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("datawarehouse"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.dwh_monitoring_service])
 _principal = Depends(get_current_principal)
 

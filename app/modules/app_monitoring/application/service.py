@@ -102,8 +102,14 @@ class AppMonitoringService:
     # --- Helpers ---
 
     async def _authorize(self, principal: Principal) -> None:
+        """Reading the screens needs ``read`` on the module."""
+
+        if not await self.access.can_read(principal):
+            raise ForbiddenError("No tienes permiso para consultar el monitoreo de aplicativos")
+
+    async def _require_manage(self, principal: Principal) -> None:
         if not await self.access.is_manager(principal):
-            raise ForbiddenError("El monitoreo de aplicativos es del área de TI")
+            raise ForbiddenError("No tienes permiso para gestionar el monitoreo de aplicativos")
 
     async def _get(self, application_id: UUID) -> Application:
         application = await self.repository.get(application_id)
@@ -226,7 +232,7 @@ class AppMonitoringService:
             dict[str, Any]: The application with its fresh status.
         """
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         application = await self._get(application_id)
         results = await self._probe(application)
         await self.repository.save_results(results)
@@ -239,7 +245,7 @@ class AppMonitoringService:
             ConflictError: If the background checks are off in this process.
         """
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         if not self.check_enabled or self.request_check_now is None:
             raise ConflictError("Los chequeos automáticos de aplicativos están apagados")
         self.request_check_now()
@@ -326,7 +332,7 @@ class AppMonitoringService:
             dict[str, Any]: The new application, not checked yet.
         """
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         if not values.get("name") or not values.get("base_url"):
             raise InvalidInputError("El aplicativo necesita nombre y URL base")
         fields = {
@@ -353,7 +359,7 @@ class AppMonitoringService:
             dict[str, Any]: The application with its status.
         """
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         current = await self._get(application_id)
         fields = {key: value for key, value in changes.items() if key in EDITABLE}
         for required in ("name", "slug", "base_url", "health_path", "ui_path"):
@@ -369,6 +375,6 @@ class AppMonitoringService:
     async def delete(self, application_id: UUID, principal: Principal) -> None:
         """Remove an application and its history."""
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         if not await self.repository.delete(application_id):
             raise NotFoundError("El aplicativo no existe")

@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     AUTH_DEV_SEED_ANALYST_EMAIL: str = "analista.ti@jdh.com.co"
     AUTH_DEV_SEED_TENANT_ID: str = ""
     AUTH_DEV_SEED_MOCK_PREFIX: str = "development-mock"
+    # The single platform owner (global role ``owner``), set by migration 0041 and
+    # scripts/set-owner.py. Never assignable through the API.
+    PLATFORM_OWNER_EMAIL: str = "analista.ti@jdh.com.co"
     AUTH_COOKIE_DOMAIN: str | None = None
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_COOKIE_SECURE: bool | None = None
@@ -393,10 +396,14 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def entra_authority(self) -> str:
-        """Return the single-tenant Entra authority used by OIDC."""
+        """Return the single-tenant Entra authority the OAuth endpoints hang from.
+
+        ``{authority}/oauth2/v2.0/authorize`` and ``/token``; the issuer of the tokens is
+        the one that ends in ``/v2.0`` (``entra_issuer``).
+        """
 
         tenant = self.ENTRA_TENANT_ID or "organizations"
-        return f"https://login.microsoftonline.com/{tenant}/v2.0"
+        return f"https://login.microsoftonline.com/{tenant}"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

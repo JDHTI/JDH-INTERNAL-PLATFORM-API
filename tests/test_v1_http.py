@@ -8,7 +8,11 @@ from fastapi.testclient import TestClient
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.areas.application.dto import AreaView
-from app.modules.identity.presentation.router import get_current_user, require_admin
+from app.modules.identity.presentation.router import (
+    get_current_user,
+    require_admin,
+    require_admin_or_moderator,
+)
 from tests.modules.fakes import NOW
 
 
@@ -105,6 +109,8 @@ def test_admin_user_list_forwards_activity_filter_and_pagination() -> None:
 
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
     app.dependency_overrides[require_admin] = lambda: admin
+    # Moderators read the user list too.
+    app.dependency_overrides[require_admin_or_moderator] = lambda: admin
     with app.state.container.v1_container.identity_service.override(StubIdentity()):
         with TestClient(app) as client:
             response = client.get("/api/v1/users?offset=2&limit=10&is_active=true")

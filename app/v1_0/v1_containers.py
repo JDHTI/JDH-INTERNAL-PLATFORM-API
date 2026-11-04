@@ -13,7 +13,7 @@ from app.modules.app_monitoring.application.service import AppMonitoringService
 from app.modules.app_monitoring.infrastructure.prober import HttpProber
 from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyApplicationRepository
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.infrastructure.policies import AreaManagerPolicy, UnrestrictedAreaAccess
+from app.modules.areas.infrastructure.policies import PermissionPolicy, UnrestrictedAreaAccess
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
 from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
@@ -189,13 +189,6 @@ class V1Container(containers.DeclarativeContainer):
         authority=settings.provided.entra_authority,
         issuer=settings.provided.entra_issuer,
     )
-    identity_service = providers.Factory(
-        IdentityService,
-        repository=identity_repository,
-        entra=entra_client,
-        storage=storage,
-        settings=settings,
-    )
 
     # Areas and documents read users through this port, never the tables.
     user_directory = providers.Factory(UserDirectory, repository=identity_repository)
@@ -252,6 +245,15 @@ class V1Container(containers.DeclarativeContainer):
         repository=area_repository,
         users=user_directory,
     )
+    identity_service = providers.Factory(
+        IdentityService,
+        repository=identity_repository,
+        entra=entra_client,
+        storage=storage,
+        settings=settings,
+        # Global role changes go to the permissions log of the areas module.
+        audit=area_service,
+    )
 
     # --- Documents (segmented by area) ---
     document_repository = providers.Factory(SqlAlchemyDocumentRepository, database=database)
@@ -290,7 +292,10 @@ class V1Container(containers.DeclarativeContainer):
         country=config.pqrsf.holidays_country,
     )
     pqrsf_manager_policy = providers.Factory(
-        AreaManagerPolicy, areas=area_service, area_slug=config.pqrsf.manager_area_slug
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.pqrsf.manager_area_slug,
+        module="pqrsf",
     )
     pqrsf_classification_service = providers.Factory(
         ClassificationService,
@@ -378,15 +383,28 @@ class V1Container(containers.DeclarativeContainer):
         SqlAlchemyCommercialMasterRepository, database=database
     )
     supplier_support_manager_policy = providers.Factory(
-        AreaManagerPolicy,
+        PermissionPolicy,
         areas=area_service,
         area_slug=config.supplier_supports.manager_area_slug,
+        module="apoyos",
+    )
+    commercial_master_manager_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.supplier_supports.manager_area_slug,
+        module="maestros",
+    )
+    special_case_manager_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.supplier_supports.manager_area_slug,
+        module="casos-especiales",
     )
     commercial_margin_reader = providers.Singleton(SpreadsheetMarginReader)
     commercial_master_service = providers.Factory(
         CommercialMasterService,
         repository=commercial_master_repository,
-        managers=supplier_support_manager_policy,
+        managers=commercial_master_manager_policy,
         margin_reader=commercial_margin_reader,
         max_upload_bytes=config.product_margins.max_upload_bytes,
     )
@@ -406,7 +424,7 @@ class V1Container(containers.DeclarativeContainer):
         SpecialCaseService,
         repository=special_case_repository,
         masters=master_lookup,
-        managers=supplier_support_manager_policy,
+        managers=special_case_manager_policy,
     )
     supplier_support_repository = providers.Factory(SqlAlchemySupportRepository, database=database)
     supplier_support_service = providers.Factory(
@@ -419,13 +437,20 @@ class V1Container(containers.DeclarativeContainer):
     supplier_support_request_repository = providers.Factory(
         SqlAlchemySupportRequestRepository, database=database
     )
+    # Comercial asks for supports and BI reviews: one module, two meanings of manage.
     supplier_support_requester_policy = providers.Factory(
-        AreaManagerPolicy, areas=area_service, area_slug="comercial"
+        PermissionPolicy, areas=area_service, area_slug="comercial", module="solicitudes-apoyos"
+    )
+    supplier_support_reviewer_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.supplier_supports.manager_area_slug,
+        module="solicitudes-apoyos",
     )
     supplier_support_request_service = providers.Factory(
         SupportRequestService,
         repository=supplier_support_request_repository,
-        managers=supplier_support_manager_policy,
+        managers=supplier_support_reviewer_policy,
         requesters=supplier_support_requester_policy,
         calendar=pqrsf_calendar,
     )
@@ -479,9 +504,10 @@ class V1Container(containers.DeclarativeContainer):
     )
     # --- Retained orders validator (reads the supports master) ---
     order_validation_manager_policy = providers.Factory(
-        AreaManagerPolicy,
+        PermissionPolicy,
         areas=area_service,
         area_slug=config.order_validation.manager_area_slug,
+        module="validador-pedidos",
     )
     # The service decides and the repository counts the ready orders: both use this policy.
     order_validation_policy = providers.Singleton(
@@ -508,14 +534,16 @@ class V1Container(containers.DeclarativeContainer):
     )
     # --- Quoter (Comercial → Cotizador): live DWH reads plus the supports of the validator ---
     quotation_manager_policy = providers.Factory(
-        AreaManagerPolicy,
+        PermissionPolicy,
         areas=area_service,
         area_slug=config.quotations.manager_area_slug,
+        module="cotizador",
     )
     quotation_approver_policy = providers.Factory(
-        AreaManagerPolicy,
+        PermissionPolicy,
         areas=area_service,
         area_slug=config.quotations.approver_area_slug,
+        module="cotizador",
     )
     quotation_policy = providers.Singleton(
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
@@ -551,7 +579,12 @@ class V1Container(containers.DeclarativeContainer):
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.
-    dwh_monitoring_policy = providers.Factory(AreaManagerPolicy, areas=area_service, area_slug="ti")
+    dwh_monitoring_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug="ti", module="datawarehouse"
+    )
+    app_monitoring_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug="ti", module="monitoreo"
+    )
     dwh_monitoring_repository = providers.Factory(SqlAlchemyMonitoringRepository, database=database)
     dwh_monitoring_source = providers.Factory(WarehouseMonitoringSource, connection=data_provider)
     dwh_monitoring_sync_service = providers.Factory(
@@ -578,7 +611,7 @@ class V1Container(containers.DeclarativeContainer):
         AppMonitoringService,
         repository=app_monitoring_repository,
         prober=app_monitoring_prober,
-        access=dwh_monitoring_policy,
+        access=app_monitoring_policy,
         check_enabled=config.app_monitoring.enabled,
         check_interval=config.app_monitoring.interval,
         retention_days=config.app_monitoring.retention_days,

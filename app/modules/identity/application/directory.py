@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.errors import NotFoundError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
+from app.modules.identity.domain.roles import is_platform_admin
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.infrastructure.repository import IdentityRepository
 
@@ -25,7 +26,8 @@ def principal_from_user(user: UserModel) -> Principal:
         user_id=user.id,
         email=user.email or user.name,
         display_name=user.name,
-        is_platform_admin=user.role.code == "admin",
+        is_platform_admin=is_platform_admin(user.role.code),
+        role=user.role.code,
     )
 
 

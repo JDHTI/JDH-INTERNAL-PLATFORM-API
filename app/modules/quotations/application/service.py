@@ -284,9 +284,16 @@ class QuotationService:
         if not await self.managers.is_manager(principal):
             raise ForbiddenError("No tienes permiso para usar el cotizador")
 
+    async def can_read(self, principal: Principal) -> bool:
+        """Read on the quoter in either area (comercial quotes, BI validates)."""
+
+        if await self.managers.can_read(principal):
+            return True
+        return self.approvers is not None and await self.approvers.can_read(principal)
+
     async def _require_reader(self, principal: Principal) -> None:
-        if not await self.managers.is_manager(principal) and not await self.can_validate(principal):
-            raise ForbiddenError("No tienes permiso para usar el cotizador")
+        if not await self.can_read(principal):
+            raise ForbiddenError("No tienes permiso para consultar el cotizador")
 
     async def permissions(self, principal: Principal) -> Permissions:
         """Whether the caller may quote or validate, and the salesperson linked by e-mail.

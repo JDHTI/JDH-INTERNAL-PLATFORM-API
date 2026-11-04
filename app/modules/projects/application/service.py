@@ -121,8 +121,10 @@ class ProjectService:
 
     # --- Helpers ---
 
-    async def authorize(self, area_slug: str, principal: Principal) -> AreaRef:
-        """Return the area when the module is on there and the caller may enter.
+    async def authorize(
+        self, area_slug: str, principal: Principal, action: str = "read"
+    ) -> AreaRef:
+        """Return the area when the module is on there and the caller holds ``action``.
 
         Args:
             area_slug (str): Area slug.
@@ -135,7 +137,7 @@ class ProjectService:
         slug = area_slug.strip().lower()
         if slug not in self.enabled_area_slugs:
             raise NotFoundError("Proyectos no está habilitado para esta área")
-        return await self.areas.authorize(slug, principal)
+        return await self.areas.authorize(slug, principal, "proyectos", action)
 
     async def can_delete_any(self, area_slug: str, principal: Principal) -> bool:
         """Whether the caller may delete folders and projects created by others.
@@ -269,7 +271,7 @@ class ProjectService:
             FolderView: The created, empty folder.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         name = clean_text(command.name or "", "nombre", 150)
         if await self.repository.folder_name_taken(area.id, name):
             raise ConflictError(_DUPLICATE_FOLDER)
@@ -299,7 +301,7 @@ class ProjectService:
             FolderView: The updated folder.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         folder = await self._folder(area.id, folder_id)
         if "name" in command.fields:
             folder.name = clean_text(command.name or "", "nombre", 150)
@@ -329,7 +331,7 @@ class ProjectService:
             None
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         folder = await self._folder(area.id, folder_id)
         self._require_manager(area, folder.created_by, principal)
         if await self.repository.count_folder_projects(folder.id, include_archived=True):
@@ -397,7 +399,7 @@ class ProjectService:
             ProjectView: The created project.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         folder = await self._folder(area.id, command.folder_id)
         check_dates(command.start_date, command.end_date)
         owner = await self._owner(command.owner_user_id)
@@ -450,7 +452,7 @@ class ProjectService:
             ProjectView: The updated project.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         project = await self._project(area.id, project_id)
         fields = command.fields
         for name in _REQUIRED_PROJECT_FIELDS:
@@ -499,7 +501,7 @@ class ProjectService:
             ProjectView: The project in its new state.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         project = await self._project(area.id, project_id)
         if project.is_archived == archived:
             return await self._view(project)
@@ -519,7 +521,7 @@ class ProjectService:
             None
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         project = await self._project(area.id, project_id)
         self._require_manager(area, project.created_by, principal)
         await self.repository.delete_project(project.id)
@@ -602,7 +604,7 @@ class ProjectService:
             EpicView: The created, empty epic.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         project = await self._project(area.id, project_id)
         check_dates(command.start_date, command.end_date)
         now = datetime.now(UTC)
@@ -641,7 +643,7 @@ class ProjectService:
             EpicView: The updated epic.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         epic = await self._epic(area.id, epic_id)
         fields = command.fields
         for name in _REQUIRED_EPIC_FIELDS:
@@ -677,7 +679,7 @@ class ProjectService:
             None
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         epic = await self._epic(area.id, epic_id)
         self._require_manager(area, epic.created_by, principal)
         counts = await self.repository.epic_task_counts([epic.id])
@@ -743,7 +745,7 @@ class ProjectService:
             TaskView: The created task.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         project = await self._project(area.id, project_id)
         epic = (
             await self._project_epic(area.id, project.id, command.epic_id)
@@ -800,7 +802,7 @@ class ProjectService:
             TaskView: The updated task.
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         task = await self._task(area.id, task_id)
         fields = command.fields
         for name in _REQUIRED_TASK_FIELDS:
@@ -871,7 +873,7 @@ class ProjectService:
             None
         """
 
-        area = await self.authorize(area_slug, principal)
+        area = await self.authorize(area_slug, principal, "manage")
         task = await self._task(area.id, task_id)
         await self.repository.delete_task(task)
         await self._publish(

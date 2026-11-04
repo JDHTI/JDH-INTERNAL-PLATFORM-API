@@ -125,9 +125,11 @@ class SupportFileReader(Protocol):
 
 
 class ManagerPolicy(Protocol):
-    """Decides who may create, edit and void supports."""
+    """Decides who may create, edit and void supports, and who may read them."""
 
     async def is_manager(self, principal: Principal) -> bool: ...
+
+    async def can_read(self, principal: Principal) -> bool: ...
 
 
 class Calendar(Protocol):

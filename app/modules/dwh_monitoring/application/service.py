@@ -93,8 +93,14 @@ class DwhMonitoringService:
     # --- Helpers ---
 
     async def _authorize(self, principal: Principal) -> None:
+        """Reading the screens needs ``read`` on the module."""
+
+        if not await self.access.can_read(principal):
+            raise ForbiddenError("No tienes permiso para consultar el datawarehouse")
+
+    async def _require_manage(self, principal: Principal) -> None:
         if not await self.access.is_manager(principal):
-            raise ForbiddenError("El monitoreo del datawarehouse es del área de TI")
+            raise ForbiddenError("No tienes permiso para gestionar el datawarehouse")
 
     def today(self) -> date:
         """Current business day."""
@@ -152,7 +158,7 @@ class DwhMonitoringService:
             ConflictError: If the background load is off in this process.
         """
 
-        await self._authorize(principal)
+        await self._require_manage(principal)
         if not self.sync_enabled or self.request_sync_now is None:
             raise ConflictError("La carga automática del monitoreo está apagada")
         self.request_sync_now()

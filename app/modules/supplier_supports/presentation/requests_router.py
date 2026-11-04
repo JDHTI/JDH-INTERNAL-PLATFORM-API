@@ -10,13 +10,14 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.presentation.router import SupportResponse, _response
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("solicitudes-apoyos"))])
 _principal = Depends(get_current_principal)
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 _supports = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])

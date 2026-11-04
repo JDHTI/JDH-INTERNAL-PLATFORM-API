@@ -348,6 +348,9 @@ class FakeManagers:
     async def is_manager(self, principal: Principal) -> bool:
         return principal.is_platform_admin or principal.email in self.emails
 
+    async def can_read(self, principal: Principal) -> bool:
+        return principal.is_moderator or await self.is_manager(principal)
+
 
 class FixedCalendar:
     def today(self) -> date:

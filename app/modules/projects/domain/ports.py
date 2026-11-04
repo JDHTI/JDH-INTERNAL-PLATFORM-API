@@ -36,12 +36,16 @@ class AreaRef(Protocol):
 class AreaAccess(Protocol):
     """Answer area access questions without reading the areas module's tables."""
 
-    async def authorize(self, slug: str, principal: Principal) -> AreaRef:
-        """Return the area when the principal may use its space.
+    async def authorize(
+        self, slug: str, principal: Principal, module: str | None = None, action: str = "read"
+    ) -> AreaRef:
+        """Return the area when the principal may use ``module`` of its space.
 
         Args:
             slug (str): Area slug.
             principal (Principal): The caller.
+            module (str | None): Module of the permission catalog.
+            action (str): ``read`` or ``manage``.
 
         Returns:
             AreaRef: The authorized area.
