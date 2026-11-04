@@ -31,8 +31,21 @@ class ExportTaxRow:
 
 
 @dataclass(frozen=True)
+class NewPriceList:
+    """The header of a list the update creates (record ``0112``)."""
+
+    price_list_id: str
+    description: str
+    currency: str = "COP"
+
+
+@dataclass(frozen=True)
 class PriceListExport:
-    """The rows of a price list update; each tax row follows the price of its SKU."""
+    """The rows of a price list update; each tax row follows the price of its SKU.
+
+    With ``new_list`` the update creates that list before writing its prices.
+    """
 
     rows: tuple[ExportRow, ...]
     taxes: tuple[ExportTaxRow, ...] = ()
+    new_list: NewPriceList | None = None

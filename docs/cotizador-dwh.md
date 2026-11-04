@@ -4,7 +4,7 @@ Fecha de verificación: **2026-11-03**, contra el PostgreSQL del DWH (base `dwh`
 
 > [!important] Resumen en 6 líneas
 > - Histórico de venta: **`consumo.ventas`** (una fila por línea de factura o devolución). No trae IVA ni la lista de precios aplicada; el precio unitario se calcula.
-> - Clientes: **`consumo.clientes`** (una fila por sucursal). Mayorista = `cod_canal = '0150'` ("MAYORISTAS Y DISTRIBUIDORES"). Para el precio conviene usar la `lista_precio_id` del cliente y no el canal (ver §2.3).
+> - Clientes: **`consumo.clientes`** (una fila por sucursal). Mayorista = `cod_canal = '0150'` ("MAYORISTAS Y DISTRIBUIDORES"). Para el precio conviene usar la `lista_precio_id` del cliente y no el canal (ver §9.2.3).
 > - Vendedor ↔ usuario de la plataforma: `consumo.vendedores.correo` (correo corporativo `@JDH.COM.CO`), pero **solo 111 de 584 vendedores activos lo tienen**.
 > - Costo actual: **no hay una vista de "costo del ítem"**. Sale de `consumo.inventario_corte` (costo promedio por instalación y último costo, por bodega). Varía por centro de operación.
 > - Listas de precios: `consumo.precios_lista_vigentes` (precio vigente por lista × SKU × UM, con IVA e impoconsumo ya calculados) y `consumo.listas_precios` (maestro).
@@ -257,7 +257,7 @@ Ejemplo:
 | 2537 | Abrasivo en Polvo Pino 1-A x700g | UNID | C18 | 18 | 1614 | 19 | 0009 IVA DE 19% | 19 |
 | 1485 | Abrasivo en Polvo Pino 1-A x500g | UNID | C30 | 30 | 1614 | 19 | 0009 IVA DE 19% | 19 |
 
-### 3.3 Costo actual: `consumo.inventario_corte`
+### 3.3 Costo actual: `consumo.inventario_corte` (reemplazado, ver §9.2)
 
 **No hay una vista de "costo del ítem" a nivel de producto.** El costo actual sale de la foto de inventario:
 
@@ -523,3 +523,315 @@ En el 0127 del ejemplo, el sku 12014 necesita también su propio 0126 con la mis
 | Costo actual | `consumo.inventario_corte` (último `fecha_corte`, `costo_prom_unit_ins`, por CO) | `referencia` = `sku`, `co_bodega` |
 | Precio vigente por lista | `consumo.precios_lista_vigentes` (`precio_unidad_inventario`, `impoconsumo_valor`) | `lista_precio_id`, `sku` |
 | Margen objetivo, apoyos | **Solo en la plataforma** | — |
+
+## 9. Segunda ronda: reglas de la skill de listas de precios
+
+El cotizador aplica estas reglas desde `0038_quotation_review` (ver [cotizador.md](cotizador.md)). El costo pasó de `inventario_corte` a `inventario_fecha` y a la cotización del proveedor.
+
+Verificado el **2026-11-03** contra el DWH de producción (rol de solo lectura) y contra `UnoEE_Real` (SIESA). Leí completa `internal-platform-api\SKILL-LISTA-PRECIOS.md` antes de responder. Los tiempos son `Execution Time` de `EXPLAIN ANALYZE` en el servidor; no incluyen red ni driver.
+
+> [!important] Resumen
+> 1. **Las cotizaciones del DWH ya están limpias.** Los casos de la skill (15379 con 5.587.154, 21050 con 178.147) se corrigieron el 2026-10-28, cuando t212 pasó a extracción completa diaria. Hoy el DWH trae 2.640 y 139.115, igual que SIESA. Comparación completa: **101.803 filas, misma cantidad y misma suma de precio que SIESA hasta el último rowid extraído**. Lo que sigue saliendo raro (unas 52 filas) son **errores de captura en el propio SIESA**, por ejemplo un precio de caja cargado como UNID. Propongo un filtro contra la mediana del último costo.
+> 2. **Para el costo usa `consumo.inventario_fecha`, no `inventario_corte`.** Corrijo lo que dije en la primera ronda: `inventario_corte` reconstruye el costo a partir de movimientos y hoy difiere en 3.681 de 14.457 filas, con casos en 0. `inventario_fecha` es la foto directa de SIESA (t400 + t402) de esta mañana (08:18).
+> 3. **El DWH no tiene la relación lista → bodegas.** Sí tiene CO → bodegas, pero no identifica de forma única cuál es la principal y cuál la cava. Hay que fijar el mapeo en una tabla de la plataforma.
+> 4. **El estado "Bloqueado" existe en SIESA** (`t121.f121_ind_estado = 2`, 11 ítems), pero `consumo.productos.estado` lo reduce a `I`.
+> 5. **`precios_lista_vigentes.impoconsumo_valor` ya trae el valor Costa en las listas 004 y 11N.** La regional sale de `clientes.cod_co_factura`.
+> 6. **Crear una lista nueva es el registro 0112 v01** (101 caracteres) y después sus 0126 v03. Asignarla al cliente es el registro 0201 (`f201_id_lista_precio`, pos 140), que **reescribe la sucursal completa**. Ver el riesgo en §9.5.4.
+
+---
+
+### 9.1 Costo de cotización (`consumo.cotizaciones_proveedores`)
+
+#### 9.1.1 Columnas reales
+
+`cotizacion_rowid, proveedor_key, proveedor_nit, proveedor, proveedor_sucursal_id, proveedor_sucursal, proveedor_activo, tipo_proveedor, clase_proveedor, condicion_pago, producto_key, sku, producto, producto_activo, tipo_inventario_servicio_id, tipo_inventario_servicio, grupo_impositivo_id, grupo_impositivo, marca, categoria, linea, sublinea, fecha_activacion, fecha_hasta, unidad_medida_id, moneda_id, precio_unitario, descuento_escala_pct, descuento_valor, costo_bruto, icui_tasa_pct, icui_valor, ibua_valor, ibua_valor_um, costo_impts, tiempo_entrega_dias, centro_operacion_id, convenio, es_ultima_activacion, es_vigente`
+
+- **Grano:** una fila por cotización de SIESA (`t212.f212_rowid`). Origen: t212 (precio), t213 (IBUA), t214 (escala de descuento). Se extrae **completa cada madrugada** (hoy a las 03:11).
+- `costo_bruto = precio_unitario − precio_unitario × descuento_escala_pct/100`.
+- `es_vigente = es_ultima_activacion AND fecha_activacion <= now() AND coalesce(fecha_hasta,'infinity') >= now()`. `es_ultima_activacion` marca la última fecha de activación de cada proveedor × sucursal × ítem × UM.
+- **`icui_tasa_pct` es un porcentaje**, igual que en la fórmula de la skill. **`ibua_valor` es por unidad base.** Para UNID/KL usa `ibua_valor`; `ibua_valor_um` es el mismo valor multiplicado por el factor de la UM, para cajas.
+- **La sucursal del proveedor está en `proveedor_sucursal_id`.** No uses `centro_operacion_id`, que viene vacío.
+
+#### 9.1.2 Lactalis
+
+"Proveedor 417" es el **código del proveedor-criterio del ítem** (`consumo.productos.cod_proveedor = '417'`, 234 ítems). En cotizaciones, Lactalis se identifica por **`proveedor_nit = '800245795'`** (LACTALIS COLOMBIA S.A.S). Tiene 244 cotizaciones vigentes en la sucursal `001` y 25 en la `003`.
+
+Regla en SQL: `(proveedor_nit <> '800245795' or proveedor_sucursal_id = :suc_lactalis)`, con `:suc_lactalis = '003'` para las listas de Centro (003, 10U, 10S) y `'001'` para todas las demás. Verificado con 1081 (Crema de Leche Parmalat) en la 10U: **13.104**, el valor de la sucursal 003 que menciona la skill.
+
+#### 9.1.3 ¿El DWH trae valores malos?
+
+**Ya no.** Lo que pasaba: hasta el 2026-10-28, t212 se extraía por secuencia de rowid, que solo ve filas nuevas. Las ediciones en el mismo registro (SIESA cambia el precio sin crear fila nueva) y los borrados no llegaban: había 56 precios viejos y 809 cotizaciones borradas que seguían saliendo. Desde ese día t212 se extrae completa todos los días.
+
+Verificación de hoy:
+
+| Prueba | Resultado |
+|---|---|
+| 15379, vigente en el DWH | **2.640** (rowid 55999), igual que SIESA |
+| 21050, vigente en el DWH | **139.115** (rowid 266508), igual que SIESA |
+| t212 completa, DWH vs SIESA hasta el rowid 283.732 | **101.803 = 101.803 filas; suma de `precio` 11.783.482.564,9495 en ambos lados** |
+| SIESA después de la extracción | 44 cotizaciones nuevas creadas hoy después de las 03:11; entran mañana |
+
+La instrucción de la skill ("usar el Cotizaciones.xlsx mientras TI revisa el MCP") ya se puede levantar. Que lo confirme quien la puso, con una comparación de un día.
+
+#### 9.1.4 Filtro de cotizaciones absurdas
+
+Lo que queda raro está **mal en SIESA**, no en el DWH. Ejemplo: 12779 Kit Kat x41.5 g tiene en t212 `UNID = 84.792` (activación 2026-04-07), cuando la caja C24 cuesta 2.035.008. Es un precio de caja cargado como unidad. El DWH lo reproduce tal cual.
+
+Universo con el filtro de la skill (`es_vigente and producto_activo and unidad_medida_id in ('UNID','KL')`): **8.830 filas y 8.775 SKU**. Las 27.625 vigentes de la skill son sin filtrar.
+
+Probé dos referencias:
+
+| Referencia | Filas cot > 3× ref | Problema |
+|---|---|---|
+| Costo promedio de inventario (máximo entre bodegas con existencia) | 911 | **No sirve.** Bodegas como MDE23 "OBSOLETOS Y CORTA FECHA" llevan costo promedio 1 o 0,98, y la referencia se cae. |
+| Máximo `ultimo_costo_unit` (> 1) entre instalaciones | 25 | Frágil: el último costo también tiene basura (15379 tiene un último costo de 4.751.173 en una instalación). |
+| **Mediana de `ultimo_costo_unit` (> 1) entre instalaciones** | **52 filas / 52 SKU** (29 > 5×, 24 > 10×) | **Recomendada.** Aguanta una instalación con basura. |
+
+Propuesta:
+- **Descartar la cotización si `costo > 3 × mediana(último costo)`.** El costo es un máximo, así que una cotización inflada sube el precio; una baja no hace daño. Las 26 filas con `costo < mediana/3` no se descartan.
+- **Devolver la cotización descartada en una columna aparte** (`costo_cot_descartado`) para mostrarla como alerta "Revisar cotización en SIESA". No se debe esconder.
+- Si el SKU no tiene último costo (677 filas, ítems sin compras registradas), no hay referencia: la cotización pasa sin filtro y se marca "sin referencia".
+
+#### 9.1.5 Consulta del costo para N SKU (cotización + inventario de la bodega de la lista)
+
+```sql
+-- :skus          text[]  referencias a cotizar
+-- :suc_lactalis  '003' para listas Centro (003, 10U, 10S); '001' para el resto
+-- :bod1, :bod2   bodegas de la lista (Bodega 2 = CONGELADOS/REFRIGERADOS); ver §9.2
+with params as (
+  select :skus::text[] skus, :suc_lactalis::text lactalis_suc, :bod1::text bod1, :bod2::text bod2
+),
+prod as (
+  select p.producto_key, p.sku, p.linea, p.estado
+  from consumo.productos p, params where p.sku = any(params.skus)
+),
+ref as (   -- mediana del último costo por instalación, referencia del filtro
+  select producto_key, percentile_cont(0.5) within group (order by ultimo_costo_unit) med
+  from (select distinct f.producto_key, f.instalacion, f.ultimo_costo_unit
+        from consumo.inventario_fecha f join prod using (producto_key)
+        where f.ultimo_costo_unit > 1) s
+  group by 1
+),
+cot as (
+  select c.producto_key,
+         round(round(c.costo_bruto) * (1 + coalesce(c.icui_tasa_pct,0)/100) + coalesce(c.ibua_valor,0)) costo
+  from consumo.cotizaciones_proveedores c join prod using (producto_key), params
+  where c.es_vigente and c.producto_activo and c.unidad_medida_id in ('UNID','KL')
+    and (c.proveedor_nit <> '800245795' or c.proveedor_sucursal_id = params.lactalis_suc)   -- Lactalis
+),
+cot_ok as (
+  select c.producto_key,
+         max(c.costo) filter (where r.med is null or c.costo <= 3 * r.med) costo_cot,
+         max(c.costo) filter (where c.costo > 3 * r.med)                   costo_cot_descartado
+  from cot c left join ref r using (producto_key) group by 1
+),
+inv as (
+  select f.producto_key, max(round(f.costo_prom_unit_ins)) costo_inv, max(f.existencia) existencia
+  from consumo.inventario_fecha f join prod pr using (producto_key), params
+  where f.bodega = case when pr.linea in ('CONGELADOS','REFRIGERADOS') then params.bod2 else params.bod1 end
+  group by 1
+)
+select pr.sku, pr.linea, pr.estado,
+       c.costo_cot, c.costo_cot_descartado, i.costo_inv, i.existencia, r.med as ultimo_costo_mediana,
+       greatest(c.costo_cot, i.costo_inv) as costo_max      -- greatest() ignora NULL
+from prod pr
+left join cot_ok c using (producto_key)
+left join inv    i using (producto_key)
+left join ref    r using (producto_key)
+order by pr.sku;
+```
+
+Tiempos medidos:
+
+| Caso | Tiempo |
+|---|---|
+| 8 SKU, lista 10U (BTA9/BTA8) | **106 ms** |
+| 2.956 SKU (toda la 10U) | **1,41 s**, de los cuales ~1,1 s fueron armar la lista de SKU con `trim(lista_precio_id) = '10U'` |
+| Armar los SKU de la 10U **sin `trim()`** | **35 ms** (usa índice) |
+
+> [!tip] Quita el `trim()` de la skill
+> `lista_precio_id` no tiene espacios en el DWH: 0 de 3.569 listas tienen relleno. `trim(lista_precio_id) = '10U'` impide usar el índice y obliga a leer las 619 mil filas de precios. Usa `lista_precio_id = '10U'`.
+
+Resultado real (lista 10U):
+
+| sku | costo_cot | costo_cot_descartado | costo_inv (BTA9) | existencia | mediana último costo | costo_max |
+|---|---|---|---|---|---|---|
+| 1081 (Lactalis, suc 003) | 13.104 | — | 13.104 | 1.068 | — | 13.104 |
+| 12779 Kit Kat | — | **80.552** | 2.049 | 0 | 2.780 | 2.049 |
+| 15379 | 2.640 | — | **1** | 2.585 | — | 2.640 |
+| 21050 | 139.115 | — | 139.115 | 152 | — | 139.115 |
+| 22858 | 43.166 | — | 36.949 | 98 | 39.274 | 43.166 |
+| 7654 | 25.330 | — | 25.840 | 114 | 26.563 | 25.840 |
+
+**Variante lista 1** (mayor entre las 17 bodegas de la skill): en `inv`, cambia el filtro por `f.bodega = any(array['MDE1','MDE3','MDE4','OCC1','OCC16','OCC14','BTA9','BTA8','BTA20','CTG1','CTG15','CTG14','BGA1','BGA11','BAQ1','BAQ2','BAQ10'])` sin el `case`. El `max(round(...))` ya da el mayor, y `sum(existencia)` da la existencia total.
+
+> [!warning] Costos de inventario en 1 o 0
+> Como muestra 15379 (costo 1 en BTA9 con 2.585 unidades), hay bodegas con costo promedio ≤ 1. La regla de la skill "costo ≤ $1 → Revisar" sigue haciendo falta. Además, en el máximo de la lista 1 conviene ignorar `costo_prom_unit_ins <= 1` (`filter (where costo_prom_unit_ins > 1)`) para que un 1 no se coma la referencia cuando es el único valor.
+
+---
+
+### 9.2 Inventario: cuál vista y qué bodega
+
+#### 9.2.1 `inventario_fecha` vs `inventario_corte`
+
+| | `consumo.inventario_fecha` | `consumo.inventario_corte` |
+|---|---|---|
+| Qué es | Foto **directa** de SIESA: t400 (existencia por bodega) + t402 (costo promedio por instalación) + t132 (último costo) | Saldo **reconstruido** desde movimientos (t470) por cierre de mes; el mes en curso corta hoy |
+| Frescura hoy | `max(foto_at)` = **2026-11-03 08:18** | corte 2026-11-03, construido a las 03:00 |
+| Costo `(ins)` | El de SIESA (t402) | Último costo promedio visto en movimientos; coincide con SIESA en ~85 % de los pares |
+| Hoy, mismo SKU × bodega | — | **3.681 de 14.457 filas con costo distinto**, varias en 0 (3144 en OCC1: 0 vs 54.748) |
+
+**La correcta es `inventario_fecha`**, como dice la skill. Mi recomendación de la primera ronda (usar `inventario_corte`) era un error. Cambien el cotizador a `inventario_fecha`. Antes de calcular, la verificación de la skill (`select max(foto_at) from consumo.inventario_fecha` = hoy) sigue siendo válida.
+
+Columnas útiles de `inventario_fecha`: `referencia, bodega, desc_bodega, co_bodega, instalacion, existencia, cant_disponible, costo_prom_unit_ins, costo_prom_uni_bodega, ultimo_costo_unit, fecha_ultimo_costo, producto_activo, bodega_activa, fecha_ultima_venta, foto_at, producto_key, bodega_key`. Grano: SKU × bodega, todas las filas de t400 (226.852; 14.364 con existencia).
+
+#### 9.2.2 ¿El DWH tiene CO → bodegas o lista → bodegas?
+
+- **Lista → bodegas: no existe** en el DWH ni en SIESA. Es una convención del área (la hoja Faltantes en Lista y la columna Bodega de los archivos de Melis).
+- **CO → bodegas: sí** (`consumo.bodegas.co`, `inventario_fecha.co_bodega`), pero un CO tiene muchas bodegas. Por descripción, cada CO tiene varias "PRINCIPAL" y "CAVA":
+
+| CO | Bodegas "PRINCIPAL" / "CAVA" activas |
+|---|---|
+| 001 | LYSME, MDE1, MED1 (PRINCIPAL MEDELLIN); MDE3 CAVA MEDELLIN, MDE5 CAVA PREMIUM, MDE25, MDE26 |
+| 002 | CALI1, OCC1 (PRINCIPAL); OCC16 CAVA OCCIDENTE |
+| 003 | BDLYS, BTA9 (PRINCIPAL BOGOTA); BTA8 CAVA BOGOTA |
+| 004 | CART4, CTG1 (PRINCIPAL CARTAGENA), VUPx; CTG15 CAVA CARTAGENA, CTG17 |
+| 005 | BGA1 |
+| 009 | BAQ1; BAQ2 CAVA, BAQ15 |
+
+No se puede derivar la bodega de forma automática y confiable. **Hay que fijar el mapeo en una tabla de la plataforma** (`lista_precio_id → bodega_1, bodega_2`), cargada desde la skill:
+
+| Lista(s) | Bodega 1 | Bodega 2 (CONGELADOS/REFRIGERADOS) |
+|---|---|---|
+| 001, 1M, 10X | MDE1 | MDE3 |
+| 002, 10T, 10R | OCC1 | OCC16 |
+| 003, 10U, 10S | BTA9 | BTA8 |
+| 004, 11N | CTG1 | CTG15 |
+| 005, 10N | BGA1 | — (BGA1) |
+| 009, 1DR | BAQ1 | BAQ2 |
+| 35P | URA6 | — |
+| 1 | las 17 de la skill (máximo) | |
+
+La columna `linea` de `consumo.productos` trae exactamente `CONGELADOS` (339 ítems activos) y `REFRIGERADOS` (191) para la regla de Bodega 2.
+
+#### 9.2.3 Lista fuera de la skill (31A, 62Y, …)
+
+**Recomiendo usar la Bodega 1/2 del CO que factura al cliente** (`clientes.cod_co_factura`), con el mismo mapeo por CO de la tabla anterior (001 → MDE1/MDE3, 002 → OCC1/OCC16, 003 → BTA9/BTA8, 004 → CTG1/CTG15, 005 → BGA1, 009 → BAQ1/BAQ2). Es lo que más se parece a cómo SIESA costea la venta: el costo de la factura es el promedio de la **instalación** desde donde se despacha. Hay dos casos sin regla, y el área tiene que decidirlos:
+- **DECISIÓN PENDIENTE:** clientes con CO 006 Yumbo, 007 Urabá, 008 Valledupar, 010 Quindío, 100, 200 y 201. No están en el mapeo, y la skill excluye expresamente APO1/APO8/VUP1/VUP9 de la lista 1.
+- 3.817 sucursales activas no tienen `cod_co_factura`: usar el máximo de la lista 1 y marcar la alerta.
+
+---
+
+### 9.3 Estado del ítem
+
+- `consumo.productos.estado` → **`A` / `I`** (9.497 A, 18.346 I). Sale de `t121.f121_ind_estado` (estado de la extensión, no de t120). Es el mismo valor que `producto_activo` en `inventario_fecha` y `cotizaciones_proveedores`.
+- **SIESA tiene tres estados: 0 = inactivo, 1 = activo, 2 = bloqueado.** Hoy: 18.330 / 9.504 / 11. **El DWH reduce el bloqueado a `I`.** El dato está en `staging.stg_siesa__t121_mc_items_extensiones.ind_estado`, que la plataforma puede leer si entra como `adm_plataforma`, extraído hoy a las 07:31. Los 11 bloqueados de hoy: 9582, 9959, 1415, 1886, 6129, 12534, 15378, 18037, 22159, 22248, 27568.
+- **¿Coincide con la columna Estado del Maestro Margen?** Debería, porque ambos leen el estado del ítem en SIESA, pero no puedo validarlo: el Maestro Margen es un Excel que no está en el DWH. El desfase que se vio hasta el 2026-10-28 (t121 no movía su `ts` al cambiar de estado) se corrigió al extraer t121 completo. Hoy el DWH tiene 9.497 activos y SIESA 9.504; la diferencia corresponde a cambios hechos después de la extracción de las 07:31.
+- Si necesitan `Bloqueado` en el cotizador sin leer staging, la propuesta es agregar a `consumo.productos` una columna `estado_siesa` (`Activo`/`Inactivo`/`Bloqueado`). Es un cambio de dbt en `dwh-platform` y hay que pedirlo.
+
+```sql
+-- Mientras tanto (solo adm_plataforma): estado de 3 valores
+select p.sku,
+       case x.ind_estado when 1 then 'Activo' when 2 then 'Bloqueado' else 'Inactivo' end as estado_siesa
+from consumo.productos p
+join staging.stg_siesa__t120_mc_items i            on i.id = p.item_id and i.id_cia = 1
+join staging.stg_siesa__t121_mc_items_extensiones x on x.rowid_item = i.rowid and x.id_cia = i.id_cia
+where p.sku = any(:skus);
+```
+
+---
+
+### 9.4 Regional e impuesto de licores (Nacional vs Costa)
+
+- **Regional de facturación del cliente:** `consumo.clientes.cod_co_factura` / `co_factura`. Valores activos: 001 ANTIOQUIA (26.526), 003 CENTRO (14.458), 002 OCCIDENTE (5.692), **004 COSTA (3.122)**, 005 ORIENTE (2.778), 009 BARRANQUILLA (2.057), 200 JDH MARKET APARTADO, 006 YUMBO, 008 VALLEDUPAR, 010 QUINDIO, 201 JDH MARKET VALLEDUPAR, 007 URABA, 100 ACO URABA, y 3.817 sin valor.
+- **`precios_lista_vigentes.impoconsumo_valor` ya trae el valor Costa en las listas de la Costa.** Ejemplos reales:
+
+| sku | 1 / 001 / 009 / 1M / 1DR / 10X | 004 / 11N |
+|---|---|---|
+| 21700 Juniper Moscow Mule | 48.432 | **49.728** |
+| 21701 Juniper Gin Tonic | 60.828 | **62.256** |
+| 26275 Ron Blanco Carbón | 38.555 | **39.832** |
+| 18973 Juniper Moscow Mule (unidad) | 4.036 | **4.144** (004) |
+| 12013 / 12014 Vino Cavic, 26278 / 26279 Selva Gin | igual en todas | igual |
+
+  Eso confirma la regla de la skill: 004 y 11N llevan Costa, y 009 y 1DR (Barranquilla) llevan Nacional.
+
+**Regla recomendada para el cotizador:**
+1. Si la lista del cliente ya tiene precio del SKU, toma su `impoconsumo_valor`. Es lo que SIESA tiene cargado.
+2. Para una lista nueva o un SKU sin precio en la lista: Costa si `cod_co_factura = '004'` (copiar el `impoconsumo_valor` de la lista **004**); si no, Nacional (copiar el de la lista **1**).
+3. **DECISIÓN PENDIENTE:** 008 Valledupar y 201 Market Valledupar están en la Costa geográficamente, pero la skill no los menciona. Que el área confirme.
+4. La llave para el 0127 sale de `consumo.producto_impuestos` (`indicador='venta' and tipo_calculo='valor'`): `0005` IMPOCONSUMO, `0011` licores importados IVA 5 %, `0024` licores nacionales IVA 5 %. Usa la del SKU; no la fijes por tipo de licor.
+
+---
+
+### 9.5 Crear una lista en SIESA y asignarla al cliente
+
+#### 9.5.1 Cabecera de la lista: registro **0112 v01** ("Lista de precio")
+
+Es la única versión que hay en t661. Layout según `t662_imp_campos` (sin las columnas internas de trabajo, por ejemplo `f112_ind_existe`):
+
+| Pos | Long | Tipo | Oblig. | Campo | Valor / nota |
+|---|---|---|---|---|---|
+| 1 | 7 | N | sí | f_numero_reg | Consecutivo |
+| 8 | 4 | N | sí | f_tipo_reg | `0112` |
+| 12 | 2 | N | sí | f_subtipo_reg | `00` |
+| 14 | 2 | N | sí | f_version_reg | `01` |
+| 16 | 3 | N | sí | f_cia | `001` |
+| 19 | 1 | N | sí | f_actualiza_reg | `0` para crear (si ya existe, no la toca); `1` reemplaza la cabecera |
+| 20 | 3 | A | sí | **f112_id** | Código nuevo, 3 caracteres |
+| 23 | 40 | A | sí | **f112_descripcion** | Descripción |
+| 63 | 3 | A | sí | f112_id_moneda | `COP` |
+| 66 | 1 | N | sí | f112_ind_tipo_lista | `1`, como todas las listas reales (1, 1M, 10X, 31A, 62Y) |
+| 67–68 | 1+1 | N | sí | f112_ind_impuesto, f112_ind_precio_sugerido | `0` y `0`, como las reales (precios **sin** impuesto, sin precio sugerido). El diccionario pone los dos en la pos 68 y deja la 67 vacía, con toda probabilidad un error del diccionario. Con los dos en `0` el resultado es el mismo, pero confírmenlo en pruebas |
+| 69 | 3 | A | no | f112_id_lista_base | En blanco (lista independiente) |
+| 72 | 20 | N | no | f112_factor_base | Ceros |
+| 92 | 9 | N | no | f112_precision_base | Ceros |
+| 101 | 1 | N | no | f112_ind_aplica_item_base | `0` |
+
+**Después de la cabecera bastan los 0126 v03**, uno por SKU, con la lista nueva en las posiciones 20–22, más los 0127 de los licores. Todo puede ir en el mismo archivo, con la 0112 antes que los 0126 (el importador procesa por `f661_orden_proceso`).
+
+**Código de la lista nueva:** son 3 caracteres alfanuméricos. Hoy hay 3.569 listas en la compañía 1, casi todas de la forma dígitos + letra (`62Y`, `10X`). Verifiquen que el código esté libre en SIESA antes de generarlo; `consumo.listas_precios` refleja SIESA del día anterior. Ejemplo: el patrón `C` + 2 dígitos (`C01`…`C99`) está **sin usar** (0 listas hoy) y serviría para identificar las listas creadas desde el cotizador. **DECISIÓN PENDIENTE** del área.
+
+#### 9.5.2 Ejemplo de archivo (generado según el diccionario y verificado por longitud)
+
+Lista nueva `C01` para un cliente; SKU 22858 a 53.958 desde el 2026-11-04:
+
+```
+000000100000001001
+0000002011200010010C01COTIZADOR DISTRI CARPO FOODS            COP100   000000000000000.00000000.00000
+0000003012600030011C01       22858                                                                                                         20261104                UNID000000000053958.0000000000000000000.0000000000000000000.0000000000000000000.00000000000
+000000499990001001
+```
+
+Longitudes: 18 / **101** / 254 / 18.
+
+#### 9.5.3 Asignar la lista al cliente: registro **0201** (clientes)
+
+- El campo es **`f201_id_lista_precio`, pos 140, 3 caracteres**. Está en la misma posición desde la v02 hasta la v16. La lista se asigna **por sucursal**, la misma granularidad que `consumo.clientes.lista_precio_id`.
+- La versión que ya usa otro integrador (BEX) por el webservice es la **v04 (757 caracteres)**. Campos obligatorios de la v04: `f201_id_tercero` (20, 15), `f201_id_sucursal` (35, 3), `f201_ind_estado_activo` (38), `f201_descripcion_sucursal` (39, 40), `f201_id_moneda` (79, 3), `f201_ind_calificacion` (86), `f201_id_tipo_cli` (132, 4), `f201_fecha_ingreso` (745, 8), más `f_actualiza_reg = 1`.
+
+#### 9.5.4 Riesgos antes de automatizar
+
+> [!danger] El 0201 no es un "update de un campo"
+> Con `f_actualiza_reg = 1`, el 0201 **reemplaza la sucursal del cliente con lo que trae la línea**: vendedor (82), condición de pago (87), cupo (93), CO de factura (169), bloqueos, contacto y dirección (427–744). No hay forma de mandar solo la lista. Si los demás campos van en blanco, es probable que borren datos del cliente. Ese comportamiento **no está verificado**, y `ImportarXML` no tiene modo de validar sin escribir.
+> Opciones, de más a menos segura:
+> 1. **Asignar la lista a mano en SIESA** (un cliente a la vez; el cotizador solo crea la lista y sus precios).
+> 2. Armar el 0201 completo **desde los datos actuales de la sucursal** (`consumo.clientes` trae la mayoría: vendedor, condición de pago, CO de factura, contacto, dirección) y probarlo primero en el ambiente de pruebas de SIESA.
+
+> [!warning] Canal de carga
+> El login del DWH en el webservice (`ws_pro_DWH`) es **solo lectura**. Si la plataforma va a subir el plano por `ImportarXML` y no solo generar el .txt para que Melis lo importe, necesita una conexión de importación propia pedida a SIESA.
+
+---
+
+### 9.6 Resumen de cambios para el cotizador
+
+| Tema | Antes (ronda 1 / skill) | Ahora |
+|---|---|---|
+| Inventario | `inventario_corte` | **`inventario_fecha`** (foto directa, 08:18) |
+| Cotizaciones | La skill dice "MCP malo, usar el Excel" | DWH = SIESA (verificado completo); filtro `costo > 3 × mediana(último costo)` → `costo_cot_descartado` |
+| Lactalis | "Proveedor 417" | `proveedor_nit = '800245795'` y `proveedor_sucursal_id` |
+| Filtro de lista | `trim(lista_precio_id) = …` | `lista_precio_id = …` (35 ms en vez de ~1 s) |
+| Lista → bodegas | — | Tabla propia en la plataforma (§9.2.2); fuera de la skill, el CO que factura |
+| Estado | A/I | A/I en consumo; Bloqueado solo en staging t121 (pedir `estado_siesa`) |
+| Impoconsumo | Maestro Margen Nacional/Costa | `precios_lista_vigentes.impoconsumo_valor` de la lista (004/11N ya traen Costa) |
+| Lista nueva | — | 0112 v01 + 0126 v03 (+ 0127); asignación por 0201 con riesgo (§9.5.4) |

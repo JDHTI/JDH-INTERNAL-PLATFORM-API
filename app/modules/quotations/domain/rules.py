@@ -33,7 +33,7 @@ from app.modules.order_validation.domain.rules import (
     scope_of,
     share_of_cost,
 )
-from app.modules.quotations.domain import vocabulary
+from app.modules.quotations.domain import pricing, vocabulary
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
     Branch,
@@ -53,6 +53,7 @@ ZERO = Decimal(0)
 ONE = Decimal(1)
 HUNDRED = Decimal(100)
 MONEY = Decimal("0.0001")
+PESO = Decimal(1)
 RATIO = Decimal("0.000001")
 _TARGET_METHODS = ("margen_minimo", "puntos_margen")
 
@@ -88,14 +89,43 @@ def minimum_margin(target: Decimal | None, policy: QuotationPolicy) -> Decimal |
 def minimum_price(
     cost: Decimal | None, support: Decimal, floor_margin: Decimal | None
 ) -> Decimal | None:
-    """Lowest price whose margin with support reaches ``floor_margin`` (rounded up)."""
+    """Lowest price in whole pesos whose margin with support reaches ``floor_margin``."""
 
     if cost is None or floor_margin is None or floor_margin >= ONE:
         return None
     price = (cost - support) / (ONE - floor_margin)
     if price <= 0:
         return ZERO
-    return price.quantize(MONEY, rounding=ROUND_UP)
+    return price.quantize(PESO, rounding=ROUND_UP)
+
+
+def price_at_margin(
+    cost: Decimal | None, support: Decimal, target: Decimal | None, family: str
+) -> Decimal | None:
+    """``(cost - support) / (1 - target)`` in whole pesos, rounded as the list family does."""
+
+    if cost is None or target is None or target >= ONE:
+        return None
+    price = (cost - support) / (ONE - target)
+    if price <= 0:
+        return None
+    return pricing.round_price(price, family)
+
+
+def price_for_margin(line: QuotationLine, target: Decimal, family: str) -> Decimal | None:
+    """The price that gives ``line`` the margin ``target`` (with its support).
+
+    Never under the line's minimum when the margin asked for meets the rule: rounding to the
+    peso must not turn a valid margin into one below the minimum.
+    """
+
+    price = price_at_margin(line.cost, line.support_amount, target, family)
+    if price is None:
+        return None
+    floor = line.min_margin_pct
+    if floor is not None and target >= floor and line.min_price is not None:
+        price = max(price, line.min_price)
+    return price
 
 
 def compliance(line: QuotationLine) -> str | None:
@@ -339,26 +369,39 @@ def build_line(
     policy: QuotationPolicy,
     day: date,
     line_id: UUID,
+    price_family: str = pricing.GENERAL,
+    regional: str = vocabulary.NATIONAL,
 ) -> QuotationLine:
     """Price one SKU from its last sale (if any), current cost, target margin and supports.
 
     A SKU the advisor adds has no last sale: it comes with the warehouse item (``item``) and
     is priced from scratch. Only the liquor tax is carried as a tax (VAT is not shown).
+    The cost is the highest of the supplier's quotation and the inventory of the list's
+    warehouse, times the list family's factor (see :mod:`pricing`).
     """
 
     problems: list[str] = []
     if product is None:
         problems.append("producto_no_sincronizado")
     source = sale if sale is not None else item
+    is_active = all(value.is_active for value in (source, cost) if value is not None)
+    if not is_active:
+        problems.append(vocabulary.INACTIVE_ITEM)
     supplier_code = _first(
         product.supplier_code if product else None, source.supplier_code if source else None
     )
     field_name = channel_field(channel)
     product_target = product.margins.get(field_name) if product else None
     basis = BASIS.get(field_name, "lista")
-    cost_value = cost.cost if cost else None
-    if cost is None:
+    cost_value, cost_source = pricing.effective_cost(
+        cost.quote_cost if cost else None,
+        cost.inventory_cost if cost else None,
+        pricing.COST_FACTOR.get(price_family, ONE),
+    )
+    if cost_value is None:
         problems.append("sin_costo")
+    if cost is not None and cost.discarded_quote is not None:
+        problems.append("cotizacion_descartada")
 
     support, candidates, support_problems = pick_support(
         agreements,
@@ -379,14 +422,24 @@ def build_line(
         problems.append("sin_margen_objetivo")
     amount = support.amount if support and support.amount is not None else ZERO
     floor = minimum_margin(target, policy)
-    # The liquor tax of the customer's list; the master's national value when the list has none.
+    # The liquor tax SIESA has in the customer's list; else the margin master's value for
+    # the customer's regional (the Coast pays more on some SKUs).
     tax_amount = None
     if tax is not None:
-        tax_amount = _first(
-            list_price.value_tax_amount if list_price else None,
-            product.liquor_tax if product else None,
-        )
+        master_tax = None
+        if product is not None:
+            master_tax = (
+                _first(product.liquor_tax_coast, product.liquor_tax)
+                if regional == vocabulary.COAST
+                else product.liquor_tax
+            )
+        tax_amount = _first(list_price.value_tax_amount if list_price else None, master_tax)
     last_price = money(sale.net_price) if sale else None
+    current_with_support = margin(last_price, cost_value, amount)
+    min_price = minimum_price(cost_value, amount, floor)
+    optimal = price_at_margin(cost_value, amount, target, price_family)
+    if optimal is not None and min_price is not None:
+        optimal = max(optimal, min_price)
     return QuotationLine(
         id=line_id,
         position=position,
@@ -415,17 +468,29 @@ def build_line(
         value_tax_name=tax.name if tax and tax_amount else None,
         value_tax_amount=money(tax_amount) if tax_amount else None,
         cost=money(cost_value),
-        cost_is_global=bool(cost and cost.is_global),
         target_margin_pct=ratio(target),
         margin_basis=basis if target is not None else None,
         min_margin_pct=floor,
         current_margin_pct=margin(last_price, cost_value),
-        current_margin_with_support_pct=margin(last_price, cost_value, amount),
-        min_price=minimum_price(cost_value, amount, floor),
+        current_margin_with_support_pct=current_with_support,
+        min_price=min_price,
         support=support,
         support_candidates=candidates,
         problems=tuple(dict.fromkeys(problems)),
         origin=vocabulary.HISTORY if sale is not None else vocabulary.ADDED,
+        quote_cost=money(cost.quote_cost) if cost and cost.quote_cost is not None else None,
+        discarded_quote_cost=money(cost.discarded_quote) if cost else None,
+        inventory_cost=money(cost.inventory_cost) if cost else None,
+        cost_source=cost_source,
+        optimal_price=optimal,
+        # The support is already in the margin: a line it covers is not flagged.
+        below_target=(
+            is_active
+            and current_with_support is not None
+            and floor is not None
+            and current_with_support < floor
+        ),
+        is_active=is_active,
     )
 
 
@@ -461,12 +526,24 @@ def price_with_taxes(line: QuotationLine) -> Decimal | None:
     return money(base + (line.value_tax_amount or ZERO))
 
 
-def counts(lines: Sequence[QuotationLine]) -> tuple[int, int, int]:
-    """Lines, lines with a new price and new prices that break the rule."""
+def exported(lines: Sequence[QuotationLine]) -> list[QuotationLine]:
+    """Lines that go to the files: active in SIESA and with a new price above zero."""
 
-    changed = [line for line in lines if line.new_price is not None]
+    return [
+        line
+        for line in lines
+        if line.is_active and line.new_price is not None and line.new_price > 0
+    ]
+
+
+def counts(lines: Sequence[QuotationLine]) -> tuple[int, int, int, int]:
+    """Lines, lines that go to the files, of those the ones that break the rule, and lines
+    whose last price is under the minimum margin."""
+
+    changed = exported(lines)
     blocked = [line for line in changed if line.compliance != vocabulary.MEETS]
-    return len(lines), len(changed), len(blocked)
+    below = [line for line in lines if line.below_target]
+    return len(lines), len(changed), len(blocked), len(below)
 
 
 __all__ = [
@@ -474,10 +551,13 @@ __all__ = [
     "compliance",
     "counts",
     "customer_context",
+    "exported",
     "margin",
     "minimum_margin",
     "minimum_price",
     "pick_support",
+    "price_at_margin",
+    "price_for_margin",
     "price_with_taxes",
     "reprice",
     "variation",

@@ -34,6 +34,16 @@ MARGIN_LABELS = {
 # but no rule uses them yet.
 APPLIED_FIELDS = ("margin_list", "margin_wholesale", "margin_salsamentarias")
 
+# Liquor consumption tax per unit by regional (``IMPTOLIC``): Nacional and Costa, and the tax
+# group (``0503`` wine, ``0509`` spirits). The margin master keeps them in the ``IMPUESTOS``
+# table of ``Margen Proveedor-Impuestos``; some SKUs pay more on the Coast.
+LIQUOR_TAX_FIELDS = ("liquor_tax", "liquor_tax_coast", "liquor_tax_group")
+LIQUOR_TAX_LABELS = {
+    "liquor_tax": "Impuesto licor Nacional",
+    "liquor_tax_coast": "Impuesto licor Costa",
+    "liquor_tax_group": "Grupo impositivo",
+}
+
 _WORDS = re.compile(r"[^a-z0-9]+")
 ONE = Decimal(1)
 HUNDRED = Decimal(100)
@@ -107,7 +117,9 @@ def parse_margin(value: Any) -> tuple[bool, Decimal | None]:
 class MarginRow:
     """One row of a margin file: the SKU and the margin cells it carried.
 
-    Only the fields present in ``values`` are changed; ``None`` clears a margin.
+    Only the fields present in ``values`` are changed; ``None`` clears a margin. ``taxes``
+    holds the liquor tax fields the file carried for the SKU (see ``LIQUOR_TAX_FIELDS``);
+    ``None`` clears one.
     """
 
     row_number: int
@@ -116,6 +128,7 @@ class MarginRow:
     notes: str | None = None
     has_notes: bool = False
     problems: tuple[str, ...] = ()
+    taxes: dict[str, Decimal | str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -126,6 +139,9 @@ class MarginChange:
     description: str | None
     changes: dict[str, tuple[Decimal | None, Decimal | None]]
     notes: tuple[str | None, str | None] | None = None
+    taxes: dict[str, tuple[Decimal | str | None, Decimal | str | None]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)

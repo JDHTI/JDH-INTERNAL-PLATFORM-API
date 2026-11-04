@@ -9,7 +9,12 @@ import pytest
 from openpyxl import load_workbook
 
 from app.core.errors import InvalidInputError
-from app.modules.quotations.domain.export import ExportRow, ExportTaxRow, PriceListExport
+from app.modules.quotations.domain.export import (
+    ExportRow,
+    ExportTaxRow,
+    NewPriceList,
+    PriceListExport,
+)
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter, money
 from app.modules.quotations.infrastructure.workbook import (
     PRICE_HEADERS,
@@ -79,5 +84,26 @@ def test_workbook_has_both_sheets_of_the_template() -> None:
     assert workbook.sheetnames == ["Precios", "Impuestos en valor"]
     prices = list(workbook["Precios"].iter_rows(values_only=True))
     taxes = list(workbook["Impuestos en valor"].iter_rows(values_only=True))
-    assert prices == [PRICE_HEADERS, ("1", "123", "20260101", "unid", 100)]
-    assert taxes == [TAX_HEADERS, ("1", "123", "20260101", "unid", "0011", 10)]
+    # The date is the whole number AAAAMMDD with format 0, the reference a number.
+    assert prices == [PRICE_HEADERS, ("1", 123, 20260101, "unid", 100)]
+    assert taxes == [TAX_HEADERS, ("1", 123, 20260101, "unid", "0011", 10)]
+    cell = workbook["Precios"]["C2"]
+    assert cell.number_format == "0" and cell.font.name == "Calibri Light"
+    assert cell.font.size == 10
+
+
+def test_a_new_list_goes_first_as_record_0112() -> None:
+    export = PriceListExport(
+        rows=(ExportRow("C01", "22858", date(2026, 11, 4), "UNID", Decimal("53958")),),
+        new_list=NewPriceList("C01", "COTIZADOR DISTRI CARPO FOODS"),
+    )
+
+    lines = SiesaPriceFileWriter().write(export).decode("ascii").split("\r\n")
+
+    # The header record as the importer's dictionary lays it out (t662_imp_campos).
+    assert lines[1] == (
+        "0000002011200010010C01COTIZADOR DISTRI CARPO FOODS            COP100   "
+        "000000000000000.00000000.00000"
+    )
+    assert [len(line) for line in lines] == [18, 101, 254, 18, 0]
+    assert lines[2][7:11] == "0126" and lines[2][19:22] == "C01"

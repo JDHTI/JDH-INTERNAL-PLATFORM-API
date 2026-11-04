@@ -2,22 +2,22 @@
 
 Every query names its columns, binds its values (``$n``) and is bounded by customer or by
 SKU list. Views: ``ventas`` (one row per invoice line), ``clientes`` (one row per branch),
-``productos``, ``producto_impuestos``, ``inventario_corte`` (inventory snapshots, the last one
-is today's), ``precios_lista_vigentes``, ``listas_precios`` and ``vendedores``. See
-``docs/cotizador-dwh.md``.
+``productos``, ``producto_impuestos``, ``inventario_fecha`` (SIESA's inventory snapshot of the
+morning), ``cotizaciones_proveedores``, ``precios_lista_vigentes``, ``listas_precios`` and
+``vendedores``. See ``docs/cotizador-dwh.md``.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import time
 from collections.abc import Sequence
-from datetime import date
+from datetime import datetime
 from decimal import Decimal
 
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderConnection, DataProviderUnavailable
+from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
@@ -27,12 +27,10 @@ from app.modules.quotations.domain.entities import (
     Seller,
     ValueTaxKey,
 )
+from app.modules.quotations.domain.pricing import StockPlan
 
 logger = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-# Latest inventory snapshot date by schema: (monotonic time read, date).
-_CUT_CACHE: dict[str, tuple[float, date]] = {}
-_CUT_TTL_SECONDS = 600
 
 
 class WarehouseQuotationSource:
@@ -135,7 +133,7 @@ class WarehouseQuotationSource:
             ' AND v."fecha" >= (current_date - make_interval(months => $2::int))'
             # The product is joined to the last sale only, not to every line of the window.
             ') SELECT l.*, p."descripcion", p."unidad_inventario_id", p."iva_venta_pct",'
-            ' p."cod_proveedor", p."factor_empaque" FROM lineas l'
+            ' p."cod_proveedor", p."factor_empaque", p."estado" FROM lineas l'
             f' LEFT JOIN {self._view("productos")} p ON p."producto_key" = l."producto_key"'
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
             nit,
@@ -160,65 +158,97 @@ class WarehouseQuotationSource:
                     vat_pct=_decimal(row["iva_venta_pct"]),
                     supplier_code=_strip(row["cod_proveedor"]),
                     pack_factor=_decimal(row["factor_empaque"]),
+                    # Unknown item (no product row): leave it active; the cost tells.
+                    is_active=row["estado"] in ("A", None),
                 )
             )
         return sales
 
-    async def costs(self, skus: Sequence[str], operation_center: str | None) -> dict[str, CostInfo]:
-        """Average cost per inventory unit at the last inventory cut.
+    async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]:
+        """The supplier quotation and the inventory cost of each SKU (skill ``lista-precios``).
 
-        The cost of the customer's operation center when it has stock, else the average of
-        every warehouse weighted by stock.
+        - Quotation: the highest in force per SKU, unit or kilo, item active, gross cost
+          rounded, plus ICUI (percent) and IBUA (per unit). Lactalis only from the branch of
+          the plan. One more than ``QUOTE_OUTLIER_FACTOR`` times the median last cost of the
+          SKU's installations is a capture error: it comes apart as ``discarded_quote``.
+        - Inventory: ``inventario_fecha`` (SIESA's own snapshot of the morning), average cost
+          of the list's warehouse rounded to pesos; warehouse 2 for frozen and refrigerated
+          lines; the highest of the list 1 warehouses when the plan says so. Costs of one peso
+          or less are placeholders and never count.
         """
 
         if not skus:
             return {}
-        cut = await self._last_cut()
-        if cut is None:
-            return {}
+        primary, cold = plan.warehouses or ("", "")
         rows = await self._fetch(
-            'SELECT "referencia",'
-            ' sum("existencia" * "costo_prom_unit_ins") FILTER (WHERE "co_bodega" = $2)'
-            ' / nullif(sum("existencia") FILTER (WHERE "co_bodega" = $2), 0) AS costo_co,'
-            ' sum("existencia" * "costo_prom_unit_ins") / nullif(sum("existencia"), 0)'
-            " AS costo_global"
-            f" FROM {self._view('inventario_corte')}"
-            ' WHERE "fecha_corte" = $3 AND "existencia" > 0 AND "referencia" = ANY($1::text[])'
-            ' GROUP BY "referencia"',
+            "WITH prod AS ("
+            ' SELECT p."producto_key", p."sku", p."linea", p."estado"'
+            f' FROM {self._view("productos")} p WHERE p."sku" = ANY($1::text[])'
+            "), ref AS ("
+            ' SELECT s."producto_key",'
+            ' percentile_cont(0.5) WITHIN GROUP (ORDER BY s."ultimo_costo_unit") AS med'
+            ' FROM (SELECT DISTINCT f."producto_key", f."instalacion", f."ultimo_costo_unit"'
+            f' FROM {self._view("inventario_fecha")} f JOIN prod USING ("producto_key")'
+            ' WHERE f."ultimo_costo_unit" > 1) s GROUP BY 1'
+            "), cot AS ("
+            ' SELECT c."producto_key", round(round(c."costo_bruto")'
+            ' * (1 + coalesce(c."icui_tasa_pct", 0) / 100) + coalesce(c."ibua_valor", 0)) AS costo'
+            f' FROM {self._view("cotizaciones_proveedores")} c JOIN prod USING ("producto_key")'
+            ' WHERE c."es_vigente" AND c."producto_activo"'
+            " AND c.\"unidad_medida_id\" IN ('UNID', 'KL')"
+            ' AND (coalesce(c."proveedor_nit", \'\') <> $7 OR c."proveedor_sucursal_id" = $2)'
+            "), cot_ok AS ("
+            ' SELECT c."producto_key",'
+            " max(c.costo) FILTER (WHERE r.med IS NULL OR c.costo <= $8 * r.med) AS costo_cot,"
+            " max(c.costo) FILTER (WHERE c.costo > $8 * r.med) AS costo_descartado"
+            ' FROM cot c LEFT JOIN ref r USING ("producto_key") GROUP BY 1'
+            "), inv AS ("
+            ' SELECT f."producto_key",'
+            ' max(round(f."costo_prom_unit_ins"))'
+            ' FILTER (WHERE round(f."costo_prom_unit_ins") > 1)'
+            ' AS costo_inv, sum(f."existencia") AS existencia, max(f."foto_at") AS foto'
+            f' FROM {self._view("inventario_fecha")} f JOIN prod pr USING ("producto_key")'
+            ' WHERE CASE WHEN $5 THEN f."bodega" = ANY($6::text[])'
+            " ELSE f.\"bodega\" = CASE WHEN pr.\"linea\" IN ('CONGELADOS', 'REFRIGERADOS')"
+            " THEN $4 ELSE $3 END END"
+            " GROUP BY 1"
+            ') SELECT pr."sku", pr."linea", pr."estado", c.costo_cot, c.costo_descartado,'
+            " i.costo_inv, i.existencia, i.foto"
+            ' FROM prod pr LEFT JOIN cot_ok c USING ("producto_key")'
+            ' LEFT JOIN inv i USING ("producto_key")',
             list(skus),
-            operation_center or "",
-            cut,
+            plan.lactalis_branch,
+            primary,
+            cold,
+            plan.highest,
+            list(pricing.GENERAL_WAREHOUSES),
+            pricing.LACTALIS_NIT,
+            pricing.QUOTE_OUTLIER_FACTOR,
         )
         result: dict[str, CostInfo] = {}
         for row in rows:
-            own, overall = _decimal(row["costo_co"]), _decimal(row["costo_global"])
-            cost = own if own is not None else overall
-            if cost is None:
-                continue
-            sku = str(row["referencia"]).strip()
-            result[sku] = CostInfo(sku, cost, own is None, cut)
+            sku = str(row["sku"]).strip()
+            snapshot = row["foto"]
+            result[sku] = CostInfo(
+                sku=sku,
+                quote_cost=_decimal(row["costo_cot"]),
+                discarded_quote=_decimal(row["costo_descartado"]),
+                inventory_cost=_decimal(row["costo_inv"]),
+                stock=_decimal(row["existencia"]),
+                product_line=row["linea"],
+                is_active=row["estado"] == "A",
+                snapshot_date=snapshot.date() if isinstance(snapshot, datetime) else snapshot,
+            )
         return result
 
-    async def _last_cut(self) -> date | None:
-        """Date of the latest inventory snapshot, remembered for a few minutes.
+    async def price_list_exists(self, price_list_id: str) -> bool:
+        """Whether SIESA already has a list with this code (as of yesterday's load)."""
 
-        ``max(fecha_corte)`` scans the whole snapshot view (~900 k rows); with the date as a
-        literal the cost query uses the SKU index. The snapshot of the day is loaded once in
-        the morning, so a short memory never serves a stale cost.
-        """
-
-        key = self.schema
-        cached = _CUT_CACHE.get(key)
-        now = time.monotonic()
-        if cached and now - cached[0] < _CUT_TTL_SECONDS:
-            return cached[1]
         rows = await self._fetch(
-            f'SELECT max("fecha_corte") AS f FROM {self._view("inventario_corte")}'
+            f'SELECT 1 FROM {self._view("listas_precios")} WHERE "lista_precio_id" = $1 LIMIT 1',
+            price_list_id,
         )
-        cut = rows[0]["f"] if rows else None
-        if cut is not None:
-            _CUT_CACHE[key] = (now, cut)
-        return cut
+        return bool(rows)
 
     async def list_prices(self, price_list_id: str, skus: Sequence[str]) -> dict[str, ListPrice]:
         """Price in force and value tax of each SKU in a list, per inventory unit."""

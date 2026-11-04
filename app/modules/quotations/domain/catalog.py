@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.modules.order_validation.domain.catalog import HOLDS, INFORMS, WARNS, Rule, Section
+from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import QuotationPolicy
 
 
@@ -16,6 +17,7 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
     """Every rule the quoter applies, with the values in force."""
 
     points = _points(policy.max_points_below_target)
+    factor = f"{pricing.COST_FACTOR[pricing.GENERAL]}".replace(".", ",")
     return (
         Section(
             "precio",
@@ -27,23 +29,46 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "La última venta de cada referencia al cliente (todas sus sucursales) en la "
                     "ventana elegida, 6 o 12 meses. Es el precio neto de descuentos, antes de IVA "
                     "y por unidad de inventario: una caja de 45 vendida a 149.551 es 3.323,36 por "
-                    "unidad. No cuentan devoluciones ni obsequios.",
+                    "unidad. No cuentan devoluciones ni obsequios. Las referencias son las que el "
+                    "cliente compró y quedan en la lista que tiene asignada.",
                     INFORMS,
                 ),
                 Rule(
                     "costo_actual",
-                    "Costo actual",
-                    "Costo promedio del último corte de inventario en el centro de operación que "
-                    "factura al cliente. Si ese centro no tiene existencia, el promedio de todas "
-                    "las bodegas.",
+                    "Costo: el mayor entre cotización e inventario",
+                    "Se toma el mayor entre la cotización vigente del proveedor (en unidad o kilo, "
+                    "con ICUI e IBUA) y el costo promedio de inventario de la bodega de la lista "
+                    "(bodega 2 para congelados y refrigerados; la lista 1 toma el mayor de sus 17 "
+                    "bodegas; una lista sin bodega definida usa la del centro de operación que "
+                    "factura). Se redondea hacia arriba y se multiplica por "
+                    f"{factor} (las listas mayoristas no llevan ese factor). Lactalis cotiza por "
+                    "sucursal: 003 para Centro y 001 para el resto.",
                     INFORMS,
+                    {"factor_costo": factor},
+                ),
+                Rule(
+                    "cotizacion_descartada",
+                    "Cotización fuera de rango",
+                    "Una cotización que pasa de 3 veces el último costo del producto es un error "
+                    "de captura en SIESA (por ejemplo, el precio de la caja cargado como unidad): "
+                    "no se usa y la línea avisa para revisarla. Un costo de $1 o menos no cuenta.",
+                    WARNS,
                 ),
                 Rule(
                     "impuestos",
-                    "Impuestos",
-                    "IVA de venta del producto e impuestos en valor (impoconsumo, licores) de la "
-                    "lista del cliente. Los precios del formato van antes de IVA.",
+                    "Impuesto de licores",
+                    "Solo el impuesto al consumo de licores, por unidad: el de la lista del "
+                    "cliente en SIESA o, si no lo tiene, el del maestro de márgenes según la "
+                    "regional de facturación (Costa para el centro de operación 004, Nacional "
+                    "para el resto). El IVA no se muestra.",
                     INFORMS,
+                ),
+                Rule(
+                    "inactivas",
+                    "Referencias inactivas",
+                    "Una referencia inactiva en SIESA se muestra marcada para reemplazarla. No "
+                    "sale en el Excel ni en el plano.",
+                    WARNS,
                 ),
             ),
         ),
@@ -66,6 +91,23 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "de márgenes. Si el apoyo aplicado trae su propio objetivo, manda el del "
                     "apoyo.",
                     INFORMS,
+                ),
+                Rule(
+                    "precio_optimo",
+                    "Precio óptimo y precio mínimo",
+                    "Precio óptimo: el que da exactamente el margen objetivo, (costo − apoyo) / "
+                    "(1 − objetivo), en pesos enteros (hacia arriba en Salsamentarias y Market). "
+                    f"Precio mínimo: el más bajo que cumple la regla (objetivo − {points} punto), "
+                    "redondeado hacia arriba.",
+                    INFORMS,
+                ),
+                Rule(
+                    "bajo_objetivo",
+                    "Margen actual bajo el objetivo",
+                    "Se resalta la referencia cuyo último precio deja el margen, contando el "
+                    f"apoyo, más de {points} punto bajo el objetivo: hay que revisarla y "
+                    "actualizarla. Si un apoyo la cubre, no se resalta.",
+                    WARNS,
                 ),
                 Rule(
                     "apoyos",
@@ -93,10 +135,13 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     {"puntos_maximos": points},
                 ),
                 Rule(
-                    "generar",
-                    "Generar el formato",
-                    "Solo se genera si todas las líneas con precio nuevo cumplen la regla y tienen "
-                    "costo y margen objetivo.",
+                    "confirmar",
+                    "Confirmar y validar",
+                    "El asesor confirma la lista (queda pendiente de validación) solo si todas "
+                    "las referencias activas con precio nuevo cumplen la regla y tienen costo, "
+                    "margen objetivo y precio en pesos enteros. Mientras está pendiente no se "
+                    "edita. Quien valida la aprueba (queda creada o actualizada y se liberan los "
+                    "archivos) o la devuelve a borrador con una nota.",
                     HOLDS,
                 ),
             ),
@@ -107,17 +152,29 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
             (
                 Rule(
                     "lista_destino",
-                    "Lista de precios",
-                    "Por defecto la lista SIESA del cliente. Si la lista es compartida, el cambio "
-                    "llega a todos sus clientes: al generar se puede elegir otra.",
+                    "Actualización o creación de lista",
+                    "Actualización: los precios se escriben en la lista SIESA que el cliente "
+                    "tiene asignada; si es compartida, el cambio llega a todos sus clientes. "
+                    "Creación: se crea una lista nueva con su código y descripción. Un cliente en "
+                    "la lista 1 siempre va por creación: la lista 1 no se actualiza por este "
+                    "medio. Asignar la lista nueva al cliente se hace en SIESA.",
                     WARNS,
                 ),
                 Rule(
                     "archivos",
                     "Excel y plano",
                     "El Excel ACTUALIZACION LISTAS PRECIOS (hojas Precios e Impuestos en valor) y "
-                    "el plano de importación de SIESA, con solo las líneas con precio nuevo, por "
-                    "unidad de inventario y antes de IVA.",
+                    "el plano de importación de SIESA, con las referencias activas con precio "
+                    "nuevo, por unidad de inventario, antes de IVA y en pesos enteros. Para una "
+                    "lista nueva, el plano trae primero su cabecera.",
+                    INFORMS,
+                ),
+                Rule(
+                    "plantilla",
+                    "Plantilla para cambios masivos",
+                    "La cotización se descarga en Excel con sus datos; se cambia el precio nuevo o "
+                    "el margen nuevo de las referencias que se quiera y se sube completa. Manda la "
+                    "celda que se cambió; las dos vacías quitan el precio nuevo.",
                     INFORMS,
                 ),
             ),

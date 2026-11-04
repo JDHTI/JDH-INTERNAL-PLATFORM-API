@@ -180,6 +180,8 @@ class MarginChangeResponse(BaseModel):
     description: str | None
     margins: dict[str, dict[str, Decimal | None]]
     notes: dict[str, str | None] | None
+    # Liquor tax by regional: liquor_tax (Nacional), liquor_tax_coast (Costa), liquor_tax_group.
+    taxes: dict[str, dict[str, Decimal | str | None]] = Field(default_factory=dict)
 
 
 class MarginIssueResponse(BaseModel):
@@ -261,6 +263,10 @@ def _report(report: MarginReport) -> MarginReportResponse:
                     for name, (before, after) in item.changes.items()
                 },
                 notes=None if item.notes is None else {"from": item.notes[0], "to": item.notes[1]},
+                taxes={
+                    name: {"from": before, "to": after}
+                    for name, (before, after) in item.taxes.items()
+                },
             )
             for item in report.changes
         ],
@@ -464,7 +470,9 @@ async def margin_template(
     description=(
         "multipart/form-data with `file` (.xlsx or .csv; columns Referencia and any of "
         "Margen Lista 1, Margen Mayorista, Margen Masivo Food, Margen Market Apartadó, "
-        "Margen Salsamentarias, Observaciones). Blank cells keep the margin, 0 clears it. "
+        "Margen Salsamentarias, IMPTOLIC, Observaciones). Blank cells keep the margin, 0 "
+        "clears it. An .xlsx may carry the IMPUESTOS table (Sku, Nacional, Costa, Grupo "
+        "impositivo) of `Margen Proveedor-Impuestos`: the liquor tax by regional. "
         "A simulation unless `apply=true`."
     ),
 )

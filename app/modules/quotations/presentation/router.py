@@ -9,8 +9,8 @@ from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query, Response, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
 from app.modules.identity.domain.principal import Principal
@@ -20,8 +20,9 @@ from app.modules.quotations.application.service import (
     MAX_PASTED_SKUS,
     LineChange,
     QuotationService,
+    Skipped,
 )
-from app.modules.quotations.domain import rules
+from app.modules.quotations.domain import pricing, rules
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
     Quotation,
@@ -31,8 +32,11 @@ from app.modules.quotations.domain.entities import (
 from app.modules.quotations.domain.vocabulary import (
     BASIS_LABELS,
     COMPLIANCE_LABELS,
+    COST_SOURCE_LABELS,
+    LIST_ACTION_LABELS,
     ORIGIN_LABELS,
     PROBLEM_LABELS,
+    REGIONAL_LABELS,
     STATUS_LABELS,
     WARNING_LABELS,
 )
@@ -41,7 +45,8 @@ router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.quotation_service])
 _principal = Depends(get_current_principal)
 
-Status = Literal["borrador", "generado"]
+Status = Literal["borrador", "pendiente_validacion", "creada", "actualizada"]
+ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
 
 
@@ -55,6 +60,8 @@ class PermissionsResponse(BaseModel):
     """What the caller may do, and the salesperson linked to their e-mail."""
 
     can_manage: bool
+    # May validate confirmed quotations (approvers' area and admins).
+    can_validate: bool
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -99,8 +106,19 @@ class CreateRequest(BaseModel):
 
 
 class LineChangeRequest(BaseModel):
+    """A new price (``null`` clears it), or ``margin_pct`` to price the SKU at a margin."""
+
     sku: str = Field(min_length=1, max_length=60)
     new_price: Decimal | None = None
+    margin_pct: Decimal | None = Field(
+        default=None, description="Fraction (0.30 = 30 %); prices the SKU at that margin"
+    )
+
+    @model_validator(mode="after")
+    def _one_of(self) -> LineChangeRequest:
+        if self.new_price is not None and self.margin_pct is not None:
+            raise ValueError("Envía new_price o margin_pct, no los dos")
+        return self
 
 
 class LinesRequest(BaseModel):
@@ -130,14 +148,45 @@ class ImportResultResponse(BaseModel):
     repeated: int
 
 
+class SkippedResponse(BaseModel):
+    """A SKU a change could not price."""
+
+    sku: str
+    reason: str
+    row_number: int | None = None
+
+
+class TemplateResultResponse(BaseModel):
+    """What an uploaded workbook did."""
+
+    updated: list[str]
+    cleared: list[str]
+    added: list[str]
+    unchanged: int
+    not_found: list[str]
+    inactive: list[str]
+    skipped: list[SkippedResponse]
+
+
 class VersionRequest(BaseModel):
     version: int = Field(ge=1)
 
 
-class GenerateRequest(BaseModel):
+class ConfirmRequest(BaseModel):
+    """Close the draft and send it to validation."""
+
     version: int = Field(ge=1)
+    list_action: ListAction | None = None
+    price_list_id: str | None = Field(
+        default=None, max_length=3, description="Code of the new list (creation only)"
+    )
+    new_list_name: str | None = Field(default=None, max_length=40)
     activation_date: date | None = None
-    price_list_id: str | None = Field(default=None, max_length=3)
+
+
+class ReturnRequest(BaseModel):
+    version: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class WarningResponse(BaseModel):
@@ -192,7 +241,11 @@ class LineResponse(BaseModel):
     value_tax_name: str | None
     value_tax_amount: Decimal | None
     cost: Decimal | None
-    cost_is_global: bool
+    quote_cost: Decimal | None
+    discarded_quote_cost: Decimal | None
+    inventory_cost: Decimal | None
+    cost_source: Literal["cotizacion", "inventario"] | None
+    cost_source_label: str | None
     target_margin_pct: Decimal | None
     margin_basis: str | None
     margin_basis_label: str | None
@@ -200,6 +253,9 @@ class LineResponse(BaseModel):
     current_margin_pct: Decimal | None
     current_margin_with_support_pct: Decimal | None
     min_price: Decimal | None
+    optimal_price: Decimal | None
+    below_target: bool
+    is_active: bool
     support: SupportResponse | None
     support_candidates: list[CandidateResponse]
     new_price: Decimal | None
@@ -226,13 +282,18 @@ class SummaryResponse(BaseModel):
     window_months: int
     status: Status
     status_label: str
+    list_action: ListAction
+    list_action_label: str
+    export_price_list_id: str | None
     line_count: int
     changed_count: int
     below_rule_count: int
+    below_target_count: int
     created_by: str
     created_at: datetime
     updated_at: datetime
-    generated_at: datetime | None
+    confirmed_at: datetime | None
+    validated_at: datetime | None
     version: int
 
 
@@ -243,19 +304,30 @@ class QuotationResponse(SummaryResponse):
     price_list_name: str | None
     price_list_customers: int | None
     billing_center_code: str | None
+    regional: Literal["nacional", "costa"]
+    regional_label: str
+    price_family: str
+    price_family_label: str
+    stock_source: str | None
     salesperson_code: str | None
     salesperson_name: str | None
     built_at: datetime
     cost_cut_date: date | None
     activation_date: date | None
-    export_price_list_id: str | None
+    new_list_name: str | None
     max_points_below_target: Decimal
     warnings: list[WarningResponse]
-    generated_by: str | None
+    confirmed_by: str | None
+    validated_by: str | None
+    review_note: str | None
     updated_by: str
     lines: list[LineResponse]
     # Only on POST /{id}/lines: what the pasted list did.
     import_result: ImportResultResponse | None = None
+    # Only on PUT /{id}/lines: SKUs a margin could not price.
+    skipped: list[SkippedResponse] | None = None
+    # Only on POST /{id}/template: what the workbook did.
+    template_result: TemplateResultResponse | None = None
 
 
 class QuotationPageResponse(BaseModel):
@@ -308,7 +380,11 @@ def _line(line: QuotationLine) -> LineResponse:
         value_tax_name=line.value_tax_name,
         value_tax_amount=line.value_tax_amount,
         cost=line.cost,
-        cost_is_global=line.cost_is_global,
+        quote_cost=line.quote_cost,
+        discarded_quote_cost=line.discarded_quote_cost,
+        inventory_cost=line.inventory_cost,
+        cost_source=line.cost_source,  # type: ignore[arg-type]
+        cost_source_label=COST_SOURCE_LABELS.get(line.cost_source or ""),
         target_margin_pct=line.target_margin_pct,
         margin_basis=line.margin_basis,
         margin_basis_label=BASIS_LABELS.get(line.margin_basis or ""),
@@ -316,6 +392,9 @@ def _line(line: QuotationLine) -> LineResponse:
         current_margin_pct=line.current_margin_pct,
         current_margin_with_support_pct=line.current_margin_with_support_pct,
         min_price=line.min_price,
+        optimal_price=line.optimal_price,
+        below_target=line.below_target,
+        is_active=line.is_active,
         support=_support(line.support),
         support_candidates=[
             CandidateResponse(
@@ -350,13 +429,18 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "window_months": quotation.window_months,
         "status": quotation.status,
         "status_label": STATUS_LABELS[quotation.status],
+        "list_action": quotation.list_action,
+        "list_action_label": LIST_ACTION_LABELS[quotation.list_action],
+        "export_price_list_id": quotation.export_price_list_id,
         "line_count": quotation.line_count,
         "changed_count": quotation.changed_count,
         "below_rule_count": quotation.below_rule_count,
+        "below_target_count": quotation.below_target_count,
         "created_by": quotation.created_by,
         "created_at": quotation.created_at,
         "updated_at": quotation.updated_at,
-        "generated_at": quotation.generated_at,
+        "confirmed_at": quotation.confirmed_at,
+        "validated_at": quotation.validated_at,
         "version": quotation.version,
     }
 
@@ -369,18 +453,27 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         price_list_name=quotation.price_list_name,
         price_list_customers=quotation.price_list_customers,
         billing_center_code=quotation.billing_center_code,
+        regional=quotation.regional,  # type: ignore[arg-type]
+        regional_label=REGIONAL_LABELS.get(quotation.regional, quotation.regional),
+        price_family=quotation.price_family,
+        price_family_label=pricing.FAMILY_LABELS.get(
+            quotation.price_family, quotation.price_family
+        ),
+        stock_source=quotation.stock_source,
         salesperson_code=quotation.salesperson_code,
         salesperson_name=quotation.salesperson_name,
         built_at=quotation.built_at,
         cost_cut_date=quotation.cost_cut_date,
         activation_date=quotation.activation_date,
-        export_price_list_id=quotation.export_price_list_id,
+        new_list_name=quotation.new_list_name,
         max_points_below_target=quotation.max_points_below_target,
         warnings=[
             WarningResponse(code=code, label=WARNING_LABELS.get(code, code))
             for code in quotation.warnings
         ],
-        generated_by=quotation.generated_by,
+        confirmed_by=quotation.confirmed_by,
+        validated_by=quotation.validated_by,
+        review_note=quotation.review_note,
         updated_by=quotation.updated_by,
         lines=[_line(line) for line in detail.lines],
     )
@@ -398,6 +491,7 @@ async def permissions(
     seller = result.seller
     return PermissionsResponse(
         can_manage=result.can_manage,
+        can_validate=result.can_validate,
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller
@@ -535,11 +629,20 @@ async def update_lines(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Set (or clear with ``null``) the advisor's prices. A price below the rule is saved and
-    marked; 409 when the quotation changed since it was read."""
+    """Set (or clear with ``null``) the advisor's prices, or price SKUs at a margin with
+    ``margin_pct`` (a selection at one standard margin). A price below the rule is saved and
+    marked; SKUs a margin cannot price come back in ``skipped``. 409 when the quotation
+    changed since it was read or awaits validation."""
 
-    changes = [LineChange(item.sku, item.new_price) for item in body.lines]
-    return _detail(await service.update_lines(principal, quotation_id, body.version, changes))
+    changes = [LineChange(item.sku, item.new_price, item.margin_pct) for item in body.lines]
+    detail, skipped = await service.update_lines(principal, quotation_id, body.version, changes)
+    response = _detail(detail)
+    response.skipped = [_skipped(item) for item in skipped]
+    return response
+
+
+def _skipped(item: Skipped) -> SkippedResponse:
+    return SkippedResponse(sku=item.sku, reason=item.reason, row_number=item.row_number)
 
 
 @router.post(
@@ -581,7 +684,8 @@ async def remove_line(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Only SKUs the advisor added; a sales-window SKU stays (leave its new price empty)."""
+    """SKUs the advisor added or inactive in SIESA; an active sales-window SKU stays (leave
+    its new price empty)."""
 
     return _detail(await service.remove_line(principal, quotation_id, version, sku))
 
@@ -602,22 +706,113 @@ async def refresh_quotation(
 
 
 @router.post(
-    "/{quotation_id}/generate", response_model=QuotationResponse, summary="Close the update"
+    "/{quotation_id}/confirm", response_model=QuotationResponse, summary="Send to validation"
 )
 @inject
-async def generate_quotation(
+async def confirm_quotation(
     quotation_id: UUID,
-    body: GenerateRequest,
+    body: ConfirmRequest,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Every new price must meet the rule; then the files can be downloaded."""
+    """The advisor closes the draft: every new price of an active SKU must meet the rule.
+    ``actualizacion`` writes to the customer's list; ``creacion`` creates ``price_list_id``
+    (list 1 customers always go by creation). The quotation is ``pendiente_validacion``."""
 
     return _detail(
-        await service.generate(
-            principal, quotation_id, body.version, body.activation_date, body.price_list_id
+        await service.confirm(
+            principal,
+            quotation_id,
+            body.version,
+            list_action=body.list_action,
+            price_list_id=body.price_list_id,
+            new_list_name=body.new_list_name,
+            activation_date=body.activation_date,
         )
     )
+
+
+@router.post("/{quotation_id}/return", response_model=QuotationResponse, summary="Back to draft")
+@inject
+async def return_quotation(
+    quotation_id: UUID,
+    body: ReturnRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """A pending quotation goes back to draft: the approver rejects it (``note`` required) or
+    an advisor withdraws it."""
+
+    return _detail(await service.return_to_draft(principal, quotation_id, body.version, body.note))
+
+
+@router.post("/{quotation_id}/validate", response_model=QuotationResponse, summary="Validate")
+@inject
+async def validate_quotation(
+    quotation_id: UUID,
+    body: VersionRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Approvers only: the quotation becomes ``creada`` or ``actualizada`` and its files can
+    be downloaded."""
+
+    return _detail(await service.validate(principal, quotation_id, body.version))
+
+
+@router.get(
+    "/{quotation_id}/template.xlsx",
+    response_class=Response,
+    responses={
+        200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
+    },
+    summary="Download the quotation workbook",
+)
+@inject
+async def download_template(
+    quotation_id: UUID,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> Response:
+    """Every SKU with its data; ``Precio nuevo`` and ``Margen nuevo`` are editable."""
+
+    result = await service.template_file(principal, quotation_id)
+    return _file(result.content, result.filename, result.media_type)
+
+
+@router.post(
+    "/{quotation_id}/template",
+    response_model=QuotationResponse,
+    summary="Upload the edited quotation workbook",
+    description=(
+        "multipart/form-data with `file` (the workbook from `template.xlsx`) and `version`. "
+        "Per row the cell that changed wins: a new price, else a new margin; both blank clear "
+        "the price. Unknown SKUs are added if they exist and are active."
+    ),
+)
+@inject
+async def upload_template(
+    quotation_id: UUID,
+    file: UploadFile = File(...),  # noqa: B008
+    version: int = Form(ge=1),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    content = await file.read(service.max_upload_bytes + 1)
+    detail, result = await service.upload_template(
+        principal, quotation_id, version, file.filename, content
+    )
+    response = _detail(detail)
+    response.template_result = TemplateResultResponse(
+        updated=list(result.updated),
+        cleared=list(result.cleared),
+        added=list(result.added),
+        unchanged=result.unchanged,
+        not_found=list(result.not_found),
+        inactive=list(result.inactive),
+        skipped=[_skipped(item) for item in result.skipped],
+    )
+    return response
 
 
 def _file(content: bytes, filename: str, media_type: str) -> Response:

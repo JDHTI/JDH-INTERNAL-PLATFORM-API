@@ -27,11 +27,13 @@ from app.modules.quotations.domain.entities import (
     ValueTaxKey,
 )
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
+from app.modules.quotations.infrastructure.template import QuotationTemplateFile
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
 from tests.modules.order_validation.conftest import FakeAgreementSource
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
 
 MANAGER = "asesor@jdh.com.co"
+APPROVER = "bi@jdh.com.co"
 NIT = "900315138"
 
 
@@ -41,8 +43,8 @@ def branch(**values) -> Branch:
         "legal_name": "HOTEL EL BOSQUE SAS",
         "channel_code": "0142",
         "channel": "HOTELES Y CLUBES",
-        "price_list_id": "1",
-        "price_list_name": "GENERAL",
+        "price_list_id": "001",
+        "price_list_name": "GENERAL ANTIOQUIA",
         "billing_center_code": "001",
         "salesperson_code": "0051",
         "salesperson_name": "PEREZ ANA",
@@ -70,6 +72,17 @@ def sale(sku: str = "2537", price: str = "4000", **values) -> LastSale:
     return LastSale(**{**base, **values})
 
 
+def cost(sku: str = "2537", inventory: str | None = None, quote: str | None = None, **values):
+    """Costs as the warehouse gives them: inventory of the list warehouse and quotation."""
+
+    return CostInfo(
+        sku,
+        quote_cost=Decimal(quote) if quote else None,
+        inventory_cost=Decimal(inventory) if inventory else None,
+        **values,
+    )
+
+
 def product(sku: str = "2537", **values) -> ProductMaster:
     base = {
         "sku": sku,
@@ -90,8 +103,9 @@ class FakeWarehouse:
         self.branch_rows: dict[str, list[Branch]] = {NIT: [branch()]}
         self.sales: dict[str, list[LastSale]] = {NIT: [sale()]}
         self.cost_rows: dict[str, CostInfo] = {
-            "2537": CostInfo("2537", Decimal("3000"), False, date(2026, 11, 3))
+            "2537": cost("2537", inventory="3000", snapshot_date=date(2026, 11, 3))
         }
+        self.existing_lists: set[str] = {"001", "1", "C01"}
         self.prices: dict[str, ListPrice] = {"2537": ListPrice("2537", Decimal("4568"))}
         self.taxes: dict[str, ValueTaxKey] = {}
         self.seller_rows: dict[str, list[Seller]] = {
@@ -122,10 +136,14 @@ class FakeWarehouse:
         self.calls.append(("last_sales", nit, months))
         return list(self.sales.get(nit, []))
 
-    async def costs(self, skus, operation_center):
+    async def costs(self, skus, plan):
         self._check()
-        self.calls.append(("costs", tuple(skus), operation_center))
+        self.calls.append(("costs", tuple(skus), plan))
         return {sku: self.cost_rows[sku] for sku in skus if sku in self.cost_rows}
+
+    async def price_list_exists(self, price_list_id):
+        self._check()
+        return price_list_id in self.existing_lists
 
     async def list_prices(self, price_list_id, skus):
         self._check()
@@ -245,6 +263,8 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         masters=masters,
         supports=supports,
         managers=FakeManagers([MANAGER]),
+        approvers=FakeManagers([APPROVER]),
+        template=QuotationTemplateFile(),
         calendar=FixedCalendar(),
         workbook=PriceListWorkbookWriter(),
         flat_file=SiesaPriceFileWriter(),
@@ -258,4 +278,9 @@ def advisor():
     return person(MANAGER)
 
 
-__all__ = ["MANAGER", "NIT", "branch", "product", "replace", "sale"]
+@pytest.fixture
+def approver():
+    return person(APPROVER)
+
+
+__all__ = ["APPROVER", "MANAGER", "NIT", "branch", "cost", "product", "replace", "sale"]

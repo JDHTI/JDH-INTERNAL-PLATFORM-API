@@ -33,7 +33,14 @@ sincronización. El estado y el proveedor comercial vienen del DWH y no se puede
 
 `liquor_tax` (`IMPTOLIC`, valor por unidad en la región Nacional), `liquor_tax_coast` (Costa) y
 `liquor_tax_group` (grupo impositivo, `0503`, `0509`) de los 12 productos con impuesto. El validador
-marca las líneas de esos productos: el pedido pudo montarse sin el impuesto.
+marca las líneas de esos productos: el pedido pudo montarse sin el impuesto. Algunas referencias pagan
+más en la Costa (18973: 4.036 Nacional y 4.144 Costa); el [cotizador](cotizador.md) usa el valor Costa
+para los clientes que facturan desde el CO `004`.
+
+El actualizador de márgenes también carga el impuesto: lee `IMPTOLIC` de `Margen Producto` y la tabla
+`IMPUESTOS` (`Sku`, `Nacional`, `Costa`, `Grupo impositivo`) de `Margen Proveedor-Impuestos`, que manda
+sobre `IMPTOLIC`. `IMPTOLIC` en 0 sin fila en la tabla quita el impuesto. El reporte muestra el antes y el
+después de cada impuesto (`taxes`).
 
 ## Carga inicial desde el libro
 
@@ -60,6 +67,7 @@ Para cambiar muchos márgenes a la vez se sube un archivo `.xlsx` o `.csv` con l
 | --- | --- |
 | `Referencia` | referencia JDH (SKU); obligatoria |
 | `Margen Lista 1`, `Margen Mayorista`, `Margen Masivo Food`, `Margen Market Apartadó`, `Margen Salsamentarias` | al menos una; el resto de columnas se ignora |
+| `IMPTOLIC` | opcional: impuesto al licor Nacional por unidad; 0 lo quita |
 | `Observaciones` | opcional |
 
 Reglas de cada celda:
@@ -73,7 +81,9 @@ Reglas de cada celda:
 Todo archivo se **simula** primero: el reporte dice cuántos productos cambian, cuántos quedan igual,
 qué referencias no existen y qué filas son inválidas, con el antes y el después de cada cambio (los
 primeros 500). Solo con `apply=true` se escribe. La plantilla se descarga con los márgenes actuales
-(`with_data=true`) o vacía; se edita y se vuelve a subir. Si el libro tiene varias hojas se lee la
+(`with_data=true`) o vacía; se edita y se vuelve a subir. Tiene el formato del `Maestro Margen.xlsx`:
+la hoja `Margen Producto` (con `IMPTOLIC`) y `Margen Proveedor-Impuestos` con la tabla `IMPUESTOS` en
+las columnas I:N, así que el libro del área se sube tal cual. Si el libro tiene varias hojas se lee la
 `Margen Producto`; `sheet` elige otra.
 
 ## API (`/api/v1/commercial`)
