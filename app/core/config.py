@@ -396,10 +396,14 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def entra_authority(self) -> str:
-        """Return the single-tenant Entra authority used by OIDC."""
+        """Return the single-tenant Entra authority the OAuth endpoints hang from.
+
+        ``{authority}/oauth2/v2.0/authorize`` and ``/token``; the issuer of the tokens is
+        the one that ends in ``/v2.0`` (``entra_issuer``).
+        """
 
         tenant = self.ENTRA_TENANT_ID or "organizations"
-        return f"https://login.microsoftonline.com/{tenant}/v2.0"
+        return f"https://login.microsoftonline.com/{tenant}"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

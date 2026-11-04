@@ -6,6 +6,14 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
+def test_entra_endpoints_hang_from_the_tenant_and_the_issuer_has_v2() -> None:
+    app_settings = Settings(_env_file=None, ENTRA_TENANT_ID="tenant")
+
+    # {authority}/oauth2/v2.0/authorize is what Entra serves; /tenant/v2.0/oauth2/... is a 404.
+    assert app_settings.entra_authority == "https://login.microsoftonline.com/tenant"
+    assert app_settings.entra_issuer == "https://login.microsoftonline.com/tenant/v2.0"
+
+
 def test_directory_graph_settings_fall_back_to_the_sso_tenant() -> None:
     app_settings = Settings(
         _env_file=None,
