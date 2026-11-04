@@ -5,10 +5,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database import Base
+from app.modules.identity.domain.roles import OWNER_ROLE_ID
 
 
 class RoleModel(Base):
@@ -78,6 +88,13 @@ class UserModel(Base):
         UniqueConstraint("tenant_id", "entra_object_id", name="uq_users_tenant_entra_object"),
         Index("ix_users_tenant_id", "tenant_id"),
         Index("ix_users_email", "email"),
+        # Exactly one owner (migration 0041).
+        Index(
+            "uq_users_single_owner",
+            "role_id",
+            unique=True,
+            postgresql_where=text(f"role_id = '{OWNER_ROLE_ID}'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

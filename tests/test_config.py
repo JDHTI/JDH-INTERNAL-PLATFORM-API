@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 import pytest
 from pydantic import ValidationError
@@ -6,16 +6,51 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 
-def test_microsoft_entra_id_settings_are_loaded_as_typed_values() -> None:
+def test_entra_endpoints_hang_from_the_tenant_and_the_issuer_has_v2() -> None:
+    app_settings = Settings(_env_file=None, ENTRA_TENANT_ID="tenant")
+
+    # {authority}/oauth2/v2.0/authorize is what Entra serves; /tenant/v2.0/oauth2/... is a 404.
+    assert app_settings.entra_authority == "https://login.microsoftonline.com/tenant"
+    assert app_settings.entra_issuer == "https://login.microsoftonline.com/tenant/v2.0"
+
+
+def test_directory_graph_settings_fall_back_to_the_sso_tenant() -> None:
     app_settings = Settings(
-        AUTH_MICROSOFT_ENTRA_ID_SECRET="test-secret",
-        AUTH_MICROSOFT_ENTRA_ID_ID="client-id",
-        AUTH_MICROSOFT_ENTRA_ID_TENANT_ID="tenant-id",
+        _env_file=None,
+        ENTRA_TENANT_ID="sso-tenant",
+        DIRECTORY_GRAPH_CLIENT_ID="client-id",
+        DIRECTORY_GRAPH_CLIENT_SECRET="test-secret",
+        DIRECTORY_CORPORATE_DOMAINS="JDH.com.co, filial.co",
     )
 
-    assert app_settings.AUTH_MICROSOFT_ENTRA_ID_SECRET.get_secret_value() == "test-secret"
-    assert app_settings.AUTH_MICROSOFT_ENTRA_ID_ID == "client-id"
-    assert app_settings.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID == "tenant-id"
+    directory = app_settings.container_config()["directory"]
+    assert directory["tenant_id"] == "sso-tenant"
+    assert directory["user_tenant_id"] == "sso-tenant"
+    assert directory["client_secret"] == "test-secret"
+    assert directory["sync_at"] == time(23, 59)
+    assert directory["corporate_domains"] == ["jdh.com.co", "filial.co"]
+    assert Settings(_env_file=None).container_config()["directory"]["user_tenant_id"] == (
+        "development"
+    )
+
+
+def test_directory_sync_needs_credentials_and_a_valid_schedule() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, DIRECTORY_SYNC_ENABLED=True)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, DIRECTORY_SYNC_AT="medianoche")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, DIRECTORY_SYNC_TIMEZONE="Bogota")
+
+    ready = Settings(
+        _env_file=None,
+        DIRECTORY_SYNC_ENABLED=True,
+        DIRECTORY_GRAPH_TENANT_ID="tenant",
+        DIRECTORY_GRAPH_CLIENT_ID="app",
+        DIRECTORY_GRAPH_CLIENT_SECRET="secret",
+        DIRECTORY_SYNC_AT="02:30",
+    )
+    assert ready.directory_sync_at == time(2, 30)
 
 
 def test_mail_intake_needs_credentials_to_be_switched_on() -> None:

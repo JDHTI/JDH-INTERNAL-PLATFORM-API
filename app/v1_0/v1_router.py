@@ -4,9 +4,12 @@ from fastapi import APIRouter
 
 from app.modules.app_monitoring.presentation.router import board_router as monitoring_board_router
 from app.modules.app_monitoring.presentation.router import router as app_monitoring_router
+from app.modules.areas.presentation.permissions_router import router as permissions_router
 from app.modules.areas.presentation.router import router as areas_router
 from app.modules.commercial_masters.presentation.router import router as commercial_router
 from app.modules.consumption.presentation.router import router as consumption_router
+from app.modules.directory.presentation.admin_router import router as directory_admin_router
+from app.modules.directory.presentation.router import router as directory_router
 from app.modules.documents.presentation.router import area_router as area_documents_router
 from app.modules.documents.presentation.router import router as documents_router
 from app.modules.dwh_monitoring.presentation.router import router as dwh_monitoring_router
@@ -48,10 +51,15 @@ v1_router = APIRouter(prefix="/v1", tags=["v1"])
 v1_router.include_router(identity_router, prefix="", tags=["identity"])
 v1_router.include_router(consumption_router, prefix="", tags=["consumption"])
 v1_router.include_router(areas_router, prefix="/areas", tags=["areas"])
+v1_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 v1_router.include_router(area_documents_router, prefix="/areas", tags=["documents"])
 v1_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 v1_router.include_router(area_projects_router, prefix="/areas", tags=["projects"])
 v1_router.include_router(sites_router, prefix="/sites", tags=["sites"])
+v1_router.include_router(directory_router, prefix="/directory", tags=["directory"])
+v1_router.include_router(
+    directory_admin_router, prefix="/directory/admin", tags=["directory-admin"]
+)
 v1_router.include_router(masters_router, prefix="/masters", tags=["masters"])
 v1_router.include_router(commercial_router, prefix="/commercial", tags=["commercial-masters"])
 # The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.

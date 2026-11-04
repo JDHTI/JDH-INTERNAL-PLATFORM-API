@@ -63,6 +63,20 @@ poetry run python scripts/import-pqrsf-tracking.py P.13.F.csv --year 2026 \
 Detalles y decisiones de la importación en
 [`docs/pqrsf.md`](../docs/pqrsf.md#migración-del-excel).
 
+## Directorio de empleados
+
+Sincroniza el directorio con Entra (Microsoft Graph) igual que el proceso nocturno, aunque
+`DIRECTORY_SYNC_ENABLED` esté apagado. `--recover` cierra las corridas que un proceso detenido
+dejó en curso. Después, la importación trae de la base de la intranet el cargo, la fecha de
+nacimiento, la sede y las personas que no están en Entra; simula salvo `--apply` y se puede
+repetir. Detalle en [`docs/directory.md`](../docs/directory.md).
+
+```bash
+poetry run python scripts/sync-directory.py
+poetry run python scripts/import-intranet-directory.py "postgresql://usuario:clave@host:5432/intranet_jdh"
+poetry run python scripts/import-intranet-directory.py "postgresql://..." --apply
+```
+
 ## Apoyos de proveedores
 
 Sincroniza los maestros del datawarehouse y migra el libro de apoyos. Ambos son

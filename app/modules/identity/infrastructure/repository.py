@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.infrastructure.database import Database
+from app.modules.identity.domain.roles import ADMIN, OWNER, PLATFORM_ADMIN_ROLES
 from app.modules.identity.infrastructure.models import AreaModel, RoleModel, UserModel
 
 
@@ -121,6 +122,85 @@ class IdentityRepository:
             await session.refresh(user, attribute_names=["role", "area"])
             return user
 
+    async def update_profile_fields(
+        self, user_id: UUID, *, name: str, email: str | None, job_title: str | None
+    ) -> UserModel | None:
+        """Overwrite the fields Entra owns (name, email, job title) of a user.
+
+        Args:
+            user_id (UUID): Local user.
+            name (str): Display name.
+            email (str | None): Mail or user principal name.
+            job_title (str | None): Job title in Entra.
+
+        Returns:
+            UserModel | None: The updated user, or ``None`` when it does not exist.
+        """
+
+        async with self._session() as session:
+            user = await session.get(UserModel, user_id)
+            if user is None:
+                return None
+            user.name = name
+            user.email = email
+            user.job_title = job_title
+            await session.commit()
+            await session.refresh(user, attribute_names=["role", "area"])
+            return user
+
+    async def upsert_user_by_identity(
+        self,
+        *,
+        tenant_id: str,
+        object_id: str,
+        name: str,
+        email: str | None,
+        job_title: str | None,
+        is_active: bool | None,
+    ) -> tuple[UserModel, bool]:
+        """Create a user with the ``user`` role, or refresh the fields Entra owns.
+
+        Role, area and photo are never touched. ``is_active`` is only written when it is
+        not ``None``.
+
+        Args:
+            tenant_id (str): Entra tenant of the SSO.
+            object_id (str): Entra object id (``oid``).
+            name (str): Display name.
+            email (str | None): Mail or user principal name.
+            job_title (str | None): Job title in Entra.
+            is_active (bool | None): New state, or ``None`` to keep it.
+
+        Returns:
+            tuple[UserModel, bool]: The user and whether it was created.
+        """
+
+        existing = await self.get_user_by_identity(tenant_id, object_id)
+        if existing is None:
+            created = await self.create_user(
+                tenant_id=tenant_id,
+                object_id=object_id,
+                name=name,
+                email=email,
+                job_title=job_title,
+                role_code="user",
+                is_active=True if is_active is None else is_active,
+            )
+            # A concurrent sign-in may have created it first; create_user then returns that one.
+            return created, True
+        async with self._session() as session:
+            user = await session.get(UserModel, existing.id)
+            if user is None:  # pragma: no cover - deleted between both reads
+                return existing, False
+            user.name = name
+            user.email = email
+            user.job_title = job_title
+            if is_active is not None:
+                user.is_active = is_active
+            await session.commit()
+            await session.refresh(user, attribute_names=["role", "area"])
+            return user, False
+
     async def update_photo_key(
         self, user_id: UUID, photo_key: str | None, photo_content_type: str | None = None
     ) -> UserModel | None:
@@ -202,15 +282,43 @@ class IdentityRepository:
             await session.refresh(user, attribute_names=["role", "area"])
             return user
 
+    async def transfer_owner(self, user_id: UUID) -> UserModel | None:
+        """Make a user the owner; whoever held the role becomes admin, in one transaction.
+
+        Args:
+            user_id (UUID): The new owner.
+
+        Returns:
+            UserModel | None: The new owner, or ``None`` when it does not exist.
+        """
+
+        async with self._session() as session:
+            owner = await session.scalar(select(RoleModel).where(RoleModel.code == OWNER))
+            admin = await session.scalar(select(RoleModel).where(RoleModel.code == ADMIN))
+            user = await session.get(UserModel, user_id)
+            if owner is None or admin is None or user is None:
+                return None
+            previous = await session.scalars(
+                select(UserModel).where(UserModel.role_id == owner.id, UserModel.id != user_id)
+            )
+            for other in previous:
+                other.role_id = admin.id
+            # The partial unique index allows one owner: demote before promoting.
+            await session.flush()
+            user.role_id = owner.id
+            await session.commit()
+            await session.refresh(user, attribute_names=["role", "area"])
+            return user
+
     async def count_admins(self, *, active_only: bool = False) -> int:
-        """Count users holding the administrator role."""
+        """Count users holding a platform administrator role (owner or admin)."""
 
         async with self._session() as session:
             query = (
                 select(func.count())
                 .select_from(UserModel)
                 .join(RoleModel)
-                .where(RoleModel.code == "admin")
+                .where(RoleModel.code.in_(PLATFORM_ADMIN_ROLES))
             )
             if active_only:
                 query = query.where(UserModel.is_active.is_(True))

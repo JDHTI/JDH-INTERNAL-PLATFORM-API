@@ -57,6 +57,12 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule("GET", "/v1/pqrsf/cases/export", STRICT, "Arma una hoja de cálculo de hasta 20.000 filas"),
     Rule("POST", "/v1/auth/me/photo/refresh", STRICT, "Llama a Microsoft Graph en cada solicitud"),
+    Rule(
+        "POST",
+        "/v1/directory/admin/sync",
+        STRICT,
+        "Lanza una sincronización completa con Microsoft Graph",
+    ),
 )
 
 

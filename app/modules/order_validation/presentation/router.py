@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile,
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.order_validation.application.service import (
@@ -34,6 +35,7 @@ from app.modules.order_validation.domain.vocabulary import (
 )
 
 router = APIRouter()
+_READ_GATE = Depends(require_permission("validador-pedidos"))
 _service = Depends(Provide[ApplicationContainer.v1_container.order_validation_service])
 _principal = Depends(get_current_principal)
 _TRY_THRESHOLD = Query(default=None, ge=0, le=20, description="Try a threshold without saving it")
@@ -376,7 +378,12 @@ async def permissions(
     return PermissionsResponse(can_manage=await service.can_manage(principal))
 
 
-@router.get("/catalogs", response_model=CatalogsResponse, summary="Statuses and reasons")
+@router.get(
+    "/catalogs",
+    dependencies=[_READ_GATE],
+    response_model=CatalogsResponse,
+    summary="Statuses and reasons",
+)
 @inject
 async def catalogs(
     _: Principal = _principal,
@@ -389,6 +396,7 @@ async def catalogs(
 
 @router.get(
     "/rules",
+    dependencies=[_READ_GATE],
     response_model=list[RuleSectionResponse],
     summary="The rules the validator applies",
 )
@@ -421,6 +429,7 @@ async def validation_rules(
 
 @router.post(
     "",
+    dependencies=[_READ_GATE],
     response_model=BatchResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload a retained orders file",
@@ -444,7 +453,9 @@ async def upload(
     return _batch(await service.upload(principal, file.filename, content, margin_threshold_points))
 
 
-@router.get("", response_model=BatchPageResponse, summary="List uploaded files")
+@router.get(
+    "", dependencies=[_READ_GATE], response_model=BatchPageResponse, summary="List uploaded files"
+)
 @inject
 async def list_batches(
     page: int = Query(default=1, ge=1),
@@ -463,7 +474,12 @@ async def list_batches(
     )
 
 
-@router.get("/{batch_id}", response_model=BatchResponse, summary="Get an uploaded file")
+@router.get(
+    "/{batch_id}",
+    dependencies=[_READ_GATE],
+    response_model=BatchResponse,
+    summary="Get an uploaded file",
+)
 @inject
 async def get_batch(
     batch_id: UUID,
@@ -475,7 +491,12 @@ async def get_batch(
     return _batch(await service.get_batch(batch_id))
 
 
-@router.get("/{batch_id}/orders", response_model=OrderPageResponse, summary="Orders of a file")
+@router.get(
+    "/{batch_id}/orders",
+    dependencies=[_READ_GATE],
+    response_model=OrderPageResponse,
+    summary="Orders of a file",
+)
 @inject
 async def list_orders(
     batch_id: UUID,
@@ -519,6 +540,7 @@ async def list_orders(
 
 @router.post(
     "/{batch_id}/revalidate",
+    dependencies=[_READ_GATE],
     response_model=BatchResponse,
     summary="Validate a file again",
     description=(
@@ -542,6 +564,7 @@ async def revalidate(
 
 @router.put(
     "/{batch_id}/margin-threshold",
+    dependencies=[_READ_GATE],
     response_model=BatchResponse,
     summary="Save the margin threshold",
     description=(
@@ -564,6 +587,7 @@ async def set_margin_threshold(
 
 @router.post(
     "/{batch_id}/approvals",
+    dependencies=[_READ_GATE],
     response_model=BatchResponse,
     summary="Approve pending orders by hand",
     description=(
@@ -586,6 +610,7 @@ async def approve_orders(
 
 @router.delete(
     "/{batch_id}/orders/{document}/approval",
+    dependencies=[_READ_GATE],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove a manual approval",
 )
@@ -603,7 +628,10 @@ async def remove_approval(
 
 
 @router.delete(
-    "/{batch_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an uploaded file"
+    "/{batch_id}",
+    dependencies=[_READ_GATE],
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an uploaded file",
 )
 @inject
 async def delete_batch(

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.core.errors import NotFoundError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
+from app.modules.identity.domain.roles import is_platform_admin
 from app.modules.identity.infrastructure.models import UserModel
 from app.modules.identity.infrastructure.repository import IdentityRepository
 
@@ -25,7 +26,8 @@ def principal_from_user(user: UserModel) -> Principal:
         user_id=user.id,
         email=user.email or user.name,
         display_name=user.name,
-        is_platform_admin=user.role.code == "admin",
+        is_platform_admin=is_platform_admin(user.role.code),
+        role=user.role.code,
     )
 
 
@@ -50,8 +52,9 @@ class UserDirectory:
     async def require_user(self, email: str) -> DirectoryUser:
         """Return the user with this email.
 
-        Users are created by Entra sign-in (they need a tenant and object id),
-        so a person must have signed in once before anyone can reference them.
+        Users are created by Entra sign-in or by the directory sync (both carry a
+        tenant and object id), so a person must be in one of them before anyone can
+        reference them.
 
         Args:
             email (str): Email address of the person.
@@ -66,8 +69,8 @@ class UserDirectory:
         user = await self.repository.get_user_by_email(email)
         if user is None:
             raise NotFoundError(
-                f"No hay un usuario con el correo {email.strip()}: debe iniciar sesión "
-                "en la plataforma al menos una vez"
+                f"No hay un usuario con el correo {email.strip()}: debe estar en el "
+                "directorio de empleados o haber iniciado sesión en la plataforma"
             )
         return _directory_user(user)
 

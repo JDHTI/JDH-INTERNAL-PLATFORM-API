@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -15,7 +17,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
@@ -25,7 +27,13 @@ from app.infrastructure.database import Base
 # on the same table. Its area-space columns come from migration 0003_areas.
 from app.modules.identity.infrastructure.models import AreaModel
 
-__all__ = ["AreaMemberModel", "AreaModel", "AreaRoleModel"]
+__all__ = [
+    "AreaMemberModel",
+    "AreaModel",
+    "AreaRoleModel",
+    "AreaRolePermissionModel",
+    "PermissionEventModel",
+]
 
 
 class AreaRoleModel(Base):
@@ -76,4 +84,58 @@ class AreaMemberModel(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AreaRolePermissionModel(Base):
+    """One grant of an area role: a module (or ``*``) and ``read`` or ``manage``."""
+
+    __tablename__ = "area_role_permissions"
+    __table_args__ = (
+        UniqueConstraint("role_id", "module", name="uq_area_role_permissions_role_module"),
+        CheckConstraint("action IN ('read', 'manage')", name="ck_area_role_permissions_action"),
+        Index("ix_area_role_permissions_role_id", "role_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("area_roles.id", ondelete="CASCADE"), nullable=False
+    )
+    module: Mapped[str] = mapped_column(String(60), nullable=False)
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class PermissionEventModel(Base):
+    """One change to who may do what (roles, grants, members, global roles)."""
+
+    __tablename__ = "permission_events"
+    __table_args__ = (
+        Index("ix_permission_events_at", "at"),
+        Index("ix_permission_events_target_user_id", "target_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    area_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("areas.id", ondelete="SET NULL")
+    )
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # No foreign key: the history outlives a deleted role.
+    role_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

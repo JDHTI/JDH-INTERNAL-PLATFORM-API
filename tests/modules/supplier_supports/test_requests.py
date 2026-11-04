@@ -71,6 +71,7 @@ async def test_roles_and_ownership_are_enforced():
         "can_manage": False,
         "can_review": False,
         "can_request": True,
+        "can_read": True,
     }
     await service.search(sales, None, None, 1, 20)
     assert repo.search.call_args.args[0] == sales.user_id

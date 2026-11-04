@@ -32,6 +32,12 @@ async def test_slug_and_name_are_unique_and_validated(areas, admin) -> None:
         await areas.create_area(CreateAreaCommand(slug="Tesorería", name="Tesorería"), admin)
 
 
+async def test_slugs_of_the_general_routes_are_reserved(areas, admin) -> None:
+    for slug in ("directorio", "noticias", "documentos"):
+        with pytest.raises(InvalidInputError, match="reservado"):
+            await areas.create_area(CreateAreaCommand(slug=slug, name=slug.title()), admin)
+
+
 async def test_non_members_only_see_their_areas(areas, admin, login) -> None:
     ana = await login("ana@jdh.com.co")
     await _area_with_member(areas, admin, ana, slug="bi", role_name="Líder BI")

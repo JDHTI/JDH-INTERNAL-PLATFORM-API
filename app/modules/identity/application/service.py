@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Environment, Settings
 from app.infrastructure.s3 import S3Storage
+from app.modules.identity.application.directory import principal_from_user as principal_of
 from app.modules.identity.domain.entities import EntraProfile, IdentityToken, UserView
+from app.modules.identity.domain.principal import Principal
+from app.modules.identity.domain.roles import (
+    ASSIGNABLE_ROLES,
+    GLOBAL_ROLES,
+    OWNER,
+    ROLE_NAMES,
+    is_platform_admin,
+)
 from app.modules.identity.infrastructure.entra import (
     EntraClient,
     EntraTokenError,
@@ -30,6 +40,27 @@ class ProtectedMutationError(Exception):
     """Raised when an operation would remove the last administrator."""
 
 
+class OwnerProtectedError(Exception):
+    """Raised when an operation would deactivate the owner or change its role."""
+
+
+class RoleChangeForbidden(Exception):
+    """Raised when someone other than the owner tries to change a global role."""
+
+
+class PermissionAudit(Protocol):
+    """Where changes to who may do what are logged."""
+
+    async def record_global_event(
+        self,
+        action: str,
+        principal: Principal | None,
+        *,
+        target_user_id: UUID | None,
+        detail: dict | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AuthenticatedUser:
     """Current user plus tokens that should be rotated in cookies."""
@@ -47,11 +78,14 @@ class IdentityService:
         entra: EntraClient,
         storage: S3Storage,
         settings: Settings,
+        audit: PermissionAudit | None = None,
     ) -> None:
         self.repository = repository
         self.entra = entra
         self.storage = storage
         self.settings = settings
+        # Logs global role changes in the permissions log (the areas module implements it).
+        self.audit = audit
 
     @property
     def tenant_id(self) -> str:
@@ -73,10 +107,23 @@ class IdentityService:
         return user, tokens, is_new
 
     async def register_profile(self, profile: EntraProfile) -> tuple[UserModel, bool]:
-        """Create a default user once and attach an optional profile photo."""
+        """Create a default user once and attach an optional profile photo.
+
+        An existing user gets the fields Entra owns (name, email, job title) refreshed
+        when they changed; role, area, state and photo stay as they are.
+        """
 
         existing = await self.repository.get_user_by_identity(profile.tenant_id, profile.object_id)
         if existing is not None:
+            fields = (profile.name, profile.email, profile.job_title)
+            if fields != (existing.name, existing.email, existing.job_title):
+                refreshed = await self.repository.update_profile_fields(
+                    existing.id,
+                    name=profile.name,
+                    email=profile.email,
+                    job_title=profile.job_title,
+                )
+                existing = refreshed or existing
             return existing, False
         user = await self.repository.create_user(
             tenant_id=profile.tenant_id,
@@ -199,8 +246,14 @@ class IdentityService:
         update_role: bool,
         update_area: bool,
         update_is_active: bool,
+        actor: UserModel | None = None,
     ) -> UserModel | None:
-        """Apply admin changes while preserving at least one administrator."""
+        """Apply admin changes while keeping the owner and at least one administrator.
+
+        Only the owner changes global roles (``actor`` must be the owner when
+        ``update_role``); ``owner`` itself is never assigned here. The owner cannot be
+        deactivated nor change role.
+        """
 
         current = await self.repository.get_user(user_id)
         if current is None:
@@ -208,18 +261,34 @@ class IdentityService:
         if update_is_active and is_active is None:
             raise ValueError("is_active_required")
         current_is_active = getattr(current, "is_active", True)
-        if update_role and role_code != "admin" and current.role.code == "admin":
+        previous_role = current.role.code
+        if update_role and role_code == OWNER:
+            raise ValueError("owner_not_assignable")
+        if update_role and role_code not in ASSIGNABLE_ROLES:
+            raise ValueError("role_not_found")
+        if current.role.code == OWNER and (
+            (update_role and role_code != OWNER) or (update_is_active and is_active is False)
+        ):
+            raise OwnerProtectedError
+        if update_role and role_code != current.role.code:
+            if actor is None or actor.role.code != OWNER:
+                raise RoleChangeForbidden
+        if (
+            update_role
+            and not is_platform_admin(role_code)
+            and is_platform_admin(current.role.code)
+        ):
             if current_is_active and await self.repository.count_admins(active_only=True) <= 1:
                 raise ProtectedMutationError
         if update_is_active and is_active is False and current_is_active:
             if (
-                current.role.code == "admin"
+                is_platform_admin(current.role.code)
                 and await self.repository.count_admins(active_only=True) <= 1
             ):
                 raise ProtectedMutationError
         if update_area and area_id is not None and not current_is_active:
             raise ValueError("inactive_user")
-        return await self.repository.update_user(
+        updated = await self.repository.update_user(
             user_id,
             job_title=job_title,
             role_code=role_code,
@@ -230,6 +299,22 @@ class IdentityService:
             update_area=update_area,
             update_is_active=update_is_active,
         )
+        if self.audit is not None and updated is not None:
+            actor_principal = principal_of(actor) if actor is not None else None
+            if update_role and role_code != previous_role:
+                await self.audit.record_global_event(
+                    "global_role_changed",
+                    actor_principal,
+                    target_user_id=user_id,
+                    detail={"before": previous_role, "after": role_code},
+                )
+            if update_is_active and is_active != current_is_active:
+                await self.audit.record_global_event(
+                    "user_activated" if is_active else "user_deactivated",
+                    actor_principal,
+                    target_user_id=user_id,
+                )
+        return updated
 
     async def seed_development_users(self) -> list[UserModel]:
         """Create or refresh deterministic users for a local development database."""
@@ -245,7 +330,10 @@ class IdentityService:
                 "name": "Analista TI",
                 "email": self.settings.AUTH_DEV_SEED_ANALYST_EMAIL,
                 "job_title": "Analista TI",
-                "role_code": "admin",
+                "role_code": OWNER
+                if self.settings.AUTH_DEV_SEED_ANALYST_EMAIL.lower()
+                == self.settings.PLATFORM_OWNER_EMAIL.lower()
+                else "admin",
             },
             *[
                 {
@@ -264,9 +352,24 @@ class IdentityService:
     async def list_roles(self) -> list[RoleModel]:
         """Return configured platform roles."""
 
-        await self.repository.ensure_role("admin", "Administrator")
-        await self.repository.ensure_role("user", "User")
+        for code in GLOBAL_ROLES:
+            await self.repository.ensure_role(code, ROLE_NAMES[code])
         return list(await self.repository.list_roles())
+
+    async def set_owner(self, email: str) -> UserModel | None:
+        """Make the user with this email the owner; the previous owner becomes admin.
+
+        Args:
+            email (str): Email of an existing, active user.
+
+        Returns:
+            UserModel | None: The new owner, or ``None`` when nobody has that email.
+        """
+
+        user = await self.repository.get_user_by_email(email)
+        if user is None or not getattr(user, "is_active", True):
+            return None
+        return await self.repository.transfer_owner(user.id)
 
     async def photo(self, user: UserModel) -> bytes | None:
         """Read a private profile photo from object storage."""

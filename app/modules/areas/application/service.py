@@ -13,8 +13,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID
 
-from app.core.errors import ConflictError, ForbiddenError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.areas.application.dto import (
+    AreaGrantsView,
     AreaView,
     CreateAreaCommand,
     MemberView,
@@ -22,9 +23,28 @@ from app.modules.areas.application.dto import (
     UpdateAreaCommand,
     UserRef,
 )
-from app.modules.areas.domain.entities import Area, AreaRole, clean_name, validate_slug
+from app.modules.areas.domain.catalog import MANAGE, READ, WILDCARD, validate_grant
+from app.modules.areas.domain.entities import (
+    AccessProfile,
+    Area,
+    AreaGrants,
+    AreaRole,
+    PermissionEvent,
+    RolePermission,
+    clean_name,
+    validate_slug,
+)
 from app.modules.areas.domain.ports import AreaRepository, DirectoryUser, UserDirectory
 from app.modules.identity.domain.principal import Principal
+
+FULL_ACCESS_ROLE = "Acceso completo"
+
+
+def _sorted_grants(grants: dict[str, str]) -> list[RolePermission]:
+    return [
+        RolePermission(module, action)
+        for module, action in sorted(grants.items(), key=lambda item: (item[0] != WILDCARD, item))
+    ]
 
 
 def _user_ref(user: DirectoryUser | None) -> UserRef | None:
@@ -61,6 +81,11 @@ class AreaService:
             raise ForbiddenError("Solo un administrador de la plataforma puede hacer esto")
 
     @staticmethod
+    def _require_admin_or_moderator(principal: Principal) -> None:
+        if not (principal.is_platform_admin or principal.is_moderator):
+            raise ForbiddenError("Solo un administrador o un moderador puede ver esto")
+
+    @staticmethod
     def _require_active_user(user: DirectoryUser) -> DirectoryUser:
         if not user.is_active:
             raise ConflictError("No se puede asignar un usuario inactivo")
@@ -82,11 +107,13 @@ class AreaService:
         self,
         rows: Iterable[tuple[Area, AreaRole | None]],
         principal: Principal,
+        profile: AccessProfile | None = None,
     ) -> list[AreaView]:
         rows = list(rows)
         responsibles = await self.users.get_users(
             area.responsible_user_id for area, _ in rows if area.responsible_user_id
         )
+        profile = profile or await self.profile(principal)
         return [
             AreaView(
                 id=area.id,
@@ -100,6 +127,7 @@ class AreaService:
                 is_responsible=area.responsible_user_id == principal.user_id,
                 created_at=area.created_at,
                 updated_at=area.updated_at,
+                my_modules=profile.modules(area.slug),
             )
             for area, role in rows
         ]
@@ -119,59 +147,301 @@ class AreaService:
             raise ConflictError("Ya existe un área con ese identificador")
         raise ConflictError("Ya existe un área con ese nombre")
 
-    # --- Access (also used by the documents module) ---
+    # --- Access (also used by the documents module and every permission policy) ---
 
-    async def authorize(self, slug: str, principal: Principal) -> Area:
+    async def profile(self, principal: Principal) -> AccessProfile:
+        """Everything the principal may do in the workspace.
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            AccessProfile: Global role plus, per area, responsibility and role grants.
+        """
+
+        rows = await self.repository.list_areas_for_user(principal.user_id)
+        grants = await self.repository.get_role_permissions(role.id for _, role in rows if role)
+        return AccessProfile(
+            role=principal.role,
+            areas={
+                area.slug: AreaGrants(
+                    area_id=area.id,
+                    slug=area.slug,
+                    is_responsible=area.responsible_user_id == principal.user_id,
+                    role_id=role.id if role else None,
+                    grants=grants.get(role.id, {}) if role else {},
+                )
+                for area, role in rows
+            },
+        )
+
+    async def allows(
+        self, principal: Principal, area_slug: str | None, module: str, action: str = READ
+    ) -> bool:
+        """Whether the principal may do ``action`` on ``module``.
+
+        Args:
+            principal (Principal): The caller.
+            area_slug (str | None): The area; ``None`` means any area of the module.
+            module (str): Module key of the catalog.
+            action (str): ``read`` or ``manage``.
+
+        Returns:
+            bool: ``True`` when allowed.
+        """
+
+        if principal.is_platform_admin:
+            return True
+        if principal.is_moderator:
+            return action == READ
+        return (await self.profile(principal)).allows(area_slug, module, action)
+
+    async def require_permission(
+        self, principal: Principal, area_slug: str | None, module: str, action: str = READ
+    ) -> None:
+        """Raise unless the principal may do ``action`` on ``module``.
+
+        Raises:
+            ForbiddenError: When not allowed.
+        """
+
+        if not await self.allows(principal, area_slug, module, action):
+            verb = "gestionar" if action == MANAGE else "consultar"
+            where = f" en {area_slug}" if area_slug else ""
+            raise ForbiddenError(f"No tienes permiso para {verb} {module}{where}")
+
+    async def authorize(
+        self, slug: str, principal: Principal, module: str | None = None, action: str = READ
+    ) -> Area:
         """Return the area when the principal may work in its space.
 
         Args:
             slug (str): Area slug.
             principal (Principal): The caller.
+            module (str | None): Module of the area being used; ``None`` only asks
+                whether the caller belongs to the area.
+            action (str): ``read`` or ``manage`` on that module.
 
         Returns:
-            Area: The area, for administrators, its responsible or its members.
+            Area: The area.
         """
 
-        return await self._authorize(await self._get_area(slug), principal)
+        return await self._authorize(await self._get_area(slug), principal, module, action)
 
-    async def authorize_by_id(self, area_id: UUID, principal: Principal) -> Area:
+    async def authorize_by_id(
+        self, area_id: UUID, principal: Principal, module: str | None = None, action: str = READ
+    ) -> Area:
         """Return the area by identifier when the principal may work in its space.
 
         Args:
             area_id (UUID): Area identifier.
             principal (Principal): The caller.
+            module (str | None): Module of the area being used.
+            action (str): ``read`` or ``manage`` on that module.
 
         Returns:
-            Area: The area, for administrators, its responsible or its members.
+            Area: The area.
         """
 
         area = await self.repository.get_by_id(area_id)
         if area is None:
             raise NotFoundError("Área no encontrada")
-        return await self._authorize(area, principal)
+        return await self._authorize(area, principal, module, action)
 
-    async def _authorize(self, area: Area, principal: Principal) -> Area:
+    async def _authorize(
+        self, area: Area, principal: Principal, module: str | None, action: str
+    ) -> Area:
+        if module is not None:
+            await self.require_permission(principal, area.slug, module, action)
+            return area
         if principal.is_platform_admin or area.responsible_user_id == principal.user_id:
+            return area
+        if principal.is_moderator and action == READ:
             return area
         if await self.repository.get_member_by_user(area.id, principal.user_id) is None:
             raise ForbiddenError("No perteneces a esta área")
         return area
 
-    async def accessible_area_ids(self, principal: Principal) -> list[UUID] | None:
-        """List the areas whose space the principal may use.
+    async def accessible_area_ids(
+        self, principal: Principal, module: str | None = None, action: str = READ
+    ) -> list[UUID] | None:
+        """List the areas whose space (or one module of it) the principal may use.
 
         Args:
             principal (Principal): The caller.
+            module (str | None): Only areas where the caller may use this module.
+            action (str): ``read`` or ``manage`` on that module.
 
         Returns:
             list[UUID] | None: Area identifiers, or ``None`` meaning every area
-                (platform administrators).
+                (platform administrators, and moderators to read).
         """
 
-        if principal.is_platform_admin:
+        if principal.is_platform_admin or (principal.is_moderator and action == READ):
             return None
-        rows = await self.repository.list_areas_for_user(principal.user_id)
-        return [area.id for area, _ in rows]
+        profile = await self.profile(principal)
+        if module is None:
+            return [grants.area_id for grants in profile.areas.values()]
+        return [
+            grants.area_id
+            for slug, grants in profile.areas.items()
+            if profile.allows(slug, module, action)
+        ]
+
+    # --- Role permissions and the log ---
+
+    async def all_areas(self) -> list[Area]:
+        """Every area in navigation order (the catalog of the permissions panel)."""
+
+        return await self.repository.list_areas()
+
+    async def get_role_permissions(
+        self, slug: str, role_id: UUID, principal: Principal
+    ) -> tuple[AreaRole, list[RolePermission]]:
+        """The grants of an area role.
+
+        Args:
+            slug (str): Area slug.
+            role_id (UUID): The role.
+            principal (Principal): An administrator or a moderator.
+
+        Returns:
+            tuple[AreaRole, list[RolePermission]]: The role and its grants.
+        """
+
+        self._require_admin_or_moderator(principal)
+        area = await self._get_area(slug)
+        role = await self._get_role(area.id, role_id)
+        grants = (await self.repository.get_role_permissions([role.id])).get(role.id, {})
+        return role, _sorted_grants(grants)
+
+    async def set_role_permissions(
+        self,
+        slug: str,
+        role_id: UUID,
+        grants: Iterable[tuple[str, str]],
+        principal: Principal,
+    ) -> tuple[AreaRole, list[RolePermission]]:
+        """Replace the grants of an area role.
+
+        Args:
+            slug (str): Area slug.
+            role_id (UUID): The role.
+            grants (Iterable[tuple[str, str]]): ``(module, action)`` pairs; ``*`` is the
+                whole area. A module listed twice keeps its strongest action.
+            principal (Principal): The caller; must be a platform administrator.
+
+        Returns:
+            tuple[AreaRole, list[RolePermission]]: The role and its new grants.
+        """
+
+        self._require_admin(principal)
+        area = await self._get_area(slug)
+        role = await self._get_role(area.id, role_id)
+        cleaned: dict[str, str] = {}
+        for module, action in grants:
+            module, action = validate_grant(area.slug, module, action)
+            if cleaned.get(module) != MANAGE:
+                cleaned[module] = action
+        before = (await self.repository.get_role_permissions([role.id])).get(role.id, {})
+        await self.repository.replace_role_permissions(
+            role.id, [RolePermission(module, action) for module, action in cleaned.items()]
+        )
+        await self._event(
+            "role_permissions_set",
+            principal,
+            area_id=area.id,
+            role_id=role.id,
+            detail={"role": role.name, "before": before, "after": cleaned},
+        )
+        return role, _sorted_grants(cleaned)
+
+    async def user_permissions(self, user_id: UUID, principal: Principal) -> list[AreaGrantsView]:
+        """Areas, roles and grants of one person, for the permissions panel.
+
+        Args:
+            user_id (UUID): The person.
+            principal (Principal): An administrator or a moderator.
+
+        Returns:
+            list[AreaGrantsView]: One entry per area where the person is a member or
+                the responsible.
+        """
+
+        self._require_admin_or_moderator(principal)
+        rows = await self.repository.list_areas_for_user(user_id)
+        grants = await self.repository.get_role_permissions(role.id for _, role in rows if role)
+        return [
+            AreaGrantsView(
+                area_id=area.id,
+                slug=area.slug,
+                name=area.name,
+                is_responsible=area.responsible_user_id == user_id,
+                role=RoleRef(id=role.id, name=role.name) if role else None,
+                grants=_sorted_grants(grants.get(role.id, {}) if role else {}),
+            )
+            for area, role in rows
+        ]
+
+    async def list_events(
+        self,
+        principal: Principal,
+        *,
+        area_slug: str | None = None,
+        target_user_id: UUID | None = None,
+        action: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[PermissionEvent], int]:
+        """The permissions log, newest first.
+
+        Args:
+            principal (Principal): An administrator or a moderator.
+            area_slug (str | None): Only this area.
+            target_user_id (UUID | None): Only this person.
+            action (str | None): Only this kind of change.
+            offset (int): Rows to skip.
+            limit (int): 1 to 100 rows.
+
+        Returns:
+            tuple[list[PermissionEvent], int]: The page and the total.
+        """
+
+        self._require_admin_or_moderator(principal)
+        if not 1 <= limit <= 100:
+            raise InvalidInputError("El límite debe estar entre 1 y 100")
+        area_id = (await self._get_area(area_slug)).id if area_slug else None
+        return await self.repository.list_events(
+            area_id=area_id,
+            target_user_id=target_user_id,
+            action=action,
+            offset=offset,
+            limit=limit,
+        )
+
+    async def record_global_event(
+        self,
+        action: str,
+        principal: Principal | None,
+        *,
+        target_user_id: UUID | None,
+        detail: dict | None = None,
+    ) -> None:
+        """Log a change made outside the areas (a global role, a deactivation).
+
+        Args:
+            action (str): What happened.
+            principal (Principal | None): Who did it (``None`` for a system job).
+            target_user_id (UUID | None): Person affected.
+            detail (dict | None): Before/after values.
+        """
+
+        await self._event(action, principal, target_user_id=target_user_id, detail=detail)
+
+    async def _event(self, action: str, principal: Principal | None, **fields) -> None:
+        await self.repository.record_event(
+            action, actor_user_id=principal.user_id if principal else None, **fields
+        )
 
     # --- Areas ---
 
@@ -182,16 +452,17 @@ class AreaService:
             principal (Principal): The caller.
 
         Returns:
-            list[AreaView]: Every area for administrators; otherwise those
-                where the caller is a member or the responsible.
+            list[AreaView]: Every area for administrators and moderators; otherwise
+                those where the caller is a member or the responsible.
         """
 
         mine = await self.repository.list_areas_for_user(principal.user_id)
-        if not principal.is_platform_admin:
-            return await self._views(mine, principal)
+        profile = await self.profile(principal)
+        if not (principal.is_platform_admin or principal.is_moderator):
+            return await self._views(mine, principal, profile)
         roles = {area.id: role for area, role in mine}
         areas = await self.repository.list_areas()
-        return await self._views(((a, roles.get(a.id)) for a in areas), principal)
+        return await self._views(((a, roles.get(a.id)) for a in areas), principal, profile)
 
     async def get_area(self, slug: str, principal: Principal) -> AreaView:
         """Return one area the principal can access.
@@ -235,6 +506,10 @@ class AreaService:
             sort_order=command.sort_order,
             responsible_user_id=responsible.id if responsible else None,
         )
+        # Every area starts with a role that grants it whole.
+        role = await self.repository.create_role(area.id, FULL_ACCESS_ROLE)
+        await self.repository.replace_role_permissions(role.id, [RolePermission(WILDCARD, MANAGE)])
+        await self._event("area_created", principal, area_id=area.id, detail={"slug": slug})
         return await self._view(area, principal)
 
     async def update_area(
@@ -320,7 +595,11 @@ class AreaService:
         name = clean_name(name, max_length=100)
         if await self.repository.role_name_taken(area.id, name):
             raise ConflictError("El área ya tiene un rol con ese nombre")
-        return await self.repository.create_role(area.id, name)
+        role = await self.repository.create_role(area.id, name)
+        await self._event(
+            "role_created", principal, area_id=area.id, role_id=role.id, detail={"name": name}
+        )
+        return role
 
     async def rename_role(
         self, slug: str, role_id: UUID, name: str, principal: Principal
@@ -363,6 +642,9 @@ class AreaService:
         if await self.repository.role_in_use(role.id):
             raise ConflictError("El rol tiene miembros asignados: reasígnalos antes de borrarlo")
         await self.repository.delete_role(role.id)
+        await self._event(
+            "role_deleted", principal, area_id=area.id, role_id=role.id, detail={"name": role.name}
+        )
 
     # --- Members ---
 
@@ -430,6 +712,14 @@ class AreaService:
         if await self.repository.get_member_by_user(area.id, user.id):
             raise ConflictError("La persona ya es miembro del área")
         member = await self.repository.create_member(area.id, user.id, role.id)
+        await self._event(
+            "member_added",
+            principal,
+            area_id=area.id,
+            target_user_id=user.id,
+            role_id=role.id,
+            detail={"role": role.name},
+        )
         return MemberView(
             id=member.id,
             user=_user_ref(user),
@@ -459,8 +749,17 @@ class AreaService:
         if member is None:
             raise NotFoundError("Miembro no encontrado")
         role = await self._get_role(area.id, role_id)
+        previous_role_id = member.role_id
         member.role_id = role.id
         member = await self.repository.save_member(member)
+        await self._event(
+            "member_role_changed",
+            principal,
+            area_id=area.id,
+            target_user_id=member.user_id,
+            role_id=role.id,
+            detail={"role": role.name, "previous_role_id": str(previous_role_id)},
+        )
         users = await self.users.get_users([member.user_id])
         return MemberView(
             id=member.id,
@@ -488,3 +787,10 @@ class AreaService:
         if member is None:
             raise NotFoundError("Miembro no encontrado")
         await self.repository.delete_member(member.id)
+        await self._event(
+            "member_removed",
+            principal,
+            area_id=area.id,
+            target_user_id=member.user_id,
+            role_id=member.role_id,
+        )

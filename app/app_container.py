@@ -22,6 +22,7 @@ WIRED_MODULES = (
     "app.modules.identity.presentation.router",
     "app.modules.consumption.presentation.router",
     "app.modules.areas.presentation.router",
+    "app.modules.areas.presentation.permissions_router",
     "app.modules.documents.presentation.router",
     "app.modules.sites.presentation.router",
     "app.modules.masters.presentation.router",
@@ -45,6 +46,8 @@ WIRED_MODULES = (
     "app.modules.quotations.presentation.router",
     "app.modules.dwh_monitoring.presentation.router",
     "app.modules.app_monitoring.presentation.router",
+    "app.modules.directory.presentation.router",
+    "app.modules.directory.presentation.admin_router",
 )
 
 

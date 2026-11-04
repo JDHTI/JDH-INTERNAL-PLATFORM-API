@@ -43,7 +43,11 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - `GET /api/v1/auth/me`: devuelve el perfil local autenticado. El frontend debe
   usar `credentials: include`; no debe guardar tokens en `localStorage`.
 - Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
-  `/api/v1/areas`; requieren el rol local `admin`.
+  `/api/v1/areas`; requieren un rol global `owner` o `admin`.
+- Cada endpoint del espacio de trabajo exige un permiso de módulo: roles globales
+  `owner`, `admin`, `moderator` y `user`, y roles de área con permisos `read` o `manage`
+  por módulo. El panel vive en `/api/v1/permissions`. El owner es `PLATFORM_OWNER_EMAIL`
+  y se mueve con `scripts/set-owner.py`. Ver [`docs/permissions.md`](docs/permissions.md).
 - Todo el módulo PQRSF (contrato de la API, interfaz, estado y hoja de ruta) está
   en un solo documento: [`docs/pqrsf.md`](docs/pqrsf.md). Su formulario público
   vive en `/pqrsf`, fuera del layout autenticado.
@@ -56,6 +60,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El cotizador del área comercial (Comercial → Cotizador) vive en `/api/v1/quotations`:
   arma la lista de precios de un cliente desde el DWH, la cruza con el maestro de márgenes y
   de apoyos y genera el Excel y el plano de SIESA; ver [`docs/cotizador.md`](docs/cotizador.md).
+- El directorio de empleados vive en `/api/v1/directory` (lectura para toda persona
+  autenticada) y `/api/v1/directory/admin` (administradores): copia nocturna de Entra
+  que además crea los usuarios de la plataforma; ver [`docs/directory.md`](docs/directory.md).
 - `/api/docs`, `/api/redoc` y `/api/openapi.json`: disponibles en `dev` y `test`.
 - En `ENVIRONMENT=prod` se deshabilitan OpenAPI, Swagger UI y ReDoc; también
   se fuerza `debug=False` aunque una variable externa intente activarlo.
@@ -65,9 +72,10 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 `.env.example` contiene valores locales seguros para el stack de desarrollo.
 Los secretos reales deben inyectarse mediante el entorno del proceso o el
 gestor de secretos del despliegue. `ENVIRONMENT` acepta `dev`, `test` y `prod`.
-Las variables `AUTH_MICROSOFT_ENTRA_ID_*` se cargan desde el `.env` local o
-desde el gestor de secretos del entorno; el valor de
-`AUTH_MICROSOFT_ENTRA_ID_SECRET` nunca debe versionarse.
+Las variables `DIRECTORY_GRAPH_*` (registro de aplicación con `User.Read.All`
+para el directorio de empleados) se cargan desde el `.env` local o desde el
+gestor de secretos del entorno; el valor de `DIRECTORY_GRAPH_CLIENT_SECRET`
+nunca debe versionarse.
 El datawarehouse se configura con `DWH_*`; el proveedor inicial es PostgreSQL
 y el usuario debe tener permisos de lectura sobre el esquema `consumo`. La
 conexión se abre bajo demanda, se comprueba en readiness y se cierra con el

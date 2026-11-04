@@ -63,6 +63,8 @@ async def test_cannot_deactivate_or_degrade_the_last_active_admin() -> None:
     with pytest.raises(ProtectedMutationError):
         await service.update_user(
             user.id,
+            # Only the owner changes global roles; the last admin is still protected.
+            actor=_user(role="owner", is_active=True),
             job_title=None,
             role_code="user",
             area_id=None,
@@ -109,7 +111,8 @@ async def test_development_seed_is_deterministic_and_idempotent() -> None:
     assert len(first) == len(second) == 5
     assert len(repository.users) == 5
     assert first[0].email == "analista.ti@jdh.com.co"
-    assert first[0].role.code == "admin"
+    # The analyst is PLATFORM_OWNER_EMAIL, so the seed makes them the owner.
+    assert first[0].role.code == "owner"
     assert all(user.role.code == "user" for user in first[1:])
     assert all(user.is_active for user in first)
     assert [user.id for user in first] == [user.id for user in second]

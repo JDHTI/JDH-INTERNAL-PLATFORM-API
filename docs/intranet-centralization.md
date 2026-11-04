@@ -1,6 +1,94 @@
 # Centralización de la intranet en internal-platform
 
-Fecha: 2026-11-04. Estado: análisis, sin decisiones tomadas.
+Fecha: 2026-11-04. Estado: re-evaluado el mismo día (sección 0). La fase 1, directorio y
+provisión de usuarios, está implementada en [`directory.md`](directory.md).
+
+## 0. Re-evaluación: un solo aplicativo corporativo
+
+El objetivo cambió. Ya no es solo ahorrar máquinas: es tener **un único aplicativo
+corporativo**. Las secciones 1 a 8 son el análisis original. Esta sección lo reemplaza donde
+se contradicen.
+
+### Veredicto
+
+Centralizar en internal-platform, por módulos, sin portar la UI de la intranet. Strapi queda
+como backend de contenido (noticias, eventos, documentos corporativos) que la plataforma lee.
+Su panel ya era el editor real. La UI y la API NestJS de la intranet se apagan cuando sus
+funciones existan en la plataforma.
+
+- **La estimación C asumía un porte.** Los 85–125 días suponían trasladar 27 000 líneas de UI
+  con su kit, Lenis y la home editorial. La vista general se construye nativa, con Base UI y
+  React Query. De la intranet se reutilizan el contrato y las reglas, no el código.
+- **Buena parte no se migra.** Eventos, certificados y vacaciones sin uso, admin vacíos,
+  búsqueda rota, Better Auth, su throttling y su caché de Redis.
+- **La plataforma ya tiene lo caro.** SSO con Entra, cliente Graph de aplicación, workers, S3,
+  Redis, límites de tráfico, áreas y roles.
+- **Dos sistemas cuestan más.** Dos logins, dos listas de personas que no se hablan y dos
+  shells. Los permisos de la plataforma necesitan el directorio de todos modos.
+
+Sigue vigente: Strapi no se reescribe, la máquina se apaga solo cuando Strapi se mude (B1), y
+falta definir el despliegue de la plataforma (B3).
+
+### Fases
+
+| Fase | Qué | Repo | Estado |
+| --- | --- | --- | --- |
+| 1 | Directorio desde Graph, provisión de usuarios, sedes, fotos, historial de sincronización e importación desde la intranet | API | Hecha ([`directory.md`](directory.md)) |
+| 2 | Vista general: `/` con cumpleaños y nuevos ingresos, `/directorio`, `/directorio/[id]`; menú General y Espacio de trabajo | UI | Siguiente |
+| 3 | Cargo, nacimiento y sede desde el DWH; visibilidad definitiva | API | Confirmar si el DWH expone empleados |
+| 4 | `/noticias`, `/eventos`, `/documentos`: proxy `/content/*` de Strapi en la API, con caché | API + UI | Decidido el proxy; depende de B1 |
+| 5 | Perfil y onboarding (contacto, horarios, sede), notificaciones e ingesta desde Strapi | API + UI | — |
+| 6 | Redirecciones 301 desde `intranet.jdh.local` y apagado de la UI y la API de la intranet | Infra | — |
+
+### Rutas y shell
+
+- **Vista general para toda persona autenticada.** `/` deja de redirigir a la primera área y
+  muestra la home. Junto a `/configuracion` y `/sugerencias` van `/directorio`, `/noticias`,
+  `/eventos`, `/documentos` y `/perfil`. Una persona sin áreas deja de ver una pantalla vacía.
+- **Los módulos productivos se quedan en la raíz**, sin prefijo `/workspaces`. Siguen en
+  `/calidad/pqrsf` o `/comercial/cotizador`. El espacio de trabajo es un bloque del menú, no un
+  segmento de URL: aparece debajo de General solo si la persona tiene áreas.
+- **Motivo de mantener la raíz.** Las URL actuales ya circulan en los correos de PQRSF y en
+  marcadores. Un prefijo obligaría a redirecciones sin ganancia funcional. Si algún día se
+  quiere, la opción coherente es `/espacios/[area]` con 301.
+- **Slugs reservados.** En Next, una ruta fija gana a `[area]`, así que la API ya rechaza áreas
+  con esos nombres (`RESERVED_SLUGS` en `app/modules/areas/domain/entities.py`).
+- **`/documentos` no choca con `/[area]/documentos`.** El primero muestra los documentos
+  corporativos de Strapi y el segundo el gestor por área.
+- **La autenticación no cambia para la UI.** Sigue sin BFF y llama a la API con cookies.
+
+### Decisiones del usuario sobre la UI y el contenido (2026-11-04)
+
+- **Dos frentes en una sola app.** La vista general y el espacio de trabajo. Nada queda fuera
+  de esos dos frentes.
+  - La vista general es el route group `(general)`: `/`, `/directorio`, `/directorio/[id]`,
+    `/configuracion` y `/sugerencias`; después `/noticias`, `/eventos` y `/documentos`.
+  - El espacio de trabajo son las áreas.
+- **La administración pasa a ser un módulo del área TI.** Vive en
+  `/ti/administracion/{areas,usuarios,maestros,directorio,sedes}` y es solo para
+  administradores. `/administracion` redirige allí, y el slug `administracion` sigue reservado.
+  Los endpoints no cambian: siguen exigiendo el rol `admin` de la plataforma, no la membresía
+  en TI.
+- **Strapi se consume solo por la API, con un proxy `/content/*` y caché.** Strapi queda
+  privado y solo alimenta la interfaz gráfica de la plataforma. Esto es la fase 4.
+  - El contrato propuesto está en `docs/intranet-centralization.md`, sección 2, del repo
+    internal-platform-ui.
+  - El traspaso desde intranet-ui sobre Strapi va en `docs/intranet-strapi-handoff.md` de ese
+    mismo repo.
+  - Riesgo para la fase 4: el tipo de contenido `quinquenio` no está commiteado en master de
+    INTRANET-JDH-CMS.
+
+### Decisiones de la fase 1
+
+- La sincronización crea los usuarios de la plataforma antes del primer ingreso. Así las áreas
+  pueden agregar a cualquier empleado, y quien sale de Entra queda bloqueado.
+- La visibilidad pública usa una regla automática (cuenta habilitada, miembro, dominio
+  corporativo). El administrador puede mostrar u ocultar a cada persona.
+- El login sigue con el registro de la plataforma (`ENTRA_*`). El directorio usa el de la
+  intranet (`DIRECTORY_GRAPH_*`, con `User.Read.All`). B2 queda resuelto sin tocar Entra.
+- B4 queda resuelto: las sedes físicas son `directory_sites` en `/directory/sites`, separadas
+  de `pqrsf_sites`.
+- Redis, S3 y los límites de tráfico de la intranet no se migran. Se usan los de la plataforma.
 
 Objetivo: ahorrar máquinas y dejar un solo portal. La API de la intranet
 (INTRANET-JDH-API) tiene poca carga: sobre todo directorio y cumpleaños. El directorio
@@ -177,9 +265,9 @@ No migrar en ningún caso:
 | Id | Tema | Quién decide |
 | --- | --- | --- |
 | B1 | Qué pasa con Strapi: se muda, se queda o se reemplaza. Decide si la máquina se apaga con el camino C | Negocio y TI |
-| B2 | Consentimiento de Entra para `User.Read.All` (y la URI de redirección si cambia el login) | Administrador de Entra |
+| B2 | ~~Consentimiento de Entra para `User.Read.All`~~ Resuelto: el directorio usa el registro de la intranet, que ya lo tiene | Administrador de Entra |
 | B3 | Dónde corre internal-platform en producción, con qué capacidad, dominio, TLS y respaldos. La API tiene Dockerfile e integración continua sin despliegue; la UI no tiene ninguno de los dos | TI |
-| B4 | Nombre del módulo de sedes físicas frente a `sites` de PQRSF | Desarrollo |
+| B4 | ~~Nombre del módulo de sedes físicas frente a `sites` de PQRSF~~ Resuelto: `directory_sites` | Desarrollo |
 | — | Si la home de la intranet puede perder su diseño editorial al entrar en el shell | Producto |
 | — | Si Web Push está activo en producción | TI |
 

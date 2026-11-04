@@ -86,6 +86,9 @@ class FakeManagers:
     async def is_manager(self, principal):
         return principal.is_platform_admin or principal.user_id in self.managers
 
+    async def can_read(self, principal):
+        return principal.is_moderator or await self.is_manager(principal)
+
 
 class FakeRequests:
     def __init__(self, types) -> None:

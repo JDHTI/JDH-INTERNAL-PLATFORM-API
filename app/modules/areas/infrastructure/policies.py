@@ -6,6 +6,7 @@ from uuid import UUID
 
 from app.core.errors import ForbiddenError, NotFoundError
 from app.modules.areas.application.service import AreaService
+from app.modules.areas.domain.catalog import MANAGE, READ
 from app.modules.areas.domain.entities import Area
 from app.modules.areas.domain.ports import AreaRepository
 from app.modules.identity.domain.principal import Principal
@@ -28,7 +29,9 @@ class UnrestrictedAreaAccess:
 
         self.repository = repository
 
-    async def authorize(self, slug: str, principal: Principal) -> Area:
+    async def authorize(
+        self, slug: str, principal: Principal, module: str | None = None, action: str = READ
+    ) -> Area:
         """The area with this slug; membership is not checked.
 
         Raises:
@@ -40,7 +43,9 @@ class UnrestrictedAreaAccess:
             raise NotFoundError("Área no encontrada")
         return area
 
-    async def authorize_by_id(self, area_id: UUID, principal: Principal) -> Area:
+    async def authorize_by_id(
+        self, area_id: UUID, principal: Principal, module: str | None = None, action: str = READ
+    ) -> Area:
         """The area with this identifier; membership is not checked.
 
         Raises:
@@ -52,43 +57,81 @@ class UnrestrictedAreaAccess:
             raise NotFoundError("Área no encontrada")
         return area
 
-    async def accessible_area_ids(self, principal: Principal) -> list[UUID] | None:
+    async def accessible_area_ids(
+        self, principal: Principal, module: str | None = None, action: str = READ
+    ) -> list[UUID] | None:
         """Every area (the searches of this access are never open to the caller)."""
 
         return None
 
 
-class AreaManagerPolicy:
-    """Platform administrators and members of one area manage a feature."""
+class PermissionPolicy:
+    """Who may manage (and read) one module of one area.
 
-    def __init__(self, areas: AreaService, area_slug: str | None) -> None:
+    ``manage`` comes from the area role grants (or being the area responsible); owner
+    and admin always pass and a moderator only reads. ``is_manager`` keeps the name
+    the feature services already call.
+    """
+
+    def __init__(
+        self, areas: AreaService, area_slug: str | None, module: str, action: str = MANAGE
+    ) -> None:
         """Create the policy.
 
         Args:
             areas (AreaService): Area access use cases.
-            area_slug (str | None): Area whose members manage the feature; blank
-                leaves management to platform administrators only.
+            area_slug (str | None): Area whose roles grant the module; blank leaves it
+                to platform administrators only.
+            module (str): Module key of the catalog.
+            action (str): What ``is_manager`` asks for (``manage`` by default).
         """
 
         self.areas = areas
         self.area_slug = (area_slug or "").strip() or None
+        self.module = module
+        self.action = action
+
+    async def _allows(self, principal: Principal, action: str) -> bool:
+        if principal.is_platform_admin:
+            return True
+        if self.area_slug is None:
+            return principal.is_moderator and action == READ
+        return await self.areas.allows(principal, self.area_slug, self.module, action)
 
     async def is_manager(self, principal: Principal) -> bool:
-        """Whether the caller manages the feature.
+        """Whether the caller manages the module (``action`` of the policy).
 
         Args:
             principal (Principal): The caller.
 
         Returns:
-            bool: ``True`` for administrators and members of the managing area.
+            bool: ``True`` when the caller holds the action.
         """
 
-        if principal.is_platform_admin:
-            return True
-        if self.area_slug is None:
-            return False
-        try:
-            await self.areas.authorize(self.area_slug, principal)
-        except (ForbiddenError, NotFoundError):
-            return False
-        return True
+        return await self._allows(principal, self.action)
+
+    async def can_read(self, principal: Principal) -> bool:
+        """Whether the caller may at least read the module in the policy's area.
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            bool: ``True`` when the caller holds ``read`` or ``manage``.
+        """
+
+        return await self._allows(principal, READ)
+
+    async def require(self, principal: Principal) -> None:
+        """Raise unless the caller manages the module.
+
+        Raises:
+            ForbiddenError: When not allowed.
+        """
+
+        if not await self.is_manager(principal):
+            raise ForbiddenError(f"No tienes permiso para gestionar {self.module}")
+
+
+# Former name: every feature manager is now a module permission.
+AreaManagerPolicy = PermissionPolicy

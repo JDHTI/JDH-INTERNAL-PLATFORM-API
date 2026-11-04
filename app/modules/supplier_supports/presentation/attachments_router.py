@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
 from app.core.errors import InvalidInputError
+from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
@@ -27,7 +28,7 @@ from app.modules.supplier_supports.domain.attachments import (
 )
 from app.modules.supplier_supports.presentation.router import SearchRequest
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_permission("apoyos", "solicitudes-apoyos"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_attachment_service])
 _principal = Depends(get_current_principal)
 

@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A push to master must not cancel a deploy halfway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/master' }}
 
 jobs:
   quality:
@@ -55,3 +56,23 @@ jobs:
 
       - name: Run tests
         run: poetry run pytest -q
+
+  # The runner lives on intranet.jdh.local and connects out to GitHub, so the server opens no
+  # port for this. Setup: docs/deploy.md.
+  deploy:
+    name: Desplegar en intranet.jdh.local
+    needs: [quality]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: [self-hosted, internal-platform-api]
+    timeout-minutes: 30
+    environment: produccion
+    concurrency:
+      group: deploy-platform-api
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Deploy
+        run: bash deploy/deploy.sh
+        env:
+          GIT_SHA: ${{ github.sha }}

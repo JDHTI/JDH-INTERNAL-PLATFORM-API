@@ -23,24 +23,48 @@ class SupportRequestService:
         self.calendar = calendar
 
     async def permissions(self, principal: Principal) -> dict[str, bool]:
+        """What the caller may do with requests.
+
+        ``managers`` are the reviewers (BI) and ``requesters`` the commercial area; both
+        grant the ``solicitudes-apoyos`` module, each in its own area.
+        """
+
         manage = await self.managers.is_manager(principal)
+        can_request = manage or await self.requesters.is_manager(principal)
         return {
             "can_manage": manage,
             "can_review": manage,
-            "can_request": manage or await self.requesters.is_manager(principal),
+            "can_request": can_request,
+            "can_read": can_request
+            or await self.managers.can_read(principal)
+            or await self.requesters.can_read(principal),
         }
 
     async def require_manager(self, principal: Principal) -> None:
         if not await self.managers.is_manager(principal):
-            raise ForbiddenError("Solo BI y administradores pueden gestionar solicitudes")
+            raise ForbiddenError("No tienes permiso para revisar solicitudes de apoyo")
 
     async def owner(self, principal: Principal) -> UUID | None:
+        """Require the right to ask for supports; the caller's id scopes their rows."""
+
         permissions = await self.permissions(principal)
         if not permissions["can_request"]:
-            raise ForbiddenError(
-                "Solo Comercial, BI y administradores pueden consultar solicitudes"
-            )
+            raise ForbiddenError("No tienes permiso para solicitar apoyos")
         return None if permissions["can_review"] else principal.user_id
+
+    async def reader(self, principal: Principal) -> UUID | None:
+        """Require reading requests; reviewers (and readers on their side) see every row.
+
+        Returns:
+            UUID | None: ``None`` for every request, or the caller's id for their own.
+        """
+
+        permissions = await self.permissions(principal)
+        if not permissions["can_read"]:
+            raise ForbiddenError("No tienes permiso para consultar solicitudes de apoyo")
+        if permissions["can_review"] or await self.managers.can_read(principal):
+            return None
+        return principal.user_id
 
     @staticmethod
     def reason(text: str) -> str:
@@ -82,13 +106,13 @@ class SupportRequestService:
         size: int,
         mine: bool = False,
     ):
-        owner = await self.owner(principal)
+        owner = await self.reader(principal)
         return await self.repository.search(
             principal.user_id if mine else owner, status, q, page, size
         )
 
     async def get(self, principal: Principal, request_id: UUID, mine: bool = False):
-        owner = await self.owner(principal)
+        owner = await self.reader(principal)
         return await self.repository.get(request_id, principal.user_id if mine else owner)
 
     async def decide(

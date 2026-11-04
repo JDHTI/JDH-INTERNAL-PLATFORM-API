@@ -6,7 +6,13 @@ from collections.abc import Iterable
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.areas.domain.entities import Area, AreaMember, AreaRole
+from app.modules.areas.domain.entities import (
+    Area,
+    AreaMember,
+    AreaRole,
+    PermissionEvent,
+    RolePermission,
+)
 
 
 class DirectoryUser(Protocol):
@@ -49,6 +55,51 @@ class UserDirectory(Protocol):
 
 class AreaRepository(Protocol):
     """Define persistence operations for areas, roles and members."""
+
+    async def get_role_permissions(self, role_ids: Iterable[UUID]) -> dict[UUID, dict[str, str]]:
+        """The grants of several area roles.
+
+        Args:
+            role_ids (Iterable[UUID]): Roles to load.
+
+        Returns:
+            dict[UUID, dict[str, str]]: Per role, module (or ``*``) -> action.
+        """
+        ...
+
+    async def replace_role_permissions(self, role_id: UUID, grants: list[RolePermission]) -> None:
+        """Replace every grant of a role.
+
+        Args:
+            role_id (UUID): The role.
+            grants (list[RolePermission]): The new grants, one per module.
+        """
+        ...
+
+    async def record_event(
+        self,
+        action: str,
+        *,
+        actor_user_id: UUID | None,
+        area_id: UUID | None = None,
+        target_user_id: UUID | None = None,
+        role_id: UUID | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """Append an entry to the permissions log."""
+        ...
+
+    async def list_events(
+        self,
+        *,
+        area_id: UUID | None,
+        target_user_id: UUID | None,
+        action: str | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[PermissionEvent], int]:
+        """A page of the permissions log, newest first, and the total."""
+        ...
 
     async def list_areas(self) -> list[Area]:
         """List every area in display order.
