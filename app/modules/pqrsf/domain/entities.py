@@ -177,6 +177,8 @@ class PqrsfRequest:
     pickup_order_number: str | None = None
     # Area the requester picked on the form.
     area: AreaRef | None = None
+    # When the order with the products was delivered; required with products.
+    delivery_date: date | None = None
 
     @property
     def dependency_id(self) -> UUID | None:

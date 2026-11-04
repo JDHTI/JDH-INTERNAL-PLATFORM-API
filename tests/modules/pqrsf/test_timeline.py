@@ -128,6 +128,16 @@ def _event(event_type, actor=None, data=None, from_status=None, to_status=None) 
             ANA,
             ("user", "Ana Pérez", "Editó el asunto y la sede"),
         ),
+        (
+            _event("updated", ANA, {"fields": ["site", "dependency"]}),
+            ANA,
+            ("user", "Ana Pérez", "Editó la sede y la dependencia"),
+        ),
+        (
+            _event("updated", ANA, {"fields": ["pickup_order_number", "delivery_date"]}),
+            ANA,
+            ("user", "Ana Pérez", "Editó el número de la orden de recogida y la fecha de entrega"),
+        ),
     ],
 )
 def test_each_event_reads_as_one_sentence(event, actor, expected) -> None:

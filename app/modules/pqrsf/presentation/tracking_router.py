@@ -43,9 +43,11 @@ from app.modules.pqrsf.domain.tracking import (
     CaseItem,
     CaseStatus,
     CaseSummary,
+    CatalogRef,
     Dependency,
     DocumentType,
     ItemInput,
+    TrackingCase,
 )
 from app.modules.pqrsf.presentation.router import PqrsfRequestResponse, _request
 from app.modules.sites.domain.entities import Site
@@ -198,6 +200,45 @@ class SalesExecutiveResponse(BaseModel):
     source: Literal["invoice", "internal", "manual"] | None
 
 
+class CatalogRefResponse(BaseModel):
+    """An area, subject or cause as the case shows it."""
+
+    id: UUID
+    code: str
+    name: str
+
+
+class CaseClassificationResponse(BaseModel):
+    """What the case is about, copied from the request when it opened."""
+
+    # Area the requester picked on the form.
+    requested_area: CatalogRefResponse | None
+    subject: CatalogRefResponse | None
+    cause: CatalogRefResponse | None
+    # ``supplier`` (may go to the manufacturer), ``internal`` (a JDH process) or ``none``.
+    route: Literal["supplier", "internal", "none"] | None
+    pickup_order_requested: Literal["yes", "no", "unknown"] | None
+    pickup_order_number: str | None
+    # When the order with the products was delivered.
+    delivery_date: date | None
+
+
+class CaseProductResponse(BaseModel):
+    """A product line of the case, as the requester sent it."""
+
+    id: UUID
+    # ``request`` (public form), ``internal`` or ``email``.
+    source: Literal["request", "internal", "email"]
+    invoice_number: str
+    sku: str
+    description: str | None
+    supplier_code: str | None
+    supplier_name: str | None
+    lot: str
+    expiry_date: date
+    affected_quantity: int
+
+
 class CaseResponse(BaseModel):
     """A follow-up case."""
 
@@ -232,6 +273,9 @@ class CaseResponse(BaseModel):
     permissions: CasePermissionsResponse
     created_at: datetime
     updated_at: datetime
+    classification: CaseClassificationResponse | None = None
+    # With products the supplier of the case comes from them and is not edited by hand.
+    products: list[CaseProductResponse] = []
 
 
 class StatusChangeResponse(BaseModel):
@@ -366,6 +410,10 @@ class UpdateCaseRequest(BaseModel):
     sales_executive_name: str | None = Field(default=None, max_length=200)
     requester_name: str | None = Field(default=None, max_length=200)
     requester_email: str | None = Field(default=None, max_length=320)
+    # The number of the pickup order goes only with ``yes``.
+    pickup_order_requested: Literal["yes", "no", "unknown"] | None = None
+    pickup_order_number: str | None = Field(default=None, max_length=40)
+    delivery_date: date | None = None
 
 
 class AssignRequest(BaseModel):
@@ -573,6 +621,29 @@ def _case(view: CaseView) -> CaseResponse:
         ),
         created_at=case.created_at,
         updated_at=case.updated_at,
+        classification=_classification(case),
+        products=[
+            CaseProductResponse.model_validate(product, from_attributes=True)
+            for product in case.products
+        ],
+    )
+
+
+def _catalog_ref(value: CatalogRef | None) -> CatalogRefResponse | None:
+    if value is None:
+        return None
+    return CatalogRefResponse(id=value.id, code=value.code, name=value.name)
+
+
+def _classification(case: TrackingCase) -> CaseClassificationResponse:
+    return CaseClassificationResponse(
+        requested_area=_catalog_ref(case.requested_area),
+        subject=_catalog_ref(case.subject_ref),
+        cause=_catalog_ref(case.cause_ref),
+        route=case.route,
+        pickup_order_requested=case.pickup_order_requested,
+        pickup_order_number=case.pickup_order_number,
+        delivery_date=case.delivery_date,
     )
 
 

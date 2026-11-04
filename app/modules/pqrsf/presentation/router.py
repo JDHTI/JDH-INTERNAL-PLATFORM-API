@@ -222,6 +222,8 @@ class PqrsfRequestResponse(BaseModel):
     products: list[ClaimedProductResponse] = []
     pickup_order_requested: Literal["yes", "no", "unknown"] | None = None
     pickup_order_number: str | None = None
+    # When the order with the products was delivered.
+    delivery_date: date | None = None
     # Area the requester picked on the form.
     selected_area: ClassificationRefResponse | None = None
     attachments: list[PqrsfAttachmentResponse]
@@ -321,6 +323,7 @@ def _request(value: PqrsfRequest) -> PqrsfRequestResponse:
         ],
         pickup_order_requested=value.pickup_order_requested,
         pickup_order_number=value.pickup_order_number,
+        delivery_date=value.delivery_date,
         selected_area=_ref(value.area),
         attachments=[
             PqrsfAttachmentResponse.model_validate(attachment, from_attributes=True)
@@ -414,6 +417,7 @@ async def create_public_request(
     products: str | None = Form(default=None),  # noqa: B008
     pickup_order_requested: Literal["yes", "no", "unknown"] | None = Form(default=None),  # noqa: B008
     pickup_order_number: str | None = Form(default=None, max_length=40),  # noqa: B008
+    delivery_date: date | None = Form(default=None),  # noqa: B008
     dependency_id: UUID | None = Form(default=None),  # noqa: B008
     images: list[UploadFile] = File(default=[]),  # noqa: B008
     videos: list[UploadFile] = File(default=[]),  # noqa: B008
@@ -448,6 +452,7 @@ async def create_public_request(
         "products": [line.__dict__ for line in product_lines],
         "pickup_order_requested": pickup_order_requested,
         "pickup_order_number": pickup_order_number,
+        "delivery_date": delivery_date.isoformat() if delivery_date else None,
         "dependency_id": str(dependency_id) if dependency_id else None,
     }
     result = await service.create_request(
@@ -471,6 +476,7 @@ async def create_public_request(
         products=product_lines,
         pickup_order_requested=pickup_order_requested,
         pickup_order_number=pickup_order_number,
+        delivery_date=delivery_date,
         area_id=dependency_id,
         idempotency_key=idempotency_key,
         idempotency_payload=values,

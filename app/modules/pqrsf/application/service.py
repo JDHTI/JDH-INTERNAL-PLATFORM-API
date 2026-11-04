@@ -7,8 +7,9 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from app.core.errors import (
     ConflictError,
@@ -65,6 +66,8 @@ _MAX_PRODUCTS = 20
 _MAX_AFFECTED_QUANTITY = 1_000_000
 # Most products one search of the public form returns.
 _MAX_PRODUCT_RESULTS = 20
+# The requester's calendar: a delivery date is never after today there.
+_LOCAL = ZoneInfo("America/Bogota")
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ class _Classification:
     products: list[ClaimedProduct] = field(default_factory=list)
     pickup_order_requested: str | None = None
     pickup_order_number: str | None = None
+    delivery_date: date | None = None
 
 
 class PqrsfService:
@@ -233,6 +237,7 @@ class PqrsfService:
         pickup_order_number: str | None = None,
         videos: Sequence[ImageUpload] = (),
         area_id: UUID | None = None,
+        delivery_date: date | None = None,
     ) -> CreateResult:
         """Validate and persist an idempotent public request.
 
@@ -272,6 +277,8 @@ class PqrsfService:
             videos (Sequence[ImageUpload]): Evidence videos, where images are accepted.
             area_id (UUID | None): Area the requester picked; required where the type
                 ``asks_area`` and refused otherwise.
+            delivery_date (date | None): When the order with the products was delivered;
+                required with products, not after today, and refused without them.
 
         Returns:
             CreateResult: The stored request and whether it was replayed.
@@ -303,6 +310,7 @@ class PqrsfService:
             pickup_order_number=pickup_order_number,
             videos=videos,
             area_id=area_id,
+            delivery_date=delivery_date,
         )
         return await self._with_case(result)
 
@@ -473,6 +481,7 @@ class PqrsfService:
         pickup_order_number: str | None,
         videos: Sequence[ImageUpload] = (),
         area_id: UUID | None = None,
+        delivery_date: date | None = None,
     ) -> CreateResult:
         key = validate_idempotency_key(idempotency_key)
         request_type = await self.repository.get_request_type(request_type_id)
@@ -493,6 +502,7 @@ class PqrsfService:
             products,
             pickup_order_requested,
             pickup_order_number,
+            delivery_date,
         )
         documents = await self._requested_documents(
             request_type,
@@ -541,6 +551,7 @@ class PqrsfService:
             products=classification.products,
             pickup_order_requested=classification.pickup_order_requested,
             pickup_order_number=classification.pickup_order_number,
+            delivery_date=classification.delivery_date,
             area=area,
             idempotency_key=key,
             idempotency_hash=payload_hash,
@@ -631,6 +642,7 @@ class PqrsfService:
         products: Sequence[ProductInput],
         pickup_order_requested: str | None,
         pickup_order_number: str | None,
+        delivery_date: date | None = None,
     ) -> _Classification:
         """Validate the subject, cause, description and product lines of a request."""
 
@@ -646,7 +658,7 @@ class PqrsfService:
         if not offered:
             if subject_id is not None or cause_id is not None:
                 raise InvalidInputError("El asunto y la causal no aplican a esta solicitud")
-            if products or pickup_order_requested or pickup_order_number:
+            if products or pickup_order_requested or pickup_order_number or delivery_date:
                 raise InvalidInputError("Esta solicitud no admite productos")
             if subject_text is None:
                 raise InvalidInputError("El campo asunto no puede estar vacío")
@@ -681,10 +693,16 @@ class PqrsfService:
         if not claimed:
             if pickup_order_requested or number:
                 raise InvalidInputError("La orden de recogida solo se indica con productos")
+            if delivery_date:
+                raise InvalidInputError("La fecha de entrega solo se indica con productos")
         elif pickup_order_requested not in PICKUP_ORDER_ANSWERS:
             raise InvalidInputError("Indica si ya solicitaste la orden de recogida")
         elif number and pickup_order_requested != "yes":
             raise InvalidInputError("El número de orden de recogida va solo si ya la solicitaste")
+        elif delivery_date is None:
+            raise InvalidInputError("Indica la fecha de entrega del pedido")
+        elif delivery_date > datetime.now(_LOCAL).date():
+            raise InvalidInputError("La fecha de entrega no puede ser futura")
         return _Classification(
             subject_text,
             description_text,
@@ -693,6 +711,7 @@ class PqrsfService:
             claimed,
             pickup_order_requested if claimed else None,
             number,
+            delivery_date if claimed else None,
         )
 
     async def _claimed_products(self, products: Sequence[ProductInput]) -> list[ClaimedProduct]:

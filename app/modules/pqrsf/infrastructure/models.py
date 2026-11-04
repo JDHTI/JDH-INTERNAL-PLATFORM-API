@@ -98,6 +98,8 @@ class PqrsfRequestModel(Base):
     # ``yes`` | ``no`` | ``unknown``: whether a pickup order was already requested in the ERP.
     pickup_order_requested: Mapped[str | None] = mapped_column(String(8))
     pickup_order_number: Mapped[str | None] = mapped_column(String(40))
+    # When the order with the products was delivered; asked only with products.
+    delivery_date: Mapped[date | None] = mapped_column(Date)
     # Area the requester picked; decides only when no cause, subject or category does.
     dependency_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
@@ -347,6 +349,17 @@ class CaseModel(Base):
         Index("ix_pqrsf_cases_due_on", "due_on"),
         Index("ix_pqrsf_cases_created_by", "created_by_user_id"),
         Index("ix_pqrsf_cases_sales_executive", "sales_executive_user_id"),
+        Index("ix_pqrsf_cases_requested_area", "requested_area_id"),
+        Index("ix_pqrsf_cases_subject", "subject_id"),
+        Index("ix_pqrsf_cases_cause", "cause_id"),
+        CheckConstraint(
+            "route IS NULL OR route IN ('supplier', 'internal', 'none')",
+            name="ck_pqrsf_cases_route",
+        ),
+        CheckConstraint(
+            "pickup_order_requested IS NULL OR pickup_order_requested IN ('yes', 'no', 'unknown')",
+            name="ck_pqrsf_cases_pickup_order",
+        ),
         CheckConstraint(
             "sales_executive_source IS NULL "
             "OR sales_executive_source IN ('invoice', 'internal', 'manual')",
@@ -399,6 +412,23 @@ class CaseModel(Base):
     sales_executive_source: Mapped[str | None] = mapped_column(String(10))
     requester_name: Mapped[str | None] = mapped_column(String(200))
     requester_email: Mapped[str | None] = mapped_column(String(320))
+    # Classification of the case: the area the requester picked, the subject and cause,
+    # and the route of that cause, copied when the case opens.
+    requested_area_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_dependencies.id", ondelete="SET NULL")
+    )
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_subjects.id", ondelete="SET NULL")
+    )
+    cause_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_causes.id", ondelete="SET NULL")
+    )
+    # ``supplier`` | ``internal`` | ``none``.
+    route: Mapped[str | None] = mapped_column(String(10))
+    # ``yes`` | ``no`` | ``unknown``; the number is known later, once the order is in the ERP.
+    pickup_order_requested: Mapped[str | None] = mapped_column(String(8))
+    pickup_order_number: Mapped[str | None] = mapped_column(String(40))
+    delivery_date: Mapped[date | None] = mapped_column(Date)
     request_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pqrsf_requests.id", ondelete="SET NULL")
     )
@@ -411,6 +441,41 @@ class CaseModel(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CaseProductModel(Base):
+    """A product line of a case, as the requester sent it (it is not edited)."""
+
+    __tablename__ = "pqrsf_case_products"
+    __table_args__ = (
+        Index("ix_pqrsf_case_products_case", "case_id", "sort_order"),
+        Index("ix_pqrsf_case_products_supplier", "supplier_code"),
+        Index("ix_pqrsf_case_products_sku", "sku"),
+        CheckConstraint(
+            "source IN ('request', 'internal', 'email')", name="ck_pqrsf_case_products_source"
+        ),
+        CheckConstraint("affected_quantity > 0", name="ck_pqrsf_case_products_affected_quantity"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    # ``request`` (public form), ``internal`` (a collaborator) or ``email``.
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    invoice_number: Mapped[str] = mapped_column(String(40), nullable=False)
+    sku: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Copies of the product master at submission, so they read the same later.
+    description: Mapped[str | None] = mapped_column(Text)
+    supplier_code: Mapped[str | None] = mapped_column(String(60))
+    supplier_name: Mapped[str | None] = mapped_column(String(300))
+    lot: Mapped[str] = mapped_column(String(60), nullable=False)
+    expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    affected_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

@@ -72,8 +72,8 @@ cadena con `0024_app_monitoring` (una sola cabeza). Pasan 831 pruebas y ruff.
   provisional, que se hace desde Configuración.
 - **Factura impresa:** confirmar con 2 o 3 facturas físicas que el número impreso de la factura
   electrónica coincide con `nro_transaccion` del DWH (sección 12).
-- **Panel interno:** clasificación y productos en el caso, reclasificación, filtros nuevos y
-  formulario del comercial (etapas I-1 a I-6 de la sección 16).
+- **Panel interno:** reclasificación, filtros nuevos y formulario del comercial (etapas I-3 a
+  I-6 de la sección 16). La clasificación y los productos en el caso (I-1, I-2) ya están.
 - **UI sin consumir:** certificados, solicitudes de documentos respondidas al instante y
   respuesta de un documento con archivo (las APIs de la sección 10).
 - **Respaldo del ejecutivo comercial:** usar el vendedor asignado al cliente cuando la factura no
@@ -217,7 +217,8 @@ puertos), `application` (casos de uso), `infrastructure` (SQLAlchemy, Graph, Cla
 | `pqrsf_requests` | Lo que envió el cliente (inmutable): datos, asunto, causal, área, `products` (JSON), orden de recogida, documentos pedidos |
 | `pqrsf_attachments` | Fotos y video de la solicitud |
 | `pqrsf_subjects`, `pqrsf_causes` | Catálogo de asuntos y causales con dependencia y ruta |
-| `pqrsf_cases` | El caso: radicado, estado, responsable, dependencia, cliente, proveedor, ejecutivo comercial, fechas |
+| `pqrsf_cases` | El caso: radicado, estado, responsable, dependencia, cliente, proveedor, ejecutivo comercial, fechas; clasificación (área elegida, asunto, causal, ruta), orden de recogida y fecha de entrega |
+| `pqrsf_case_products` | Productos del caso con proveedor (`source`: `request`, `internal`, `email`); no se editan |
 | `pqrsf_case_items` | Documentos pedidos en el caso con su SLA |
 | `pqrsf_case_events` | Línea de tiempo e historial del módulo (solo inserción) |
 | `pqrsf_case_attachments` | Archivos del caso (correo, comentarios, respuestas) |
@@ -240,6 +241,7 @@ puertos), `application` (casos de uso), `infrastructure` (SQLAlchemy, Graph, Cla
 | `0026_pqrsf_supplier_contacts` | Contactos de proveedor |
 | `0027_pqrsf_sales_executive` | Código, correo, usuario y origen del ejecutivo comercial |
 | `0028_merge_pqrsf_app_monitoring` | Une la cadena de PQRSF con `0024_app_monitoring` |
+| `0038_pqrsf_case_classification` | Clasificación, orden de recogida y fecha de entrega en el caso; `pqrsf_case_products`; `delivery_date` en la solicitud. Copia lo de las solicitudes a los casos existentes |
 
 ---
 
@@ -321,6 +323,7 @@ La dependencia y la ruta de cada causal no se publican: las decide el servidor.
 | `description` | Obligatoria en sugerencia, felicitación y con «Otro»; opcional en lo demás |
 | `products` | JSON `[{"invoice_number", "sku", "lot", "expiry_date": "AAAA-MM-DD", "affected_quantity"}]`, máximo 20 líneas, solo si la causal lo admite. El SKU debe existir en el maestro |
 | `pickup_order_requested` | `yes` / `no` / `unknown`, obligatorio con productos; `pickup_order_number` (máximo 40) solo con `yes` |
+| `delivery_date` | `AAAA-MM-DD`, fecha de entrega del pedido. Obligatoria con productos, no futura (hora de Bogotá); se rechaza sin productos |
 | `document_request`, `document_category_id`, `document_type_ids`, `document_other` | Solicitud de documentos (sección 10) |
 | `images` | Fotos, en tipos con `allows_attachments`, nunca en solicitud de documentos |
 | `videos` | Igual que `images`; por defecto 1 video MP4/MOV/WebM de hasta 20 MB |
@@ -351,7 +354,9 @@ Respuesta `201`: `{ id, reference, tracking_code, handled_as, delivered_document
    - asunto «Asunto · Causal»;
    - dependencia: causal > asunto > categoría > área elegida;
    - proveedor(es) tomados de los productos;
-   - ejecutivo comercial tomado de la factura (sección 12).
+   - ejecutivo comercial tomado de la factura (sección 12);
+   - clasificación (área elegida, asunto, causal y la ruta de la causal), orden de recogida,
+     fecha de entrega y productos, copiados al caso.
 5. **Tolera fallas:** si el caso no se abre, la solicitud queda guardada y un admin la recupera
    con `POST /pqrsf/requests/{id}/case`.
 
@@ -364,7 +369,7 @@ Solo admin, con sesión:
 - `POST /pqrsf/requests/{id}/case`.
 
 El detalle (y el `request` del detalle del caso) trae `selected_area`, `selected_subject`,
-`selected_cause`, `products` y la orden de recogida.
+`selected_cause`, `products`, la orden de recogida y `delivery_date`.
 
 ---
 
@@ -489,7 +494,16 @@ Filtros de `/cases`, `/summary` y `/export`:
 - `sort`: `received_on`, `due_on`, `code`, `updated_at`, con `-` para descendente;
 - `page`, `size` (máximo 100).
 
-`PATCH` aplica solo los campos enviados; `null` limpia el campo.
+`PATCH` aplica solo los campos enviados; `null` limpia el campo. Además de los datos del caso
+acepta `pickup_order_requested`, `pickup_order_number` (solo con `yes`; pasar a `no` o
+`unknown` lo limpia) y `delivery_date` (no futura). Con productos, `supplier_name` sale de ellos y
+cambiarlo responde `422`.
+
+Cada caso trae:
+- `classification`: `requested_area`, `subject`, `cause` (`{id, code, name}`), `route`,
+  `pickup_order_requested`, `pickup_order_number` y `delivery_date`.
+- `products[]`: `id`, `source`, `invoice_number`, `sku`, `description`, `supplier_code`,
+  `supplier_name`, `lot`, `expiry_date` y `affected_quantity`.
 
 ### Equivalencia con el Excel P.13.F.01
 
@@ -555,7 +569,7 @@ en `src/features/pqrsf`.
 - Cuatro estados en cada vista: cargando, vacío, error con «Reintentar» y sin permisos.
 - En móvil, la tabla pasa a tarjetas.
 
-### Lo que cambia con la clasificación (en construcción)
+### Lo que cambia con la clasificación
 
 | Antes | Ahora |
 |---|---|
@@ -565,17 +579,26 @@ en `src/features/pqrsf`.
 | Proveedor en texto | Productos con proveedor del maestro |
 | — | Área elegida por el cliente, orden de recogida, ejecutivo comercial de la factura |
 
-**Hoy la clasificación vive en la solicitud** y el caso la lee de `request`. La siguiente etapa
-la lleva al caso para corregirla y filtrarla (D17):
+**La clasificación vive en el caso** (I-1 e I-2, D17): al abrirse se copia de la solicitud, que
+sigue intacta como evidencia en «Solicitud original».
 
 | Dato | En el caso | Editable | Quién |
 |---|---|---|---|
 | Tipo | `request_type` | No (cambiaría el radicado; si llegó mal, se cierra y se abre otro relacionado) | — |
-| Área elegida | `requested_area` | No | — |
-| Asunto, causal, ruta, dependencia | `subject_id`, `cause_id`, `route`, `dependency` | Sí, al reclasificar | Gestor |
-| Productos | `pqrsf_case_products` | Sí: agregar, corregir, quitar | Responsable o gestor |
-| Orden de recogida, fecha de entrega | columnas del caso | Sí | Responsable o gestor |
+| Área elegida | `requested_area_id` | No | — |
+| Asunto, causal, ruta, dependencia | `subject_id`, `cause_id`, `route`, `dependency` | Sí, al reclasificar (I-3) | Gestor |
+| Productos | `pqrsf_case_products` | No: son lo que envió el cliente | — |
+| Proveedor | `supplier_name`, derivado de los productos | Solo sin productos | Responsable o gestor |
+| Orden de recogida, fecha de entrega | `pickup_order_*`, `delivery_date` | Sí (el número de OR se conoce después, en CIESA) | Responsable o gestor |
 | Evidencias | se leen de la solicitud | No se borran | — |
+
+**En el detalle:**
+- **Bloque «Clasificación»:** área elegida, asunto, causal, ruta, orden de recogida y fecha de
+  entrega. «Editar» abre la orden de recogida y la fecha si hay `can_work` y el caso está
+  abierto.
+- **Bloque «Productos»:** de solo lectura, con SKU, descripción, proveedor, factura, lote,
+  vencimiento y cantidad.
+- **«Editar datos»:** con productos ya no ofrece el proveedor.
 
 **Reclasificación (I-3):**
 - **Endpoint:** `POST /pqrsf/cases/{id}/classification` con `subject_id`, `cause_id`, `route?`,
@@ -595,16 +618,17 @@ la lleva al caso para corregirla y filtrarla (D17):
 
 **Productos del caso (I-2):**
 - **Tabla:** `pqrsf_case_products`, con `source` (`request`, `internal`, `email`).
-- **Al abrir el caso:** se copian las líneas de la solicitud; la migración copia las de los
-  casos existentes.
-- **Cambios:** eventos `product_added`, `product_updated` y `product_removed`.
+- **Al abrir el caso:** se copian las líneas de la solicitud; la migración `0038` copió las de
+  los casos existentes.
+- **Inmutables:** no hay CRUD de líneas. Las de casos internos y de correo llegan con I-5 e I-6.
 
 **Formulario del comercial (I-5):**
 - **Endpoint:** `POST /pqrsf/cases` con los mismos campos del público, en multipart con
   evidencias.
 - **Cliente:** por NIT, desde `GET /v1/commercial/customers?nit=`.
 - **Ejecutivo:** el comercial queda como ejecutivo, con `source: internal`.
-- **Búsqueda de productos:** interna, en `GET /pqrsf/products`, con proveedor.
+- **Búsqueda de productos:** interna, en `GET /pqrsf/products`, con proveedor (pasó de I-2 a
+  esta etapa).
 
 ---
 
@@ -970,11 +994,12 @@ de la UI.
 
 | Etapa | Tarea | API | UI |
 |---|---|---|---|
-| I-1 | Clasificación en el caso (área elegida, asunto, causal, ruta, orden de recogida) y bloque «Clasificación» en el detalle | [ ] | [ ] |
-| I-2 | `pqrsf_case_products`, CRUD de líneas, búsqueda interna con proveedor | [ ] | [ ] |
+| I-1 | Clasificación en el caso (área elegida, asunto, causal, ruta, orden de recogida, fecha de entrega) y bloque «Clasificación» en el detalle | [x] | [x] |
+| I-1 | Fecha de entrega en el formulario público, obligatoria con productos | [x] | [x] |
+| I-2 | `pqrsf_case_products` copiados de la solicitud, de solo lectura; proveedor derivado | [x] | [x] |
 | I-3 | Reclasificación con nota y evento `reclassified` | [ ] | [ ] |
 | I-4 | Filtros y columnas nuevos en bandeja, resumen y CSV | [ ] | [ ] |
-| I-5 | Formulario interno del comercial con los campos del público | [ ] | [ ] |
+| I-5 | Formulario interno del comercial con los campos del público y búsqueda interna de productos con proveedor | [ ] | [ ] |
 | I-6 | El correo deja la clasificación en el caso | [ ] | — |
 | I-7 | Línea de tiempo legible | [x] | [x] |
 | I-8 | Mensajes al proveedor y contactos | [x] | [x] |
@@ -1032,12 +1057,12 @@ de la UI.
 | P13 | Nombres de la grabación a confirmar (aprobadores del motivo 20, director de inventarios, dueños de proceso) | F3 |
 | P14 | ¿Por correo se radica un solo producto y el resto se completa en la plataforma? | F1 |
 | P16 | Al reclasificar a otra criticidad, ¿se recalcula el plazo o se respeta el informado al cliente? | F5 |
-| P17 | ¿Un responsable de otra área puede corregir productos o solo Calidad? (propuesta: responsable o gestor) | I-2 |
 | P18 | Si reclasificar cambia el área, ¿se avisa al nuevo dueño de proceso? (propuesta: sí) | I-3 |
 | P19 | ¿El número impreso de la factura electrónica coincide con `nro_transaccion`? | Sección 12 |
 
 Resueltas:
 - **P15:** el cliente elige el área en el formulario (D16).
+- **P17:** los productos del caso son los que envió el cliente y nadie los corrige.
 - **Contacto de proveedores:** se recuerdan los correos al enviar, sin esperar el catálogo.
 
 **Riesgos:**
