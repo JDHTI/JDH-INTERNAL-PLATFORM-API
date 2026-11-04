@@ -19,9 +19,12 @@ from app.core.config import Settings
 from app.modules.identity.application.service import (
     AuthenticationRequired,
     IdentityService,
+    OwnerProtectedError,
     ProtectedMutationError,
+    RoleChangeForbidden,
     user_view,
 )
+from app.modules.identity.domain.roles import MODERATOR, is_platform_admin
 from app.modules.identity.infrastructure.entra import EntraConfigurationError, EntraError
 from app.modules.identity.infrastructure.models import UserModel
 
@@ -75,7 +78,8 @@ class UpdateUserRequest(BaseModel):
     """Editable local user fields."""
 
     job_title: str | None = Field(default=None, max_length=200)
-    role: str | None = Field(default=None, pattern="^(admin|user)$")
+    # Only the owner changes global roles; the owner itself moves with scripts/set-owner.py.
+    role: str | None = Field(default=None, pattern="^(admin|moderator|user)$")
     area_id: UUID | None = None
     is_active: bool | None = None
 
@@ -176,15 +180,29 @@ _current_user_dependency = Depends(get_current_user)
 
 
 async def require_admin(user: UserModel = _current_user_dependency) -> UserModel:
-    """Require the local administrator role."""
+    """Require a platform administrator (the owner or an admin)."""
 
     if not getattr(user, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
         )
-    if user.role.code != "admin":
+    if not is_platform_admin(user.role.code):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Administrator role required"
+        )
+    return user
+
+
+async def require_admin_or_moderator(user: UserModel = _current_user_dependency) -> UserModel:
+    """Require a role that may read the administration (owner, admin or moderator)."""
+
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
+    if not (is_platform_admin(user.role.code) or user.role.code == MODERATOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Administrator or moderator required"
         )
     return user
 
@@ -324,10 +342,10 @@ async def list_users(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     is_active: bool | None = Query(default=None),
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    _: UserModel = Depends(require_admin_or_moderator),  # noqa: B008
     service: IdentityService = _identity_service_dependency,
 ) -> UserPage:
-    """List local users for administrators."""
+    """List local users for administrators and moderators."""
 
     users, total = await service.list_users(offset, limit, is_active)
     return UserPage(
@@ -339,10 +357,10 @@ async def list_users(
 @inject
 async def get_user(
     user_id: UUID,
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    _: UserModel = Depends(require_admin_or_moderator),  # noqa: B008
     service: IdentityService = _identity_service_dependency,
 ) -> UserResponse:
-    """Get one local user for administrators."""
+    """Get one local user for administrators and moderators."""
 
     user = await service.get_user(user_id)
     if user is None:
@@ -355,15 +373,16 @@ async def get_user(
 async def update_user(
     user_id: UUID,
     body: UpdateUserRequest,
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    actor: UserModel = Depends(require_admin),  # noqa: B008
     service: IdentityService = _identity_service_dependency,
 ) -> UserResponse:
-    """Change local cargo, role, or area."""
+    """Change local cargo, role, area or state. Only the owner changes global roles."""
 
     fields = body.model_fields_set
     try:
         user = await service.update_user(
             user_id,
+            actor=actor,
             job_title=body.job_title,
             role_code=body.role,
             area_id=body.area_id,
@@ -373,6 +392,12 @@ async def update_user(
             update_area="area_id" in fields,
             update_is_active="is_active" in fields,
         )
+    except OwnerProtectedError as exc:
+        raise HTTPException(
+            status_code=409, detail="The owner cannot be deactivated or change role"
+        ) from exc
+    except RoleChangeForbidden as exc:
+        raise HTTPException(status_code=403, detail="Only the owner changes global roles") from exc
     except ProtectedMutationError as exc:
         raise HTTPException(
             status_code=409, detail="At least one administrator must remain"
@@ -392,7 +417,7 @@ async def update_user(
 @router.get("/roles", response_model=list[RoleResponse])
 @inject
 async def list_roles(
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    _: UserModel = Depends(require_admin_or_moderator),  # noqa: B008
     service: IdentityService = _identity_service_dependency,
 ) -> list[RoleResponse]:
     """List platform roles."""

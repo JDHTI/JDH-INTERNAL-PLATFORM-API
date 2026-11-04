@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     AUTH_DEV_SEED_ANALYST_EMAIL: str = "analista.ti@jdh.com.co"
     AUTH_DEV_SEED_TENANT_ID: str = ""
     AUTH_DEV_SEED_MOCK_PREFIX: str = "development-mock"
+    # The single platform owner (global role ``owner``), set by migration 0041 and
+    # scripts/set-owner.py. Never assignable through the API.
+    PLATFORM_OWNER_EMAIL: str = "analista.ti@jdh.com.co"
     AUTH_COOKIE_DOMAIN: str | None = None
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_COOKIE_SECURE: bool | None = None

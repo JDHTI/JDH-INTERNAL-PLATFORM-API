@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.entities import DeactivationResult, ProvisionedUser
+from app.modules.identity.domain.roles import OWNER, is_platform_admin
 
 
 class ProvisioningRepository(Protocol):
@@ -118,6 +119,10 @@ class UserProvisioning:
         return DeactivationResult(deactivated=deactivated, protected=tuple(protected))
 
     async def _is_last_admin(self, user) -> bool:
-        if user.role.code != "admin" or not getattr(user, "is_active", True):
+        """Whether blocking this user is forbidden: the owner, or the last active admin."""
+
+        if user.role.code == OWNER:
+            return True
+        if not is_platform_admin(user.role.code) or not getattr(user, "is_active", True):
             return False
         return await self.repository.count_admins(active_only=True) <= 1
