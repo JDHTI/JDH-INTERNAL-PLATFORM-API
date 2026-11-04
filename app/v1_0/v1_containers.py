@@ -28,6 +28,14 @@ from app.modules.commercial_masters.infrastructure.repository import (
 from app.modules.consumption.application.cursor import ClientCursorCodec
 from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
+from app.modules.directory.application.service import DirectoryService
+from app.modules.directory.application.sync import DirectorySyncService
+from app.modules.directory.infrastructure.graph import GraphDirectoryClient
+from app.modules.directory.infrastructure.repository import (
+    SqlAlchemyDirectoryRepository,
+    SqlAlchemySyncRunRepository,
+)
+from app.modules.directory.infrastructure.worker import SyncRequest
 from app.modules.documents.application.service import DocumentService
 from app.modules.documents.infrastructure.repository import SqlAlchemyDocumentRepository
 from app.modules.dwh_monitoring.application.service import DwhMonitoringService
@@ -37,6 +45,7 @@ from app.modules.dwh_monitoring.infrastructure.repository import SqlAlchemyMonit
 from app.modules.dwh_monitoring.infrastructure.worker import SyncTrigger
 from app.modules.health.application.service import HealthService
 from app.modules.identity.application.directory import UserDirectory
+from app.modules.identity.application.provisioning import UserProvisioning
 from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
@@ -190,6 +199,44 @@ class V1Container(containers.DeclarativeContainer):
 
     # Areas and documents read users through this port, never the tables.
     user_directory = providers.Factory(UserDirectory, repository=identity_repository)
+    # The employee directory creates and blocks users through this port.
+    user_provisioning = providers.Factory(
+        UserProvisioning,
+        repository=identity_repository,
+        tenant_id=config.directory.user_tenant_id,
+    )
+
+    # --- Employee directory (Entra users synced nightly through Graph) ---
+    directory_graph_client = providers.Singleton(
+        GraphDirectoryClient,
+        tenant_id=config.directory.tenant_id,
+        client_id=config.directory.client_id,
+        client_secret=config.directory.client_secret,
+    )
+    directory_repository = providers.Factory(SqlAlchemyDirectoryRepository, database=database)
+    directory_run_repository = providers.Factory(SqlAlchemySyncRunRepository, database=database)
+    # Hands the runs an administrator asks for to the background sync.
+    directory_sync_trigger = providers.Singleton(SyncRequest)
+    directory_sync_service = providers.Factory(
+        DirectorySyncService,
+        graph=directory_graph_client,
+        repository=directory_repository,
+        runs=directory_run_repository,
+        users=user_provisioning,
+        storage=storage,
+        corporate_domains=config.directory.corporate_domains,
+        batch_size=config.directory.batch_size,
+    )
+    directory_service = providers.Factory(
+        DirectoryService,
+        repository=directory_repository,
+        runs=directory_run_repository,
+        storage=storage,
+        sync_enabled=config.directory.sync_enabled,
+        sync_at=config.directory.sync_at,
+        timezone=config.directory.timezone,
+        request_sync=directory_sync_trigger.provided.set,
+    )
 
     # --- Areas ---
     area_repository = providers.Factory(

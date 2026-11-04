@@ -21,8 +21,8 @@ El nivel sigue al método HTTP: `GET` y `HEAD` son `read`; los demás métodos, 
 endpoint nuevo queda limitado desde su primer día sin que nadie tenga que acordarse. Las
 excepciones están en un solo lugar, `RULES` de `app/core/rate_policy.py`, cada una con su motivo:
 
-- `strict`: el envío del formulario público, la exportación de casos y el refresco de la foto de
-  perfil (llama a Microsoft Graph).
+- `strict`: el envío del formulario público, la exportación de casos, el refresco de la foto de
+  perfil y la sincronización manual del directorio (ambos llaman a Microsoft Graph).
 - Sin límite: las sondas `/health/live` y `/health/ready` (el orquestador siempre debe obtener
   respuesta) y las solicitudes `OPTIONS` de CORS.
 
@@ -125,6 +125,26 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/suppliers` | `read` |  |
 | `GET` | `/v1/commercial/suppliers/{code}` | `read` |  |
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
+| `GET` | `/v1/directory/admin/employees` | `read` |  |
+| `POST` | `/v1/directory/admin/employees` | `relaxed` |  |
+| `DELETE` | `/v1/directory/admin/employees/{employee_id}` | `relaxed` |  |
+| `GET` | `/v1/directory/admin/employees/{employee_id}` | `read` |  |
+| `PATCH` | `/v1/directory/admin/employees/{employee_id}` | `relaxed` |  |
+| `GET` | `/v1/directory/admin/sites` | `read` |  |
+| `POST` | `/v1/directory/admin/sites` | `relaxed` |  |
+| `DELETE` | `/v1/directory/admin/sites/{site_id}` | `relaxed` |  |
+| `PATCH` | `/v1/directory/admin/sites/{site_id}` | `relaxed` |  |
+| `GET` | `/v1/directory/admin/sync` | `read` |  |
+| `POST` | `/v1/directory/admin/sync` | `strict` | Lanza una sincronización completa con Microsoft Graph |
+| `GET` | `/v1/directory/admin/sync/runs` | `read` |  |
+| `GET` | `/v1/directory/employees` | `read` |  |
+| `GET` | `/v1/directory/employees/birthdays` | `read` |  |
+| `GET` | `/v1/directory/employees/me` | `read` |  |
+| `GET` | `/v1/directory/employees/new-hires` | `read` |  |
+| `GET` | `/v1/directory/employees/{employee_id}` | `read` |  |
+| `GET` | `/v1/directory/employees/{employee_id}/photo` | `read` |  |
+| `GET` | `/v1/directory/employees/{employee_id}/team` | `read` |  |
+| `GET` | `/v1/directory/sites` | `read` |  |
 | `GET` | `/v1/documents/search` | `read` |  |
 | `DELETE` | `/v1/documents/{document_id}` | `relaxed` |  |
 | `GET` | `/v1/documents/{document_id}` | `read` |  |

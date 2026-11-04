@@ -261,6 +261,9 @@ class FakeStorage:
     async def put_object(self, key, body, content_type=None):
         self.objects[key] = (body, content_type)
 
+    async def get_object(self, key):
+        return self.objects[key][0]
+
     async def delete_object(self, key):
         self.deleted.append(key)
         self.objects.pop(key, None)

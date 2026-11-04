@@ -1,10 +1,11 @@
 """Typed application configuration loaded from environment variables."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -128,10 +129,22 @@ class Settings(BaseSettings):
     # must be the one the browser reaches; empty means S3_ENDPOINT_URL.
     S3_PUBLIC_ENDPOINT_URL: str = ""
 
-    # Microsoft Entra ID
-    AUTH_MICROSOFT_ENTRA_ID_SECRET: SecretStr = SecretStr("")
-    AUTH_MICROSOFT_ENTRA_ID_ID: str = ""
-    AUTH_MICROSOFT_ENTRA_ID_TENANT_ID: str = ""
+    # Employee directory: a nightly copy of the Entra users (Microsoft Graph, application
+    # permission User.Read.All). The app registration may differ from the SSO one; an
+    # empty tenant falls back to ENTRA_TENANT_ID.
+    DIRECTORY_GRAPH_TENANT_ID: str = ""
+    DIRECTORY_GRAPH_CLIENT_ID: str = ""
+    DIRECTORY_GRAPH_CLIENT_SECRET: SecretStr = SecretStr("")
+    # The background sync runs every day at this local time (HH:MM in the timezone).
+    DIRECTORY_SYNC_ENABLED: bool = False
+    DIRECTORY_SYNC_AT: str = "23:59"
+    DIRECTORY_SYNC_TIMEZONE: str = "America/Bogota"
+    # At start-up, sync once when no sync succeeded in the last 24 hours.
+    DIRECTORY_SYNC_CATCH_UP: bool = True
+    # Users whose manager and photo are read from Graph at the same time.
+    DIRECTORY_SYNC_BATCH_SIZE: int = 10
+    # Mail domains (comma-separated) of the employees the directory shows by default.
+    DIRECTORY_CORPORATE_DOMAINS: str = "jdh.com.co"
 
     # Document management
     DOCUMENTS_MAX_UPLOAD_MB: int = 25
@@ -318,6 +331,43 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_directory_settings(self) -> "Settings":
+        """Reject a switched-on directory sync that cannot authenticate or has a bad time."""
+
+        try:
+            _ = self.directory_sync_at
+        except ValueError as exc:
+            raise ValueError("DIRECTORY_SYNC_AT must be HH:MM") from exc
+        try:
+            ZoneInfo(self.DIRECTORY_SYNC_TIMEZONE)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("DIRECTORY_SYNC_TIMEZONE must be an IANA timezone") from exc
+        if self.DIRECTORY_SYNC_BATCH_SIZE < 1:
+            raise ValueError("DIRECTORY_SYNC_BATCH_SIZE must be positive")
+        if self.DIRECTORY_SYNC_ENABLED and not self.directory_graph_configured:
+            raise ValueError(
+                "DIRECTORY_SYNC_ENABLED needs a tenant, DIRECTORY_GRAPH_CLIENT_ID and "
+                "DIRECTORY_GRAPH_CLIENT_SECRET"
+            )
+        return self
+
+    @property
+    def directory_sync_at(self) -> time:
+        """Local time of the daily directory sync."""
+
+        return time.fromisoformat(self.DIRECTORY_SYNC_AT.strip())
+
+    @property
+    def directory_graph_configured(self) -> bool:
+        """Whether the directory has the credentials to read Graph."""
+
+        return bool(
+            (self.DIRECTORY_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID)
+            and self.DIRECTORY_GRAPH_CLIENT_ID
+            and self.DIRECTORY_GRAPH_CLIENT_SECRET.get_secret_value()
+        )
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def mail_intake_since(self) -> datetime | None:
@@ -488,6 +538,19 @@ class Settings(BaseSettings):
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
+            },
+            "directory": {
+                "tenant_id": self.DIRECTORY_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,
+                "client_id": self.DIRECTORY_GRAPH_CLIENT_ID,
+                "client_secret": self.DIRECTORY_GRAPH_CLIENT_SECRET.get_secret_value(),
+                # Users are provisioned in the SSO tenant, the one sign-in uses.
+                "user_tenant_id": self.ENTRA_TENANT_ID or "development",
+                "sync_enabled": self.DIRECTORY_SYNC_ENABLED,
+                "sync_at": self.directory_sync_at,
+                "timezone": self.DIRECTORY_SYNC_TIMEZONE,
+                "catch_up": self.DIRECTORY_SYNC_CATCH_UP,
+                "batch_size": self.DIRECTORY_SYNC_BATCH_SIZE,
+                "corporate_domains": _split_lower(self.DIRECTORY_CORPORATE_DOMAINS),
             },
             "identity": {
                 "tenant_id": self.ENTRA_TENANT_ID,
