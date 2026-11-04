@@ -36,7 +36,7 @@ falta definir el despliegue de la plataforma (B3).
 | 1 | Directorio desde Graph, provisión de usuarios, sedes, fotos, historial de sincronización e importación desde la intranet | API | Hecha ([`directory.md`](directory.md)) |
 | 2 | Vista general: `/` con cumpleaños y nuevos ingresos, `/directorio`, `/directorio/[id]`; menú General y Espacio de trabajo | UI | Siguiente |
 | 3 | Cargo, nacimiento y sede desde el DWH; visibilidad definitiva | API | Confirmar si el DWH expone empleados |
-| 4 | `/noticias`, `/eventos`, `/documentos` leyendo Strapi | API + UI | Depende de B1 |
+| 4 | `/noticias`, `/eventos`, `/documentos`: proxy `/content/*` de Strapi en la API, con caché | API + UI | Decidido el proxy; depende de B1 |
 | 5 | Perfil y onboarding (contacto, horarios, sede), notificaciones e ingesta desde Strapi | API + UI | — |
 | 6 | Redirecciones 301 desde `intranet.jdh.local` y apagado de la UI y la API de la intranet | Infra | — |
 
@@ -56,6 +56,27 @@ falta definir el despliegue de la plataforma (B3).
 - **`/documentos` no choca con `/[area]/documentos`.** El primero muestra los documentos
   corporativos de Strapi y el segundo el gestor por área.
 - **La autenticación no cambia para la UI.** Sigue sin BFF y llama a la API con cookies.
+
+### Decisiones del usuario sobre la UI y el contenido (2026-11-04)
+
+- **Dos frentes en una sola app.** La vista general y el espacio de trabajo. Nada queda fuera
+  de esos dos frentes.
+  - La vista general es el route group `(general)`: `/`, `/directorio`, `/directorio/[id]`,
+    `/configuracion` y `/sugerencias`; después `/noticias`, `/eventos` y `/documentos`.
+  - El espacio de trabajo son las áreas.
+- **La administración pasa a ser un módulo del área TI.** Vive en
+  `/ti/administracion/{areas,usuarios,maestros,directorio,sedes}` y es solo para
+  administradores. `/administracion` redirige allí, y el slug `administracion` sigue reservado.
+  Los endpoints no cambian: siguen exigiendo el rol `admin` de la plataforma, no la membresía
+  en TI.
+- **Strapi se consume solo por la API, con un proxy `/content/*` y caché.** Strapi queda
+  privado y solo alimenta la interfaz gráfica de la plataforma. Esto es la fase 4.
+  - El contrato propuesto está en `docs/intranet-centralization.md`, sección 2, del repo
+    internal-platform-ui.
+  - El traspaso desde intranet-ui sobre Strapi va en `docs/intranet-strapi-handoff.md` de ese
+    mismo repo.
+  - Riesgo para la fase 4: el tipo de contenido `quinquenio` no está commiteado en master de
+    INTRANET-JDH-CMS.
 
 ### Decisiones de la fase 1
 
