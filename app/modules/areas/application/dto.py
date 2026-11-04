@@ -35,6 +35,20 @@ class AreaView:
     is_responsible: bool
     created_at: datetime
     updated_at: datetime
+    # Module key -> ``read`` | ``manage`` the caller holds in this area (wildcard expanded).
+    my_modules: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AreaGrantsView:
+    """One area of a person, with their role there and its grants."""
+
+    area_id: UUID
+    slug: str
+    name: str
+    is_responsible: bool
+    role: RoleRef | None
+    grants: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)

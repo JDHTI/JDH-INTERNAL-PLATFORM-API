@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.modules.app_monitoring.presentation.router import board_router as monitoring_board_router
 from app.modules.app_monitoring.presentation.router import router as app_monitoring_router
+from app.modules.areas.presentation.permissions_router import router as permissions_router
 from app.modules.areas.presentation.router import router as areas_router
 from app.modules.commercial_masters.presentation.router import router as commercial_router
 from app.modules.consumption.presentation.router import router as consumption_router
@@ -50,6 +51,7 @@ v1_router = APIRouter(prefix="/v1", tags=["v1"])
 v1_router.include_router(identity_router, prefix="", tags=["identity"])
 v1_router.include_router(consumption_router, prefix="", tags=["consumption"])
 v1_router.include_router(areas_router, prefix="/areas", tags=["areas"])
+v1_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 v1_router.include_router(area_documents_router, prefix="/areas", tags=["documents"])
 v1_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 v1_router.include_router(area_projects_router, prefix="/areas", tags=["projects"])
