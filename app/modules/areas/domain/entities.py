@@ -63,11 +63,34 @@ def clean_name(value: str, field: str = "nombre", max_length: int = 150) -> str:
     return cleaned
 
 
+# Top-level routes of the UI shared by everyone signed in. An area is served at /{slug}
+# and a fixed route wins over it, so an area named like one of them would be unreachable.
+RESERVED_SLUGS = frozenset(
+    {
+        "administracion",
+        "configuracion",
+        "directorio",
+        "documentos",
+        "eventos",
+        "inicio",
+        "login",
+        "noticias",
+        "perfil",
+        "pqrsf",
+        "sugerencias",
+    }
+)
+
+
 def validate_slug(slug: str) -> str:
-    """Return the slug when it is a valid URL segment."""
+    """Return the slug when it is a valid URL segment not taken by a general route."""
 
     if not SLUG_PATTERN.fullmatch(slug) or len(slug) > 50:
         raise InvalidInputError(
             "El identificador debe ir en minúsculas, sin tildes ni espacios (ej. talento-humano)"
+        )
+    if slug in RESERVED_SLUGS:
+        raise InvalidInputError(
+            f"El identificador {slug} está reservado para una sección general de la plataforma"
         )
     return slug
