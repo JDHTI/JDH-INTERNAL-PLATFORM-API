@@ -12,7 +12,9 @@ from redis.exceptions import RedisError
 from app.core.errors import DependencyUnavailableError
 
 
-def _trusted(address: str, networks) -> bool:
+def _trusted(address: str, names: frozenset[str], networks) -> bool:
+    if address in names:
+        return True
     try:
         ip = ipaddress.ip_address(address)
     except ValueError:
@@ -31,13 +33,14 @@ def client_ip(request: Request) -> str:
 
     settings = request.app.state.settings
     peer = request.client.host if request.client else "unknown"
+    names = settings.trusted_proxy_ips
     networks = settings.trusted_proxy_networks
-    if not _trusted(peer, networks):
+    if not _trusted(peer, names, networks):
         return peer
     hops = [hop.strip() for hop in request.headers.get("X-Forwarded-For", "").split(",")]
     hops = [hop for hop in hops if hop]
     for hop in reversed(hops):
-        if not _trusted(hop, networks):
+        if not _trusted(hop, names, networks):
             return hop
     return hops[0] if hops else peer
 
