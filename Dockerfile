@@ -16,6 +16,8 @@ RUN poetry install --only main --no-root
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+# Operational scripts (directory sync, intranet import, owner) run inside the container.
+COPY scripts ./scripts
 
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
