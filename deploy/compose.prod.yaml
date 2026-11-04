@@ -86,24 +86,29 @@ services:
       start_period: 120s
     logging: *logging
 
+  # S3-compatible storage. RustFS, as the intranet used: the MinIO images are no longer
+  # published (quay.io and Docker Hub refuse them). The service keeps the name `minio` so
+  # S3_ENDPOINT_URL and the variables stay the same.
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z
+    image: rustfs/rustfs:1.0.1
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-platform}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      RUSTFS_ACCESS_KEY: ${MINIO_ROOT_USER:-platform}
+      RUSTFS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000 || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 12
+      retries: 24
     logging: *logging
 
   minio-init:
-    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    image: amazon/aws-cli:latest
     depends_on:
       minio:
         condition: service_healthy
@@ -111,12 +116,12 @@ services:
     command:
       - -ec
       - |
-        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
-        mc mb --ignore-existing "local/$${S3_BUCKET}"
-        mc anonymous set private "local/$${S3_BUCKET}"
+        aws --endpoint-url http://minio:9000 s3api head-bucket --bucket "$${S3_BUCKET}" 2>/dev/null \
+          || aws --endpoint-url http://minio:9000 s3api create-bucket --bucket "$${S3_BUCKET}"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-platform}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-platform}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in api.env}
+      AWS_DEFAULT_REGION: us-east-1
       S3_BUCKET: ${S3_BUCKET:-internal-platform}
     restart: "no"
 
