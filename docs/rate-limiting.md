@@ -104,6 +104,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/areas/{slug}/roles` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/roles/{role_id}` | `relaxed` |  |
 | `PATCH` | `/v1/areas/{slug}/roles/{role_id}` | `relaxed` |  |
+| `GET` | `/v1/areas/{slug}/roles/{role_id}/permissions` | `read` |  |
+| `PUT` | `/v1/areas/{slug}/roles/{role_id}/permissions` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/tag-colors` | `relaxed` |  |
 | `GET` | `/v1/areas/{slug}/tag-colors` | `read` |  |
 | `PUT` | `/v1/areas/{slug}/tag-colors` | `relaxed` |  |
@@ -181,6 +183,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/order-validations/{batch_id}/orders` | `read` |  |
 | `DELETE` | `/v1/order-validations/{batch_id}/orders/{document}/approval` | `relaxed` |  |
 | `POST` | `/v1/order-validations/{batch_id}/revalidate` | `relaxed` |  |
+| `GET` | `/v1/permissions/audit` | `read` |  |
+| `GET` | `/v1/permissions/catalog` | `read` |  |
+| `GET` | `/v1/permissions/me` | `read` |  |
+| `GET` | `/v1/permissions/users/{user_id}` | `read` |  |
 | `GET` | `/v1/pqrsf/activity` | `read` |  |
 | `GET` | `/v1/pqrsf/activity/last-seen` | `read` |  |
 | `POST` | `/v1/pqrsf/activity/visits` | `relaxed` |  |

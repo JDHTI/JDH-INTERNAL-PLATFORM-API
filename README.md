@@ -43,7 +43,11 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - `GET /api/v1/auth/me`: devuelve el perfil local autenticado. El frontend debe
   usar `credentials: include`; no debe guardar tokens en `localStorage`.
 - Los endpoints administrativos viven en `/api/v1/users`, `/api/v1/roles` y
-  `/api/v1/areas`; requieren el rol local `admin`.
+  `/api/v1/areas`; requieren un rol global `owner` o `admin`.
+- Cada endpoint del espacio de trabajo exige un permiso de módulo: roles globales
+  `owner`, `admin`, `moderator` y `user`, y roles de área con permisos `read` o `manage`
+  por módulo. El panel vive en `/api/v1/permissions`. El owner es `PLATFORM_OWNER_EMAIL`
+  y se mueve con `scripts/set-owner.py`. Ver [`docs/permissions.md`](docs/permissions.md).
 - Todo el módulo PQRSF (contrato de la API, interfaz, estado y hoja de ruta) está
   en un solo documento: [`docs/pqrsf.md`](docs/pqrsf.md). Su formulario público
   vive en `/pqrsf`, fuera del layout autenticado.
