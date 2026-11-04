@@ -205,6 +205,59 @@ class DirectoryService:
             raise InvalidInputError("El mes debe estar entre 1 y 12")
         return month, await self.repository.birthdays(month)
 
+    # ------------------------------------------- port for the notifications module
+
+    async def employee_id_of(self, principal: Principal) -> UUID | None:
+        """The employee of the caller, or ``None`` (not synced, a guest, the dev user).
+
+        Args:
+            principal (Principal): The caller.
+
+        Returns:
+            UUID | None: Their employee identifier.
+        """
+
+        employee = await self.repository.get_employee_by_user(principal.user_id)
+        return employee.id if employee else None
+
+    async def audience(self, kind: str, values: list[str]) -> list[UUID]:
+        """Active employees of an audience.
+
+        Args:
+            kind (str): ``TODOS``, ``SEDE`` (site ids), ``AREA`` (department names) or
+                ``EMPLEADOS`` (employee ids).
+            values (list[str]): The ids or names; ignored for ``TODOS``.
+
+        Returns:
+            list[UUID]: The employees.
+
+        Raises:
+            InvalidInputError: Unknown kind, or a malformed identifier.
+        """
+
+        try:
+            if kind == "TODOS":
+                return await self.repository.audience_ids()
+            if kind == "SEDE":
+                return await self.repository.audience_ids(site_ids=[UUID(v) for v in values])
+            if kind == "AREA":
+                return await self.repository.audience_ids(departments=values)
+            if kind == "EMPLEADOS":
+                return await self.repository.audience_ids(employee_ids=[UUID(v) for v in values])
+        except ValueError as exc:
+            raise InvalidInputError("audiencia.valores tiene identificadores inválidos") from exc
+        raise InvalidInputError(f"Audiencia no soportada: {kind}")
+
+    async def audience_catalog(self) -> tuple[list[Site], list[tuple[str, int]]]:
+        """Sites and departments to aim a notification at, with their sizes.
+
+        Returns:
+            tuple[list[Site], list[tuple[str, int]]]: Active sites (with public employee
+                counts) and departments of active employees.
+        """
+
+        return await self.repository.list_sites(False), await self.repository.department_counts()
+
     # ------------------------------------------------------------- my profile
 
     async def onboarding(self, principal: Principal) -> tuple[Employee, list[str], list[Site]]:

@@ -13,6 +13,7 @@ from app.modules.documents.infrastructure import models as documents_models
 from app.modules.dwh_monitoring.infrastructure import models as dwh_monitoring_models
 from app.modules.identity.infrastructure import models as identity_models
 from app.modules.masters.infrastructure import models as masters_models
+from app.modules.notifications.infrastructure import models as notifications_models
 from app.modules.order_validation.infrastructure import models as order_validation_models
 from app.modules.pqrsf.infrastructure import models as pqrsf_models
 from app.modules.projects.infrastructure import models as projects_models
@@ -30,6 +31,7 @@ __all__ = [
     "dwh_monitoring_models",
     "identity_models",
     "masters_models",
+    "notifications_models",
     "order_validation_models",
     "pqrsf_models",
     "projects_models",

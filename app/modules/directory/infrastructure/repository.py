@@ -287,6 +287,50 @@ class SqlAlchemyDirectoryRepository:
             )
             return [_employee(row) for row in rows]
 
+    async def audience_ids(
+        self,
+        *,
+        site_ids: list[UUID] | None = None,
+        departments: list[str] | None = None,
+        employee_ids: list[UUID] | None = None,
+    ) -> list[UUID]:
+        """Active employees of an audience (all of them when every filter is ``None``).
+
+        Args:
+            site_ids (list[UUID] | None): Only these sites.
+            departments (list[str] | None): Only these departments, ignoring case.
+            employee_ids (list[UUID] | None): Only these employees.
+
+        Returns:
+            list[UUID]: Their identifiers.
+        """
+
+        conditions = [_E.is_active.is_(True)]
+        if site_ids is not None:
+            conditions.append(_E.site_id.in_(site_ids))
+        if departments is not None:
+            conditions.append(func.lower(_E.department).in_([d.lower() for d in departments]))
+        if employee_ids is not None:
+            conditions.append(_E.id.in_(employee_ids))
+        async with self.database.session_factory() as session:
+            return list(await session.scalars(select(_E.id).where(*conditions)))
+
+    async def department_counts(self) -> list[tuple[str, int]]:
+        """Departments of the active employees, with how many each has.
+
+        Returns:
+            list[tuple[str, int]]: By name.
+        """
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(_E.department, func.count())
+                .where(_E.is_active.is_(True), _E.department.is_not(None))
+                .group_by(_E.department)
+                .order_by(_E.department)
+            )
+            return [(name, int(count)) for name, count in rows]
+
     async def get_schedule(self, employee_id: UUID) -> list[ScheduleSlot]:
         """The contact windows of an employee.
 

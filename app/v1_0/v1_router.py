@@ -15,6 +15,10 @@ from app.modules.documents.presentation.router import router as documents_router
 from app.modules.dwh_monitoring.presentation.router import router as dwh_monitoring_router
 from app.modules.identity.presentation.router import router as identity_router
 from app.modules.masters.presentation.router import router as masters_router
+from app.modules.notifications.presentation.router import (
+    ingest_router as notifications_ingest_router,
+)
+from app.modules.notifications.presentation.router import router as notifications_router
 from app.modules.order_validation.presentation.router import router as order_validation_router
 from app.modules.pqrsf.presentation.certificates_router import router as pqrsf_certificates_router
 from app.modules.pqrsf.presentation.classification_router import (
@@ -60,6 +64,11 @@ v1_router.include_router(directory_router, prefix="/directory", tags=["directory
 v1_router.include_router(
     directory_admin_router, prefix="/directory/admin", tags=["directory-admin"]
 )
+# The ingestion goes first: its fixed paths must win over /{notification_id}.
+v1_router.include_router(
+    notifications_ingest_router, prefix="/notifications/ingest", tags=["notifications-ingest"]
+)
+v1_router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
 v1_router.include_router(masters_router, prefix="/masters", tags=["masters"])
 v1_router.include_router(commercial_router, prefix="/commercial", tags=["commercial-masters"])
 # The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.

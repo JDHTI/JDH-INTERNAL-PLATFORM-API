@@ -52,6 +52,13 @@ from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
+from app.modules.notifications.application.service import (
+    NotificationService as BellNotificationService,
+)
+from app.modules.notifications.infrastructure.push import WebPushSender
+from app.modules.notifications.infrastructure.repository import (
+    SqlAlchemyNotificationRepository as BellNotificationRepository,
+)
 from app.modules.order_validation.application.service import OrderValidationService
 from app.modules.order_validation.domain.entities import OrderPolicy
 from app.modules.order_validation.infrastructure.agreements import SqlAlchemyAgreementSource
@@ -220,6 +227,14 @@ class V1Container(containers.DeclarativeContainer):
         corporate_domains=config.directory.corporate_domains,
         batch_size=config.directory.batch_size,
     )
+    # --- Notifications of the general view (bell, Web Push, Strapi ingestion) ---
+    notification_repository = providers.Factory(BellNotificationRepository, database=database)
+    notification_push = providers.Singleton(
+        WebPushSender,
+        public_key=config.notifications.vapid_public_key,
+        private_key=config.notifications.vapid_private_key,
+        subject=config.notifications.vapid_subject,
+    )
     directory_service = providers.Factory(
         DirectoryService,
         repository=directory_repository,
@@ -229,6 +244,13 @@ class V1Container(containers.DeclarativeContainer):
         sync_at=config.directory.sync_at,
         timezone=config.directory.timezone,
         request_sync=directory_sync_trigger.provided.set,
+    )
+    notification_service = providers.Factory(
+        BellNotificationService,
+        repository=notification_repository,
+        directory=directory_service,
+        push=notification_push,
+        timezone=config.notifications.timezone,
     )
 
     # --- Areas ---

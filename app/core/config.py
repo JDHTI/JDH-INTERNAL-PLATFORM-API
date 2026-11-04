@@ -266,6 +266,17 @@ class Settings(BaseSettings):
     APP_MONITORING_INTERVAL_SECONDS: int = 60
     APP_MONITORING_RETENTION_DAYS: int = 30
 
+    # Notifications of the general view (the bell): Strapi ingests each publication with
+    # this shared secret (empty = ingestion off); a loop sends the scheduled ones.
+    NOTIFICATIONS_INGEST_SECRET: SecretStr = SecretStr("")
+    NOTIFICATIONS_DISPATCH_ENABLED: bool = False
+    NOTIFICATIONS_DISPATCH_INTERVAL_SECONDS: int = 60
+    NOTIFICATIONS_TIMEZONE: str = "America/Bogota"
+    # Web Push (VAPID). Off while any of the three is empty.
+    PUSH_VAPID_PUBLIC_KEY: str = ""
+    PUSH_VAPID_PRIVATE_KEY: SecretStr = SecretStr("")
+    PUSH_VAPID_SUBJECT: str = ""
+
     # Areas where the project manager is switched on (comma-separated slugs).
     PROJECTS_AREA_SLUGS: str = "ti"
     # A live connection without a ping for this long leaves the presence list.
@@ -546,6 +557,12 @@ class Settings(BaseSettings):
             "projects": {
                 "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
+            },
+            "notifications": {
+                "timezone": self.NOTIFICATIONS_TIMEZONE,
+                "vapid_public_key": self.PUSH_VAPID_PUBLIC_KEY,
+                "vapid_private_key": self.PUSH_VAPID_PRIVATE_KEY.get_secret_value(),
+                "vapid_subject": self.PUSH_VAPID_SUBJECT,
             },
             "directory": {
                 "tenant_id": self.DIRECTORY_GRAPH_TENANT_ID or self.ENTRA_TENANT_ID,

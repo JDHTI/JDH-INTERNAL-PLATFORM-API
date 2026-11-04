@@ -176,6 +176,15 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/masters/{slug}` | `read` |  |
 | `GET` | `/v1/masters/{slug}/records` | `read` |  |
 | `GET` | `/v1/monitoring/board` | `read` |  |
+| `GET` | `/v1/notifications` | `read` |  |
+| `GET` | `/v1/notifications/count` | `read` |  |
+| `POST` | `/v1/notifications/ingest` | `relaxed` |  |
+| `GET` | `/v1/notifications/ingest/audiences` | `read` |  |
+| `GET` | `/v1/notifications/push/public-key` | `read` |  |
+| `DELETE` | `/v1/notifications/push/subscriptions` | `relaxed` |  |
+| `POST` | `/v1/notifications/push/subscriptions` | `relaxed` |  |
+| `PATCH` | `/v1/notifications/read` | `relaxed` |  |
+| `PATCH` | `/v1/notifications/{notification_id}/read` | `relaxed` |  |
 | `GET` | `/v1/order-validations` | `read` |  |
 | `POST` | `/v1/order-validations` | `relaxed` |  |
 | `GET` | `/v1/order-validations/catalogs` | `read` |  |
