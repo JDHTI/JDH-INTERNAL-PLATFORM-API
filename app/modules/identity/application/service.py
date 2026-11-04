@@ -73,10 +73,23 @@ class IdentityService:
         return user, tokens, is_new
 
     async def register_profile(self, profile: EntraProfile) -> tuple[UserModel, bool]:
-        """Create a default user once and attach an optional profile photo."""
+        """Create a default user once and attach an optional profile photo.
+
+        An existing user gets the fields Entra owns (name, email, job title) refreshed
+        when they changed; role, area, state and photo stay as they are.
+        """
 
         existing = await self.repository.get_user_by_identity(profile.tenant_id, profile.object_id)
         if existing is not None:
+            fields = (profile.name, profile.email, profile.job_title)
+            if fields != (existing.name, existing.email, existing.job_title):
+                refreshed = await self.repository.update_profile_fields(
+                    existing.id,
+                    name=profile.name,
+                    email=profile.email,
+                    job_title=profile.job_title,
+                )
+                existing = refreshed or existing
             return existing, False
         user = await self.repository.create_user(
             tenant_id=profile.tenant_id,

@@ -31,6 +31,25 @@ class IdentityToken:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvisionedUser:
+    """Result of creating or refreshing a user from the directory."""
+
+    user_id: UUID
+    created: bool
+    is_active: bool
+    # The directory asked to block the only active administrator; the block was skipped.
+    last_admin_protected: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DeactivationResult:
+    """Users the directory blocked, and administrators it had to leave active."""
+
+    deactivated: int
+    protected: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class UserView:
     """Stable application representation of a local user."""
 
