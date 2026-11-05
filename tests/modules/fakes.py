@@ -93,6 +93,9 @@ class FakeAreaRepository:
     async def set_area_module(self, area_id, module, is_enabled, config):
         self.modules.setdefault(area_id, {})[module] = AreaModule(is_enabled, dict(config))
 
+    async def delete_area_module(self, area_id, module):
+        self.modules.get(area_id, {}).pop(module, None)
+
     async def get_role_permissions(self, role_ids):
         return {role_id: dict(self.permissions.get(role_id, {})) for role_id in role_ids}
 

@@ -435,6 +435,48 @@ class AreaService:
         )
         return ModuleStateView(is_enabled=is_enabled_, config=cleaned, is_default=False)
 
+    async def reset_area_module(
+        self, slug: str, module: str, principal: Principal
+    ) -> ModuleStateView:
+        """Forget an area's choice so the module follows the catalog default again.
+
+        Args:
+            slug (str): Area slug.
+            module (str): Module key of the catalog.
+            principal (Principal): A platform administrator.
+
+        Returns:
+            ModuleStateView: The default state now in force.
+        """
+
+        self._require_admin(principal)
+        area = await self._get_area(slug)
+        if get_module(module) is None:
+            raise NotFoundError(f"El módulo {module} no existe")
+        overrides = await self.repository.list_module_overrides()
+        default = ModuleStateView(
+            is_enabled=is_enabled(area.slug, module), config={}, is_default=True
+        )
+        if module not in overrides.get(area.slug, {}):
+            return default
+        before = {
+            "enabled": is_enabled(area.slug, module, overrides),
+            "config": dict(module_config(area.slug, module, overrides)),
+        }
+        await self.repository.delete_area_module(area.id, module)
+        await self._event(
+            "module_toggled",
+            principal,
+            area_id=area.id,
+            detail={
+                "module": module,
+                "before": before,
+                "after": {"enabled": default.is_enabled, "config": {}},
+                "reset": True,
+            },
+        )
+        return default
+
     # --- Role permissions and the log ---
 
     async def all_areas(self) -> list[Area]:

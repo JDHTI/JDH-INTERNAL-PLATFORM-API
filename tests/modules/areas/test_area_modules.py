@@ -92,6 +92,35 @@ async def test_switching_a_module_off_hides_it_and_keeps_the_grants(
     assert await areas.allows(ana, "bi", "validador-pedidos", "manage")
 
 
+async def test_resetting_a_module_returns_it_to_the_catalog_default(
+    areas, area_repo, admin, login
+) -> None:
+    await areas.create_area(CreateAreaCommand(slug="cartera", name="Cartera"), admin)
+    await areas.set_area_module("cartera", "maestros", True, {"masters": ["clientes"]}, admin)
+    await areas.set_area_module("cartera", "documentos", False, None, admin)
+
+    state = await areas.reset_area_module("cartera", "maestros", admin)
+    assert not state.is_enabled and state.is_default and state.config == {}
+    assert (await areas.reset_area_module("cartera", "documentos", admin)).is_enabled
+
+    (cartera,) = await areas.area_modules(admin)
+    assert cartera.modules["maestros"].is_default and not cartera.modules["maestros"].is_enabled
+    assert cartera.modules["documentos"].is_default and cartera.modules["documentos"].is_enabled
+    reset = [e for e in area_repo.events if e.detail and e.detail.get("reset")]
+    assert [e.detail["module"] for e in reset] == ["maestros", "documentos"]
+    assert reset[0].detail["before"] == {"enabled": True, "config": {"masters": ["clientes"]}}
+
+    # Nothing stored: no event, same answer.
+    count = len(area_repo.events)
+    assert (await areas.reset_area_module("cartera", "maestros", admin)).is_default
+    assert len(area_repo.events) == count
+    ana = await login("ana@jdh.com.co")
+    with pytest.raises(ForbiddenError):
+        await areas.reset_area_module("cartera", "maestros", ana)
+    with pytest.raises(NotFoundError):
+        await areas.reset_area_module("cartera", "no-existe", admin)
+
+
 async def test_only_admins_switch_modules_and_moderators_see_them(areas, admin, login) -> None:
     await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
     ana = await login("ana@jdh.com.co")

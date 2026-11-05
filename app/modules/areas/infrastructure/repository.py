@@ -146,6 +146,16 @@ class SqlAlchemyAreaRepository:
             await session.execute(statement)
             await session.commit()
 
+    async def delete_area_module(self, area_id: UUID, module: str) -> None:
+        """Forget the choice so the module follows the catalog default again."""
+
+        statement = delete(AreaModuleModel).where(
+            AreaModuleModel.area_id == area_id, AreaModuleModel.module == module
+        )
+        async with self.database.session_factory() as session:
+            await session.execute(statement)
+            await session.commit()
+
     # --- Areas ---
 
     async def list_areas(self) -> list[Area]:

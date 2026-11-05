@@ -324,6 +324,29 @@ async def set_area_module(
     }
 
 
+@router.delete(
+    "/{slug}/modules/{module}",
+    response_model=AreaModuleResponse,
+    summary="Return a module to the catalog default in the area",
+)
+@inject
+async def reset_area_module(
+    slug: str,
+    module: str,
+    principal: Principal = _principal,
+    service: AreaService = _service,
+) -> dict:
+    """Devuelve el módulo a su valor por defecto en el área (administradores); idempotente."""
+
+    state = await service.reset_area_module(slug, module, principal)
+    return {
+        "module": module,
+        "enabled": state.is_enabled,
+        "config": state.config,
+        "is_default": state.is_default,
+    }
+
+
 # --- Members ---
 
 

@@ -78,6 +78,8 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
 
 - **Activar o desactivar.** `PUT /areas/{slug}/modules/{module}` con `{enabled, config}` guarda la
   decisión de un administrador. Sin fila, vale el catálogo, así que la migración `0046` no cambia nada.
+- **Volver al valor por defecto.** `DELETE /areas/{slug}/modules/{module}` borra la decisión y el
+  módulo sigue de nuevo al catálogo (`is_default=true`). Es idempotente.
 - **Qué cambia al desactivar.** El módulo sale de `my_modules` de todos (el menú) y del catálogo de
   permisos del área. Los gates lo cierran a los miembros, también al líder; owner, admin y moderador
   siguen pasando. Los permisos de los roles que lo mencionan **se conservan** y vuelven a valer al
@@ -86,7 +88,8 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
   líder y el responsable lo tienen de una vez.
 - **Configuración.** Solo `maestros` la lleva: `{"masters": ["clientes", "proveedores"]}` limita el
   área a esos maestros; sin lista, todos. Los demás módulos no aceptan configuración (422).
-- **Bitácora.** Cada cambio queda como `module_toggled` con antes y después.
+- **Bitácora.** Cada cambio queda como `module_toggled` con antes y después; el restablecimiento lleva
+  además `reset: true`.
 - **Proyectos.** Ya no usa `PROJECTS_AREA_SLUGS`: se habilita por área como cualquier módulo.
 - **Significado de `manage`.** Donde un módulo tiene dueño (`QUOTATIONS_*`, `PQRSF_MANAGER_AREA_SLUG`,
   `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG`, `ti` para monitoreo y datawarehouse), el setting sigue
@@ -120,6 +123,7 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
 | `GET /permissions/catalog` | autenticado | Módulos activos que puede conceder cada área, las acciones y el comodín |
 | `GET /permissions/modules` | admin o moderador | Todos los módulos y, por área, `{enabled, config, is_default}` |
 | `PUT /areas/{slug}/modules/{module}` | admin | `{enabled, config}`. 404 si el módulo no existe; 422 si la configuración no aplica |
+| `DELETE /areas/{slug}/modules/{module}` | admin | Vuelve al valor del catálogo y responde ese estado. 404 si el módulo no existe |
 | `GET /permissions/me` | autenticado | Rol global y, por área, `{módulo: acción}`. La UI arma el menú con esto |
 | `GET /areas/{slug}/roles/{role_id}/permissions` | admin o moderador | Permisos de un rol |
 | `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si el módulo no existe en el área; 409 en el rol líder |

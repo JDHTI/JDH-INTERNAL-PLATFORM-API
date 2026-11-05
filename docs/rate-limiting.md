@@ -78,6 +78,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/areas/{slug}/members` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/members/{member_id}` | `relaxed` |  |
 | `PATCH` | `/v1/areas/{slug}/members/{member_id}` | `relaxed` |  |
+| `DELETE` | `/v1/areas/{slug}/modules/{module}` | `relaxed` |  |
 | `PUT` | `/v1/areas/{slug}/modules/{module}` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/project-epics/{epic_id}` | `relaxed` |  |
 | `PATCH` | `/v1/areas/{slug}/project-epics/{epic_id}` | `relaxed` |  |

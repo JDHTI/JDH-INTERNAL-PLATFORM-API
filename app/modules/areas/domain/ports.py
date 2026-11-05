@@ -78,6 +78,15 @@ class AreaRepository(Protocol):
         """
         ...
 
+    async def delete_area_module(self, area_id: UUID, module: str) -> None:
+        """Forget the choice so the module follows the catalog default again.
+
+        Args:
+            area_id (UUID): The area.
+            module (str): Module key of the catalog.
+        """
+        ...
+
     async def get_role_permissions(self, role_ids: Iterable[UUID]) -> dict[UUID, dict[str, str]]:
         """The grants of several area roles.
 
