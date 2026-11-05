@@ -52,6 +52,14 @@ class AreaAccess(Protocol):
         """
         ...
 
+    async def area_module_config(self, slug: str, module: str) -> dict[str, Any] | None:
+        """The module's settings in the area, or ``None`` when it is switched off there.
+
+        Raises:
+            NotFoundError: When the area does not exist.
+        """
+        ...
+
 
 class People(Protocol):
     """Platform users, read through the identity module."""

@@ -1,9 +1,8 @@
 """Project management use cases, segmented by area like the document manager.
 
 Rules:
-- The module is switched on per area (``enabled_area_slugs``); today only TI.
-  Inside an enabled area, the areas module decides who may enter (member,
-  responsible or platform administrator).
+- The module is switched on per area from the administration panel (``area_modules``;
+  by default only TI). Inside an enabled area, the role grants decide who may enter.
 - Every member can create, edit, move, archive and restore. Permanent deletes
   are for the creator, the area responsible and platform administrators.
 - Concurrent edits are last-write-wins. Each write raises the project's
@@ -85,6 +84,7 @@ from app.modules.projects.domain.ports import (
     ProjectRepository,
 )
 
+MODULE = "proyectos"
 _DUPLICATE_FOLDER = "Ya existe una carpeta con ese nombre en el área"
 _REQUIRED_PROJECT_FIELDS = ("name", "status", "priority", "color", "start_date", "folder_id")
 _REQUIRED_EPIC_FIELDS = ("name", "color", "position")
@@ -101,23 +101,21 @@ class ProjectService:
         areas: AreaAccess,
         people: People,
         events: ProjectEventPublisher,
-        enabled_area_slugs: Iterable[str],
     ) -> None:
         """Create the service with its ports.
 
         Args:
             repository (ProjectRepository): Port that stores folders and projects.
-            areas (AreaAccess): Port that authorizes access to an area.
+            areas (AreaAccess): Port that authorizes access to an area and says where
+                the module is switched on.
             people (People): Port that resolves project owners.
             events (ProjectEventPublisher): Port that fans changes out live.
-            enabled_area_slugs (Iterable[str]): Areas where the module is on.
         """
 
         self.repository = repository
         self.areas = areas
         self.people = people
         self.events = events
-        self.enabled_area_slugs = frozenset(s.strip().lower() for s in enabled_area_slugs if s)
 
     # --- Helpers ---
 
@@ -135,9 +133,9 @@ class ProjectService:
         """
 
         slug = area_slug.strip().lower()
-        if slug not in self.enabled_area_slugs:
+        if await self.areas.area_module_config(slug, MODULE) is None:
             raise NotFoundError("Proyectos no está habilitado para esta área")
-        return await self.areas.authorize(slug, principal, "proyectos", action)
+        return await self.areas.authorize(slug, principal, MODULE, action)
 
     async def can_delete_any(self, area_slug: str, principal: Principal) -> bool:
         """Whether the caller may delete folders and projects created by others.

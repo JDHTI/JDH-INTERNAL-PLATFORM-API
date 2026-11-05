@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 
@@ -50,6 +51,26 @@ class AreaGrantsView:
     is_responsible: bool
     role: RoleRef | None
     grants: list = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ModuleStateView:
+    """Whether a module is on in an area, with its settings."""
+
+    is_enabled: bool
+    config: dict[str, Any] = field(default_factory=dict)
+    # No stored choice: the catalog default applies.
+    is_default: bool = True
+
+
+@dataclass(frozen=True)
+class AreaModulesView:
+    """An area with the state of every module of the catalog."""
+
+    area_id: UUID
+    slug: str
+    name: str
+    modules: dict[str, ModuleStateView] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

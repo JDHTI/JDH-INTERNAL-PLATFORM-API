@@ -215,6 +215,9 @@ services:
       # Data warehouse monitoring: copies the monitoreo schema over the DWH_* connection.
       DWH_MONITORING_SYNC_ENABLED: ${DWH_MONITORING_SYNC_ENABLED:-false}
       DWH_MONITORING_SYNC_INTERVAL_SECONDS: ${DWH_MONITORING_SYNC_INTERVAL_SECONDS:-600}
+      # Background jobs: master syncs when the DWH sequences publish fresh data.
+      JOBS_ENABLED: ${JOBS_ENABLED:-false}
+      JOBS_FALLBACK_AT: ${JOBS_FALLBACK_AT:-10:00}
       # Application monitoring: health endpoint and UI of every registered platform.
       APP_MONITORING_ENABLED: ${APP_MONITORING_ENABLED:-true}
       APP_MONITORING_INTERVAL_SECONDS: ${APP_MONITORING_INTERVAL_SECONDS:-60}

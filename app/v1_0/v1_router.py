@@ -14,6 +14,7 @@ from app.modules.documents.presentation.router import area_router as area_docume
 from app.modules.documents.presentation.router import router as documents_router
 from app.modules.dwh_monitoring.presentation.router import router as dwh_monitoring_router
 from app.modules.identity.presentation.router import router as identity_router
+from app.modules.jobs.presentation.router import router as jobs_router
 from app.modules.masters.presentation.router import router as masters_router
 from app.modules.notifications.presentation.router import (
     ingest_router as notifications_ingest_router,
@@ -72,6 +73,7 @@ v1_router.include_router(
 )
 v1_router.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
 v1_router.include_router(masters_router, prefix="/masters", tags=["masters"])
+v1_router.include_router(jobs_router, prefix="/jobs", tags=["jobs"])
 v1_router.include_router(commercial_router, prefix="/commercial", tags=["commercial-masters"])
 # The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.
 v1_router.include_router(

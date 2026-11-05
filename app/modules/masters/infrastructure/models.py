@@ -75,6 +75,8 @@ class MasterRecordModel(Base):
     __table_args__ = (
         UniqueConstraint("master_id", "source_key", name="uq_master_records_master_source_key"),
         Index("ix_master_records_master_company_code", "master_id", "company_id", "code"),
+        # The sync deactivates what a run did not see (migration 0046).
+        Index("ix_master_records_master_synced_at", "master_id", "synced_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)

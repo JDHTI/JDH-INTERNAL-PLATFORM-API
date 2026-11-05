@@ -78,6 +78,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/areas/{slug}/members` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/members/{member_id}` | `relaxed` |  |
 | `PATCH` | `/v1/areas/{slug}/members/{member_id}` | `relaxed` |  |
+| `PUT` | `/v1/areas/{slug}/modules/{module}` | `relaxed` |  |
 | `DELETE` | `/v1/areas/{slug}/project-epics/{epic_id}` | `relaxed` |  |
 | `PATCH` | `/v1/areas/{slug}/project-epics/{epic_id}` | `relaxed` |  |
 | `GET` | `/v1/areas/{slug}/project-folders` | `read` |  |
@@ -172,9 +173,13 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/dwh-monitoring/sync` | `read` |  |
 | `POST` | `/v1/dwh-monitoring/sync` | `relaxed` |  |
 | `GET` | `/v1/dwh-monitoring/transformations` | `read` |  |
+| `GET` | `/v1/jobs` | `read` |  |
+| `GET` | `/v1/jobs/runs` | `read` |  |
+| `POST` | `/v1/jobs/{key}/run` | `strict` | Lanza una sincronización de maestros contra el datawarehouse |
 | `GET` | `/v1/masters` | `read` |  |
 | `GET` | `/v1/masters/{slug}` | `read` |  |
 | `GET` | `/v1/masters/{slug}/records` | `read` |  |
+| `GET` | `/v1/masters/{slug}/records.xlsx` | `strict` | Arma una hoja de cálculo de hasta 100.000 filas |
 | `GET` | `/v1/monitoring/board` | `read` |  |
 | `GET` | `/v1/notifications` | `read` |  |
 | `GET` | `/v1/notifications/count` | `read` |  |
@@ -200,6 +205,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/permissions/audit` | `read` |  |
 | `GET` | `/v1/permissions/catalog` | `read` |  |
 | `GET` | `/v1/permissions/me` | `read` |  |
+| `GET` | `/v1/permissions/modules` | `read` |  |
 | `GET` | `/v1/permissions/users/{user_id}` | `read` |  |
 | `GET` | `/v1/pqrsf/activity` | `read` |  |
 | `GET` | `/v1/pqrsf/activity/last-seen` | `read` |  |

@@ -6,10 +6,12 @@ from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import delete, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
+from app.modules.areas.domain.catalog import AreaModule
 from app.modules.areas.domain.entities import (
     Area,
     AreaMember,
@@ -20,6 +22,7 @@ from app.modules.areas.domain.entities import (
 from app.modules.areas.infrastructure.models import (
     AreaMemberModel,
     AreaModel,
+    AreaModuleModel,
     AreaRoleModel,
     AreaRolePermissionModel,
     PermissionEventModel,
@@ -109,6 +112,39 @@ class SqlAlchemyAreaRepository:
                 await session.commit()
             except IntegrityError as exc:
                 raise ConflictError("El registro está en uso y no se puede borrar") from exc
+
+    # --- Modules switched on per area ---
+
+    async def list_module_overrides(self) -> dict[str, dict[str, AreaModule]]:
+        """Every stored module choice, keyed by area slug and module key."""
+
+        query = select(AreaModel.slug, AreaModuleModel).join(
+            AreaModuleModel, AreaModuleModel.area_id == AreaModel.id
+        )
+        async with self.database.session_factory() as session:
+            result = await session.execute(query)
+            overrides: dict[str, dict[str, AreaModule]] = {}
+            for slug, row in result.all():
+                overrides.setdefault(slug, {})[row.module] = AreaModule(
+                    is_enabled=row.is_enabled, config=dict(row.config or {})
+                )
+            return overrides
+
+    async def set_area_module(
+        self, area_id: UUID, module: str, is_enabled: bool, config: dict
+    ) -> None:
+        """Store whether a module is on in an area, and its settings."""
+
+        statement = insert(AreaModuleModel).values(
+            area_id=area_id, module=module, is_enabled=is_enabled, config=config
+        )
+        statement = statement.on_conflict_do_update(
+            constraint="uq_area_modules_area_module",
+            set_={"is_enabled": is_enabled, "config": config, "updated_at": func.now()},
+        )
+        async with self.database.session_factory() as session:
+            await session.execute(statement)
+            await session.commit()
 
     # --- Areas ---
 
