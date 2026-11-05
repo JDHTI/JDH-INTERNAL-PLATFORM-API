@@ -195,6 +195,8 @@ RESERVED_SLUGS = frozenset(
         "perfil",
         "pqrsf",
         "sugerencias",
+        # The workspace hub of the UI: the list of the person's areas.
+        "workspace",
     }
 )
 
