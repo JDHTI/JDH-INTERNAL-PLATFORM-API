@@ -132,7 +132,16 @@ def test_my_permissions_and_the_catalog(client, world) -> None:
 
 
 def test_admins_edit_grants_and_moderators_read_the_log(client, world) -> None:
-    role = asyncio.run(world.areas.list_roles("bi", world.admin))[0]
+    leader = asyncio.run(world.areas.list_roles("bi", world.admin))[0]
+    roles = client.get(f"{BASE}/areas/bi/roles").json()
+    assert roles[0]["id"] == str(leader.id) and roles[0]["is_leader"] is True
+    fixed = client.put(
+        f"{BASE}/areas/bi/roles/{leader.id}/permissions",
+        json={"grants": [{"module": "cotizador", "action": "read"}]},
+    )
+    assert fixed.status_code == 409
+    assert client.delete(f"{BASE}/areas/bi/roles/{leader.id}").status_code == 409
+    role = asyncio.run(world.areas.create_role("bi", "Analista BI", world.admin))
 
     updated = client.put(
         f"{BASE}/areas/bi/roles/{role.id}/permissions",

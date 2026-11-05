@@ -37,7 +37,7 @@ class UserDirectory(Protocol):
             DirectoryUser: The existing user.
 
         Raises:
-            NotFoundError: When nobody with that email has signed in yet.
+            NotFoundError: When nobody has that email in the directory or the platform.
         """
         ...
 
@@ -243,12 +243,13 @@ class AreaRepository(Protocol):
         """
         ...
 
-    async def create_role(self, area_id: UUID, name: str) -> AreaRole:
+    async def create_role(self, area_id: UUID, name: str, is_leader: bool = False) -> AreaRole:
         """Persist a new role in an area.
 
         Args:
             area_id (UUID): Owning area.
             name (str): Role name.
+            is_leader (bool): Whether it is the area's leader role (one per area).
 
         Returns:
             AreaRole: The stored role.

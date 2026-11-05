@@ -53,6 +53,8 @@ class MyAreaResponse(BaseModel):
     name: str
     is_responsible: bool
     role_id: UUID | None
+    # The caller holds the area's leader role.
+    is_leader: bool = False
     modules: dict[str, str]
 
 
@@ -73,6 +75,7 @@ class GrantResponse(BaseModel):
 class RoleRefResponse(BaseModel):
     id: UUID
     name: str
+    is_leader: bool = False
 
 
 class UserAreaResponse(BaseModel):
@@ -153,6 +156,7 @@ async def my_permissions(
                 "name": view.name,
                 "is_responsible": view.is_responsible,
                 "role_id": profile.areas[view.slug].role_id if view.slug in profile.areas else None,
+                "is_leader": view.slug in profile.areas and profile.areas[view.slug].is_leader,
                 "modules": view.my_modules,
             }
             for view in views
@@ -177,7 +181,11 @@ async def user_permissions(
                 "slug": area.slug,
                 "name": area.name,
                 "is_responsible": area.is_responsible,
-                "role": {"id": area.role.id, "name": area.role.name} if area.role else None,
+                "role": (
+                    {"id": area.role.id, "name": area.role.name, "is_leader": area.role.is_leader}
+                    if area.role
+                    else None
+                ),
                 "grants": _grants(area.grants),
             }
             for area in areas

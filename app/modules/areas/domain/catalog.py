@@ -2,7 +2,7 @@
 
 ``read`` lets a person look and download; ``manage`` lets them create, edit, approve
 and configure, and implies ``read``. The wildcard ``*`` covers every module of the
-area ("Acceso completo"). Record rules (a case assigned to you, a quotation you made)
+area (what the area's leader role holds). Record rules (a case assigned to you, a quotation you made)
 stay inside each module.
 
 Mirrors the module catalog of the UI (``areas.config.ts``), limited to the modules

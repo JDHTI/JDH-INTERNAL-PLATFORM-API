@@ -18,6 +18,7 @@ class UserRef:
 class RoleRef:
     id: UUID
     name: str
+    is_leader: bool = False
 
 
 @dataclass(frozen=True)

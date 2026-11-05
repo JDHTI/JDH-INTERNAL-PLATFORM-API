@@ -41,13 +41,18 @@ class Area:
 
 @dataclass
 class AreaRole:
-    """A role that exists only inside one area, e.g. "Líder BI"."""
+    """A role that exists only inside one area, e.g. "Analista BI".
+
+    Each area has exactly one leader role: it holds every permission of the area and
+    can be renamed, but never deleted nor have its permissions changed.
+    """
 
     id: UUID
     area_id: UUID
     name: str
     created_at: datetime
     updated_at: datetime
+    is_leader: bool = False
 
 
 @dataclass
@@ -86,7 +91,7 @@ class PermissionEvent:
 
 @dataclass(frozen=True)
 class AreaGrants:
-    """What a person may do in one area: by being its responsible or by their role."""
+    """What a person may do in one area: as its responsible, its leader, or by their role."""
 
     area_id: UUID
     slug: str
@@ -94,11 +99,13 @@ class AreaGrants:
     role_id: UUID | None = None
     # Module key (or ``*``) -> ``read`` | ``manage``.
     grants: dict[str, str] = field(default_factory=dict)
+    # The person holds the area's leader role: everything, whatever the stored grants say.
+    is_leader: bool = False
 
     def action_for(self, module: str) -> str | None:
         """Strongest action held on a module (``manage`` > ``read`` > ``None``)."""
 
-        if self.is_responsible:
+        if self.is_responsible or self.is_leader:
             return MANAGE
         held = {self.grants.get(WILDCARD), self.grants.get(module)}
         if MANAGE in held:

@@ -45,6 +45,8 @@ class UserRefResponse(BaseModel):
 class RoleRefResponse(BaseModel):
     id: UUID
     name: str
+    # The area's leader role: every permission, cannot be deleted nor narrowed.
+    is_leader: bool = False
 
 
 class AreaResponse(BaseModel):
@@ -105,6 +107,8 @@ class RoleRequest(BaseModel):
 class RoleResponse(BaseModel):
     id: UUID
     name: str
+    # The area's leader role: every permission, cannot be deleted nor narrowed.
+    is_leader: bool
     created_at: datetime
     updated_at: datetime
 
@@ -250,7 +254,7 @@ async def get_role_permissions(
 
     role, grants = await service.get_role_permissions(slug, role_id, principal)
     return {
-        "role": {"id": role.id, "name": role.name},
+        "role": {"id": role.id, "name": role.name, "is_leader": role.is_leader},
         "grants": [{"module": g.module, "action": g.action} for g in grants],
     }
 
@@ -268,13 +272,13 @@ async def set_role_permissions(
     principal: Principal = _principal,
     service: AreaService = _service,
 ) -> dict:
-    """Reemplaza los permisos del rol; 422 si un módulo no existe en el área."""
+    """Reemplaza los permisos del rol; 422 si un módulo no existe en el área, 409 si es el líder."""
 
     role, grants = await service.set_role_permissions(
         slug, role_id, [(g.module, g.action) for g in payload.grants], principal
     )
     return {
-        "role": {"id": role.id, "name": role.name},
+        "role": {"id": role.id, "name": role.name, "is_leader": role.is_leader},
         "grants": [{"module": g.module, "action": g.action} for g in grants],
     }
 

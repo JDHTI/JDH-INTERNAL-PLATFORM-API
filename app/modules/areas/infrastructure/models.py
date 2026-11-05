@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -42,6 +43,13 @@ class AreaRoleModel(Base):
         # Target of the composite FK that keeps a member's role in their area.
         UniqueConstraint("area_id", "id", name="uq_area_roles_area_id_id"),
         Index("uq_area_roles_area_name_lower", "area_id", text("lower(name)"), unique=True),
+        # One leader role per area: all its permissions, never deleted or narrowed.
+        Index(
+            "uq_area_roles_one_leader",
+            "area_id",
+            unique=True,
+            postgresql_where=text("is_leader"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -49,6 +57,9 @@ class AreaRoleModel(Base):
         UUID(as_uuid=True), ForeignKey("areas.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_leader: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
