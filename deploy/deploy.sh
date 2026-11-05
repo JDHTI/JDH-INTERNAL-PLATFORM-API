@@ -35,12 +35,11 @@ docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 \
   || { echo "Missing network $EDGE_NETWORK: start the edge stack first" >&2; exit 1; }
 [[ -f $EDGE_CA ]] || { echo "Missing the Caddy root CA at $EDGE_CA" >&2; exit 1; }
 
-# The rate limiter trusts X-Forwarded-For only from Caddy: without it every person
-# would share Caddy's address and one bucket.
+# The rate limiter trusts X-Forwarded-For only from the edge network (Caddy, and the UI
+# when it renders pages on the server): without it every person would share one bucket.
 if [[ -z ${RATE_LIMIT_TRUSTED_PROXY_IPS:-} ]]; then
   RATE_LIMIT_TRUSTED_PROXY_IPS=$(docker network inspect "$EDGE_NETWORK" \
-    --format '{{range .Containers}}{{if eq .Name "intranet-caddy"}}{{.IPv4Address}}{{end}}{{end}}' \
-    | cut -d/ -f1)
+    --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' | xargs | tr ' ' ',')
   export RATE_LIMIT_TRUSTED_PROXY_IPS
 fi
 

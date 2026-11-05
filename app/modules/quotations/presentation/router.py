@@ -64,6 +64,9 @@ class PermissionsResponse(BaseModel):
     can_manage: bool
     # May validate confirmed quotations (approvers' area and admins).
     can_validate: bool
+    # Customers the caller works on: all, team (supervisor), mine (salesperson) or none.
+    # The server applies it to customers, quotations and their creation.
+    sales_scope: Literal["all", "team", "mine", "none"] | None = None
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -494,6 +497,7 @@ async def permissions(
     return PermissionsResponse(
         can_manage=result.can_manage,
         can_validate=result.can_validate,
+        sales_scope=result.sales_scope,  # type: ignore[arg-type]
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller

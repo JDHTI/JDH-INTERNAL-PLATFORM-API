@@ -6,6 +6,9 @@ Rules:
 - A member's role must come from the catalog of the same area.
 - An area that still has document folders cannot be deleted; neither can a
   role that members hold.
+- Every area has one leader role ("Líder de área"): it holds every permission of the
+  area, is never deleted and its permissions never change; it can be renamed. The
+  other roles are free: any module, at read or manage, or the whole area.
 """
 
 from __future__ import annotations
@@ -37,7 +40,8 @@ from app.modules.areas.domain.entities import (
 from app.modules.areas.domain.ports import AreaRepository, DirectoryUser, UserDirectory
 from app.modules.identity.domain.principal import Principal
 
-FULL_ACCESS_ROLE = "Acceso completo"
+LEADER_ROLE = "Líder de área"
+LEADER_GRANTS = (RolePermission(WILDCARD, MANAGE),)
 
 
 def _sorted_grants(grants: dict[str, str]) -> list[RolePermission]:
@@ -45,6 +49,10 @@ def _sorted_grants(grants: dict[str, str]) -> list[RolePermission]:
         RolePermission(module, action)
         for module, action in sorted(grants.items(), key=lambda item: (item[0] != WILDCARD, item))
     ]
+
+
+def _role_ref(role: AreaRole) -> RoleRef:
+    return RoleRef(id=role.id, name=role.name, is_leader=role.is_leader)
 
 
 def _user_ref(user: DirectoryUser | None) -> UserRef | None:
@@ -123,7 +131,7 @@ class AreaService:
                 icon=area.icon,
                 sort_order=area.sort_order,
                 responsible=_user_ref(responsibles.get(area.responsible_user_id)),
-                my_role=RoleRef(id=role.id, name=role.name) if role else None,
+                my_role=_role_ref(role) if role else None,
                 is_responsible=area.responsible_user_id == principal.user_id,
                 created_at=area.created_at,
                 updated_at=area.updated_at,
@@ -170,6 +178,7 @@ class AreaService:
                     is_responsible=area.responsible_user_id == principal.user_id,
                     role_id=role.id if role else None,
                     grants=grants.get(role.id, {}) if role else {},
+                    is_leader=bool(role and role.is_leader),
                 )
                 for area, role in rows
             },
@@ -338,6 +347,10 @@ class AreaService:
         self._require_admin(principal)
         area = await self._get_area(slug)
         role = await self._get_role(area.id, role_id)
+        if role.is_leader:
+            raise ConflictError(
+                "El rol líder tiene todos los permisos del área: no se pueden modificar"
+            )
         cleaned: dict[str, str] = {}
         for module, action in grants:
             module, action = validate_grant(area.slug, module, action)
@@ -377,7 +390,7 @@ class AreaService:
                 slug=area.slug,
                 name=area.name,
                 is_responsible=area.responsible_user_id == user_id,
-                role=RoleRef(id=role.id, name=role.name) if role else None,
+                role=_role_ref(role) if role else None,
                 grants=_sorted_grants(grants.get(role.id, {}) if role else {}),
             )
             for area, role in rows
@@ -482,7 +495,7 @@ class AreaService:
 
         Args:
             command (CreateAreaCommand): Area data; the responsible is given by
-                email and must have signed in at least once.
+                email and must be in the directory (no sign-in needed).
             principal (Principal): The caller; must be a platform administrator.
 
         Returns:
@@ -506,9 +519,9 @@ class AreaService:
             sort_order=command.sort_order,
             responsible_user_id=responsible.id if responsible else None,
         )
-        # Every area starts with a role that grants it whole.
-        role = await self.repository.create_role(area.id, FULL_ACCESS_ROLE)
-        await self.repository.replace_role_permissions(role.id, [RolePermission(WILDCARD, MANAGE)])
+        # Every area starts with its leader role, which grants it whole.
+        role = await self.repository.create_role(area.id, LEADER_ROLE, is_leader=True)
+        await self.repository.replace_role_permissions(role.id, list(LEADER_GRANTS))
         await self._event("area_created", principal, area_id=area.id, detail={"slug": slug})
         return await self._view(area, principal)
 
@@ -619,10 +632,20 @@ class AreaService:
         self._require_admin(principal)
         area = await self._get_area(slug)
         role = await self._get_role(area.id, role_id)
+        before = role.name
         role.name = clean_name(name, max_length=100)
         if await self.repository.role_name_taken(area.id, role.name, exclude_id=role.id):
             raise ConflictError("El área ya tiene un rol con ese nombre")
-        return await self.repository.save_role(role)
+        saved = await self.repository.save_role(role)
+        if saved.name != before:
+            await self._event(
+                "role_renamed",
+                principal,
+                area_id=area.id,
+                role_id=role.id,
+                detail={"before": before, "after": saved.name},
+            )
+        return saved
 
     async def delete_role(self, slug: str, role_id: UUID, principal: Principal) -> None:
         """Delete a role nobody holds.
@@ -639,6 +662,8 @@ class AreaService:
         self._require_admin(principal)
         area = await self._get_area(slug)
         role = await self._get_role(area.id, role_id)
+        if role.is_leader:
+            raise ConflictError("El rol líder del área no se puede eliminar")
         if await self.repository.role_in_use(role.id):
             raise ConflictError("El rol tiene miembros asignados: reasígnalos antes de borrarlo")
         await self.repository.delete_role(role.id)
@@ -680,7 +705,7 @@ class AreaService:
             MemberView(
                 id=m.id,
                 user=_user_ref(users[m.user_id]),
-                role=RoleRef(id=m.role_id, name=roles[m.role_id].name),
+                role=_role_ref(roles[m.role_id]),
                 created_at=m.created_at,
                 updated_at=m.updated_at,
             )
@@ -696,8 +721,9 @@ class AreaService:
 
         Args:
             slug (str): Area slug.
-            email (str): Person's email; they must have signed in at least
-                once, since platform users are created by Entra sign-in.
+            email (str): Person's email. The directory sync creates every Entra
+                account as a user, so someone who never signed in can be assigned;
+                their first sign-in reuses that user and keeps the membership.
             role_id (UUID): A role of the same area.
             principal (Principal): The caller; must be a platform administrator.
 
@@ -723,7 +749,7 @@ class AreaService:
         return MemberView(
             id=member.id,
             user=_user_ref(user),
-            role=RoleRef(id=role.id, name=role.name),
+            role=_role_ref(role),
             created_at=member.created_at,
             updated_at=member.updated_at,
         )
@@ -764,7 +790,7 @@ class AreaService:
         return MemberView(
             id=member.id,
             user=_user_ref(users[member.user_id]),
-            role=RoleRef(id=role.id, name=role.name),
+            role=_role_ref(role),
             created_at=member.created_at,
             updated_at=member.updated_at,
         )

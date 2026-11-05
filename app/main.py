@@ -25,6 +25,7 @@ from app.core.rate_limit_middleware import RateLimitMiddleware
 from app.modules.app_monitoring.infrastructure.worker import AppCheckWorker
 from app.modules.directory.infrastructure.worker import DirectorySyncWorker
 from app.modules.dwh_monitoring.infrastructure.worker import MonitoringSyncWorker
+from app.modules.notifications.infrastructure.worker import NotificationDispatchWorker
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
 from app.modules.pqrsf.infrastructure.notification_worker import NotificationWorker
 
@@ -44,6 +45,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         monitoring_worker: MonitoringSyncWorker | None = None
         app_worker: AppCheckWorker | None = None
         directory_worker: DirectorySyncWorker | None = None
+        notification_worker_loop: NotificationDispatchWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
@@ -85,6 +87,16 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     f"Directory syncing Entra users daily at {runtime_settings.DIRECTORY_SYNC_AT} "
                     f"({runtime_settings.DIRECTORY_SYNC_TIMEZONE})"
                 )
+            if runtime_settings.NOTIFICATIONS_DISPATCH_ENABLED:
+                notification_worker_loop = NotificationDispatchWorker(
+                    container.v1_container.notification_service,
+                    runtime_settings.NOTIFICATIONS_DISPATCH_INTERVAL_SECONDS,
+                )
+                notification_worker_loop.start()
+                logger.info(
+                    "Notifications dispatching scheduled ones every "
+                    f"{runtime_settings.NOTIFICATIONS_DISPATCH_INTERVAL_SECONDS}s"
+                )
             if runtime_settings.APP_MONITORING_ENABLED:
                 app_worker = AppCheckWorker(
                     container.v1_container.app_monitoring_service,
@@ -110,6 +122,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if notification_worker_loop is not None:
+                await notification_worker_loop.stop()
             if directory_worker is not None:
                 await directory_worker.stop()
                 await container.v1_container.directory_graph_client().close()

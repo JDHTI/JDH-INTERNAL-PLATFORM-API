@@ -143,9 +143,22 @@ def test_the_public_directory_lists_searches_and_hides(client, harness) -> None:
 def test_birthdays_and_new_hires(client, harness) -> None:
     asyncio.run(_seed(harness))
 
-    birthdays = client.get(f"{BASE}/employees/birthdays").json()
-    assert birthdays["month"] == 11
-    assert [(i["full_name"], i["birth_day"]) for i in birthdays["items"]] == [
+    asyncio.run(
+        harness.repository.create_employee(
+            {"full_name": "Marta Ríos", "birth_date": date(1992, 3, 15)}
+        )
+    )
+
+    year = client.get(f"{BASE}/employees/birthdays").json()
+    assert year["month"] is None
+    assert [(i["full_name"], i["birth_month"], i["birth_day"]) for i in year["items"]] == [
+        ("Marta Ríos", 3, 15),
+        ("Luis Gómez", 11, 2),
+        ("Ana María Pérez", 11, 20),
+    ]
+    november = client.get(f"{BASE}/employees/birthdays", params={"month": 11}).json()
+    assert november["month"] == 11
+    assert [(i["full_name"], i["birth_day"]) for i in november["items"]] == [
         ("Luis Gómez", 2),
         ("Ana María Pérez", 20),
     ]
@@ -153,6 +166,77 @@ def test_birthdays_and_new_hires(client, harness) -> None:
 
     hires = client.get(f"{BASE}/employees/new-hires").json()["items"]
     assert [(i["full_name"], i["hire_date"]) for i in hires] == [("Ana María Pérez", "2026-10-01")]
+
+
+def test_onboarding_tells_what_is_missing_and_saves_it(client, harness) -> None:
+    site, ana, _, _ = asyncio.run(_seed(harness))
+    asyncio.run(harness.repository.update_employee(ana.id, {"site_id": None}))
+    closed = harness.repository.add_site("Sede Cerrada", is_active=False)
+
+    first = client.get(f"{BASE}/employees/me/onboarding").json()
+    assert first["pendientes"] == ["sede", "contacto"]
+    assert first["siteId"] is None and first["mobilePhone"] == ""
+    assert first["showInDirectory"] is False
+    assert [s["nombre"] for s in first["sedes"]] == ["Bodega Principal"]
+
+    saved = client.post(
+        f"{BASE}/employees/me/onboarding",
+        json={"siteId": str(site.id), "mobilePhone": " 300 123 4567 ", "showInDirectory": True},
+    )
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["pendientes"] == [] and body["siteId"] == str(site.id)
+    assert body["mobilePhone"] == "300 123 4567" and body["showInDirectory"] is True
+
+    profile = client.get(f"{BASE}/employees/{ana.id}").json()
+    assert profile["mobile_phone"] == "300 123 4567"
+
+    bad_site = client.post(f"{BASE}/employees/me/onboarding", json={"siteId": str(closed.id)})
+    bad_phone = client.post(f"{BASE}/employees/me/onboarding", json={"mobilePhone": "abc"})
+    empty = client.post(f"{BASE}/employees/me/onboarding", json={})
+    assert bad_site.status_code == bad_phone.status_code == empty.status_code == 422
+
+    client.post(f"{BASE}/employees/me/onboarding", json={"showInDirectory": False})
+    assert client.get(f"{BASE}/employees/{ana.id}").json()["mobile_phone"] is None
+
+
+def test_onboarding_needs_an_employee(client) -> None:
+    assert client.get(f"{BASE}/employees/me/onboarding").status_code == 404
+
+
+def test_contact_schedule_is_replaced_whole_and_validated(client, harness) -> None:
+    _, ana, luis, hidden = asyncio.run(_seed(harness))
+
+    assert client.get(f"{BASE}/employees/me/contact-schedule").json() == {"franjas": []}
+    franjas = [
+        {"dia": "MARTES", "inicio": "14:00", "fin": "17:00"},
+        {"dia": "LUNES", "inicio": "08:00", "fin": "12:00"},
+        {"dia": "MARTES", "inicio": "08:00", "fin": "12:00"},
+    ]
+    saved = client.put(f"{BASE}/employees/me/contact-schedule", json={"franjas": franjas})
+    assert saved.status_code == 200
+    assert [(f["dia"], f["inicio"]) for f in saved.json()["franjas"]] == [
+        ("LUNES", "08:00"),
+        ("MARTES", "08:00"),
+        ("MARTES", "14:00"),
+    ]
+    assert client.get(f"{BASE}/employees/{ana.id}/contact-schedule").json() == saved.json()
+    assert client.get(f"{BASE}/employees/{luis.id}/contact-schedule").json() == {"franjas": []}
+    assert client.get(f"{BASE}/employees/{hidden.id}/contact-schedule").status_code == 404
+
+    overlap = [
+        {"dia": "LUNES", "inicio": "08:00", "fin": "12:00"},
+        {"dia": "LUNES", "inicio": "11:00", "fin": "13:00"},
+    ]
+    backwards = [{"dia": "LUNES", "inicio": "12:00", "fin": "08:00"}]
+    bad_day = [{"dia": "FERIADO", "inicio": "08:00", "fin": "09:00"}]
+    bad_time = [{"dia": "LUNES", "inicio": "8am", "fin": "09:00"}]
+    for body in (overlap, backwards, bad_day, bad_time):
+        response = client.put(f"{BASE}/employees/me/contact-schedule", json={"franjas": body})
+        assert response.status_code == 422, body
+
+    cleared = client.put(f"{BASE}/employees/me/contact-schedule", json={"franjas": []})
+    assert cleared.json() == {"franjas": []}
 
 
 def test_photos_are_cached_by_version(client, harness) -> None:

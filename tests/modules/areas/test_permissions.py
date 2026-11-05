@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.errors import ForbiddenError, InvalidInputError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.areas.application.dto import CreateAreaCommand
 from app.modules.areas.domain.catalog import modules_for, validate_grant
 from app.modules.areas.domain.entities import AccessProfile, AreaGrants
@@ -80,14 +80,57 @@ def test_grants_are_checked_against_the_catalog() -> None:
         validate_grant("bi", "cotizador", "delete")
 
 
-async def test_new_areas_get_a_full_access_role(areas, area_repo, admin) -> None:
+async def test_new_areas_get_their_leader_role(areas, area_repo, admin) -> None:
     await areas.create_area(CreateAreaCommand(slug="cartera", name="Cartera"), admin)
 
     roles = await areas.list_roles("cartera", admin)
 
-    assert [role.name for role in roles] == ["Acceso completo"]
+    assert [(role.name, role.is_leader) for role in roles] == [("Líder de área", True)]
     assert area_repo.permissions[roles[0].id] == {"*": "manage"}
     assert [event.action for event in area_repo.events] == ["area_created"]
+
+
+async def test_the_leader_role_is_fixed(areas, area_repo, admin) -> None:
+    await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
+    leader = (await areas.list_roles("bi", admin))[0]
+
+    with pytest.raises(ConflictError):
+        await areas.set_role_permissions("bi", leader.id, [("cotizador", "read")], admin)
+    with pytest.raises(ConflictError):
+        await areas.delete_role("bi", leader.id, admin)
+    assert area_repo.permissions[leader.id] == {"*": "manage"}
+
+    renamed = await areas.rename_role("bi", leader.id, "Director BI", admin)
+    assert renamed.name == "Director BI" and renamed.is_leader
+    assert area_repo.events[-1].action == "role_renamed"
+    assert area_repo.events[-1].detail == {"before": "Líder de área", "after": "Director BI"}
+
+
+async def test_the_leader_manages_everything_whatever_its_rows(
+    areas, area_repo, admin, login
+) -> None:
+    await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
+    leader = (await areas.list_roles("bi", admin))[0]
+    area_repo.permissions[leader.id] = {}  # even a stored row lost does not narrow it
+    ana = await login("ana@jdh.com.co")
+    await areas.add_member("bi", ana.email, leader.id, admin)
+
+    view = await areas.get_area("bi", ana)
+
+    assert view.my_role.is_leader
+    assert view.my_modules == {m.key: "manage" for m in modules_for("bi")}
+    assert await areas.allows(ana, "bi", "maestros", "manage")
+
+
+async def test_other_roles_take_any_grant_including_the_whole_area(areas, admin) -> None:
+    await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
+    analyst = await areas.create_role("bi", "Analista BI", admin)
+
+    _, grants = await areas.set_role_permissions("bi", analyst.id, [("*", "manage")], admin)
+
+    assert [(g.module, g.action) for g in grants] == [("*", "manage")]
+    assert not analyst.is_leader
+    await areas.delete_role("bi", analyst.id, admin)
 
 
 async def test_a_new_role_grants_nothing_until_set(areas, area_repo, admin, login) -> None:
@@ -100,7 +143,7 @@ async def test_a_new_role_grants_nothing_until_set(areas, area_repo, admin, logi
     assert (await areas.get_area("ti", pedro)).my_modules == {}
     assert await areas.allows(pedro, "ti", "documentos") is False
     # The seeded role keeps the whole area.
-    seeded = next(r for r in await areas.list_roles("ti", admin) if r.name == "Acceso completo")
+    seeded = next(r for r in await areas.list_roles("ti", admin) if r.is_leader)
     assert area_repo.permissions[seeded.id] == {"*": "manage"}
 
 
@@ -151,11 +194,12 @@ async def test_only_admins_edit_grants_and_moderators_read_them(areas, admin, lo
         await areas.set_role_permissions("bi", role.id, [("cotizador", "read")], moderator)
     with pytest.raises(ForbiddenError):
         await areas.get_role_permissions("bi", role.id, ana)
+    analyst = await areas.create_role("bi", "Analista BI", admin)
     with pytest.raises(InvalidInputError):
-        await areas.set_role_permissions("bi", role.id, [("pqrsf", "read")], admin)
+        await areas.set_role_permissions("bi", analyst.id, [("pqrsf", "read")], admin)
 
     events, total = await areas.list_events(moderator, area_slug="bi")
-    assert total == 1 and events[0].action == "area_created"
+    assert total == 2 and [e.action for e in events] == ["role_created", "area_created"]
     with pytest.raises(ForbiddenError):
         await areas.list_events(ana)
 

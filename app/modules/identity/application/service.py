@@ -100,7 +100,7 @@ class IdentityService:
 
         tokens = await self.entra.exchange_code(code, code_verifier)
         identity = await self.entra.validate_access_token(tokens.access_token)
-        profile = await self.entra.profile(identity)
+        profile = await self.entra.profile(identity, tokens.graph_token)
         user, is_new = await self.register_profile(profile)
         if not getattr(user, "is_active", True):
             raise AuthenticationRequired

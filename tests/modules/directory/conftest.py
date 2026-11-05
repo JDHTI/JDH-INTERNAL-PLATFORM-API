@@ -99,6 +99,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.employees: dict[uuid.UUID, Employee] = {}
         self.sites: dict[uuid.UUID, Site] = {}
+        self.schedules: dict[uuid.UUID, list] = {}
 
     def add_site(self, name, address=None, is_active=True) -> Site:
         site = Site(uuid.uuid4(), name, address, is_active, NOW, NOW)
@@ -162,9 +163,33 @@ class FakeRepository:
         rows = [
             e
             for e in self.employees.values()
-            if e.is_public and e.birth_date and e.birth_date.month == month
+            if e.is_public and e.birth_date and (month is None or e.birth_date.month == month)
         ]
-        return sorted(rows, key=lambda e: (e.birth_date.day, e.full_name))
+        return sorted(rows, key=lambda e: (e.birth_date.month, e.birth_date.day, e.full_name))
+
+    async def audience_ids(self, *, site_ids=None, departments=None, employee_ids=None):
+        lowered = {d.lower() for d in departments} if departments is not None else None
+        return [
+            e.id
+            for e in self.employees.values()
+            if e.is_active
+            and (site_ids is None or e.site_id in site_ids)
+            and (lowered is None or (e.department or "").lower() in lowered)
+            and (employee_ids is None or e.id in employee_ids)
+        ]
+
+    async def department_counts(self):
+        counts: dict[str, int] = {}
+        for e in self.employees.values():
+            if e.is_active and e.department:
+                counts[e.department] = counts.get(e.department, 0) + 1
+        return sorted(counts.items())
+
+    async def get_schedule(self, employee_id):
+        return list(self.schedules.get(employee_id, []))
+
+    async def replace_schedule(self, employee_id, slots):
+        self.schedules[employee_id] = list(slots)
 
     async def new_hires(self, today, limit):
         rows = [

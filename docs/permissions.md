@@ -28,8 +28,22 @@ módulos. La vista general (`/directory/*` público, `/users/me`, `/auth/*`, `GE
   - `read` permite consultar y descargar.
   - `manage` permite crear, editar, aprobar y configurar, e incluye `read`.
   - El módulo `*` es el área completa.
-- **Rol por defecto.** Toda área nueva nace con el rol "Acceso completo" (`*` manage).
+- **Rol líder.** Cada área tiene exactamente un rol líder (`area_roles.is_leader`, índice único
+  parcial `uq_area_roles_one_leader`). Toda área nueva nace con él, como "Líder de área".
+  - Tiene todos los permisos del área (`*` manage). La resolución lo trata como acceso completo
+    aunque falte la fila de permisos.
+  - No se puede eliminar ni cambiar sus permisos: `DELETE` y `PUT .../permissions` responden 409.
+  - Se puede renombrar (en BI se llama "Director BI").
+  - La API lo marca con `is_leader` en `GET /areas/{slug}/roles` (sale primero), en `my_role` de
+    `GET /areas` y en `/permissions/me`.
+- **Los demás roles.** Son libres: se crean sin permisos y aceptan cualquier módulo del área en
+  `read` o `manage`, o el área completa con `*`. Se pueden renombrar y borrar si no tienen miembros.
 - **Un rol por área.** Una persona tiene un rol por área (`area_members`).
+- **Personas que nunca han entrado.** La sincronización del directorio crea a cada cuenta de Entra
+  como usuario, así que se asigna por correo a quien nunca ha iniciado sesión. El primer inicio de
+  sesión reutiliza ese usuario (mismo tenant y object id) y conserva sus áreas.
+- **Cambios en vivo.** Los permisos se resuelven en cada request, sin caché: un cambio aplica en la
+  siguiente llamada de la persona.
 - **Responsable.** El responsable del área gestiona toda su área.
 - **Reglas por registro.** Siguen dentro de cada módulo: el caso asignado o creado en PQRSF, la cotización propia o el proyecto creado.
 
@@ -85,7 +99,7 @@ depende del rol global. Un rol de área nunca debe conceder administración.
 | `GET /permissions/catalog` | autenticado | Módulos que puede conceder cada área, las acciones y el comodín |
 | `GET /permissions/me` | autenticado | Rol global y, por área, `{módulo: acción}`. La UI arma el menú con esto |
 | `GET /areas/{slug}/roles/{role_id}/permissions` | admin o moderador | Permisos de un rol |
-| `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si el módulo no existe en el área |
+| `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si el módulo no existe en el área; 409 en el rol líder |
 | `GET /permissions/users/{user_id}` | admin o moderador | Áreas, rol y permisos de una persona |
 | `GET /permissions/audit` | admin o moderador | Bitácora: `area_slug`, `target_user_id`, `action`, `offset`, `limit` |
 | `GET /areas` | autenticado | Cada área trae `my_modules` |
@@ -93,7 +107,7 @@ depende del rol global. Un rol de área nunca debe conceder administración.
 | `PATCH /users/{id}` | admin. Solo el owner cambia el rol | Rol global y estado |
 
 La bitácora (`permission_events`) registra estas acciones: `area_created`, `role_created`,
-`role_deleted`, `role_permissions_set`, `member_added`, `member_role_changed`, `member_removed`,
+`role_renamed`, `role_deleted`, `role_permissions_set`, `member_added`, `member_role_changed`, `member_removed`,
 `global_role_changed`, `user_deactivated` y `user_activated`. Cada registro guarda el actor, el área,
 la persona y el detalle de antes y después.
 
@@ -102,6 +116,9 @@ la persona y el detalle de antes y después.
 - **Migración `0041_permissions`.** A **todo rol de área existente** le da `*` manage. Hasta ahora
   cualquier miembro gestionaba todo en su área, así que el despliegue no cambia lo que hacen los
   miembros. Después, los admins estrechan cada rol desde el panel.
+- **Migración `0044_area_leader_role`.** Marca el rol líder de cada área: el que tiene "líder" o
+  "director" en el nombre; si no hay, "Acceso completo", renombrado "Líder de área"; si tampoco hay,
+  uno nuevo. Le deja exactamente `*` manage. Los demás roles conservan sus permisos.
 - **Lecturas cerradas.** Quien no es miembro de ningún área pierde las lecturas que antes estaban
   abiertas: lotes del validador de pedidos, apoyos y adjuntos, maestros comerciales, contactos de
   proveedores y sugerencias de PQRSF.

@@ -399,6 +399,21 @@ class IdentityRepository:
                 .limit(1)
             )
 
+    async def active_user_emails(self) -> dict[str, UUID]:
+        """Lowercase email -> id of every active user that has an email.
+
+        Returns:
+            dict[str, UUID]: The index.
+        """
+
+        async with self._session() as session:
+            rows = await session.execute(
+                select(func.lower(UserModel.email), UserModel.id).where(
+                    UserModel.is_active.is_(True), UserModel.email.is_not(None)
+                )
+            )
+            return {email: user_id for email, user_id in rows}
+
     async def get_users_by_ids(self, user_ids: Iterable[UUID]) -> Sequence[UserModel]:
         """Load several users at once.
 

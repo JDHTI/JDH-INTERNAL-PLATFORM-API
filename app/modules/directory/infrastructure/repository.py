@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, exists, extract, func, or_, select, update
+from sqlalchemy import and_, delete, exists, extract, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
 
@@ -19,6 +19,7 @@ from app.modules.directory.domain.entities import (
     EmployeeRef,
     RunStatus,
     RunTrigger,
+    ScheduleSlot,
     Site,
     SiteRef,
     SyncRun,
@@ -26,6 +27,7 @@ from app.modules.directory.domain.entities import (
 )
 from app.modules.directory.domain.search import build_search_text
 from app.modules.directory.infrastructure.models import (
+    DirectoryContactScheduleModel,
     DirectoryEmployeeModel,
     DirectorySiteModel,
     DirectorySyncRunModel,
@@ -61,6 +63,9 @@ _COLUMNS = frozenset(
         "photo_content_type",
         "photo_updated_at",
         "synced_at",
+        "mobile_phone",
+        "landline_phone",
+        "show_mobile_in_directory",
     }
 )
 
@@ -109,6 +114,9 @@ def _employee(model: DirectoryEmployeeModel) -> Employee:
         synced_at=model.synced_at,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        mobile_phone=model.mobile_phone,
+        landline_phone=model.landline_phone,
+        show_mobile_in_directory=model.show_mobile_in_directory,
     )
 
 
@@ -258,25 +266,110 @@ class SqlAlchemyDirectoryRepository:
             )
             return [_employee(row) for row in rows]
 
-    async def birthdays(self, month: int) -> list[Employee]:
-        """Public employees born in a month, by day and name.
+    async def birthdays(self, month: int | None) -> list[Employee]:
+        """Public employees with a birth date, by month, day and name.
 
         Args:
-            month (int): 1 to 12.
+            month (int | None): 1 to 12, or ``None`` for the whole year.
 
         Returns:
             list[Employee]: The employees.
         """
 
+        query = select(_E).where(_public(), _E.birth_date.is_not(None))
+        if month is not None:
+            query = query.where(extract("month", _E.birth_date) == month)
         async with self.database.session_factory() as session:
             rows = await session.scalars(
-                select(_E)
-                .where(_public(), _E.birth_date.is_not(None))
-                .where(extract("month", _E.birth_date) == month)
-                .options(*_LOAD)
-                .order_by(extract("day", _E.birth_date), _E.full_name)
+                query.options(*_LOAD).order_by(
+                    extract("month", _E.birth_date), extract("day", _E.birth_date), _E.full_name
+                )
             )
             return [_employee(row) for row in rows]
+
+    async def audience_ids(
+        self,
+        *,
+        site_ids: list[UUID] | None = None,
+        departments: list[str] | None = None,
+        employee_ids: list[UUID] | None = None,
+    ) -> list[UUID]:
+        """Active employees of an audience (all of them when every filter is ``None``).
+
+        Args:
+            site_ids (list[UUID] | None): Only these sites.
+            departments (list[str] | None): Only these departments, ignoring case.
+            employee_ids (list[UUID] | None): Only these employees.
+
+        Returns:
+            list[UUID]: Their identifiers.
+        """
+
+        conditions = [_E.is_active.is_(True)]
+        if site_ids is not None:
+            conditions.append(_E.site_id.in_(site_ids))
+        if departments is not None:
+            conditions.append(func.lower(_E.department).in_([d.lower() for d in departments]))
+        if employee_ids is not None:
+            conditions.append(_E.id.in_(employee_ids))
+        async with self.database.session_factory() as session:
+            return list(await session.scalars(select(_E.id).where(*conditions)))
+
+    async def department_counts(self) -> list[tuple[str, int]]:
+        """Departments of the active employees, with how many each has.
+
+        Returns:
+            list[tuple[str, int]]: By name.
+        """
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(_E.department, func.count())
+                .where(_E.is_active.is_(True), _E.department.is_not(None))
+                .group_by(_E.department)
+                .order_by(_E.department)
+            )
+            return [(name, int(count)) for name, count in rows]
+
+    async def get_schedule(self, employee_id: UUID) -> list[ScheduleSlot]:
+        """The contact windows of an employee.
+
+        Args:
+            employee_id (UUID): The employee.
+
+        Returns:
+            list[ScheduleSlot]: The windows, unordered.
+        """
+
+        async with self.database.session_factory() as session:
+            rows = await session.scalars(
+                select(DirectoryContactScheduleModel).where(
+                    DirectoryContactScheduleModel.employee_id == employee_id
+                )
+            )
+            return [ScheduleSlot(row.day, row.start_time, row.end_time) for row in rows]
+
+    async def replace_schedule(self, employee_id: UUID, slots: list[ScheduleSlot]) -> None:
+        """Replace every contact window of an employee in one transaction.
+
+        Args:
+            employee_id (UUID): The employee.
+            slots (list[ScheduleSlot]): The new windows, already validated.
+        """
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                delete(DirectoryContactScheduleModel).where(
+                    DirectoryContactScheduleModel.employee_id == employee_id
+                )
+            )
+            session.add_all(
+                DirectoryContactScheduleModel(
+                    employee_id=employee_id, day=slot.day, start_time=slot.start, end_time=slot.end
+                )
+                for slot in slots
+            )
+            await session.commit()
 
     async def new_hires(self, today: date, limit: int) -> list[Employee]:
         """Public employees by hire date, newest first, up to today.

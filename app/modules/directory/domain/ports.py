@@ -14,6 +14,7 @@ from app.modules.directory.domain.entities import (
     GraphUser,
     RunStatus,
     RunTrigger,
+    ScheduleSlot,
     Site,
     SyncRun,
 )
@@ -51,8 +52,26 @@ class DirectoryRepository(Protocol):
     async def synced_employees(self) -> list[Employee]:
         """Every employee synced from Entra, active or not."""
 
-    async def birthdays(self, month: int) -> list[Employee]:
-        """Public employees born in that month, by day."""
+    async def birthdays(self, month: int | None) -> list[Employee]:
+        """Public employees born in that month (or the whole year), by month and day."""
+
+    async def audience_ids(
+        self,
+        *,
+        site_ids: list[UUID] | None = None,
+        departments: list[str] | None = None,
+        employee_ids: list[UUID] | None = None,
+    ) -> list[UUID]:
+        """Active employees of an audience."""
+
+    async def department_counts(self) -> list[tuple[str, int]]:
+        """Departments of the active employees with their sizes."""
+
+    async def get_schedule(self, employee_id: UUID) -> list[ScheduleSlot]:
+        """The contact windows of an employee."""
+
+    async def replace_schedule(self, employee_id: UUID, slots: list[ScheduleSlot]) -> None:
+        """Replace every contact window of an employee."""
 
     async def new_hires(self, today: date, limit: int) -> list[Employee]:
         """Public employees by hire date, newest first, up to today."""

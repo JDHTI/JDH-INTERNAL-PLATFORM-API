@@ -42,7 +42,12 @@ def _area(m: AreaModel) -> Area:
 
 def _role(m: AreaRoleModel) -> AreaRole:
     return AreaRole(
-        id=m.id, area_id=m.area_id, name=m.name, created_at=m.created_at, updated_at=m.updated_at
+        id=m.id,
+        area_id=m.area_id,
+        name=m.name,
+        created_at=m.created_at,
+        updated_at=m.updated_at,
+        is_leader=bool(m.is_leader),
     )
 
 
@@ -274,14 +279,14 @@ class SqlAlchemyAreaRepository:
             area_id (UUID): The area.
 
         Returns:
-            list[AreaRole]: Roles ordered by name.
+            list[AreaRole]: The leader role first, then the rest by name.
         """
 
         async with self.database.session_factory() as session:
             result = await session.execute(
                 select(AreaRoleModel)
                 .where(AreaRoleModel.area_id == area_id)
-                .order_by(AreaRoleModel.name)
+                .order_by(AreaRoleModel.is_leader.desc(), AreaRoleModel.name)
             )
             return [_role(m) for m in result.scalars()]
 
@@ -327,18 +332,21 @@ class SqlAlchemyAreaRepository:
         async with self.database.session_factory() as session:
             return bool((await session.execute(select(exists().where(condition)))).scalar())
 
-    async def create_role(self, area_id: UUID, name: str) -> AreaRole:
+    async def create_role(self, area_id: UUID, name: str, is_leader: bool = False) -> AreaRole:
         """Persist a new role in an area.
 
         Args:
             area_id (UUID): Owning area.
             name (str): Role name.
+            is_leader (bool): Whether it is the area's leader role (one per area).
 
         Returns:
             AreaRole: The stored role.
         """
 
-        return _role(await self._add(AreaRoleModel(area_id=area_id, name=name)))
+        return _role(
+            await self._add(AreaRoleModel(area_id=area_id, name=name, is_leader=is_leader))
+        )
 
     async def save_role(self, role: AreaRole) -> AreaRole:
         """Persist changes to a role.

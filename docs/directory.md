@@ -118,7 +118,10 @@ Toda persona autenticada:
 | --- | --- | --- | --- |
 | GET | `/directory/employees` | `q`, `site_id`, `department`, `page`, `size` (1–100, 24) | `{items, total, page, size}` |
 | GET | `/directory/employees/me` | — | Perfil propio; 404 hasta la sincronización |
-| GET | `/directory/employees/birthdays` | `month` (1–12, el actual) | `{month, items}` por día, con `birth_day` |
+| GET | `/directory/employees/birthdays` | `month` (1–12); sin él, el año completo | `{month, items}` por mes y día, con `birth_month` y `birth_day`. `month` es `null` para el año |
+| GET / POST | `/directory/employees/me/onboarding` | POST: `{siteId?, mobilePhone?, landlinePhone?, showInDirectory?}` | `{pendientes: ("sede"\|"contacto")[], siteId, mobilePhone, landlinePhone, showInDirectory, sedes: [{id, nombre}]}`. Es el contrato de la intranet, en camelCase. 404 sin empleado |
+| GET / PUT | `/directory/employees/me/contact-schedule` | PUT: `{franjas: [{dia, inicio, fin}]}` | El horario propio. PUT lo reemplaza completo; 422 si una franja se cruza o termina antes de empezar |
+| GET | `/directory/employees/{id}/contact-schedule` | — | Horario de un empleado público |
 | GET | `/directory/employees/new-hires` | `limit` (1–24, 6) | `{items}` con `hire_date`, del más reciente |
 | GET | `/directory/employees/{id}` | — | Perfil; 404 si no es público |
 | GET | `/directory/employees/{id}/team` | `limit` (1–24, 3) | Mismo departamento |
@@ -128,6 +131,15 @@ Toda persona autenticada:
 `q` busca sin tildes por inicio de palabra, en cualquier orden, sobre nombre, cargo, cargo de
 Entra y correo: `per mar` encuentra a "María Pérez". La columna `search_text` guarda el texto
 normalizado, así que no hace falta la extensión `unaccent`.
+
+Completar perfil pide dos cosas: la sede (`sede`, si el empleado no tiene) y el celular
+(`contacto`, si no lo registró).
+- **Sede.** Solo acepta sedes activas.
+- **Teléfonos.** Se guardan como se escribieron. Admiten números, espacios, `+`, `-` y paréntesis,
+  y deben tener al menos 7 dígitos.
+- **Celular en el perfil.** El perfil público muestra `landline_phone` siempre. `mobile_phone` solo
+  aparece cuando la persona marcó `showInDirectory`.
+- **Horario de contacto.** Usa días de `LUNES` a `DOMINGO` y horas `HH:MM` (`directory_contact_schedules`).
 
 La foto se pide con `v = photo_version` del empleado. Con `v` se responde
 `Cache-Control: private, max-age=31536000, immutable`; sin `v`, una hora. El perfil público
@@ -176,4 +188,4 @@ Primera carga contra Entra (2026-11-04, base local):
 - `GET /auth/me/photo` sigue usando la foto que identity baja por OBO en el primer ingreso. El
   siguiente paso es que use la foto del directorio y retirar esa descarga.
 - Cargo y fecha de nacimiento desde el DWH en lugar de la importación.
-- Contacto, horarios y onboarding del perfil (fase 5 del plan de centralización).
+- Notificaciones (campana y push).

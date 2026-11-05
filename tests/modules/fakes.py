@@ -159,7 +159,8 @@ class FakeAreaRepository:
 
     async def list_roles(self, area_id):
         return sorted(
-            (r for r in self.roles.values() if r.area_id == area_id), key=lambda r: r.name
+            (r for r in self.roles.values() if r.area_id == area_id),
+            key=lambda r: (not r.is_leader, r.name),
         )
 
     async def get_role(self, area_id, role_id):
@@ -172,8 +173,8 @@ class FakeAreaRepository:
             for r in self.roles.values()
         )
 
-    async def create_role(self, area_id, name):
-        role = AreaRole(uuid.uuid4(), area_id, name, NOW, NOW)
+    async def create_role(self, area_id, name, is_leader=False):
+        role = AreaRole(uuid.uuid4(), area_id, name, NOW, NOW, is_leader=is_leader)
         self.roles[role.id] = role
         if self.default_grants is not None:
             self.permissions[role.id] = dict(self.default_grants)
