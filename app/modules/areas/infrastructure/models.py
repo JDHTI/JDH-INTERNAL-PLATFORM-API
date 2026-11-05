@@ -31,6 +31,7 @@ from app.modules.identity.infrastructure.models import AreaModel
 __all__ = [
     "AreaMemberModel",
     "AreaModel",
+    "AreaModuleModel",
     "AreaRoleModel",
     "AreaRolePermissionModel",
     "PermissionEventModel",
@@ -114,6 +115,37 @@ class AreaRolePermissionModel(Base):
     )
     module: Mapped[str] = mapped_column(String(60), nullable=False)
     action: Mapped[str] = mapped_column(String(10), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AreaModuleModel(Base):
+    """An administrator's choice for one module in one area.
+
+    No row means the catalog default (``catalog.MODULES[].area_slugs``).
+    """
+
+    __tablename__ = "area_modules"
+    __table_args__ = (UniqueConstraint("area_id", "module", name="uq_area_modules_area_module"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    area_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("areas.id", ondelete="CASCADE"), nullable=False
+    )
+    module: Mapped[str] = mapped_column(String(60), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

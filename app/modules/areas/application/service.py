@@ -14,19 +14,34 @@ Rules:
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 from uuid import UUID
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.areas.application.dto import (
     AreaGrantsView,
+    AreaModulesView,
     AreaView,
     CreateAreaCommand,
     MemberView,
+    ModuleStateView,
     RoleRef,
     UpdateAreaCommand,
     UserRef,
 )
-from app.modules.areas.domain.catalog import MANAGE, READ, WILDCARD, validate_grant
+from app.modules.areas.domain.catalog import (
+    MANAGE,
+    MODULES,
+    READ,
+    WILDCARD,
+    Module,
+    clean_module_config,
+    get_module,
+    is_enabled,
+    module_config,
+    modules_for,
+    validate_grant,
+)
 from app.modules.areas.domain.entities import (
     AccessProfile,
     Area,
@@ -171,6 +186,7 @@ class AreaService:
         grants = await self.repository.get_role_permissions(role.id for _, role in rows if role)
         return AccessProfile(
             role=principal.role,
+            overrides=await self.repository.list_module_overrides(),
             areas={
                 area.slug: AreaGrants(
                     area_id=area.id,
@@ -297,6 +313,128 @@ class AreaService:
             if profile.allows(slug, module, action)
         ]
 
+    async def module_configs(
+        self, principal: Principal, module: str, action: str = READ
+    ) -> dict[str, dict[str, Any]] | None:
+        """The settings of a module in each area where the principal may use it.
+
+        Args:
+            principal (Principal): The caller.
+            module (str): Module key.
+            action (str): ``read`` or ``manage``.
+
+        Returns:
+            dict[str, dict[str, Any]] | None: Area slug -> settings; ``None`` means
+                every area (platform administrators, and moderators to read).
+        """
+
+        if principal.is_platform_admin or (principal.is_moderator and action == READ):
+            return None
+        return (await self.profile(principal)).configs(module, action)
+
+    async def area_module_config(self, slug: str, module: str) -> dict[str, Any] | None:
+        """The settings of a module in one area, or ``None`` when it is off there.
+
+        Args:
+            slug (str): Area slug.
+            module (str): Module key.
+
+        Returns:
+            dict[str, Any] | None: The settings, or ``None``.
+        """
+
+        area = await self._get_area(slug)
+        overrides = await self.repository.list_module_overrides()
+        if not is_enabled(area.slug, module, overrides):
+            return None
+        return dict(module_config(area.slug, module, overrides))
+
+    # --- Modules per area ---
+
+    async def grantable_modules(self) -> list[tuple[Area, list[Module]]]:
+        """Every area with the modules switched on in it (what its roles can grant)."""
+
+        overrides = await self.repository.list_module_overrides()
+        return [
+            (area, modules_for(area.slug, overrides)) for area in await self.repository.list_areas()
+        ]
+
+    async def area_modules(self, principal: Principal) -> list[AreaModulesView]:
+        """Every area with the state of every module, for the administration panel.
+
+        Args:
+            principal (Principal): An administrator or a moderator.
+
+        Returns:
+            list[AreaModulesView]: Areas in navigation order.
+        """
+
+        self._require_admin_or_moderator(principal)
+        overrides = await self.repository.list_module_overrides()
+        return [
+            AreaModulesView(
+                area_id=area.id,
+                slug=area.slug,
+                name=area.name,
+                modules={
+                    module.key: ModuleStateView(
+                        is_enabled=is_enabled(area.slug, module.key, overrides),
+                        config=dict(module_config(area.slug, module.key, overrides)),
+                        is_default=module.key not in overrides.get(area.slug, {}),
+                    )
+                    for module in MODULES
+                },
+            )
+            for area in await self.repository.list_areas()
+        ]
+
+    async def set_area_module(
+        self,
+        slug: str,
+        module: str,
+        is_enabled_: bool,
+        config: dict[str, Any] | None,
+        principal: Principal,
+    ) -> ModuleStateView:
+        """Switch a module on or off in an area and store its settings.
+
+        Turning a module off keeps the role grants that mention it: they stop counting
+        and come back when it is switched on again.
+
+        Args:
+            slug (str): Area slug.
+            module (str): Module key of the catalog.
+            is_enabled_ (bool): On or off.
+            config (dict[str, Any] | None): Settings (``maestros``: which masters).
+            principal (Principal): A platform administrator.
+
+        Returns:
+            ModuleStateView: The new state.
+        """
+
+        self._require_admin(principal)
+        area = await self._get_area(slug)
+        if get_module(module) is None:
+            raise NotFoundError(f"El módulo {module} no existe")
+        cleaned = clean_module_config(module, config)
+        overrides = await self.repository.list_module_overrides()
+        before = {
+            "enabled": is_enabled(area.slug, module, overrides),
+            "config": dict(module_config(area.slug, module, overrides)),
+        }
+        await self.repository.set_area_module(area.id, module, is_enabled_, cleaned)
+        await self._event(
+            "module_toggled",
+            principal,
+            area_id=area.id,
+            detail={
+                "module": module,
+                "before": before,
+                "after": {"enabled": is_enabled_, "config": cleaned},
+            },
+        )
+        return ModuleStateView(is_enabled=is_enabled_, config=cleaned, is_default=False)
+
     # --- Role permissions and the log ---
 
     async def all_areas(self) -> list[Area]:
@@ -352,8 +490,9 @@ class AreaService:
                 "El rol líder tiene todos los permisos del área: no se pueden modificar"
             )
         cleaned: dict[str, str] = {}
+        overrides = await self.repository.list_module_overrides()
         for module, action in grants:
-            module, action = validate_grant(area.slug, module, action)
+            module, action = validate_grant(area.slug, module, action, overrides)
             if cleaned.get(module) != MANAGE:
                 cleaned[module] = action
         before = (await self.repository.get_role_permissions([role.id])).get(role.id, {})

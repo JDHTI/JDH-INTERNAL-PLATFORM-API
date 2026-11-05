@@ -200,8 +200,10 @@ class Settings(BaseSettings):
     SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER: str = "soporte_apoyos"
     # Most supports one upload may be linked to.
     SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS: int = 1000
-    # Rows per DWH page and per upsert when syncing the commercial masters.
+    # Rows per DWH page and per upsert when syncing the commercial masters and the catalog.
     MASTERS_SYNC_BATCH_SIZE: int = 2000
+    # Seconds per DWH page of the master catalog sync (the pool's command timeout is short).
+    MASTERS_SYNC_DWH_TIMEOUT_SECONDS: float = 120.0
     # Largest margin file a manager can upload to update the product margins.
     PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
 
@@ -278,8 +280,7 @@ class Settings(BaseSettings):
     PUSH_VAPID_PRIVATE_KEY: SecretStr = SecretStr("")
     PUSH_VAPID_SUBJECT: str = ""
 
-    # Areas where the project manager is switched on (comma-separated slugs).
-    PROJECTS_AREA_SLUGS: str = "ti"
+    # Where the project manager is on is set per area in the panel (area_modules).
     # A live connection without a ping for this long leaves the presence list.
     PROJECTS_PRESENCE_TTL_SECONDS: int = 45
 
@@ -524,7 +525,10 @@ class Settings(BaseSettings):
                 "documents_folder": self.SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER,
                 "max_attach_supports": self.SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS,
             },
-            "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
+            "masters_sync": {
+                "batch_size": self.MASTERS_SYNC_BATCH_SIZE,
+                "dwh_timeout": self.MASTERS_SYNC_DWH_TIMEOUT_SECONDS,
+            },
             "product_margins": {
                 "max_upload_bytes": self.PRODUCT_MARGINS_MAX_UPLOAD_MB * 1024 * 1024,
             },
@@ -556,7 +560,6 @@ class Settings(BaseSettings):
                 "retention_days": self.APP_MONITORING_RETENTION_DAYS,
             },
             "projects": {
-                "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
             },
             "notifications": {

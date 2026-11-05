@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.areas.domain.catalog import AreaModule
 from app.modules.areas.domain.entities import (
     Area,
     AreaMember,
@@ -55,6 +56,27 @@ class UserDirectory(Protocol):
 
 class AreaRepository(Protocol):
     """Define persistence operations for areas, roles and members."""
+
+    async def list_module_overrides(self) -> dict[str, dict[str, AreaModule]]:
+        """Every stored module choice (``area_modules``).
+
+        Returns:
+            dict[str, dict[str, AreaModule]]: Area slug -> module key -> choice.
+        """
+        ...
+
+    async def set_area_module(
+        self, area_id: UUID, module: str, is_enabled: bool, config: dict
+    ) -> None:
+        """Store whether a module is on in an area, and its settings.
+
+        Args:
+            area_id (UUID): The area.
+            module (str): Module key of the catalog.
+            is_enabled (bool): On or off.
+            config (dict): The module's settings in the area.
+        """
+        ...
 
     async def get_role_permissions(self, role_ids: Iterable[UUID]) -> dict[UUID, dict[str, str]]:
         """The grants of several area roles.

@@ -51,6 +51,9 @@ from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
+from app.modules.masters.application.sync import MasterCatalogSync
+from app.modules.masters.infrastructure.access import AreaMasterAccess
+from app.modules.masters.infrastructure.dwh_source import WarehouseCatalogSource
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
 from app.modules.notifications.application.service import (
     NotificationService as BellNotificationService,
@@ -302,13 +305,27 @@ class V1Container(containers.DeclarativeContainer):
         areas=area_service,
         people=user_directory,
         events=project_live_service,
-        enabled_area_slugs=config.projects.area_slugs,
     )
 
     site_repository = providers.Factory(SqlAlchemySiteRepository, database=database)
     site_service = providers.Factory(SiteService, repository=site_repository)
     master_repository = providers.Factory(SqlAlchemyMasterRepository, database=database)
-    master_service = providers.Factory(MasterService, repository=master_repository)
+    master_access = providers.Factory(AreaMasterAccess, areas=area_service)
+    master_service = providers.Factory(
+        MasterService, repository=master_repository, access=master_access
+    )
+    # Every declared master, copied from the DWH into master_records (jobs run it).
+    master_catalog_source = providers.Factory(
+        WarehouseCatalogSource,
+        connection=data_provider,
+        timeout=config.masters_sync.dwh_timeout,
+    )
+    master_catalog_sync = providers.Factory(
+        MasterCatalogSync,
+        source=master_catalog_source,
+        repository=master_repository,
+        batch_size=config.masters_sync.batch_size,
+    )
     pqrsf_repository = providers.Factory(SqlAlchemyPqrsfRepository, database=database)
     pqrsf_case_repository = providers.Factory(SqlAlchemyCaseRepository, database=database)
     pqrsf_calendar = providers.Singleton(

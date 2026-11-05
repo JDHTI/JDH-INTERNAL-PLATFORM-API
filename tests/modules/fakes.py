@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.core.errors import ConflictError, NotFoundError
+from app.modules.areas.domain.catalog import AreaModule
 from app.modules.areas.domain.entities import Area, AreaMember, AreaRole, PermissionEvent
 from app.modules.documents.domain.entities import Document, DocumentFolder, TagColor
 from app.modules.documents.domain.ports import SearchFilters
@@ -79,6 +80,18 @@ class FakeAreaRepository:
         # module tests keep "a member manages the area". The real repository starts them
         # empty; permission tests replace the grants explicitly (or set this to ``None``).
         self.default_grants: dict[str, str] | None = {"*": "manage"}
+        # area_id -> module -> AreaModule (``area_modules``).
+        self.modules: dict[uuid.UUID, dict] = {}
+
+    async def list_module_overrides(self):
+        return {
+            self.areas[area_id].slug: dict(choices)
+            for area_id, choices in self.modules.items()
+            if area_id in self.areas
+        }
+
+    async def set_area_module(self, area_id, module, is_enabled, config):
+        self.modules.setdefault(area_id, {})[module] = AreaModule(is_enabled, dict(config))
 
     async def get_role_permissions(self, role_ids):
         return {role_id: dict(self.permissions.get(role_id, {})) for role_id in role_ids}
