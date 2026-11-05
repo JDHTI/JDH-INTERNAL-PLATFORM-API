@@ -1,4 +1,4 @@
-"""Turn a warehouse row into a ``master_records`` row, following the master's fields."""
+"""Turn a warehouse row into a master record, following the master's fields."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import math
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid5
 
-from app.modules.masters.domain.entities import MasterSpec
+from app.modules.masters.domain.entities import MasterRecord, MasterSpec
 from app.modules.masters.domain.ports import Row
 
 _SMALLINT = range(-32768, 32768)
@@ -74,26 +74,30 @@ def json_safe(value: Any) -> Any:
     return str(value)
 
 
-def record_row(spec: MasterSpec, row: Row) -> dict[str, Any] | None:
+def to_record(spec: MasterSpec, row: Row, synced_at: datetime | None) -> MasterRecord | None:
     """The record for one warehouse row; ``None`` when it has no key.
+
+    The id is derived from the master and the key, so a record keeps it between reads.
 
     Args:
         spec (MasterSpec): How the master's columns map to the record.
-        row (Row): One row of the source relation.
+        row (Row): One row of the source view.
+        synced_at (datetime | None): When the DWH published the row.
 
     Returns:
-        dict[str, Any] | None: ``source_key``, ``company_id``, ``code``, ``name``,
-            ``is_active`` and ``attributes``.
+        MasterRecord | None: The record.
     """
 
     key = text(row.get(spec.key))
     if key is None:
         return None
-    return {
-        "source_key": key,
-        "company_id": company_id(row.get(spec.company)) if spec.company else None,
-        "code": text(row.get(spec.code)) if spec.code else None,
-        "name": text(row.get(spec.name)) if spec.name else None,
-        "is_active": active_flag(row.get(spec.active)) if spec.active else None,
-        "attributes": {column: json_safe(row.get(column)) for column in spec.attribute_columns},
-    }
+    return MasterRecord(
+        id=uuid5(spec.master_id, key),
+        company_id=company_id(row.get(spec.company)) if spec.company else None,
+        code=text(row.get(spec.code)) if spec.code else None,
+        name=text(row.get(spec.name)) if spec.name else None,
+        is_active=active_flag(row.get(spec.active)) if spec.active else None,
+        source_key=key,
+        attributes={column: json_safe(row.get(column)) for column in spec.attribute_columns},
+        synced_at=synced_at,
+    )

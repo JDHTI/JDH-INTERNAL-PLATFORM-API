@@ -57,25 +57,25 @@ def test_a_moderator_reads_the_jobs_but_cannot_run_one(client, harness) -> None:
     asyncio.run(harness.service.poll_dwh())
 
     body = client.get(BASE).json()
-    runs = client.get(f"{BASE}/runs", params={"job": "masters-sync"}).json()
+    runs = client.get(f"{BASE}/runs", params={"job": "masters-warm-identity"}).json()
 
     assert body["enabled"] is True and body["fallback_at"] == "10:00"
     assert body["dwh"]["error"] is None and body["dwh"]["last_poll_at"]
-    identity = next(item for item in body["items"] if item["key"] == "masters-sync")
+    identity = next(item for item in body["items"] if item["key"] == "masters-warm-identity")
     assert identity["sequence"] == "identidad"
     assert identity["last_run"]["status"] == "queued"
     assert identity["last_run"]["trigger"] == "dwh"
     assert identity["next_expected_at"] is None
     assert identity["sequence_state"]["ultima_estado"] == "success"
-    assert [run["job"] for run in runs] == ["masters-sync"]
-    assert client.post(f"{BASE}/masters-sync/run").status_code == 403
+    assert [run["job"] for run in runs] == ["masters-warm-identity"]
+    assert client.post(f"{BASE}/masters-warm-identity/run").status_code == 403
 
 
 def test_an_admin_runs_a_job_once(client, harness) -> None:
     harness.caller = user("admin")
 
-    first = client.post(f"{BASE}/masters-sync-products/run")
-    again = client.post(f"{BASE}/masters-sync-products/run")
+    first = client.post(f"{BASE}/masters-warm-products/run")
+    again = client.post(f"{BASE}/masters-warm-products/run")
 
     assert first.status_code == 202 and "run_id" in first.json()
     assert again.status_code == 409

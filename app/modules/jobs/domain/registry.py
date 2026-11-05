@@ -63,24 +63,11 @@ class JobDefinition:
     fallback_days: frozenset[int]
 
 
-IDENTITY_MASTERS = (
-    "terceros",
-    "clientes",
-    "proveedores",
-    "vendedores",
-    "supervisores",
-    "equipos",
-    "centros-operacion",
-    "centros-costo",
-    "unidades-negocio",
-    "regionales",
-)
-
 JOBS: tuple[JobDefinition, ...] = (
     JobDefinition(
-        "masters-sync",
-        "Maestros de identidad",
-        "Clientes, proveedores, vendedores y demás maestros del catálogo",
+        "masters-warm-identity",
+        "Caché de maestros de identidad",
+        "Lee del DWH clientes, proveedores, vendedores y demás maestros de identidad",
         "identidad",
         EVERY_DAY,
     ),
@@ -92,9 +79,9 @@ JOBS: tuple[JobDefinition, ...] = (
         EVERY_DAY,
     ),
     JobDefinition(
-        "masters-sync-products",
-        "Maestro de productos",
-        "El maestro de productos del catálogo",
+        "masters-warm-products",
+        "Caché del maestro de productos",
+        "Lee del DWH el maestro de productos",
         "reporte_ventas",
         MONDAY_TO_SATURDAY,
     ),

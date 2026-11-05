@@ -1,4 +1,4 @@
-"""The work behind each job key: the master syncs of the masters modules."""
+"""The work behind each job key: the master caches and the commercial syncs."""
 
 from __future__ import annotations
 
@@ -7,17 +7,12 @@ from typing import Any
 
 from app.modules.commercial_masters.application.sync import MasterSyncService
 from app.modules.jobs.domain.ports import JobHandler
-from app.modules.jobs.domain.registry import IDENTITY_MASTERS
-from app.modules.masters.application.sync import MasterCatalogSync
+from app.modules.masters.application.service import MasterService
 
 
-def _catalog(build: Callable[[], MasterCatalogSync], only: Sequence[str]) -> JobHandler:
+def _warm(build: Callable[[], MasterService], sequence: str) -> JobHandler:
     async def handler() -> Mapping[str, Any]:
-        reports = await build().run(only=only, apply=True)
-        return {
-            "masters": [report.as_detail() for report in reports],
-            "errors": [f"{r.slug}: {r.error}" for r in reports if r.error],
-        }
+        return await build().warm(sequence)
 
     return handler
 
@@ -43,13 +38,13 @@ def _commercial(build: Callable[[], MasterSyncService], only: Sequence[str]) -> 
 
 
 def build_job_handlers(
-    catalog_sync: Callable[[], MasterCatalogSync],
+    masters: Callable[[], MasterService],
     commercial_sync: Callable[[], MasterSyncService],
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
     Args:
-        catalog_sync (Callable[[], MasterCatalogSync]): Builds the catalog sync.
+        masters (Callable[[], MasterService]): Builds the master catalog service.
         commercial_sync (Callable[[], MasterSyncService]): Builds the commercial sync.
 
     Returns:
@@ -57,8 +52,8 @@ def build_job_handlers(
     """
 
     return {
-        "masters-sync": _catalog(catalog_sync, IDENTITY_MASTERS),
-        "masters-sync-products": _catalog(catalog_sync, ("productos",)),
+        "masters-warm-identity": _warm(masters, "identidad"),
+        "masters-warm-products": _warm(masters, "reporte_ventas"),
         "commercial-sync-identity": _commercial(commercial_sync, ("suppliers", "customers")),
         "commercial-sync-products": _commercial(
             commercial_sync, ("commercial_suppliers", "products")

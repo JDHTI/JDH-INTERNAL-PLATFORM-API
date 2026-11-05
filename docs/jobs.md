@@ -1,7 +1,7 @@
 # Tareas en segundo plano (jobs)
 
-Las sincronizaciones de maestros corren solas cuando el DWH publica datos frescos, sin horarios fijos
-en la plataforma. Módulo: `app/modules/jobs`.
+Las sincronizaciones de los maestros comerciales y el calentamiento de la caché de maestros corren
+solos cuando el DWH publica datos frescos, sin horarios fijos en la plataforma. Módulo: `app/modules/jobs`.
 
 ## Horario del DWH
 
@@ -24,9 +24,9 @@ se recupera sola. Para eso está el respaldo diario.
 
 | Tarea | Secuencia | Qué hace |
 | --- | --- | --- |
-| `masters-sync` | `identidad` | Catálogo de maestros de identidad (`docs/masters.md`) |
+| `masters-warm-identity` | `identidad` | Lee del DWH los maestros de identidad para la caché (`docs/masters.md`) |
 | `commercial-sync-identity` | `identidad` | Maestros comerciales: proveedores y clientes |
-| `masters-sync-products` | `reporte_ventas` | Maestro de productos del catálogo |
+| `masters-warm-products` | `reporte_ventas` | Lee del DWH el maestro de productos para la caché |
 | `commercial-sync-products` | `reporte_ventas` | Maestros comerciales: proveedores comerciales y productos |
 | `commercial-sync-supply` | `abastecimiento` | Costo unitario promedio y el puente producto-proveedor |
 
@@ -54,7 +54,7 @@ El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada 
   abastecimiento): los costos necesitan los productos.
 - **Espera al DWH.** Si la secuencia está recargando (dbt borra y recrea las vistas), la corrida espera
   hasta `JOBS_WAIT_FOR_DWH_SECONDS` (30 min) y luego falla.
-- **Resultado.** `success`, `partial` (algún maestro falló, por ejemplo `terceros` por permiso) o
+- **Resultado.** `success`, `partial` (algún maestro falló, por ejemplo una vista que no respondió) o
   `failed`, con el detalle por maestro en `detail`.
 - **DWH caído.** El sondeo lo registra en `dwh.error` de `GET /jobs`, conserva las marcas y reintenta
   en el siguiente ciclo.
@@ -77,14 +77,14 @@ El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada 
 | `JOBS_FALLBACK_AT` | `10:00` | Hora local del respaldo |
 | `JOBS_TIMEZONE` | `America/Bogota` | Zona de esa hora |
 | `JOBS_WAIT_FOR_DWH_SECONDS` | `1800` | Espera máxima a una secuencia en curso |
-| `MASTERS_SYNC_DWH_TIMEOUT_SECONDS` | `120` | Tiempo por página del sync de maestros |
 
 El usuario del DWH (`DWH_USER`) necesita leer `monitoreo`. En producción ya lo lee, porque el
 monitoreo del DWH usa el mismo esquema.
 
 ## Despliegue
 
-1. Migración `0047_jobs`.
+1. Migraciones `0047_jobs` y `0048_masters_live`.
 2. `JOBS_ENABLED=true` en `api.env` y reiniciar la API.
-3. El primer sondeo encola los cinco trabajos una vez; tardan unos 7 minutos en total.
+3. El primer sondeo encola los cinco trabajos una vez; los comerciales tardan unos minutos y el
+   calentamiento de maestros, segundos.
 4. Revisar `GET /jobs`.

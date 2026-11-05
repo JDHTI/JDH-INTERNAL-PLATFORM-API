@@ -3,31 +3,33 @@
 Administrators and moderators read every master. Anyone else reads the masters
 switched on in the areas where their role grants ``maestros``; ``?area=`` narrows the
 list to one area's masters. Personal data fields go only to whoever manages the module.
+Records come live from the DWH; ``last_synced_at`` is when the DWH published them and
+``is_stale`` marks a cached answer served while the DWH reloads or does not answer.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
-from app.modules.masters.application.service import MAX_PAGE_SIZE, MasterService
+from app.modules.masters.application.service import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    MasterService,
+)
 from app.modules.masters.domain.entities import MasterField, MasterRecord, MasterSummary
-from app.modules.masters.infrastructure.export import master_workbook
 
 router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.master_service])
 _reader = Depends(require_permission("maestros"))
-
-_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class MasterSummaryResponse(BaseModel):
@@ -40,8 +42,12 @@ class MasterSummaryResponse(BaseModel):
     source_object: str | None
     grain: str | None
     natural_key: list[str]
-    record_count: int
+    # ``None`` when the DWH could not be counted.
+    record_count: int | None
+    # When the DWH published the data (its sequence's last run).
     last_synced_at: datetime | None
+    dwh_sequence: str | None
+    is_stale: bool
 
 
 class MasterFieldResponse(BaseModel):
@@ -82,6 +88,8 @@ class MasterRecordPageResponse(BaseModel):
     total: int
     offset: int
     limit: int
+    last_synced_at: datetime | None
+    is_stale: bool
 
 
 def _summary(summary: MasterSummary) -> dict[str, Any]:
@@ -137,7 +145,7 @@ async def list_master_records(
     q: str | None = Query(default=None, max_length=100),
     is_active: bool | None = None,
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     principal: Principal = _reader,
     service: MasterService = _service,
 ) -> MasterRecordPageResponse:
@@ -149,32 +157,8 @@ async def list_master_records(
         total=page.total,
         offset=page.offset,
         limit=page.limit,
-    )
-
-
-@router.get(
-    "/{slug}/records.xlsx",
-    summary="Download a master",
-    response_class=Response,
-    responses={200: {"content": {_XLSX: {}}}},
-)
-@inject
-async def download_master(
-    slug: str,
-    is_active: bool | None = None,
-    principal: Principal = _reader,
-    service: MasterService = _service,
-) -> Response:
-    """Descarga el maestro en Excel, con los campos que puedes ver."""
-
-    detail, records = await service.export(slug, is_active, principal)
-    # ASCII fallback plus the master's display name (RFC 5987) for the browser.
-    name = quote(f"{detail.summary.name}.xlsx", safe="")
-    disposition = f"attachment; filename=\"{detail.summary.slug}.xlsx\"; filename*=UTF-8''{name}"
-    return Response(
-        content=master_workbook(detail, records),
-        media_type=_XLSX,
-        headers={"Content-Disposition": disposition},
+        last_synced_at=page.last_synced_at,
+        is_stale=page.is_stale,
     )
 
 

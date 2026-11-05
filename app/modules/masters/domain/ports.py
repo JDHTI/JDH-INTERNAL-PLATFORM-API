@@ -1,73 +1,82 @@
-"""Contracts of the master catalog: persistence, the warehouse and who sees what."""
+"""Contracts of the master catalog: declarations, the warehouse, the cache and access."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
-from datetime import datetime
+from collections.abc import Hashable, Mapping, Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.principal import Principal
-from app.modules.masters.domain.entities import (
-    MasterDetail,
-    MasterRecordPage,
-    MasterSpec,
-    MasterSummary,
-)
+from app.modules.masters.domain.entities import Freshness, MasterDetail, MasterSpec
 
 Row = Mapping[str, Any]
 
 
+class WarehouseUnavailable(Exception):
+    """The DWH could not answer (down, timed out, or a view being re-created)."""
+
+
 class MasterRepository(Protocol):
-    """Read masters, their structure and their records."""
+    """Read the masters declared in the platform (``master_definitions``)."""
 
-    async def list_masters(self) -> list[MasterSummary]:
-        """Return active masters ordered by sort order and name."""
+    async def list_definitions(self) -> list[MasterDetail]:
+        """Active masters with their fields, in sort order (counts unset)."""
         ...
 
-    async def get_master(self, slug: str) -> MasterDetail | None:
-        """Return one master with its fields, or None."""
+    async def get_definition(self, slug: str) -> MasterDetail | None:
+        """One active master with its fields, or ``None``."""
         ...
 
-    async def list_records(
+
+class MasterWarehouse(Protocol):
+    """Read a master straight from its ``consumo`` view.
+
+    Every method raises :class:`WarehouseUnavailable` when the DWH does not answer.
+    """
+
+    async def count(self, spec: MasterSpec, query: str | None, is_active: bool | None) -> int:
+        """Rows matching the filters."""
+        ...
+
+    async def page(
         self,
-        slug: str,
+        spec: MasterSpec,
         query: str | None,
         is_active: bool | None,
         offset: int,
         limit: int,
-    ) -> MasterRecordPage | None:
-        """Return a page of records, or None when the master does not exist."""
+    ) -> list[Row]:
+        """Rows matching the filters, ordered by code, name and key."""
+        ...
+
+    async def freshness(
+        self, sequences: Sequence[str], refresh: bool = False
+    ) -> dict[str, Freshness]:
+        """The state of these sequences; empty when monitoring cannot be read.
+
+        Args:
+            sequences (Sequence[str]): Sequence names.
+            refresh (bool): Skip the short memo and ask the DWH now.
+        """
         ...
 
 
-class MasterSyncRepository(Protocol):
-    """Write the records the warehouse sync reads."""
+class CachedValue(Protocol):
+    """A value read from the DWH and the sequence run it came from."""
 
-    async def list_definitions(self) -> list[MasterDetail]:
-        """Active masters with their fields, in sort order."""
+    version: UUID | None
+    value: Any
+
+
+class MasterCache(Protocol):
+    """What the platform last read from the DWH, kept per request."""
+
+    def get(self, key: Hashable) -> CachedValue | None:
+        """The last value stored under the key, whatever its run."""
         ...
 
-    async def upsert_records(
-        self, master_id: UUID, rows: Sequence[Row], synced_at: datetime
-    ) -> int:
-        """Insert or update records by ``(master_id, source_key)``; return how many."""
-        ...
-
-    async def deactivate_unseen(self, master_id: UUID, synced_at: datetime) -> int:
-        """Mark inactive the active records this sync did not see; return how many."""
-        ...
-
-    async def touch_definition(self, master_id: UUID, synced_at: datetime) -> None:
-        """Record when the master was last synced."""
-        ...
-
-
-class MasterSource(Protocol):
-    """Read a master from the data warehouse."""
-
-    def records(self, spec: MasterSpec, batch_size: int) -> AsyncIterator[list[Row]]:
-        """Pages of the master's source relation, ordered by its key."""
+    def put(self, key: Hashable, version: UUID | None, value: Any) -> None:
+        """Store a value read while the sequence's last run was ``version``."""
         ...
 
 

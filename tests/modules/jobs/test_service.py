@@ -11,9 +11,9 @@ from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.jobs.domain.registry import RunStatus, Trigger
 from tests.modules.jobs.conftest import NOW, READY, sequence
 
-IDENTITY_JOBS = {"masters-sync", "commercial-sync-identity"}
+IDENTITY_JOBS = {"masters-warm-identity", "commercial-sync-identity"}
 ALL_JOBS = IDENTITY_JOBS | {
-    "masters-sync-products",
+    "masters-warm-products",
     "commercial-sync-products",
     "commercial-sync-supply",
 }
@@ -29,9 +29,9 @@ async def test_the_first_poll_dispatches_every_mapped_job_once(make_service, run
     queued = await service.poll_dwh()
 
     assert [runs.items[run_id].job for run_id in queued] == [
-        "masters-sync",
+        "masters-warm-identity",
         "commercial-sync-identity",
-        "masters-sync-products",
+        "masters-warm-products",
         "commercial-sync-products",
         "commercial-sync-supply",
     ]
@@ -79,11 +79,11 @@ async def test_reloading_or_failed_sequences_are_saved_but_not_dispatched(
 async def test_an_open_run_is_skipped_and_the_watermark_still_advances(
     make_service, runs, watermarks
 ):
-    await runs.queue("masters-sync", Trigger.MANUAL, NOW)
+    await runs.queue("masters-warm-identity", Trigger.MANUAL, NOW)
 
     await make_service().poll_dwh()
 
-    assert len(runs.by_job("masters-sync")) == 1
+    assert len(runs.by_job("masters-warm-identity")) == 1
     assert watermarks.states["identidad"].dispatched_datos_listos == READY
 
 
@@ -100,36 +100,36 @@ async def test_start_up_runs_what_is_older_than_the_fresh_data(make_service, run
     for run_id in list(runs.items):
         await runs.mark_running(run_id, READY + timedelta(minutes=5))
         await runs.finish(run_id, RunStatus.SUCCESS, {}, NOW)
-    stale = runs.by_job("masters-sync")[0]
+    stale = runs.by_job("masters-warm-identity")[0]
     runs.items[stale.id] = replace(stale, started_at=READY - timedelta(hours=1))
 
     queued = await make_service().catch_up()
 
-    assert [runs.items[i].job for i in queued] == ["masters-sync"]
+    assert [runs.items[i].job for i in queued] == ["masters-warm-identity"]
     assert runs.items[queued[0]].trigger is Trigger.STARTUP
 
 
 async def test_the_fallback_runs_today_what_the_dwh_did_not(make_service, runs):
     # Saturday in Bogotá: abastecimiento does not run, so its job is not due.
     saturday = datetime(2026, 11, 7, 15, tzinfo=UTC)
-    await runs.queue("masters-sync", Trigger.DWH, saturday - timedelta(hours=2))
-    done = runs.by_job("masters-sync")[0]
+    await runs.queue("masters-warm-identity", Trigger.DWH, saturday - timedelta(hours=2))
+    done = runs.by_job("masters-warm-identity")[0]
     await runs.mark_running(done.id, saturday - timedelta(hours=2))
     await runs.finish(done.id, RunStatus.SUCCESS, {}, saturday)
 
     queued = await make_service(clock=lambda: saturday).fallback()
 
     jobs = {runs.items[i].job for i in queued}
-    assert jobs == {"commercial-sync-identity", "masters-sync-products", "commercial-sync-products"}
+    assert jobs == {"commercial-sync-identity", "masters-warm-products", "commercial-sync-products"}
     assert all(runs.items[i].trigger is Trigger.SCHEDULED for i in queued)
 
 
 async def test_execute_records_success_partial_and_failure(make_service, runs, recorder):
     service = make_service()
-    ok = await runs.queue("masters-sync", Trigger.MANUAL, NOW)
-    partial = await runs.queue("masters-sync-products", Trigger.MANUAL, NOW)
+    ok = await runs.queue("masters-warm-identity", Trigger.MANUAL, NOW)
+    partial = await runs.queue("masters-warm-products", Trigger.MANUAL, NOW)
     broken = await runs.queue("commercial-sync-supply", Trigger.MANUAL, NOW)
-    recorder.results["masters-sync-products"] = {"errors": ["productos: permiso denegado"]}
+    recorder.results["masters-warm-products"] = {"errors": ["productos: permiso denegado"]}
     recorder.results["commercial-sync-supply"] = RuntimeError("se cayó el DWH")
 
     assert (await service.execute(ok.id)).status is RunStatus.SUCCESS
@@ -138,7 +138,11 @@ async def test_execute_records_success_partial_and_failure(make_service, runs, r
 
     assert failed.status is RunStatus.FAILED and failed.error == "se cayó el DWH"
     assert runs.items[ok.id].started_at == NOW and runs.items[ok.id].detail == {"ok": True}
-    assert recorder.calls == ["masters-sync", "masters-sync-products", "commercial-sync-supply"]
+    assert recorder.calls == [
+        "masters-warm-identity",
+        "masters-warm-products",
+        "commercial-sync-supply",
+    ]
 
 
 async def test_execute_waits_while_the_sequence_reloads_then_gives_up(
@@ -146,7 +150,7 @@ async def test_execute_waits_while_the_sequence_reloads_then_gives_up(
 ):
     source.rows["identidad"] = sequence("identidad", en_curso=True)
     sleeps: list[float] = []
-    run = await runs.queue("masters-sync", Trigger.MANUAL, NOW)
+    run = await runs.queue("masters-warm-identity", Trigger.MANUAL, NOW)
 
     result = await make_service(sleeps=sleeps).execute(run.id)
 
@@ -157,15 +161,15 @@ async def test_execute_waits_while_the_sequence_reloads_then_gives_up(
 async def test_a_person_queues_a_run(make_service, runs, requested):
     service = make_service()
 
-    run = await service.request_run("masters-sync", "ana@jdh.com.co")
+    run = await service.request_run("masters-warm-identity", "ana@jdh.com.co")
 
     assert requested == [run.id] and run.triggered_by == "ana@jdh.com.co"
     with pytest.raises(ConflictError, match="en cola o en curso"):
-        await service.request_run("masters-sync", "ana@jdh.com.co")
+        await service.request_run("masters-warm-identity", "ana@jdh.com.co")
     with pytest.raises(NotFoundError):
         await service.request_run("nada", None)
     with pytest.raises(ConflictError, match="JOBS_ENABLED"):
-        await make_service(enabled=False).request_run("masters-sync-products", None)
+        await make_service(enabled=False).request_run("masters-warm-products", None)
 
 
 async def test_recover_overview_and_history(make_service, runs):
@@ -174,10 +178,10 @@ async def test_recover_overview_and_history(make_service, runs):
 
     assert await service.recover_stale_runs() == 5
     settings, status, items = await service.overview()
-    history = await service.history("masters-sync", 10)
+    history = await service.history("masters-warm-identity", 10)
 
     assert settings.enabled and status.last_poll_at == NOW
-    identity = next(item for item in items if item.key == "masters-sync")
+    identity = next(item for item in items if item.key == "masters-warm-identity")
     assert identity.last_run.status is RunStatus.FAILED and identity.last_success_at is None
     assert identity.sequence_state.ultima_datos_listos == READY
     assert len(history) == 1

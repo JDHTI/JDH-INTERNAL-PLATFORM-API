@@ -200,10 +200,12 @@ class Settings(BaseSettings):
     SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER: str = "soporte_apoyos"
     # Most supports one upload may be linked to.
     SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS: int = 1000
-    # Rows per DWH page and per upsert when syncing the commercial masters and the catalog.
+    # Rows per DWH page and per upsert when syncing the commercial masters.
     MASTERS_SYNC_BATCH_SIZE: int = 2000
-    # Seconds per DWH page of the master catalog sync (the pool's command timeout is short).
-    MASTERS_SYNC_DWH_TIMEOUT_SECONDS: float = 120.0
+    # The master catalog reads the DWH live (/masters): seconds for a count or a page, and
+    # master queries running at once on the DWH.
+    MASTERS_DWH_QUERY_TIMEOUT_SECONDS: float = 15.0
+    MASTERS_DWH_MAX_CONCURRENT: int = 3
     # Largest margin file a manager can upload to update the product margins.
     PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
 
@@ -559,7 +561,10 @@ class Settings(BaseSettings):
             },
             "masters_sync": {
                 "batch_size": self.MASTERS_SYNC_BATCH_SIZE,
-                "dwh_timeout": self.MASTERS_SYNC_DWH_TIMEOUT_SECONDS,
+            },
+            "masters": {
+                "dwh_query_timeout": self.MASTERS_DWH_QUERY_TIMEOUT_SECONDS,
+                "dwh_max_concurrent": self.MASTERS_DWH_MAX_CONCURRENT,
             },
             "product_margins": {
                 "max_upload_bytes": self.PRODUCT_MARGINS_MAX_UPLOAD_MB * 1024 * 1024,

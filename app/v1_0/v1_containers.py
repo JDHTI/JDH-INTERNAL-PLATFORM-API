@@ -59,9 +59,9 @@ from app.modules.jobs.infrastructure.repository import (
 from app.modules.jobs.infrastructure.worker import RunRequest
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
-from app.modules.masters.application.sync import MasterCatalogSync
 from app.modules.masters.infrastructure.access import AreaMasterAccess
-from app.modules.masters.infrastructure.dwh_source import WarehouseCatalogSource
+from app.modules.masters.infrastructure.cache import MasterReadCache
+from app.modules.masters.infrastructure.dwh_source import WarehouseMasterReader
 from app.modules.masters.infrastructure.repository import SqlAlchemyMasterRepository
 from app.modules.notifications.application.service import (
     NotificationService as BellNotificationService,
@@ -319,20 +319,21 @@ class V1Container(containers.DeclarativeContainer):
     site_service = providers.Factory(SiteService, repository=site_repository)
     master_repository = providers.Factory(SqlAlchemyMasterRepository, database=database)
     master_access = providers.Factory(AreaMasterAccess, areas=area_service)
-    master_service = providers.Factory(
-        MasterService, repository=master_repository, access=master_access
-    )
-    # Every declared master, copied from the DWH into master_records (jobs run it).
-    master_catalog_source = providers.Factory(
-        WarehouseCatalogSource,
+    # Masters are read live from the DWH; one reader caps the queries and one cache keeps
+    # what was read by sequence run, for the whole API.
+    master_warehouse = providers.Singleton(
+        WarehouseMasterReader,
         connection=data_provider,
-        timeout=config.masters_sync.dwh_timeout,
+        query_timeout=config.masters.dwh_query_timeout,
+        max_concurrent=config.masters.dwh_max_concurrent,
     )
-    master_catalog_sync = providers.Factory(
-        MasterCatalogSync,
-        source=master_catalog_source,
+    master_cache = providers.Singleton(MasterReadCache)
+    master_service = providers.Factory(
+        MasterService,
         repository=master_repository,
-        batch_size=config.masters_sync.batch_size,
+        warehouse=master_warehouse,
+        cache=master_cache,
+        access=master_access,
     )
     pqrsf_repository = providers.Factory(SqlAlchemyPqrsfRepository, database=database)
     pqrsf_case_repository = providers.Factory(SqlAlchemyCaseRepository, database=database)
@@ -676,7 +677,7 @@ class V1Container(containers.DeclarativeContainer):
     job_sequence_source = providers.Factory(WarehouseSequenceSource, connection=data_provider)
     job_handlers = providers.Singleton(
         build_job_handlers,
-        catalog_sync=master_catalog_sync.provider,
+        masters=master_service.provider,
         commercial_sync=master_sync_service.provider,
     )
     # The worker and the API share the last poll result and the queue of runs.
