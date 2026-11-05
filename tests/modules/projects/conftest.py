@@ -257,7 +257,6 @@ def projects(project_repo, areas, directory, live) -> ProjectService:
         areas=areas,
         people=directory,
         events=live,
-        enabled_area_slugs=["ti"],
     )
 
 

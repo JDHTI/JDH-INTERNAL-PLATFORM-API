@@ -49,6 +49,9 @@ módulos. La vista general (`/directory/*` público, `/users/me`, `/auth/*`, `GE
 
 ### Catálogo (`app/modules/areas/domain/catalog.py`)
 
+La columna "Área" es dónde está activo cada módulo **por defecto**. Un administrador lo activa o
+desactiva en cualquier área desde el panel (ver "Módulos por área").
+
 | Área | Módulo | `read` | `manage` |
 | --- | --- | --- | --- |
 | todas | `documentos` | carpetas, búsqueda, descarga | crear, editar, borrar, colores de etiqueta |
@@ -58,18 +61,39 @@ módulos. La vista general (`/directory/*` público, `/users/me`, `/auth/*`, `GE
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar y devolver |
-| bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` se concede en el área de `ORDER_VALIDATION_MANAGER_AREA_SLUG`, hoy `comercial` |
+| bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
 | bi | `casos-especiales` | casos especiales | crear, editar |
-| bi | `maestros` | maestros comerciales (proveedores, clientes, productos) | editar producto o proveedor, cargar márgenes |
+| bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 
 `/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador` y `validador-pedidos`, porque
 esas pantallas buscan proveedores y productos.
 
-**No son módulos.** La administración de la plataforma (`/users*`, `/roles`, `/sites`, `/masters`,
-`/directory/admin/*`, `/pqrsf/requests*`, escrituras de áreas, roles, miembros y permisos) solo
-depende del rol global. Un rol de área nunca debe conceder administración.
+**No son módulos.** La administración de la plataforma (`/users*`, `/roles`, `/sites`,
+`/directory/admin/*`, `/pqrsf/requests*`, `/jobs`, escrituras de áreas, roles, miembros, permisos y
+módulos) solo depende del rol global. Un rol de área nunca debe conceder administración.
+
+## Módulos por área (`area_modules`)
+
+- **Activar o desactivar.** `PUT /areas/{slug}/modules/{module}` con `{enabled, config}` guarda la
+  decisión de un administrador. Sin fila, vale el catálogo, así que la migración `0046` no cambia nada.
+- **Volver al valor por defecto.** `DELETE /areas/{slug}/modules/{module}` borra la decisión y el
+  módulo sigue de nuevo al catálogo (`is_default=true`). Es idempotente.
+- **Qué cambia al desactivar.** El módulo sale de `my_modules` de todos (el menú) y del catálogo de
+  permisos del área. Los gates lo cierran a los miembros, también al líder; owner, admin y moderador
+  siguen pasando. Los permisos de los roles que lo mencionan **se conservan** y vuelven a valer al
+  reactivarlo.
+- **Qué cambia al activar.** El área puede conceder el módulo a sus roles (antes daba 422). El
+  líder y el responsable lo tienen de una vez.
+- **Configuración.** Solo `maestros` la lleva: `{"masters": ["clientes", "proveedores"]}` limita el
+  área a esos maestros; sin lista, todos. Los demás módulos no aceptan configuración (422).
+- **Bitácora.** Cada cambio queda como `module_toggled` con antes y después; el restablecimiento lleva
+  además `reset: true`.
+- **Proyectos.** Ya no usa `PROJECTS_AREA_SLUGS`: se habilita por área como cualquier módulo.
+- **Significado de `manage`.** Donde un módulo tiene dueño (`QUOTATIONS_*`, `PQRSF_MANAGER_AREA_SLUG`,
+  `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG`, `ti` para monitoreo y datawarehouse), el setting sigue
+  decidiendo qué área gestiona. La activación decide dónde se ve y se lee.
 
 ## Cómo se aplica
 
@@ -96,7 +120,10 @@ depende del rol global. Un rol de área nunca debe conceder administración.
 
 | Método y ruta | Quién | Uso |
 | --- | --- | --- |
-| `GET /permissions/catalog` | autenticado | Módulos que puede conceder cada área, las acciones y el comodín |
+| `GET /permissions/catalog` | autenticado | Módulos activos que puede conceder cada área, las acciones y el comodín |
+| `GET /permissions/modules` | admin o moderador | Todos los módulos y, por área, `{enabled, config, is_default}` |
+| `PUT /areas/{slug}/modules/{module}` | admin | `{enabled, config}`. 404 si el módulo no existe; 422 si la configuración no aplica |
+| `DELETE /areas/{slug}/modules/{module}` | admin | Vuelve al valor del catálogo y responde ese estado. 404 si el módulo no existe |
 | `GET /permissions/me` | autenticado | Rol global y, por área, `{módulo: acción}`. La UI arma el menú con esto |
 | `GET /areas/{slug}/roles/{role_id}/permissions` | admin o moderador | Permisos de un rol |
 | `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si el módulo no existe en el área; 409 en el rol líder |
@@ -108,7 +135,7 @@ depende del rol global. Un rol de área nunca debe conceder administración.
 
 La bitácora (`permission_events`) registra estas acciones: `area_created`, `role_created`,
 `role_renamed`, `role_deleted`, `role_permissions_set`, `member_added`, `member_role_changed`, `member_removed`,
-`global_role_changed`, `user_deactivated` y `user_activated`. Cada registro guarda el actor, el área,
+`module_toggled`, `global_role_changed`, `user_deactivated` y `user_activated`. Cada registro guarda el actor, el área,
 la persona y el detalle de antes y después.
 
 ## Despliegue
@@ -119,6 +146,7 @@ la persona y el detalle de antes y después.
 - **Migración `0044_area_leader_role`.** Marca el rol líder de cada área: el que tiene "líder" o
   "director" en el nombre; si no hay, "Acceso completo", renombrado "Líder de área"; si tampoco hay,
   uno nuevo. Le deja exactamente `*` manage. Los demás roles conservan sus permisos.
+- **Migración `0046_area_modules`.** Crea `area_modules` vacía: todo sigue como el catálogo.
 - **Lecturas cerradas.** Quien no es miembro de ningún área pierde las lecturas que antes estaban
   abiertas: lotes del validador de pedidos, apoyos y adjuntos, maestros comerciales, contactos de
   proveedores y sugerencias de PQRSF.

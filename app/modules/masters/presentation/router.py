@@ -1,4 +1,11 @@
-"""Administrator endpoints for the shared master catalog."""
+"""Master catalog endpoints (``/masters``).
+
+Administrators and moderators read every master. Anyone else reads the masters
+switched on in the areas where their role grants ``maestros``; ``?area=`` narrows the
+list to one area's masters. Personal data fields go only to whoever manages the module.
+Records come live from the DWH; ``last_synced_at`` is when the DWH published them and
+``is_stale`` marks a cached answer served while the DWH reloads or does not answer.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +18,18 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
-from app.modules.identity.infrastructure.models import UserModel
-from app.modules.identity.presentation.router import require_admin
-from app.modules.masters.application.service import MAX_PAGE_SIZE, MasterService
+from app.modules.areas.presentation.dependencies import require_permission
+from app.modules.identity.domain.principal import Principal
+from app.modules.masters.application.service import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    MasterService,
+)
 from app.modules.masters.domain.entities import MasterField, MasterRecord, MasterSummary
 
 router = APIRouter()
 _service = Depends(Provide[ApplicationContainer.v1_container.master_service])
+_reader = Depends(require_permission("maestros"))
 
 
 class MasterSummaryResponse(BaseModel):
@@ -30,8 +42,12 @@ class MasterSummaryResponse(BaseModel):
     source_object: str | None
     grain: str | None
     natural_key: list[str]
-    record_count: int
+    # ``None`` when the DWH could not be counted.
+    record_count: int | None
+    # When the DWH published the data (its sequence's last run).
     last_synced_at: datetime | None
+    dwh_sequence: str | None
+    is_stale: bool
 
 
 class MasterFieldResponse(BaseModel):
@@ -72,6 +88,8 @@ class MasterRecordPageResponse(BaseModel):
     total: int
     offset: int
     limit: int
+    last_synced_at: datetime | None
+    is_stale: bool
 
 
 def _summary(summary: MasterSummary) -> dict[str, Any]:
@@ -89,14 +107,15 @@ def _record(record: MasterRecord) -> MasterRecordResponse:
 @router.get("", response_model=list[MasterSummaryResponse], summary="List masters")
 @inject
 async def list_masters(
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    area: str | None = Query(default=None, max_length=50, description="Only this area's masters"),
+    principal: Principal = _reader,
     service: MasterService = _service,
 ) -> list[MasterSummaryResponse]:
-    """List active masters with their record counts."""
+    """Maestros que puedes consultar, con su número de registros y última sincronización."""
 
     return [
         MasterSummaryResponse.model_validate(summary, from_attributes=True)
-        for summary in await service.list_masters()
+        for summary in await service.list_masters(principal, area)
     ]
 
 
@@ -104,12 +123,12 @@ async def list_masters(
 @inject
 async def get_master(
     slug: str,
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    principal: Principal = _reader,
     service: MasterService = _service,
 ) -> MasterDetailResponse:
-    """Return one master with its declared fields."""
+    """Un maestro con sus campos declarados."""
 
-    detail = await service.get_master(slug)
+    detail = await service.get_master(slug, principal)
     return MasterDetailResponse(
         **_summary(detail.summary), fields=[_field(field) for field in detail.fields]
     )
@@ -126,18 +145,20 @@ async def list_master_records(
     q: str | None = Query(default=None, max_length=100),
     is_active: bool | None = None,
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
-    _: UserModel = Depends(require_admin),  # noqa: B008
+    limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    principal: Principal = _reader,
     service: MasterService = _service,
 ) -> MasterRecordPageResponse:
-    """Search a master's records by code or name."""
+    """Busca registros de un maestro por código o nombre."""
 
-    page = await service.list_records(slug, q, is_active, offset, limit)
+    page = await service.list_records(slug, q, is_active, offset, limit, principal)
     return MasterRecordPageResponse(
         items=[_record(record) for record in page.items],
         total=page.total,
         offset=page.offset,
         limit=page.limit,
+        last_synced_at=page.last_synced_at,
+        is_stale=page.is_stale,
     )
 
 

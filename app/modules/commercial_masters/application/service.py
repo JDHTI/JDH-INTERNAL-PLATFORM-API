@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -86,6 +87,15 @@ _MARGIN_ATTRIBUTE = {
     "margin_market": "market",
     "margin_salsamentarias": "salsamentarias",
 }
+
+
+@dataclass(frozen=True)
+class LiquorTax:
+    """Liquor consumption tax per unit of a product (``IMPTOLIC``)."""
+
+    national: Decimal
+    coast: Decimal
+    group: str
 
 
 class MarginReader(Protocol):
@@ -325,6 +335,79 @@ class CommercialMasterService:
         if product is None:
             raise NotFoundError("Producto no encontrado")
         return product
+
+    async def set_product_margins(
+        self,
+        principal: Principal,
+        sku: str,
+        margins: Mapping[str, Decimal],
+        notes: str | None,
+        liquor_tax: LiquorTax | None,
+    ) -> Product:
+        """Set every margin of one product by hand, without a file.
+
+        All five margins are required. The liquor tax is stored only for the products that
+        pay it: a product that already pays it must keep the three values (Nacional, Costa
+        and the tax group); one that does not may start paying it.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            sku (str): JDH reference.
+            margins (Mapping[str, Decimal]): One fraction per margin column (0.18 = 18 %).
+            notes (str | None): Notes of the margin; ``None`` or blank clears them.
+            liquor_tax (LiquorTax | None): The liquor tax, or ``None`` when it does not apply.
+
+        Returns:
+            Product: The updated product.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            InvalidInputError: If a margin is missing or out of range, or a product that pays
+                the liquor tax comes without it.
+            NotFoundError: If the product does not exist.
+        """
+
+        await self._require_manager(principal, "editar márgenes")
+        missing = [MARGIN_LABELS[name] for name in MARGIN_FIELDS if margins.get(name) is None]
+        if missing:
+            raise InvalidInputError(f"Faltan márgenes: {', '.join(missing)}")
+        unknown = sorted(set(margins) - set(MARGIN_FIELDS))
+        if unknown:
+            raise InvalidInputError(f"Márgenes desconocidos: {', '.join(unknown)}")
+        values: dict[str, Any] = {}
+        for name in MARGIN_FIELDS:
+            value = margins[name]
+            if not Decimal(0) < value < _ONE:
+                raise InvalidInputError(
+                    f"{MARGIN_LABELS[name]} debe estar entre 0 y 1 (0.18 = 18 %)"
+                )
+            # Half up, as PostgreSQL rounds a numeric column.
+            values[name] = value.quantize(_SIX_PLACES, ROUND_HALF_UP)
+        values["margin_notes"] = _term(notes)
+        product = await self.get_product(sku)
+        pays_liquor_tax = any(getattr(product, name) is not None for name in LIQUOR_TAX_FIELDS)
+        if liquor_tax is None:
+            if pays_liquor_tax:
+                raise InvalidInputError(
+                    "Este producto paga impuesto licor: envía Nacional, Costa y el grupo impositivo"
+                )
+        else:
+            group = _term(liquor_tax.group)
+            if group is None:
+                raise InvalidInputError("Falta el grupo impositivo del impuesto licor")
+            if liquor_tax.national < 0 or liquor_tax.coast < 0:
+                raise InvalidInputError("El impuesto licor no puede ser negativo")
+            values.update(
+                liquor_tax=liquor_tax.national.quantize(_FOUR_PLACES, ROUND_HALF_UP),
+                liquor_tax_coast=liquor_tax.coast.quantize(_FOUR_PLACES, ROUND_HALF_UP),
+                liquor_tax_group=group,
+            )
+        updated = await self.repository.update_product(
+            product.sku, values, principal.email, datetime.now(UTC)
+        )
+        if updated is None:
+            raise NotFoundError("Producto no encontrado")
+        return updated
 
     async def update_margins(
         self,

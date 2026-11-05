@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.domain.catalog import ACTIONS, modules_for
+from app.modules.areas.domain.catalog import ACTIONS, MODULES
 from app.modules.areas.domain.entities import RolePermission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -121,7 +121,6 @@ async def catalog(
 ) -> dict[str, Any]:
     """Módulos que un rol de cada área puede conceder, y las dos acciones."""
 
-    areas = await service.all_areas()
     return {
         "actions": list(ACTIONS),
         "wildcard": "*",
@@ -129,7 +128,69 @@ async def catalog(
             {
                 "slug": area.slug,
                 "name": area.name,
-                "modules": [{"key": m.key, "label": m.label} for m in modules_for(area.slug)],
+                "modules": [{"key": m.key, "label": m.label} for m in modules],
+            }
+            for area, modules in await service.grantable_modules()
+        ],
+    }
+
+
+class ModuleInfoResponse(BaseModel):
+    key: str
+    label: str
+    description: str
+    configurable: bool
+
+
+class ModuleStateResponse(BaseModel):
+    enabled: bool
+    # ``maestros``: ``{"masters": [slug, ...]}``; empty means every master.
+    config: dict[str, Any]
+    # No stored choice: the catalog default applies.
+    is_default: bool
+
+
+class AreaModulesResponse(BaseModel):
+    area_id: UUID
+    slug: str
+    name: str
+    modules: dict[str, ModuleStateResponse]
+
+
+class ModulesResponse(BaseModel):
+    """Every module of the catalog and, per area, whether it is on."""
+
+    modules: list[ModuleInfoResponse]
+    areas: list[AreaModulesResponse]
+
+
+@router.get("/modules", response_model=ModulesResponse, summary="Modules switched on per area")
+@inject
+async def area_modules(
+    principal: Principal = _principal, service: AreaService = _service
+) -> dict[str, Any]:
+    """Módulos de la plataforma y, por área, si están activos (administradores y moderadores)."""
+
+    areas = await service.area_modules(principal)
+    return {
+        "modules": [
+            {
+                "key": m.key,
+                "label": m.label,
+                "description": m.description,
+                "configurable": m.configurable,
+            }
+            for m in MODULES
+        ],
+        "areas": [
+            {
+                "area_id": area.area_id,
+                "slug": area.slug,
+                "name": area.name,
+                "modules": {
+                    key: {"enabled": s.is_enabled, "config": s.config, "is_default": s.is_default}
+                    for key, s in area.modules.items()
+                },
             }
             for area in areas
         ],

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -16,9 +16,10 @@ from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.commercial_masters.application.service import (
     MAX_PAGE_SIZE,
     CommercialMasterService,
+    LiquorTax,
 )
 from app.modules.commercial_masters.domain.entities import Product
-from app.modules.commercial_masters.domain.margins import MarginReport
+from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, MarginReport
 from app.modules.commercial_masters.infrastructure.margins_file import template_workbook
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -180,6 +181,37 @@ class ProductUpdate(BaseModel):
     liquor_tax: Decimal | None = Field(default=None, ge=0)
     liquor_tax_coast: Decimal | None = Field(default=None, ge=0)
     liquor_tax_group: str | None = Field(default=None, max_length=20)
+
+
+_Margin = Annotated[Decimal, Field(gt=0, lt=1)]
+
+
+class LiquorTaxRequest(BaseModel):
+    """Liquor consumption tax per unit, in pesos (``IMPTOLIC``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    national: Decimal = Field(ge=0, description="Impuesto licor Nacional")
+    coast: Decimal = Field(ge=0, description="Impuesto licor Costa")
+    group: str = Field(min_length=1, max_length=20, description="Grupo impositivo (0503, 0509)")
+
+
+class ProductMarginsRequest(BaseModel):
+    """Every margin of a product, set by hand. All fields are required.
+
+    Margins are fractions (0.18 = 18 %). ``notes`` may be ``null``. ``liquor_tax`` is
+    ``null`` for a product that does not pay it; a product that already pays it must send it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    margin_list: _Margin
+    margin_wholesale: _Margin
+    margin_mass_food: _Margin
+    margin_market: _Margin
+    margin_salsamentarias: _Margin
+    notes: str | None = Field(max_length=1000)
+    liquor_tax: LiquorTaxRequest | None
 
 
 class MarginChangeResponse(BaseModel):
@@ -527,6 +559,34 @@ async def update_product(
 
     changes: dict[str, Any] = {name: getattr(body, name) for name in body.model_fields_set}
     return _product(await service.update_product(principal, sku, changes))
+
+
+@router.put(
+    "/products/{sku}/margins",
+    response_model=ProductResponse,
+    summary="Set the margins of one product",
+)
+@inject
+async def set_product_margins(
+    sku: str,
+    body: ProductMarginsRequest,
+    principal: Principal = _principal,
+    service: CommercialMasterService = _service,
+) -> ProductResponse:
+    """Fija los cinco márgenes de un producto, sus notas y su impuesto licor, sin archivo.
+
+    Solo gestores. 422 si falta un margen o si el producto paga impuesto licor y no llega.
+    """
+
+    liquor = body.liquor_tax
+    product = await service.set_product_margins(
+        principal,
+        sku,
+        {name: getattr(body, name) for name in MARGIN_FIELDS},
+        body.notes,
+        LiquorTax(liquor.national, liquor.coast, liquor.group) if liquor else None,
+    )
+    return _product(product)
 
 
 __all__ = ["router"]

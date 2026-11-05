@@ -81,6 +81,60 @@ def test_a_plain_user_is_kept_out_of_the_workspace_reads(client, world) -> None:
     assert client.get(f"{BASE}/order-validations/permissions").json() == {"can_manage": False}
 
 
+def test_bi_and_comercial_roles_manage_the_order_validator(client, world) -> None:
+    permissions = f"{BASE}/order-validations/permissions"
+
+    world.caller = world.member("bi", "analista@jdh.com.co", [("validador-pedidos", "manage")])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 200
+    assert client.get(permissions).json() == {"can_manage": True}
+
+    world.caller = world.member(
+        "comercial", "vendedor@jdh.com.co", [("validador-pedidos", "manage")]
+    )
+    assert client.get(permissions).json() == {"can_manage": True}
+
+    world.caller = world.member("bi", "lector@jdh.com.co", [("validador-pedidos", "read")])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 200
+    assert client.get(permissions).json() == {"can_manage": False}
+
+    world.caller = world.member("bi", "sin-permisos@jdh.com.co", [])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 403
+
+
+def test_modules_are_switched_per_area(client, world) -> None:
+    body = client.get(f"{BASE}/permissions/modules").json()
+    keys = [module["key"] for module in body["modules"]]
+    bi = next(area for area in body["areas"] if area["slug"] == "bi")
+    assert "maestros" in keys and bi["modules"]["maestros"]["enabled"] is True
+    assert bi["modules"]["pqrsf"] == {"enabled": False, "config": {}, "is_default": True}
+
+    response = client.put(
+        f"{BASE}/areas/comercial/modules/maestros",
+        json={"enabled": True, "config": {"masters": ["clientes"]}},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "module": "maestros",
+        "enabled": True,
+        "config": {"masters": ["clientes"]},
+        "is_default": False,
+    }
+    catalog = client.get(f"{BASE}/permissions/catalog").json()
+    comercial = next(area for area in catalog["areas"] if area["slug"] == "comercial")
+    assert "maestros" in [m["key"] for m in comercial["modules"]]
+
+    assert client.put(f"{BASE}/areas/bi/modules/nada", json={"enabled": True}).status_code == 404
+    bad = client.put(
+        f"{BASE}/areas/bi/modules/documentos", json={"enabled": True, "config": {"x": 1}}
+    )
+    assert bad.status_code == 422
+
+    world.caller = world.member("bi", "lector@jdh.com.co", [("maestros", "read")])
+    assert client.get(f"{BASE}/permissions/modules").status_code == 403
+    denied = client.put(f"{BASE}/areas/bi/modules/maestros", json={"enabled": False})
+    assert denied.status_code == 403
+
+
 def test_the_gate_follows_the_grants(world) -> None:
     app = FastAPI()
     app.state.container = SimpleNamespace(

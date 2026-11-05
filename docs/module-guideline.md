@@ -86,7 +86,9 @@ nuevo código debe importar desde `app.app_container`.
 ## Permisos
 
 Un módulo del espacio de trabajo se registra en el catálogo
-(`app/modules/areas/domain/catalog.py`) con las áreas donde existe. Su router exige
+(`app/modules/areas/domain/catalog.py`) con las áreas donde está activo por defecto; después
+TI lo activa o desactiva en cualquier área desde el panel (`area_modules`), sin desplegar. Su
+router exige
 lectura con `require_permission("<módulo>")`
 (`app/modules/areas/presentation/dependencies.py`), a nivel de router o por endpoint si
 expone un `GET /permissions` que debe responder `false`. Las escrituras las decide el

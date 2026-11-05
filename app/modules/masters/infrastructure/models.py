@@ -39,6 +39,8 @@ class MasterDefinitionModel(Base):
     natural_key: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # DWH sequence (``monitoreo.secuencias``) that refreshes the source view (0048).
+    dwh_sequence: Mapped[str | None] = mapped_column(String(60))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -69,12 +71,18 @@ class MasterFieldModel(Base):
 
 
 class MasterRecordModel(Base):
-    """A normalized record of a master."""
+    """A normalized record of a master.
+
+    Unused since the masters are read live from the DWH (0048); the table stays until
+    the live reads are validated in production.
+    """
 
     __tablename__ = "master_records"
     __table_args__ = (
         UniqueConstraint("master_id", "source_key", name="uq_master_records_master_source_key"),
         Index("ix_master_records_master_company_code", "master_id", "company_id", "code"),
+        # The sync deactivates what a run did not see (migration 0046).
+        Index("ix_master_records_master_synced_at", "master_id", "synced_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)

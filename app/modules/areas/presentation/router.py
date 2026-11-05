@@ -9,6 +9,7 @@ or manage in each module of the area.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -280,6 +281,69 @@ async def set_role_permissions(
     return {
         "role": {"id": role.id, "name": role.name, "is_leader": role.is_leader},
         "grants": [{"module": g.module, "action": g.action} for g in grants],
+    }
+
+
+# --- Modules switched on in the area ---
+
+
+class AreaModuleRequest(BaseModel):
+    enabled: bool
+    # ``maestros``: ``{"masters": ["clientes", ...]}``; omitted or ``null`` is every master.
+    config: dict[str, Any] | None = None
+
+
+class AreaModuleResponse(BaseModel):
+    module: str
+    enabled: bool
+    config: dict[str, Any]
+    is_default: bool
+
+
+@router.put(
+    "/{slug}/modules/{module}",
+    response_model=AreaModuleResponse,
+    summary="Switch a module on or off in the area",
+)
+@inject
+async def set_area_module(
+    slug: str,
+    module: str,
+    payload: AreaModuleRequest,
+    principal: Principal = _principal,
+    service: AreaService = _service,
+) -> dict:
+    """Activa o desactiva un módulo en el área (administradores); 404 si el módulo no existe."""
+
+    state = await service.set_area_module(slug, module, payload.enabled, payload.config, principal)
+    return {
+        "module": module,
+        "enabled": state.is_enabled,
+        "config": state.config,
+        "is_default": state.is_default,
+    }
+
+
+@router.delete(
+    "/{slug}/modules/{module}",
+    response_model=AreaModuleResponse,
+    summary="Return a module to the catalog default in the area",
+)
+@inject
+async def reset_area_module(
+    slug: str,
+    module: str,
+    principal: Principal = _principal,
+    service: AreaService = _service,
+) -> dict:
+    """Devuelve el módulo a su valor por defecto en el área (administradores); idempotente."""
+
+    state = await service.reset_area_module(slug, module, principal)
+    return {
+        "module": module,
+        "enabled": state.is_enabled,
+        "config": state.config,
+        "is_default": state.is_default,
     }
 
 

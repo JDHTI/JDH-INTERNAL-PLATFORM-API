@@ -202,11 +202,16 @@ class Settings(BaseSettings):
     SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS: int = 1000
     # Rows per DWH page and per upsert when syncing the commercial masters.
     MASTERS_SYNC_BATCH_SIZE: int = 2000
+    # The master catalog reads the DWH live (/masters): seconds for a count or a page, and
+    # master queries running at once on the DWH.
+    MASTERS_DWH_QUERY_TIMEOUT_SECONDS: float = 15.0
+    MASTERS_DWH_MAX_CONCURRENT: int = 3
     # Largest margin file a manager can upload to update the product margins.
     PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
 
-    # Members of this area (plus platform admins) upload retained orders files.
-    ORDER_VALIDATION_MANAGER_AREA_SLUG: str = "comercial"
+    # Area whose roles grant `validador-pedidos: manage` (upload, approve, re-run). Empty means
+    # every area the catalog lists for the module (BI and Comercial); a slug narrows it to one.
+    ORDER_VALIDATION_MANAGER_AREA_SLUG: str = ""
     ORDER_VALIDATION_MAX_UPLOAD_MB: int = 10
     ORDER_VALIDATION_MAX_LINES: int = 10_000
     # Order-level release rules, in margin points / percent: a line more than
@@ -259,6 +264,16 @@ class Settings(BaseSettings):
     DWH_MONITORING_SYNC_ENABLED: bool = False
     DWH_MONITORING_SYNC_INTERVAL_SECONDS: int = 600
 
+    # Background jobs (master syncs) started when the DWH sequences publish fresh data:
+    # the loop reads monitoreo.secuencias every JOBS_DWH_POLL_SECONDS; at JOBS_FALLBACK_AT
+    # (local time) a job the DWH did not trigger that day runs anyway.
+    JOBS_ENABLED: bool = False
+    JOBS_DWH_POLL_SECONDS: int = 60
+    JOBS_FALLBACK_AT: str = "10:00"
+    JOBS_TIMEZONE: str = "America/Bogota"
+    # Longest wait for a reloading sequence before a job gives up.
+    JOBS_WAIT_FOR_DWH_SECONDS: int = 1800
+
     # Application monitoring (TI → Monitoreo → Aplicativos): a background loop requests the
     # health endpoint and the UI of every registered platform; checks older than the
     # retention are purged.
@@ -277,8 +292,7 @@ class Settings(BaseSettings):
     PUSH_VAPID_PRIVATE_KEY: SecretStr = SecretStr("")
     PUSH_VAPID_SUBJECT: str = ""
 
-    # Areas where the project manager is switched on (comma-separated slugs).
-    PROJECTS_AREA_SLUGS: str = "ti"
+    # Where the project manager is on is set per area in the panel (area_modules).
     # A live connection without a ping for this long leaves the presence list.
     PROJECTS_PRESENCE_TTL_SECONDS: int = 45
 
@@ -372,6 +386,28 @@ class Settings(BaseSettings):
         """Local time of the daily directory sync."""
 
         return time.fromisoformat(self.DIRECTORY_SYNC_AT.strip())
+
+    @property
+    def jobs_fallback_at(self) -> time:
+        """Local time of the daily fallback of the jobs."""
+
+        return time.fromisoformat(self.JOBS_FALLBACK_AT.strip())
+
+    @model_validator(mode="after")
+    def validate_jobs_settings(self) -> "Settings":
+        """Reject a bad fallback time, timezone or interval for the jobs."""
+
+        try:
+            _ = self.jobs_fallback_at
+        except ValueError as exc:
+            raise ValueError("JOBS_FALLBACK_AT must be HH:MM") from exc
+        try:
+            ZoneInfo(self.JOBS_TIMEZONE)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("JOBS_TIMEZONE must be an IANA timezone") from exc
+        if self.JOBS_DWH_POLL_SECONDS < 10:
+            raise ValueError("JOBS_DWH_POLL_SECONDS must be at least 10")
+        return self
 
     @property
     def directory_graph_configured(self) -> bool:
@@ -523,7 +559,13 @@ class Settings(BaseSettings):
                 "documents_folder": self.SUPPLIER_SUPPORTS_DOCUMENTS_FOLDER,
                 "max_attach_supports": self.SUPPLIER_SUPPORTS_MAX_ATTACH_SUPPORTS,
             },
-            "masters_sync": {"batch_size": self.MASTERS_SYNC_BATCH_SIZE},
+            "masters_sync": {
+                "batch_size": self.MASTERS_SYNC_BATCH_SIZE,
+            },
+            "masters": {
+                "dwh_query_timeout": self.MASTERS_DWH_QUERY_TIMEOUT_SECONDS,
+                "dwh_max_concurrent": self.MASTERS_DWH_MAX_CONCURRENT,
+            },
             "product_margins": {
                 "max_upload_bytes": self.PRODUCT_MARGINS_MAX_UPLOAD_MB * 1024 * 1024,
             },
@@ -549,13 +591,19 @@ class Settings(BaseSettings):
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
                 "sync_interval": self.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
             },
+            "jobs": {
+                "enabled": self.JOBS_ENABLED,
+                "poll_seconds": self.JOBS_DWH_POLL_SECONDS,
+                "fallback_at": self.jobs_fallback_at,
+                "timezone": self.JOBS_TIMEZONE,
+                "wait_for_dwh": self.JOBS_WAIT_FOR_DWH_SECONDS,
+            },
             "app_monitoring": {
                 "enabled": self.APP_MONITORING_ENABLED,
                 "interval": self.APP_MONITORING_INTERVAL_SECONDS,
                 "retention_days": self.APP_MONITORING_RETENTION_DAYS,
             },
             "projects": {
-                "area_slugs": _split_lower(self.PROJECTS_AREA_SLUGS),
                 "presence_ttl": self.PROJECTS_PRESENCE_TTL_SECONDS,
             },
             "notifications": {

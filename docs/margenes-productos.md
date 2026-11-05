@@ -96,8 +96,43 @@ Lectura: cualquier usuario autenticado. Escritura: administradores y miembros de
 | `GET /products` | Lista de productos con sus márgenes. Filtros: `q`, `brand`, `category`, `commercial_supplier_code`, `is_active`, `has_margin` (con o sin algún margen). Los activos van primero |
 | `GET /products/{sku}` | Un producto con sus márgenes e impuesto |
 | `PATCH /products/{sku}` | Cambia solo los campos enviados: descripción, marca, categoría, empaque…, los cinco márgenes (fracción entre 0 y 1; `null` borra), `margin_notes` e impuesto al licor. El estado y el proveedor no se editan. Un campo desconocido es 422 |
+| `PUT /products/{sku}/margins` | Actualización manual de un producto, sin archivo. Ver abajo |
 | `POST /products/margins` | Actualizador (`multipart/form-data`, campo `file`; `apply=true` para escribir; `sheet`) |
 | `GET /products/margins/template` | Plantilla `.xlsx`; `with_data=false` la trae vacía |
+
+### Actualización manual de un producto (`PUT /products/{sku}/margins`)
+
+Para corregir uno o dos productos sin armar un archivo. Todos los campos son obligatorios:
+
+```json
+{
+  "margin_list": 0.18,
+  "margin_wholesale": 0.12,
+  "margin_mass_food": 0.15,
+  "margin_market": 0.20,
+  "margin_salsamentarias": 0.10,
+  "notes": "Revisado con compras",
+  "liquor_tax": {"national": 1200, "coast": 1350, "group": "0509"}
+}
+```
+
+- **Márgenes.** Los cinco, como fracción entre 0 y 1 (`0.18` = 18 %). Ninguno puede ir vacío ni en 0;
+  para dejar un producto sin margen está el `PATCH` o el archivo.
+- **`notes`.** Se envía siempre; `null` o vacío las borra.
+- **`liquor_tax`.** Se envía siempre. `null` si el producto no paga impuesto al licor. Si el producto ya lo
+  paga (tiene Nacional, Costa o grupo guardados) es obligatorio, con los tres valores: Nacional y Costa
+  en pesos por unidad y el grupo impositivo (`0503` vino, `0509` licores). Un producto que no lo pagaba
+  puede empezar a pagarlo.
+- **Respuesta.** El producto actualizado, con `margin_source = manual` y quién y cuándo lo cambió.
+- **Errores.** 403 si no gestionas; 404 si el SKU no existe; 422 si falta un campo, un margen está fuera
+  de rango o el producto paga impuesto al licor y no llega.
+
+### El sync del DWH no toca los márgenes
+
+Los márgenes, sus notas y el impuesto al licor solo cambian a mano o por archivo. El sync de productos
+(job `commercial-sync-products`) escribe únicamente las columnas del catálogo de `consumo.productos`,
+y un producto que sale del DWH queda inactivo, no se borra. Una prueba
+(`test_the_product_sync_never_carries_margins_or_liquor_taxes`) lo vigila.
 
 Los maestros generales (`/suppliers`, `/legal-suppliers`, `/customers`, `/products`) listan **primero los
 activos y al final los inactivos**, y se pueden filtrar con `is_active=true|false`. Para un cliente o

@@ -66,7 +66,7 @@ class UnrestrictedAreaAccess:
 
 
 class PermissionPolicy:
-    """Who may manage (and read) one module of one area.
+    """Who may manage (and read) one module, in one area or in any area of the catalog.
 
     ``manage`` comes from the area role grants (or being the area responsible); owner
     and admin always pass and a moderator only reads. ``is_manager`` keeps the name
@@ -80,8 +80,9 @@ class PermissionPolicy:
 
         Args:
             areas (AreaService): Area access use cases.
-            area_slug (str | None): Area whose roles grant the module; blank leaves it
-                to platform administrators only.
+            area_slug (str | None): Area whose roles grant the module; blank means any
+                area where the catalog has the module (the order validator lives in BI
+                and Comercial, and each one grants it by role).
             module (str): Module key of the catalog.
             action (str): What ``is_manager`` asks for (``manage`` by default).
         """
@@ -94,8 +95,6 @@ class PermissionPolicy:
     async def _allows(self, principal: Principal, action: str) -> bool:
         if principal.is_platform_admin:
             return True
-        if self.area_slug is None:
-            return principal.is_moderator and action == READ
         return await self.areas.allows(principal, self.area_slug, self.module, action)
 
     async def is_manager(self, principal: Principal) -> bool:
