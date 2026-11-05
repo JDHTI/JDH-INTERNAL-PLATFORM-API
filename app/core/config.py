@@ -205,8 +205,9 @@ class Settings(BaseSettings):
     # Largest margin file a manager can upload to update the product margins.
     PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
 
-    # Members of this area (plus platform admins) upload retained orders files.
-    ORDER_VALIDATION_MANAGER_AREA_SLUG: str = "comercial"
+    # Area whose roles grant `validador-pedidos: manage` (upload, approve, re-run). Empty means
+    # every area the catalog lists for the module (BI and Comercial); a slug narrows it to one.
+    ORDER_VALIDATION_MANAGER_AREA_SLUG: str = ""
     ORDER_VALIDATION_MAX_UPLOAD_MB: int = 10
     ORDER_VALIDATION_MAX_LINES: int = 10_000
     # Order-level release rules, in margin points / percent: a line more than

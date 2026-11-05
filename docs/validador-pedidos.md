@@ -257,8 +257,11 @@ apoyo, margen objetivo y una explicación en español, y el apoyo que decidió
 
 ## API (`/api/v1/order-validations`)
 
-Lectura: cualquier usuario autenticado. Subir, revalidar, aprobar y borrar: administradores y miembros del
-área `ORDER_VALIDATION_MANAGER_AREA_SLUG` (por defecto `comercial`).
+Lectura: quien tenga `validador-pedidos: read` en BI o Comercial (además de admin, owner y
+moderador). Subir, revalidar, aprobar y borrar: quien tenga `validador-pedidos: manage` en
+cualquiera de esas dos áreas, el líder o responsable del área, y los administradores.
+`ORDER_VALIDATION_MANAGER_AREA_SLUG` vacío (por defecto) acepta las dos áreas; con un slug, solo esa.
+`GET /order-validations/permissions` responde `can_manage` con la misma regla.
 
 | Método y ruta | Uso |
 | --- | --- |

@@ -182,6 +182,34 @@ async def test_role_grants_decide_what_members_do(areas, area_repo, admin, login
     assert last.detail["after"] == {"pqrsf": "manage"}
 
 
+async def test_a_policy_without_area_follows_every_area_of_the_module(areas, admin, login) -> None:
+    for slug, name in (("bi", "BI"), ("comercial", "Comercial"), ("calidad", "Calidad")):
+        await areas.create_area(CreateAreaCommand(slug=slug, name=name), admin)
+    anywhere = PermissionPolicy(areas, None, "validador-pedidos")
+    only_comercial = PermissionPolicy(areas, "comercial", "validador-pedidos")
+
+    async def member(slug: str, email: str, grants: list[tuple[str, str]]):
+        role = await areas.create_role(slug, f"Rol {email}", admin)
+        await areas.set_role_permissions(slug, role.id, grants, admin)
+        person = await login(email)
+        await areas.add_member(slug, person.email, role.id, admin)
+        return person
+
+    analyst = await member("bi", "analista@jdh.com.co", [("validador-pedidos", "manage")])
+    seller = await member("comercial", "vendedor@jdh.com.co", [("validador-pedidos", "manage")])
+    reader = await member("bi", "lector@jdh.com.co", [("validador-pedidos", "read")])
+    quality = await member("calidad", "calidad@jdh.com.co", [("*", "manage")])
+
+    assert await anywhere.is_manager(analyst) and await anywhere.is_manager(seller)
+    assert await only_comercial.is_manager(analyst) is False
+    assert await anywhere.can_read(reader) and not await anywhere.is_manager(reader)
+    # The whole of an area without the module grants nothing on it.
+    assert await anywhere.can_read(quality) is False
+    moderator = principal("auditor@jdh.com.co", role="moderator")
+    assert await anywhere.can_read(moderator) and not await anywhere.is_manager(moderator)
+    assert await anywhere.is_manager(admin)
+
+
 async def test_only_admins_edit_grants_and_moderators_read_them(areas, admin, login) -> None:
     await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
     role = (await areas.list_roles("bi", admin))[0]
