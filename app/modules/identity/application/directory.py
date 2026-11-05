@@ -63,7 +63,7 @@ class UserDirectory:
             DirectoryUser: The existing user.
 
         Raises:
-            NotFoundError: When nobody with that email has signed in yet.
+            NotFoundError: When nobody has that email in the directory or the platform.
         """
 
         user = await self.repository.get_user_by_email(email)
@@ -86,6 +86,15 @@ class UserDirectory:
 
         users = await self.repository.get_users_by_ids(user_ids)
         return {user.id: _directory_user(user) for user in users}
+
+    async def active_emails(self) -> dict[str, UUID]:
+        """Lowercase email -> id of every active user that has one.
+
+        Returns:
+            dict[str, UUID]: The index, for matching other systems by email.
+        """
+
+        return await self.repository.active_user_emails()
 
     async def search_users(self, query: str, limit: int = 20) -> list[DirectoryUser]:
         """Find active users by name or email, for people pickers.

@@ -93,6 +93,7 @@ class QuotationRepository(Protocol):
         q: str | None,
         page: int,
         size: int,
+        visible_to: tuple[UUID, Sequence[str]] | None = None,
     ) -> QuotationPage: ...
 
     async def save(
@@ -106,6 +107,27 @@ class QuotationRepository(Protocol):
     ) -> QuotationDetail: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...
+
+
+class SalesScope(Protocol):
+    """The customers a person works on (the salespeople module's ``SalesScope``)."""
+
+    scope: str
+    seller_codes: tuple[str, ...]
+    supervisor_codes: tuple[str, ...]
+    # Salesperson codes; ``None`` means every customer.
+    codes: tuple[str, ...] | None
+
+    @property
+    def is_all(self) -> bool: ...
+
+    def allows(self, salesperson_code: str | None) -> bool: ...
+
+
+class SalesScopeResolver(Protocol):
+    """Decides each person's sales scope from their role and salesperson links."""
+
+    async def scope_for(self, principal: Principal) -> SalesScope: ...
 
 
 class ManagerPolicy(Protocol):

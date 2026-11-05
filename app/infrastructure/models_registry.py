@@ -18,6 +18,7 @@ from app.modules.order_validation.infrastructure import models as order_validati
 from app.modules.pqrsf.infrastructure import models as pqrsf_models
 from app.modules.projects.infrastructure import models as projects_models
 from app.modules.quotations.infrastructure import models as quotations_models
+from app.modules.salespeople.infrastructure import models as salespeople_models
 from app.modules.sites.infrastructure import models as sites_models
 from app.modules.supplier_supports.infrastructure import models as supplier_supports_models
 
@@ -36,6 +37,7 @@ __all__ = [
     "pqrsf_models",
     "projects_models",
     "quotations_models",
+    "salespeople_models",
     "sites_models",
     "supplier_supports_models",
 ]

@@ -35,6 +35,7 @@ from app.modules.pqrsf.presentation.supplier_messages_router import (
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
 from app.modules.projects.presentation.router import area_router as area_projects_router
 from app.modules.quotations.presentation.router import router as quotations_router
+from app.modules.salespeople.presentation.router import router as salespeople_router
 from app.modules.sites.presentation.router import router as sites_router
 from app.modules.supplier_supports.presentation.attachments_router import (
     router as supports_attachments_router,
@@ -56,6 +57,7 @@ v1_router.include_router(identity_router, prefix="", tags=["identity"])
 v1_router.include_router(consumption_router, prefix="", tags=["consumption"])
 v1_router.include_router(areas_router, prefix="/areas", tags=["areas"])
 v1_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
+v1_router.include_router(salespeople_router, prefix="/salespeople", tags=["salespeople"])
 v1_router.include_router(area_documents_router, prefix="/areas", tags=["documents"])
 v1_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 v1_router.include_router(area_projects_router, prefix="/areas", tags=["projects"])

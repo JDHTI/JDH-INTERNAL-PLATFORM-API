@@ -118,6 +118,9 @@ from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotation
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
 from app.modules.quotations.infrastructure.template import QuotationTemplateFile
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
+from app.modules.salespeople.application.service import SalesScopeService
+from app.modules.salespeople.infrastructure.dwh_roster import WarehouseSalesRoster
+from app.modules.salespeople.infrastructure.repository import SqlAlchemyLinkRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
@@ -583,8 +586,28 @@ class V1Container(containers.DeclarativeContainer):
     quotation_flat_file_writer = providers.Singleton(
         SiesaPriceFileWriter, company=config.quotations.siesa_company
     )
+    # --- Salespeople: who is which SIESA salesperson, and each person's sales scope ---
+    salesperson_link_repository = providers.Factory(SqlAlchemyLinkRepository, database=database)
+    sales_roster = providers.Factory(
+        WarehouseSalesRoster,
+        connection=data_provider,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.quotations.dwh_timeout,
+    )
+    sales_scope_service = providers.Factory(
+        SalesScopeService,
+        links=salesperson_link_repository,
+        roster=sales_roster,
+        users=user_directory,
+        access=area_service,
+        audit=area_service,
+        # BI sees every customer; in Comercial only its leader or responsible does.
+        all_area_slugs=providers.List(config.quotations.approver_area_slug),
+        leader_area_slugs=providers.List(config.quotations.manager_area_slug),
+    )
     quotation_service = providers.Factory(
         QuotationService,
+        sales=sales_scope_service,
         repository=quotation_repository,
         warehouse=quotation_warehouse_source,
         masters=quotation_master_source,

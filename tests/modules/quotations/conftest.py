@@ -202,11 +202,16 @@ class FakeRepository:
     async def get(self, quotation_id):
         return self.items.get(quotation_id)
 
-    async def list(self, *, created_by_id, status, customer_nit, q, page, size):
+    async def list(self, *, created_by_id, status, customer_nit, q, page, size, visible_to=None):
         items = [
             detail.quotation
             for detail in self.items.values()
-            if (created_by_id is None or detail.quotation.created_by_id == created_by_id)
+            if (
+                visible_to is None
+                or detail.quotation.created_by_id == visible_to[0]
+                or detail.quotation.salesperson_code in visible_to[1]
+            )
+            and (created_by_id is None or detail.quotation.created_by_id == created_by_id)
             and (status is None or detail.quotation.status == status)
             and (customer_nit is None or detail.quotation.customer_nit == customer_nit)
         ]

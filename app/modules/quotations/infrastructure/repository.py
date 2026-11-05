@@ -123,10 +123,13 @@ class SqlAlchemyQuotationRepository:
         q: str | None,
         page: int,
         size: int,
+        visible_to: tuple[UUID, Sequence[str]] | None = None,
     ) -> QuotationPage:
         """Quotations, newest first.
 
         Args:
+            visible_to (tuple[UUID, Sequence[str]] | None): ``(user, salesperson codes)``:
+                only the ones the user created or whose customer is of those salespeople.
             created_by_id (UUID | None): Only the ones this user created.
             status (str | None): Only this status.
             customer_nit (str | None): Only this customer.
@@ -139,6 +142,13 @@ class SqlAlchemyQuotationRepository:
         """
 
         conditions = []
+        if visible_to is not None:
+            owner, codes = visible_to
+            conditions.append(
+                or_(Q.created_by_id == owner, Q.salesperson_code.in_(list(codes)))
+                if codes
+                else Q.created_by_id == owner
+            )
         if created_by_id is not None:
             conditions.append(Q.created_by_id == created_by_id)
         if status:

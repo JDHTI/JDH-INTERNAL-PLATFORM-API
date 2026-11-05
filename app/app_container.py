@@ -49,6 +49,7 @@ WIRED_MODULES = (
     "app.modules.directory.presentation.router",
     "app.modules.directory.presentation.admin_router",
     "app.modules.notifications.presentation.router",
+    "app.modules.salespeople.presentation.router",
 )
 
 

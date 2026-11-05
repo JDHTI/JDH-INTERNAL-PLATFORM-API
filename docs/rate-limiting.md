@@ -286,6 +286,12 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/template.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |
+| `GET` | `/v1/salespeople/links` | `read` |  |
+| `POST` | `/v1/salespeople/links` | `relaxed` |  |
+| `DELETE` | `/v1/salespeople/links/{link_id}` | `relaxed` |  |
+| `GET` | `/v1/salespeople/me` | `read` |  |
+| `GET` | `/v1/salespeople/roster` | `read` |  |
+| `POST` | `/v1/salespeople/sync` | `relaxed` |  |
 | `GET` | `/v1/sites` | `read` |  |
 | `POST` | `/v1/sites` | `relaxed` |  |
 | `DELETE` | `/v1/sites/{site_id}` | `relaxed` |  |

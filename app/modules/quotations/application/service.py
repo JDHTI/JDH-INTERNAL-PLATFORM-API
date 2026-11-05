@@ -43,6 +43,8 @@ from app.modules.quotations.domain.ports import (
     ManagerPolicy,
     MasterSource,
     QuotationRepository,
+    SalesScope,
+    SalesScopeResolver,
     SupportSource,
     TemplateFile,
     WarehouseSource,
@@ -181,6 +183,8 @@ class Permissions:
     can_manage: bool
     seller: Seller | None
     can_validate: bool = False
+    # ``all``, ``team``, ``mine`` or ``none``; ``None`` when no scope resolver is wired.
+    sales_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -236,6 +240,7 @@ class QuotationService:
         approvers: ManagerPolicy | None = None,
         template: TemplateFile | None = None,
         max_upload_bytes: int = 10 * 1024 * 1024,
+        sales: SalesScopeResolver | None = None,
     ) -> None:
         """Create the service.
 
@@ -254,6 +259,8 @@ class QuotationService:
                 one only administrators do.
             template (TemplateFile | None): The workbook advisors edit in bulk.
             max_upload_bytes (int): Largest workbook accepted.
+            sales (SalesScopeResolver | None): Each person's customers (salespeople module).
+                Without one every reader sees every customer and quotation.
         """
 
         self.repository = repository
@@ -269,6 +276,7 @@ class QuotationService:
         self.approvers = approvers
         self.template = template
         self.max_upload_bytes = max_upload_bytes
+        self.sales = sales
 
     # ------------------------------------------------------------ access
 
@@ -309,15 +317,47 @@ class QuotationService:
             except Exception:  # noqa: BLE001 - the link is a convenience
                 sellers = []
             seller = sellers[0] if sellers else None
-        return Permissions(can_manage, seller, await self.can_validate(principal))
+        scope = await self._scope(principal)
+        return Permissions(
+            can_manage,
+            seller,
+            await self.can_validate(principal),
+            scope.scope if scope is not None else None,
+        )
 
     def rule_catalog(self) -> tuple[Section, ...]:
         return catalog(self.policy)
+
+    # ------------------------------------------------------------ sales scope
+
+    async def _scope(self, principal: Principal) -> SalesScope | None:
+        """The caller's sales scope; ``None`` when no resolver is wired (everything)."""
+
+        return await self.sales.scope_for(principal) if self.sales is not None else None
+
+    @staticmethod
+    def _restricted(scope: SalesScope | None) -> bool:
+        return scope is not None and not scope.is_all
+
+    def _check_visible(
+        self, principal: Principal, scope: SalesScope | None, quotation: Quotation
+    ) -> None:
+        """A restricted person reaches a quotation they made or one of their customers."""
+
+        if not self._restricted(scope) or quotation.created_by_id == principal.user_id:
+            return
+        assert scope is not None
+        if not scope.allows(quotation.salesperson_code):
+            raise ForbiddenError("La cotización es de un cliente fuera de tu cartera")
 
     async def customers(
         self, principal: Principal, scope: str, q: str | None, page: int, size: int
     ) -> tuple[CustomerPage, bool]:
         """Customers to quote: the caller's portfolio (``mine``) or all.
+
+        With a scope resolver the server decides: a salesperson or supervisor gets their
+        portfolio or their team's whatever ``scope`` asks, and someone without a link gets
+        none. Only a person whose scope is ``all`` chooses between ``mine`` and ``all``.
 
         Returns:
             tuple[CustomerPage, bool]: The page and whether the caller is linked to a seller.
@@ -325,6 +365,14 @@ class QuotationService:
 
         await self._require_manager(principal)
         _page(page, size)
+        sales = await self._scope(principal)
+        if sales is not None:
+            linked = bool(sales.seller_codes or sales.supervisor_codes)
+            if sales.is_all:
+                codes = list(sales.seller_codes) if scope == "mine" else None
+            else:
+                codes = list(sales.codes or ())
+            return await self.masters.customers(codes, q, page, size), linked
         if scope == "mine":
             codes = [seller.code for seller in await self.warehouse.sellers(principal.email)]
             return await self.masters.customers(codes, q, page, size), bool(codes)
@@ -336,10 +384,15 @@ class QuotationService:
 
     # ------------------------------------------------------------ build
 
-    async def _context(self, nit: str) -> CustomerContext:
+    async def _context(self, nit: str, scope: SalesScope | None = None) -> CustomerContext:
         branches = await self.warehouse.branches(nit)
         if not branches:
             raise NotFoundError(f"No se encontró el cliente con NIT {nit}")
+        if self._restricted(scope) and not any(
+            scope.allows(branch.salesperson_code)  # type: ignore[union-attr]
+            for branch in branches
+        ):
+            raise ForbiddenError(f"El cliente {nit} no está en tu cartera")
         draft = rules.customer_context(nit, branches)
         shared = await self.warehouse.price_list_customers(draft.price_list_id)
         context = rules.customer_context(nit, branches, shared)
@@ -499,7 +552,7 @@ class QuotationService:
         if window_months not in vocabulary.WINDOWS:
             raise InvalidInputError("La ventana debe ser de 6 o 12 meses")
         nit = normalize_nit(customer_nit)
-        context = await self._context(nit)
+        context = await self._context(nit, await self._scope(principal))
         lines, snapshot = await self._build(context, window_months)
         if not lines:
             # A customer without sales in the window is quoted with the SKUs the advisor adds.
@@ -537,6 +590,7 @@ class QuotationService:
         detail = await self.repository.get(quotation_id)
         if detail is None:
             raise NotFoundError("Cotización no encontrada")
+        self._check_visible(principal, await self._scope(principal), detail.quotation)
         return detail
 
     async def _editable(self, principal: Principal, quotation_id: UUID) -> QuotationDetail:
@@ -565,7 +619,14 @@ class QuotationService:
         _page(page, size)
         if status is not None and status not in vocabulary.STATUSES:
             raise InvalidInputError("Estado desconocido")
+        scope = await self._scope(principal)
+        visible = (
+            (principal.user_id, tuple(scope.codes or ()))
+            if self._restricted(scope) and scope is not None
+            else None
+        )
         return await self.repository.list(
+            visible_to=visible,
             created_by_id=principal.user_id if mine else None,
             status=status,
             customer_nit=normalize_nit(customer_nit) if customer_nit else None,
