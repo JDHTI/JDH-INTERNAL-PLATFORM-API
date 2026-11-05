@@ -63,6 +63,18 @@ RULES: tuple[Rule, ...] = (
         STRICT,
         "Lanza una sincronización completa con Microsoft Graph",
     ),
+    Rule(
+        "POST",
+        "/v1/jobs/{key}/run",
+        STRICT,
+        "Lanza una sincronización de maestros contra el datawarehouse",
+    ),
+    Rule(
+        "GET",
+        "/v1/masters/{slug}/records.xlsx",
+        STRICT,
+        "Arma una hoja de cálculo de hasta 100.000 filas",
+    ),
 )
 
 

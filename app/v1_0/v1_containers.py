@@ -49,6 +49,14 @@ from app.modules.identity.application.provisioning import UserProvisioning
 from app.modules.identity.application.service import IdentityService
 from app.modules.identity.infrastructure.entra import EntraClient
 from app.modules.identity.infrastructure.repository import IdentityRepository
+from app.modules.jobs.application.service import JobService, JobsSettings, PollStatus
+from app.modules.jobs.infrastructure.dwh_source import WarehouseSequenceSource
+from app.modules.jobs.infrastructure.handlers import build_job_handlers
+from app.modules.jobs.infrastructure.repository import (
+    SqlAlchemyJobRunRepository,
+    SqlAlchemySequenceWatermarks,
+)
+from app.modules.jobs.infrastructure.worker import RunRequest
 from app.modules.mail.infrastructure.graph import GraphMailClient
 from app.modules.masters.application.service import MasterService
 from app.modules.masters.application.sync import MasterCatalogSync
@@ -661,6 +669,36 @@ class V1Container(containers.DeclarativeContainer):
         sync_enabled=config.dwh_monitoring.sync_enabled,
         sync_interval=config.dwh_monitoring.sync_interval,
         request_sync=dwh_monitoring_trigger.provided.set,
+    )
+    # --- Background jobs: the master syncs, started when the DWH sequences finish ---
+    job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)
+    job_watermarks = providers.Factory(SqlAlchemySequenceWatermarks, database=database)
+    job_sequence_source = providers.Factory(WarehouseSequenceSource, connection=data_provider)
+    job_handlers = providers.Singleton(
+        build_job_handlers,
+        catalog_sync=master_catalog_sync.provider,
+        commercial_sync=master_sync_service.provider,
+    )
+    # The worker and the API share the last poll result and the queue of runs.
+    job_poll_status = providers.Singleton(PollStatus)
+    job_request = providers.Singleton(RunRequest)
+    job_settings = providers.Singleton(
+        JobsSettings,
+        enabled=config.jobs.enabled,
+        poll_seconds=config.jobs.poll_seconds,
+        fallback_at=config.jobs.fallback_at,
+        timezone=config.jobs.timezone,
+    )
+    job_service = providers.Factory(
+        JobService,
+        runs=job_run_repository,
+        watermarks=job_watermarks,
+        sequences=job_sequence_source,
+        handlers=job_handlers,
+        status=job_poll_status,
+        settings=job_settings,
+        request_run=job_request.provided.set,
+        wait_for_dwh_seconds=config.jobs.wait_for_dwh,
     )
     # --- Application monitoring (TI → Monitoreo → Aplicativos) and the general board ---
     app_monitoring_repository = providers.Factory(

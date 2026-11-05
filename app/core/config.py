@@ -262,6 +262,16 @@ class Settings(BaseSettings):
     DWH_MONITORING_SYNC_ENABLED: bool = False
     DWH_MONITORING_SYNC_INTERVAL_SECONDS: int = 600
 
+    # Background jobs (master syncs) started when the DWH sequences publish fresh data:
+    # the loop reads monitoreo.secuencias every JOBS_DWH_POLL_SECONDS; at JOBS_FALLBACK_AT
+    # (local time) a job the DWH did not trigger that day runs anyway.
+    JOBS_ENABLED: bool = False
+    JOBS_DWH_POLL_SECONDS: int = 60
+    JOBS_FALLBACK_AT: str = "10:00"
+    JOBS_TIMEZONE: str = "America/Bogota"
+    # Longest wait for a reloading sequence before a job gives up.
+    JOBS_WAIT_FOR_DWH_SECONDS: int = 1800
+
     # Application monitoring (TI → Monitoreo → Aplicativos): a background loop requests the
     # health endpoint and the UI of every registered platform; checks older than the
     # retention are purged.
@@ -374,6 +384,28 @@ class Settings(BaseSettings):
         """Local time of the daily directory sync."""
 
         return time.fromisoformat(self.DIRECTORY_SYNC_AT.strip())
+
+    @property
+    def jobs_fallback_at(self) -> time:
+        """Local time of the daily fallback of the jobs."""
+
+        return time.fromisoformat(self.JOBS_FALLBACK_AT.strip())
+
+    @model_validator(mode="after")
+    def validate_jobs_settings(self) -> "Settings":
+        """Reject a bad fallback time, timezone or interval for the jobs."""
+
+        try:
+            _ = self.jobs_fallback_at
+        except ValueError as exc:
+            raise ValueError("JOBS_FALLBACK_AT must be HH:MM") from exc
+        try:
+            ZoneInfo(self.JOBS_TIMEZONE)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("JOBS_TIMEZONE must be an IANA timezone") from exc
+        if self.JOBS_DWH_POLL_SECONDS < 10:
+            raise ValueError("JOBS_DWH_POLL_SECONDS must be at least 10")
+        return self
 
     @property
     def directory_graph_configured(self) -> bool:
@@ -553,6 +585,13 @@ class Settings(BaseSettings):
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
                 "sync_interval": self.DWH_MONITORING_SYNC_INTERVAL_SECONDS,
+            },
+            "jobs": {
+                "enabled": self.JOBS_ENABLED,
+                "poll_seconds": self.JOBS_DWH_POLL_SECONDS,
+                "fallback_at": self.jobs_fallback_at,
+                "timezone": self.JOBS_TIMEZONE,
+                "wait_for_dwh": self.JOBS_WAIT_FOR_DWH_SECONDS,
             },
             "app_monitoring": {
                 "enabled": self.APP_MONITORING_ENABLED,
