@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -167,10 +168,13 @@ async def download_master(
     """Descarga el maestro en Excel, con los campos que puedes ver."""
 
     detail, records = await service.export(slug, is_active, principal)
+    # ASCII fallback plus the master's display name (RFC 5987) for the browser.
+    name = quote(f"{detail.summary.name}.xlsx", safe="")
+    disposition = f"attachment; filename=\"{detail.summary.slug}.xlsx\"; filename*=UTF-8''{name}"
     return Response(
         content=master_workbook(detail, records),
         media_type=_XLSX,
-        headers={"Content-Disposition": f'attachment; filename="{detail.summary.slug}.xlsx"'},
+        headers={"Content-Disposition": disposition},
     )
 
 
