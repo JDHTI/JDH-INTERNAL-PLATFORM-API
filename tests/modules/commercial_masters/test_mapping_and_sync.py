@@ -10,6 +10,9 @@ from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.application import mapping
 from app.modules.commercial_masters.application.sync import MasterSyncService, _primary_nits
 from app.modules.commercial_masters.domain.entities import clean_nit
+from app.modules.commercial_masters.domain.margins import LIQUOR_TAX_FIELDS, MARGIN_FIELDS
+from app.modules.commercial_masters.infrastructure.models import ProductModel
+from app.modules.commercial_masters.infrastructure.repository import _SYNC_TABLES
 
 
 @pytest.mark.parametrize(
@@ -81,6 +84,30 @@ def test_product_row_maps_the_catalog_columns() -> None:
     assert mapped["sku"] == "8749" and mapped["commercial_supplier_code"] == "546"
     assert mapped["brand"] == "DIANA" and str(mapped["pack_factor"]) == "12"
     assert mapped["is_active"] is True
+
+
+def test_the_product_sync_never_carries_margins_or_liquor_taxes() -> None:
+    """The margin master changes only by hand or by file.
+
+    The upsert writes only the columns a row carries, and a product that leaves the DWH is
+    deactivated, never deleted, so its margins survive every sync.
+    """
+
+    mapped = mapping.product_row(
+        {"producto_key": "p1", "sku": "8749", "estado": "A", "margen": 0.5, "imptolic": 1}
+    )
+    owned_by_hand = {
+        *MARGIN_FIELDS,
+        *LIQUOR_TAX_FIELDS,
+        "margin_notes",
+        "margin_source",
+        "margin_updated_by",
+        "margin_updated_at",
+    }
+
+    assert owned_by_hand <= {column.name for column in ProductModel.__table__.columns}
+    assert not owned_by_hand & mapped.keys()
+    assert _SYNC_TABLES["products"] == (ProductModel, "update")
 
 
 def test_commercial_supplier_is_active_while_it_has_active_products() -> None:

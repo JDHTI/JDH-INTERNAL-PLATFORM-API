@@ -8,7 +8,10 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
-from app.modules.commercial_masters.application.service import CommercialMasterService
+from app.modules.commercial_masters.application.service import (
+    CommercialMasterService,
+    LiquorTax,
+)
 from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     Page,
@@ -242,6 +245,80 @@ async def test_warehouse_fields_are_not_editable(service) -> None:
         await service.update_product(principal(admin=True), "0", {"brand": "X"})
     with pytest.raises(NotFoundError):
         await service.get_product("0")
+
+
+FIVE = {
+    "margin_list": D("0.18"),
+    "margin_wholesale": D("0.12"),
+    "margin_mass_food": D("0.15"),
+    "margin_market": D("0.2"),
+    "margin_salsamentarias": D("0.1"),
+}
+
+
+async def test_setting_the_margins_of_one_product_by_hand(service, repo) -> None:
+    with pytest.raises(ForbiddenError):
+        await service.set_product_margins(principal(), "7244", FIVE, None, None)
+
+    updated = await service.set_product_margins(
+        principal(admin=True), " 7244 ", FIVE, "  Revisado   con compras ", None
+    )
+
+    assert repo.calls[-1] == (
+        "update_product",
+        "7244",
+        {**FIVE, "margin_notes": "Revisado con compras"},
+        "ana@jdh.com.co",
+    )
+    assert updated.margins.market == D("0.2") and updated.margins.source == "manual"
+
+
+async def test_every_margin_is_required_and_a_fraction(service) -> None:
+    admin = principal(admin=True)
+    partial = {k: v for k, v in FIVE.items() if k != "margin_market"}
+
+    with pytest.raises(InvalidInputError, match="Faltan márgenes: Margen Market Apartadó"):
+        await service.set_product_margins(admin, "7244", partial, None, None)
+    with pytest.raises(InvalidInputError, match="Faltan"):
+        await service.set_product_margins(admin, "7244", {**FIVE, "margin_list": None}, None, None)
+    for bad in (D("0"), D("1"), D("18")):
+        with pytest.raises(InvalidInputError, match="entre 0 y 1"):
+            await service.set_product_margins(
+                admin, "7244", {**FIVE, "margin_wholesale": bad}, None, None
+            )
+    with pytest.raises(NotFoundError):
+        await service.set_product_margins(admin, "0", FIVE, None, None)
+
+
+async def test_the_liquor_tax_stays_with_the_products_that_pay_it(service, repo) -> None:
+    admin = principal(admin=True)
+    repo.products["9001"] = product(
+        "9001", liquor_tax=D("1200"), liquor_tax_coast=D("1350"), liquor_tax_group="0509"
+    )
+
+    with pytest.raises(InvalidInputError, match="paga impuesto licor"):
+        await service.set_product_margins(admin, "9001", FIVE, None, None)
+
+    await service.set_product_margins(
+        admin, "9001", FIVE, None, LiquorTax(D("1250.12345"), D("1400"), " 0509 ")
+    )
+    assert repo.calls[-1][2] == {
+        **FIVE,
+        "margin_notes": None,
+        "liquor_tax": D("1250.1235"),
+        "liquor_tax_coast": D("1400.0000"),
+        "liquor_tax_group": "0509",
+    }
+
+    # A product that did not pay it may start paying it; the group is required.
+    await service.set_product_margins(admin, "1569", FIVE, None, LiquorTax(D("0"), D("0"), "0503"))
+    assert repo.calls[-1][2]["liquor_tax_group"] == "0503"
+    with pytest.raises(InvalidInputError, match="grupo impositivo"):
+        await service.set_product_margins(admin, "1569", FIVE, None, LiquorTax(D("1"), D("1"), " "))
+    with pytest.raises(InvalidInputError, match="negativo"):
+        await service.set_product_margins(
+            admin, "1569", FIVE, None, LiquorTax(D("-1"), D("1"), "0503")
+        )
 
 
 # ----------------------------------------------------------------- margin updater

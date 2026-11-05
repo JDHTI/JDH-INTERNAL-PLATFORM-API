@@ -143,6 +143,49 @@ def test_patch_a_product_and_its_margins(api) -> None:
     assert client.patch(f"{BASE}/products/7244", json={"state": "Activo"}).status_code == 422
 
 
+MARGINS = {
+    "margin_list": "0.18",
+    "margin_wholesale": "0.12",
+    "margin_mass_food": "0.15",
+    "margin_market": "0.2",
+    "margin_salsamentarias": "0.1",
+    "notes": "Revisado con compras",
+    "liquor_tax": None,
+}
+
+
+def test_put_sets_every_margin_of_one_product(api) -> None:
+    client, repo = api
+
+    response = client.put(f"{BASE}/products/7244/margins", json=MARGINS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["margin_market"] == "0.200000" and body["margin_source"] == "manual"
+    assert repo.calls[-1][2]["margin_notes"] == "Revisado con compras"
+    with_tax = {**MARGINS, "liquor_tax": {"national": "1200", "coast": "1350", "group": "0509"}}
+    assert client.put(f"{BASE}/products/7244/margins", json=with_tax).status_code == 200
+    assert repo.calls[-1][2]["liquor_tax_coast"] == 1350
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {k: v for k, v in MARGINS.items() if k != "margin_market"},  # a margin missing
+        {k: v for k, v in MARGINS.items() if k != "liquor_tax"},  # liquor_tax must be sent
+        {k: v for k, v in MARGINS.items() if k != "notes"},  # notes must be sent (or null)
+        {**MARGINS, "margin_list": None},
+        {**MARGINS, "margin_list": 18},
+        {**MARGINS, "liquor_tax": {"national": "1", "coast": "1"}},
+        {**MARGINS, "brand": "X"},
+    ],
+)
+def test_put_margins_rejects_an_incomplete_body(api, body) -> None:
+    client, _ = api
+
+    assert client.put(f"{BASE}/products/7244/margins", json=body).status_code == 422
+
+
 def test_margin_file_simulation_then_apply(api) -> None:
     client, repo = api
     text = "Referencia;Margen Lista 1;Observaciones\n7244;18;Aseo\n0000;18;\n"
@@ -187,6 +230,7 @@ def test_non_managers_can_read_but_not_edit(outsider_api) -> None:
     assert client.patch(f"{BASE}/suppliers/233", json={"confirmed_nits": []}).status_code == 403
     assert client.patch(f"{BASE}/products/7244", json={"margin_list": "0.2"}).status_code == 403
     assert client.post(f"{BASE}/products/margins", files=files).status_code == 403
+    assert client.put(f"{BASE}/products/7244/margins", json=MARGINS).status_code == 403
     assert client.get(f"{BASE}/suppliers/233").status_code == 200  # reading is open
     assert client.get(f"{BASE}/products/7244").status_code == 200
     assert client.get(f"{BASE}/products/margins/template").status_code == 200

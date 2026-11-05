@@ -126,6 +126,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/products/margins/template` | `read` |  |
 | `GET` | `/v1/commercial/products/{sku}` | `read` |  |
 | `PATCH` | `/v1/commercial/products/{sku}` | `relaxed` |  |
+| `PUT` | `/v1/commercial/products/{sku}/margins` | `relaxed` |  |
 | `GET` | `/v1/commercial/suppliers` | `read` |  |
 | `GET` | `/v1/commercial/suppliers/{code}` | `read` |  |
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
@@ -180,7 +181,6 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/masters` | `read` |  |
 | `GET` | `/v1/masters/{slug}` | `read` |  |
 | `GET` | `/v1/masters/{slug}/records` | `read` |  |
-| `GET` | `/v1/masters/{slug}/records.xlsx` | `strict` | Arma una hoja de cálculo de hasta 100.000 filas |
 | `GET` | `/v1/monitoring/board` | `read` |  |
 | `GET` | `/v1/notifications` | `read` |  |
 | `GET` | `/v1/notifications/count` | `read` |  |
