@@ -81,6 +81,26 @@ def test_a_plain_user_is_kept_out_of_the_workspace_reads(client, world) -> None:
     assert client.get(f"{BASE}/order-validations/permissions").json() == {"can_manage": False}
 
 
+def test_bi_and_comercial_roles_manage_the_order_validator(client, world) -> None:
+    permissions = f"{BASE}/order-validations/permissions"
+
+    world.caller = world.member("bi", "analista@jdh.com.co", [("validador-pedidos", "manage")])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 200
+    assert client.get(permissions).json() == {"can_manage": True}
+
+    world.caller = world.member(
+        "comercial", "vendedor@jdh.com.co", [("validador-pedidos", "manage")]
+    )
+    assert client.get(permissions).json() == {"can_manage": True}
+
+    world.caller = world.member("bi", "lector@jdh.com.co", [("validador-pedidos", "read")])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 200
+    assert client.get(permissions).json() == {"can_manage": False}
+
+    world.caller = world.member("bi", "sin-permisos@jdh.com.co", [])
+    assert client.get(f"{BASE}/order-validations/catalogs").status_code == 403
+
+
 def test_the_gate_follows_the_grants(world) -> None:
     app = FastAPI()
     app.state.container = SimpleNamespace(
