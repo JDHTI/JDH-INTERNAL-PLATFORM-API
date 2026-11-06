@@ -305,6 +305,8 @@ class OrderPage:
     counts: dict[str, int] = field(default_factory=dict)
     # Orders of the whole file that the threshold releases and the margin alone would not.
     threshold_released_count: int = 0
+    # Every operation center (C.O. factura) in the file and how many orders it has, by code.
+    operation_centers: tuple[tuple[str, int], ...] = ()
 
 
 def _text(value: Decimal | None) -> str | None:

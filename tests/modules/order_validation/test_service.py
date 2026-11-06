@@ -62,6 +62,28 @@ async def test_orders_group_lines_and_filter(service, source, manager) -> None:
     assert (await service.orders(batch.id, q="pv-1")).items[0].document == "PV-1"
 
 
+async def test_orders_filter_by_operation_center(service, source, manager) -> None:
+    def row(center: str, document: str) -> list:
+        values = list(ROW)
+        values[0], values[2] = center, document
+        return values
+
+    content = workbook(HEADER, row("004", "PV-1"), row("004", "PV-2"), row("012", "PV-3"))
+    batch = await service.upload(manager, "p.xlsx", content)
+
+    page = await service.orders(batch.id, sort="file")
+    # Every center of the file, by code, with its orders.
+    assert page.operation_centers == (("004", 2), ("012", 1))
+
+    only = await service.orders(batch.id, operation_center="012", sort="file")
+    assert [order.document for order in only.items] == ["PV-3"] and only.total == 1
+    assert sum(only.counts.values()) == 1
+    # The list of centers does not shrink with the filter or the search.
+    assert only.operation_centers == page.operation_centers
+    assert (await service.orders(batch.id, q="pv-1")).operation_centers == page.operation_centers
+    assert (await service.orders(batch.id, operation_center="999")).total == 0
+
+
 async def test_revalidate_uses_the_supports_as_they_are_now(service, source, manager) -> None:
     batch = await service.upload(manager, "p.xlsx", report())
     assert batch.ready_order_count == 0
