@@ -37,6 +37,9 @@ class FakeDirectory:
     async def employee_id_of(self, principal):
         return self.by_user.get(principal.user_id)
 
+    async def employee_ids_of_users(self, user_ids):
+        return [self.by_user[u] for u in dict.fromkeys(user_ids) if u in self.by_user]
+
     async def audience(self, kind, values):
         if kind == "TODOS":
             return list(self.everyone)

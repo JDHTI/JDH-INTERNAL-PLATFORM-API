@@ -80,6 +80,9 @@ class Directory(Protocol):
     async def employee_id_of(self, principal: Principal) -> UUID | None:
         """The caller's employee."""
 
+    async def employee_ids_of_users(self, user_ids: list[UUID]) -> list[UUID]:
+        """The employees of these platform users (users without one are left out)."""
+
     async def audience(self, kind: str, values: list[str]) -> list[UUID]:
         """Active employees of an audience."""
 

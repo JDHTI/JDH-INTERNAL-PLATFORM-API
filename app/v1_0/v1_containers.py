@@ -414,6 +414,7 @@ class V1Container(containers.DeclarativeContainer):
         storage=storage,
         documents=pqrsf_manager_files,
         requests=pqrsf_repository,
+        bell=notification_service,
     )
     pqrsf_sales_lookup = providers.Factory(
         WarehouseSalesLookup, connection=data_provider, schema=settings.provided.DWH_SCHEMA

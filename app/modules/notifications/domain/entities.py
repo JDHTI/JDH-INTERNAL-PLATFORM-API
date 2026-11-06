@@ -14,6 +14,8 @@ class Source(StrEnum):
     NOTICIA = "NOTICIA"
     EVENTO = "EVENTO"
     CERTIFICADO = "CERTIFICADO"
+    # Raised by the platform itself (never by Strapi): news on a PQRSF case.
+    PQRSF = "PQRSF"
 
 
 class AudienceType(StrEnum):
@@ -144,4 +146,7 @@ def href_for(source: Source, slug: str | None) -> str:
         return f"/noticias/{slug}" if slug else "/noticias"
     if source is Source.EVENTO:
         return f"/eventos/{slug}" if slug else "/eventos"
+    if source is Source.PQRSF:
+        # The slug is the path of the case in the UI.
+        return slug or "/"
     return "/perfil"

@@ -55,7 +55,7 @@ class NotificationResponse(BaseModel):
     titulo: str
     resumen: str | None
     href: str
-    fuente: Literal["NOTICIA", "EVENTO", "CERTIFICADO"]
+    fuente: Literal["NOTICIA", "EVENTO", "CERTIFICADO", "PQRSF"]
     leida: bool
     creada_en: datetime
 

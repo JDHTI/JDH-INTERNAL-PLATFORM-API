@@ -352,6 +352,7 @@ class CaseModel(Base):
         Index("ix_pqrsf_cases_requested_area", "requested_area_id"),
         Index("ix_pqrsf_cases_subject", "subject_id"),
         Index("ix_pqrsf_cases_cause", "cause_id"),
+        Index("ix_pqrsf_cases_news_at", "news_at", postgresql_where=text("news_at IS NOT NULL")),
         CheckConstraint(
             "route IS NULL OR route IN ('supplier', 'internal', 'none')",
             name="ck_pqrsf_cases_route",
@@ -434,6 +435,9 @@ class CaseModel(Base):
     )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     first_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # An email from the client or a supplier the team has not opened yet; set and cleared
+    # on its own (never through the header save), so a concurrent edit cannot undo it.
+    news_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     legacy: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(

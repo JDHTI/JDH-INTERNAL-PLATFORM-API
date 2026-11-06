@@ -220,6 +220,23 @@ class DirectoryService:
         employee = await self.repository.get_employee_by_user(principal.user_id)
         return employee.id if employee else None
 
+    async def employee_ids_of_users(self, user_ids: list[UUID]) -> list[UUID]:
+        """The employees of these platform users; a user without one is left out.
+
+        Args:
+            user_ids (list[UUID]): Platform users.
+
+        Returns:
+            list[UUID]: Their employee identifiers, without repeats.
+        """
+
+        found: list[UUID] = []
+        for user_id in dict.fromkeys(user_ids):
+            employee = await self.repository.get_employee_by_user(user_id)
+            if employee is not None and employee.id not in found:
+                found.append(employee.id)
+        return found
+
     async def audience(self, kind: str, values: list[str]) -> list[UUID]:
         """Active employees of an audience.
 

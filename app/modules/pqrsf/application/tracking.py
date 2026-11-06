@@ -911,7 +911,12 @@ class CaseTrackingService:
     async def record_email(
         self, case_id: UUID, message_id: UUID, sender: str, note: str, data: dict
     ) -> None:
-        """Add a received email to the timeline of a case.
+        """Add a received email to the timeline of a case and flag it as news.
+
+        The flag (``news_at``) stays until someone who works the case opens it. Whoever
+        works it is told (bell and email) when the flag goes up; more emails before they
+        open the case only join the timeline, so a chatty thread is one notice. A
+        failure to tell them is logged and never loses the email.
 
         Args:
             case_id (UUID): The case the message joined.
@@ -921,15 +926,23 @@ class CaseTrackingService:
             data (dict): Extra detail (rejected attachments, stored files).
         """
 
-        await self.repository.add_event(
-            self._event(
-                case_id,
-                EVENT_EMAIL_RECEIVED,
-                None,
-                note=note,
-                data={"message_id": str(message_id), "from": sender, **data},
-            )
+        event = self._event(
+            case_id,
+            EVENT_EMAIL_RECEIVED,
+            None,
+            note=note,
+            data={"message_id": str(message_id), "from": sender, **data},
         )
+        await self.repository.add_event(event)
+        flagged = await self.repository.set_news(case_id, event.created_at)
+        if self.notifier is None or not flagged:
+            return
+        try:
+            case = await self.repository.get_case(case_id)
+            if case is not None:
+                await self.notifier.case_news(case, sender, note)
+        except Exception:
+            logger.exception("Could not tell the team about the email on case %s", case_id)
 
     async def find_case(self, case_id: UUID) -> TrackingCase | None:
         """Load a case without checking access (system use)."""
@@ -1429,7 +1442,8 @@ class CaseTrackingService:
         Opening the case moves it from the initial status to ``leida`` (when that status
         exists and is active) if the caller can work it: its responsible or a manager.
         Someone who can only see the case (who raised it) does not change its status,
-        and every other status change stays manual. ``first_read_at`` is the
+        and every other status change stays manual. It also clears the news flag
+        (``news_at``) when the caller can work the case. ``first_read_at`` is the
         responsible's own first opening, so a manager reading it first does not take it
         over. Any opening that changes nothing leaves a ``viewed`` access record (one per
         person and case every 30 minutes) so the history shows who saw the case and when.
@@ -1443,6 +1457,10 @@ class CaseTrackingService:
         """
 
         case, access, is_manager = await self._load(case_id, principal)
+        if access.can_work and case.news_at is not None:
+            # Whoever works the case saw the news; someone who only follows it did not.
+            await self.repository.clear_news(case.id)
+            case.news_at = None
         first_by_responsible = (
             case.assignee_user_id == principal.user_id and case.first_read_at is None
         )

@@ -244,6 +244,40 @@ class NotificationService:
             "areas": [{"nombre": name, "empleados": count} for name, count in departments],
         }
 
+    # ------------------------------------------------------------------ platform notices
+
+    async def ring(
+        self, user_ids: list[UUID], key: str, title: str, summary: str, path: str
+    ) -> None:
+        """Put a notice from a platform module in these users' bells, with Web Push.
+
+        Used by PQRSF for news on a case. Users without an employee (not synced, a
+        guest) are skipped; the key makes a repeated call harmless.
+
+        Args:
+            user_ids (list[UUID]): Platform users to tell.
+            key (str): Idempotency key of this notice.
+            title (str): Headline (up to 200 characters).
+            summary (str): One line (up to 500 characters).
+            path (str): UI path the notice opens.
+        """
+
+        employees = await self.directory.employee_ids_of_users(user_ids)
+        if not employees:
+            return
+        await self.ingest(
+            IngestCommand(
+                source=Source.PQRSF,
+                source_id=path[:255],
+                title=title[:200],
+                idempotency_key=key[:255],
+                audience_type=AudienceType.EMPLEADOS,
+                audience_values=[str(employee) for employee in employees],
+                slug=path[:255],
+                summary=summary[:500],
+            )
+        )
+
     # ------------------------------------------------------------------ dispatch
 
     async def dispatch_due(self) -> tuple[int, int]:

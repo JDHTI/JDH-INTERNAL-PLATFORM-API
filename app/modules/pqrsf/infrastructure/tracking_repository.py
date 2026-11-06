@@ -272,6 +272,7 @@ def _case(
         request_id=model.request_id,
         created_by_user_id=model.created_by_user_id,
         first_read_at=model.first_read_at,
+        news_at=model.news_at,
         closed_at=model.closed_at,
         legacy=dict(model.legacy) if model.legacy is not None else None,
         created_at=model.created_at,
@@ -358,6 +359,8 @@ def _conditions(filters: CaseFilters, today: date) -> list:
         conditions.append(CaseModel.due_on < today)
     if filters.due_today:
         conditions.append(CaseModel.due_on == today)
+    if filters.with_news:
+        conditions.append(CaseModel.news_at.is_not(None))
     if filters.received_from:
         conditions.append(CaseModel.received_on >= filters.received_from)
     if filters.received_to:
@@ -839,6 +842,7 @@ class SqlAlchemyCaseRepository:
             func.count().filter(and_(is_open, CaseModel.due_on < today)),
             func.count().filter(and_(is_open, CaseModel.due_on == today)),
             func.count().filter(and_(is_open, CaseModel.assignee_user_id.is_(None))),
+            func.count().filter(and_(is_open, CaseModel.news_at.is_not(None))),
         )
         by_status_query = base.add_columns(CaseModel.status_id, func.count()).group_by(
             CaseModel.status_id
@@ -847,7 +851,7 @@ class SqlAlchemyCaseRepository:
             CaseModel.request_type_id
         )
         async with self.database.session_factory() as session:
-            total, open_count, overdue, due_today, unassigned = (
+            total, open_count, overdue, due_today, unassigned, with_news = (
                 await session.execute(totals_query)
             ).one()
             status_counts = dict((await session.execute(by_status_query)).tuples().all())
@@ -866,6 +870,7 @@ class SqlAlchemyCaseRepository:
             overdue=int(overdue),
             due_today=int(due_today),
             unassigned=int(unassigned),
+            with_news=int(with_news),
             by_status=[
                 CountBucket(s.id, s.code, s.name, int(status_counts.get(s.id, 0)), s.color)
                 for s in statuses
@@ -951,6 +956,45 @@ class SqlAlchemyCaseRepository:
                     .values(updated_at=func.now())
                 )
             await session.commit()
+
+    async def set_news(self, case_id: UUID, at: datetime) -> bool:
+        """Flag news on a case; an earlier unseen one keeps its time.
+
+        Args:
+            case_id (UUID): Case identifier.
+            at (datetime): When the email arrived.
+
+        Returns:
+            bool: Whether the case had no unseen news before.
+        """
+
+        async with self.database.session_factory() as session:
+            result = await session.execute(
+                update(CaseModel)
+                .where(CaseModel.id == case_id, CaseModel.news_at.is_(None))
+                .values(news_at=at)
+            )
+            await session.commit()
+            return bool(result.rowcount)
+
+    async def clear_news(self, case_id: UUID) -> bool:
+        """Clear the news flag of a case.
+
+        Args:
+            case_id (UUID): Case identifier.
+
+        Returns:
+            bool: Whether the case had news.
+        """
+
+        async with self.database.session_factory() as session:
+            result = await session.execute(
+                update(CaseModel)
+                .where(CaseModel.id == case_id, CaseModel.news_at.is_not(None))
+                .values(news_at=None)
+            )
+            await session.commit()
+            return bool(result.rowcount)
 
     async def list_events(self, case_id: UUID) -> list[CaseEvent]:
         """List the timeline oldest first.

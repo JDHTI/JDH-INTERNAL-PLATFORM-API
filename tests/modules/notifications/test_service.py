@@ -11,6 +11,7 @@ from app.core.errors import InvalidInputError
 from app.modules.notifications.domain.entities import (
     AudienceType,
     IngestCommand,
+    PushSubscription,
     Source,
     Status,
     Trigger,
@@ -47,6 +48,35 @@ async def test_an_immediate_publication_reaches_everyone_once(world) -> None:
     assert feed.total == 1 and feed.unread == 1
     item = feed.items[0]
     assert item.notification.href == "/noticias/nueva-politica" and item.read is False
+
+
+async def test_a_platform_notice_rings_the_bell_of_the_users_with_an_employee(world) -> None:
+    ana = principal("ana@jdh.com.co")
+    guest = principal("invitado@x.co")
+    employee = world.directory.employee(user_id=ana.user_id)
+    world.repository.subs["https://push/ana"] = PushSubscription(
+        uuid4(), employee, "https://push/ana", "k", "a"
+    )
+    path = "/calidad/pqrsf/abc"
+
+    await world.service.ring(
+        [ana.user_id, guest.user_id], "pqrsf-news:1", "Novedad en el caso Q1", "Escribió", path
+    )
+    await world.service.ring([ana.user_id], "pqrsf-news:1", "Novedad en el caso Q1", "Otra", path)
+
+    feed = await world.service.feed(ana)
+    assert feed.total == 1 and feed.unread == 1
+    notice = feed.items[0].notification
+    assert notice.source is Source.PQRSF and notice.href == path
+    assert notice.title == "Novedad en el caso Q1"
+    assert [payload["href"] for _, payload in world.push.sent] == [path]
+    assert (await world.service.feed(guest)).total == 0
+
+
+async def test_a_platform_notice_without_employees_does_nothing(world) -> None:
+    await world.service.ring([uuid4()], "k", "t", "s", "/x")
+
+    assert world.repository.notifications == {}
 
 
 async def test_audiences_by_site_area_and_people(world) -> None:
