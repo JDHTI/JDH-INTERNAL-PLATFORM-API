@@ -204,8 +204,9 @@ uno en el ambiente de pruebas de SIESA.
 
 Leer exige ser administrador, miembro del área comercial (`QUOTATIONS_MANAGER_AREA_SLUG`) o del
 área que valida (`QUOTATIONS_APPROVER_AREA_SLUG`). Cotizan las dos áreas: quien gestiona el
-cotizador en Comercial o en BI. Cada quien edita solo las cotizaciones que creó (los
-administradores, todas). Validar, solo quien valida.
+cotizador en Comercial o en BI. BI y los administradores tienen el módulo completo: editan
+(refrescar, precios, agregar referencias, plantilla masiva, confirmar) y borran cualquier
+cotización. Comercial, solo las que creó. Validar, solo quien valida.
 
 Qué cotizaciones ve cada uno: quien valida (BI y administradores) y los moderadores ven todas; el
 resto, también supervisores y líderes de Comercial, solo las que creó. `GET /quotations` les

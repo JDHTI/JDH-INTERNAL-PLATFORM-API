@@ -297,6 +297,13 @@ class QuotationService:
 
         return principal.is_moderator or await self.can_validate(principal)
 
+    async def _require_owner_or_validator(
+        self, principal: Principal, quotation: Quotation, action: str
+    ) -> None:
+        if quotation.created_by_id == principal.user_id or await self.can_validate(principal):
+            return
+        raise ForbiddenError(f"Solo quien creó la cotización puede {action}")
+
     async def _require_manager(self, principal: Principal) -> None:
         if not await self.can_manage(principal):
             raise ForbiddenError("No tienes permiso para usar el cotizador")
@@ -599,13 +606,14 @@ class QuotationService:
         return detail
 
     async def _editable(self, principal: Principal, quotation_id: UUID) -> QuotationDetail:
-        """The quotation, if the caller created it (or is an admin) and it is not awaiting
-        validation. BI reads every quotation but edits only its own."""
+        """The quotation, if the caller may edit it and it is not awaiting validation.
+
+        BI (and admins) has the whole module: it edits any quotation. Anyone else, only theirs.
+        """
 
         await self._require_manager(principal)
         detail = await self.get(principal, quotation_id)
-        if detail.quotation.created_by_id != principal.user_id and not principal.is_platform_admin:
-            raise ForbiddenError("Solo quien creó la cotización puede editarla")
+        await self._require_owner_or_validator(principal, detail.quotation, "editarla")
         if detail.quotation.status == vocabulary.PENDING:
             raise ConflictError(
                 "La cotización está pendiente de validación; devuélvela a borrador para editarla"
@@ -1173,11 +1181,10 @@ class QuotationService:
         return await self.repository.save(validated, [], version)
 
     async def delete(self, principal: Principal, quotation_id: UUID) -> None:
-        """Delete a quotation: its creator or an admin."""
+        """Delete a quotation: its creator, or BI and admins."""
 
         detail = await self.get(principal, quotation_id)
-        if detail.quotation.created_by_id != principal.user_id and not principal.is_platform_admin:
-            raise ForbiddenError("Solo quien creó la cotización puede borrarla")
+        await self._require_owner_or_validator(principal, detail.quotation, "borrarla")
         await self.repository.delete(quotation_id)
 
     # ------------------------------------------------------------ export
