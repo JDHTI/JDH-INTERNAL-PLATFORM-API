@@ -69,6 +69,9 @@ def test_upload_then_read_orders_with_their_lines(client) -> None:
     pending = client.get(f"{BASE}/{batch['id']}/orders", params={"status": "pendiente_validacion"})
     assert [item["document"] for item in pending.json()["items"]] == ["PV-2"]
     assert client.get(f"{BASE}/{batch['id']}/orders", params={"status": "x"}).status_code == 422
+    assert orders["operation_centers"] == [{"code": "004", "order_count": 2}]
+    by_center = client.get(f"{BASE}/{batch['id']}/orders", params={"operation_center": "004"})
+    assert by_center.json()["total"] == 2
 
 
 def test_list_get_and_revalidate(client) -> None:
