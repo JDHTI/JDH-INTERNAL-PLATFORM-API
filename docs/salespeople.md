@@ -1,7 +1,7 @@
 # Vendedores y alcance comercial
 
 Vincula a cada usuario de la plataforma con su código de vendedor o de supervisor de SIESA, y de
-ahí decide qué clientes y cotizaciones ve y trabaja. El servidor aplica el alcance; el cliente no
+ahí decide qué clientes puede cotizar. El servidor aplica el alcance; el cliente no
 lo elige. Módulo: `app/modules/salespeople`.
 
 ## Fuente
@@ -30,9 +30,9 @@ a mano.
 
 ## Alcance
 
-| Alcance | Quién | Qué ve |
+| Alcance | Quién | Qué cotiza |
 | --- | --- | --- |
-| `all` | Admin, owner, moderador; todo miembro o responsable de BI; líder o responsable de Comercial | Todos los clientes y cotizaciones |
+| `all` | Admin, owner, moderador; todo miembro o responsable de BI; líder o responsable de Comercial | Todos los clientes |
 | `team` | Vinculado a uno o más códigos de supervisor | Clientes de los vendedores activos de su equipo, más sus propios códigos |
 | `mine` | Vinculado a uno o más códigos de vendedor | Clientes de sus códigos |
 | `none` | Cualquier otro, también miembros de Comercial sin vínculo | Nada hasta que TI lo vincule |
@@ -44,8 +44,8 @@ BI y Comercial salen de `QUOTATIONS_APPROVER_AREA_SLUG` y `QUOTATIONS_MANAGER_AR
 - `GET /quotations/customers`: con alcance `team`, `mine` o `none` se ignora `scope` y se
   devuelve la cartera. Con `all` la persona sigue eligiendo `mine` o `all`.
 - `POST /quotations`: 403 si ninguna sucursal del NIT es de sus códigos.
-- `GET /quotations` y `GET /quotations/{id}` (y todo lo que abre una cotización): solo las que
-  creó la persona o cuyo vendedor (`salesperson_code`) está en su alcance; si no, 403.
+- Qué cotizaciones ve cada uno ya no depende del alcance: ver `docs/cotizador.md` (quien no
+  valida ve solo las que creó).
 - `GET /quotations/permissions` trae `sales_scope`.
 
 Las solicitudes de apoyo no se tocan: no tienen cliente ni vendedor, siguen por quien las pide.

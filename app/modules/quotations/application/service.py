@@ -281,15 +281,24 @@ class QuotationService:
     # ------------------------------------------------------------ access
 
     async def can_manage(self, principal: Principal) -> bool:
-        return await self.managers.is_manager(principal)
+        """Whether the caller quotes: Comercial, and BI too (it validates and also quotes)."""
+
+        if await self.managers.is_manager(principal):
+            return True
+        return self.approvers is not None and await self.approvers.is_manager(principal)
 
     async def can_validate(self, principal: Principal) -> bool:
         if principal.is_platform_admin:
             return True
         return self.approvers is not None and await self.approvers.is_manager(principal)
 
+    async def _sees_all(self, principal: Principal) -> bool:
+        """Validators and moderators read every quotation; anyone else only the ones they made."""
+
+        return principal.is_moderator or await self.can_validate(principal)
+
     async def _require_manager(self, principal: Principal) -> None:
-        if not await self.managers.is_manager(principal):
+        if not await self.can_manage(principal):
             raise ForbiddenError("No tienes permiso para usar el cotizador")
 
     async def can_read(self, principal: Principal) -> bool:
@@ -309,7 +318,7 @@ class QuotationService:
         A warehouse outage never hides the page: the seller is just unknown.
         """
 
-        can_manage = await self.managers.is_manager(principal)
+        can_manage = await self.can_manage(principal)
         seller = None
         if can_manage:
             try:
@@ -339,16 +348,12 @@ class QuotationService:
     def _restricted(scope: SalesScope | None) -> bool:
         return scope is not None and not scope.is_all
 
-    def _check_visible(
-        self, principal: Principal, scope: SalesScope | None, quotation: Quotation
-    ) -> None:
-        """A restricted person reaches a quotation they made or one of their customers."""
+    async def _check_visible(self, principal: Principal, quotation: Quotation) -> None:
+        """Outside validation, each person reaches only the quotations they created."""
 
-        if not self._restricted(scope) or quotation.created_by_id == principal.user_id:
+        if quotation.created_by_id == principal.user_id or await self._sees_all(principal):
             return
-        assert scope is not None
-        if not scope.allows(quotation.salesperson_code):
-            raise ForbiddenError("La cotización es de un cliente fuera de tu cartera")
+        raise ForbiddenError("Solo puedes ver las cotizaciones que creaste")
 
     async def customers(
         self, principal: Principal, scope: str, q: str | None, page: int, size: int
@@ -590,14 +595,17 @@ class QuotationService:
         detail = await self.repository.get(quotation_id)
         if detail is None:
             raise NotFoundError("Cotización no encontrada")
-        self._check_visible(principal, await self._scope(principal), detail.quotation)
+        await self._check_visible(principal, detail.quotation)
         return detail
 
     async def _editable(self, principal: Principal, quotation_id: UUID) -> QuotationDetail:
-        """The quotation, if the caller may edit it now (not while it awaits validation)."""
+        """The quotation, if the caller created it (or is an admin) and it is not awaiting
+        validation. BI reads every quotation but edits only its own."""
 
         await self._require_manager(principal)
         detail = await self.get(principal, quotation_id)
+        if detail.quotation.created_by_id != principal.user_id and not principal.is_platform_admin:
+            raise ForbiddenError("Solo quien creó la cotización puede editarla")
         if detail.quotation.status == vocabulary.PENDING:
             raise ConflictError(
                 "La cotización está pendiente de validación; devuélvela a borrador para editarla"
@@ -619,15 +627,9 @@ class QuotationService:
         _page(page, size)
         if status is not None and status not in vocabulary.STATUSES:
             raise InvalidInputError("Estado desconocido")
-        scope = await self._scope(principal)
-        visible = (
-            (principal.user_id, tuple(scope.codes or ()))
-            if self._restricted(scope) and scope is not None
-            else None
-        )
+        own_only = mine or not await self._sees_all(principal)
         return await self.repository.list(
-            visible_to=visible,
-            created_by_id=principal.user_id if mine else None,
+            created_by_id=principal.user_id if own_only else None,
             status=status,
             customer_nit=normalize_nit(customer_nit) if customer_nit else None,
             q=q.strip() if q and q.strip() else None,
@@ -1120,7 +1122,7 @@ class QuotationService:
         if quotation.status != vocabulary.PENDING:
             raise ConflictError("Solo se devuelve una cotización pendiente de validación")
         approver = await self.can_validate(principal)
-        if not approver and not await self.managers.is_manager(principal):
+        if not approver and not await self.can_manage(principal):
             raise ForbiddenError("No tienes permiso para devolver la cotización")
         text = (note or "").strip() or None
         if approver and quotation.created_by_id != principal.user_id and text is None:

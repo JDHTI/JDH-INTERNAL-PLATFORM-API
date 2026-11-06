@@ -445,7 +445,8 @@ async def test_customers_mine_uses_the_seller_linked_by_email(
     empty, linked = await service.customers(unlinked, "mine", None, 1, 20)
     assert empty.total == 0 and not linked
     validator = await service.permissions(approver)
-    assert not validator.can_manage and validator.can_validate
+    # BI validates and also quotes.
+    assert validator.can_manage and validator.can_validate
     warehouse.down = True
     everyone, linked = await service.customers(advisor, "all", None, 1, 20)
     assert everyone.total == 2 and not linked
@@ -478,6 +479,37 @@ async def test_list_and_delete(service, advisor, approver) -> None:
     await service.delete(other, quotation.id)
     with pytest.raises(NotFoundError):
         await service.get(advisor, quotation.id)
+
+
+async def test_bi_quotes_too_and_edits_only_its_own(service, advisor, approver) -> None:
+    permissions = await service.permissions(approver)
+    assert permissions.can_manage and permissions.can_validate
+
+    own = (await service.create(approver, NIT, 6)).quotation
+    assert own.created_by == approver.email
+    advisors = (await service.create(advisor, NIT, 6)).quotation
+
+    # BI reads the advisor's quotation to validate it, but does not edit it.
+    assert (await service.get(approver, advisors.id)).quotation.id == advisors.id
+    with pytest.raises(ForbiddenError):
+        await service.refresh(approver, advisors.id, advisors.version)
+    # The advisor never reaches the one BI made.
+    with pytest.raises(ForbiddenError):
+        await service.get(advisor, own.id)
+    mine = await service.list(
+        approver, mine=True, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert [item.id for item in mine.items] == [own.id]
+
+
+async def test_a_moderator_reads_every_quotation(service, advisor) -> None:
+    created = (await service.create(advisor, NIT, 6)).quotation
+    moderator = replace(person("mod@jdh.com.co"), role="moderator")
+
+    page = await service.list(
+        moderator, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert [item.id for item in page.items] == [created.id]
 
 
 def test_normalize_nit_and_list_name() -> None:

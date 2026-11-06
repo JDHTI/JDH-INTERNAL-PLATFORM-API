@@ -59,28 +59,39 @@ async def test_quoting_a_customer_outside_the_portfolio_is_refused(service, sale
     assert detail.quotation.salesperson_code == "0051"
 
 
-async def test_quotations_are_seen_only_inside_the_scope(
-    service, sales, repository, advisor, approver
+@pytest.mark.parametrize(
+    "scope",
+    [
+        EVERYTHING,
+        SalesScope("team", (), ("S01",), ("0051",)),
+        SalesScope("mine", ("0051",), (), ("0051",)),
+    ],
+)
+async def test_an_advisor_sees_only_the_quotations_they_created(
+    service, sales, repository, advisor, approver, scope
 ) -> None:
     sales.scopes[advisor.email] = EVERYTHING
     detail = await service.create(advisor, NIT, 6)
+    # Same customer and salesperson, made by someone else.
     other = replace(
         detail.quotation, id=detail.quotation.id.__class__(int=1), created_by_id=approver.user_id
     )
     repository.items[other.id] = replace(detail, quotation=other)
 
-    sales.scopes[advisor.email] = SalesScope("mine", ("0099",), (), ("0099",))
+    sales.scopes[advisor.email] = scope
     page = await service.list(
         advisor, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
     )
-    # Only the one the advisor made: the other is of a customer outside their codes.
     assert [q.id for q in page.items] == [detail.quotation.id]
     assert (await service.get(advisor, detail.quotation.id)).quotation.id == detail.quotation.id
     with pytest.raises(ForbiddenError):
         await service.get(advisor, other.id)
 
-    sales.scopes[advisor.email] = SalesScope("team", (), ("S01",), ("0051",))
-    assert (await service.get(advisor, other.id)).quotation.id == other.id
+    # The validator still reads both.
+    every = await service.list(
+        approver, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert every.total == 2
 
 
 async def test_permissions_report_the_scope(service, sales, advisor) -> None:
