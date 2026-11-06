@@ -7,6 +7,7 @@ import pytest
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.pqrsf.application.dto import CaseChanges, ImportedCase, ImportedItem, ItemChanges
+from app.modules.pqrsf.application.notification_templates import received_at_text
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
 from app.modules.pqrsf.domain.entities import (
@@ -671,6 +672,87 @@ async def test_submission_survives_a_failing_case_opener() -> None:
 
     assert ok.tracking_code == "P26MD0007"
     assert failed.tracking_code is None
+
+
+class _Outbox:
+    def __init__(self) -> None:
+        self.items = []
+
+    async def enqueue(self, notification):
+        if any(i.dedupe_key == notification.dedupe_key for i in self.items):
+            return False
+        self.items.append(notification)
+        return True
+
+
+def _acknowledging(s: Setup, outbox, acknowledge: bool = True) -> PqrsfService:
+    woken = []
+    service = PqrsfService(
+        None,
+        None,
+        cases=s.service,
+        notifications=outbox,
+        acknowledge=acknowledge,
+        wake=lambda: woken.append(True),
+        clock=lambda: NOW,
+    )
+    service.woken = woken
+    return service
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_opens_a_case_emails_the_radicado_to_the_requester() -> None:
+    s = Setup()
+    outbox = _Outbox()
+    service = _acknowledging(s, outbox)
+    request = _public_request(s.peticion)
+
+    result = await service._with_case(CreateResult(request, replayed=False))
+
+    (email,) = outbox.items
+    assert email.kind == "request_ack" and email.recipient_email == request.email
+    assert email.subject == f"Radicamos tu peticion: {result.tracking_code}"
+    assert email.dedupe_key == f"request_ack:{request.id}"
+    content = email.payload["email"]
+    assert content["title"] == "Radicamos tu peticion"
+    assert content["facts"][0] == ["Radicado", result.tracking_code]
+    assert content["facts"][1] == ["Tipo de solicitud", "Peticion"]
+    assert content["facts"][2][0] == "Fecha de recepción"
+    assert service.woken == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_submission_does_not_email_the_radicado_twice() -> None:
+    s = Setup()
+    outbox = _Outbox()
+    service = _acknowledging(s, outbox)
+    request = _public_request(s.peticion)
+    await service._with_case(CreateResult(request, replayed=False))
+
+    await service._with_case(CreateResult(request, replayed=True))
+
+    assert len(outbox.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_radicado_email_while_the_pqrsf_emails_are_off() -> None:
+    s = Setup()
+    outbox = _Outbox()
+
+    await _acknowledging(s, outbox, acknowledge=False)._with_case(
+        CreateResult(_public_request(s.peticion), replayed=False)
+    )
+
+    assert outbox.items == []
+
+
+def test_the_reception_date_is_written_in_colombian_time() -> None:
+    received = datetime(2026, 11, 6, 14, 41, tzinfo=UTC)
+
+    assert received_at_text(received) == "6 de noviembre de 2026, 9:41 a. m."
+    assert received_at_text(received.replace(hour=23, minute=5)) == (
+        "6 de noviembre de 2026, 6:05 p. m."
+    )
 
 
 @pytest.mark.asyncio

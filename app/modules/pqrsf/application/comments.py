@@ -17,6 +17,7 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.modules.identity.domain.principal import Principal
+from app.modules.mail.layout import render_text
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.application.attachment_guard import AttachmentGuard
 from app.modules.pqrsf.application.dto import EventView
@@ -318,14 +319,14 @@ class CaseCommentService:
         stored: list[CaseAttachment],
         cc: Sequence[str] = (),
     ) -> Notification:
-        subject, body = templates.client_reply(case, text)
+        subject, content = templates.client_reply(case, text)
         notification = Notification(
             id=notification_id,
             kind=CLIENT_REPLY,
             recipient_email=recipient,
             recipient_user_id=None,
             subject=subject,
-            body=body,
+            body=render_text(content),
             case_id=case.id,
             dedupe_key=f"{CLIENT_REPLY}:{event.event.id}",
             next_attempt_at=self.clock(),
@@ -334,6 +335,7 @@ class CaseCommentService:
                 "file_ids": [str(a.id) for a in stored],
                 "graph_id": await self.emails.latest_inbound_graph_id(case.id),
                 "cc": list(cc),
+                "email": content.to_payload(),
             },
         )
         await self.notifications.enqueue(notification)

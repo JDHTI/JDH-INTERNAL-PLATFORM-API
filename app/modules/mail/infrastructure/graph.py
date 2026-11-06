@@ -149,18 +149,20 @@ class GraphMailClient(GraphAppClient):
         text: str,
         files: Sequence[OutgoingFile] = (),
         cc: Sequence[str] = (),
+        html: bool = False,
     ) -> bool:
         """Reply in the same conversation; Graph quotes the original and keeps the thread.
 
         With files the reply goes through a draft (Graph's plain reply takes no
-        attachments): create it, attach each file, send it.
+        attachments): create it, attach each file, send it. ``html`` takes the text as an
+        HTML fragment instead of plain text.
 
         Returns:
             bool: ``False`` when the message to answer no longer exists.
         """
 
         message = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}"
-        body: dict[str, Any] = {"comment": _html(text)}
+        body: dict[str, Any] = {"comment": text if html else _html(text)}
         if cc:
             body["message"] = {"ccRecipients": _recipients(cc)}
         if not files:
@@ -195,12 +197,17 @@ class GraphMailClient(GraphAppClient):
         text: str,
         files: Sequence[OutgoingFile] = (),
         cc: Sequence[str] = (),
+        html: bool = False,
     ) -> None:
-        """Send a plain-text message from the mailbox; it is kept in its Sent Items."""
+        """Send a message from the mailbox; it is kept in its Sent Items.
+
+        The text is plain unless ``html``: then it is an HTML document, and the files with a
+        ``content_id`` (the logo) are shown inside it.
+        """
 
         message: dict[str, Any] = {
             "subject": subject,
-            "body": {"contentType": "Text", "content": text},
+            "body": {"contentType": "HTML" if html else "Text", "content": text},
             "toRecipients": _recipients([to]),
         }
         if cc:
@@ -276,9 +283,13 @@ def _html(text: str) -> str:
 
 
 def _file_attachment(file: OutgoingFile) -> dict[str, Any]:
-    return {
+    attachment = {
         "@odata.type": _FILE_ATTACHMENT,
         "name": file.name,
         "contentType": file.content_type,
         "contentBytes": base64.b64encode(file.content).decode("ascii"),
     }
+    if file.content_id:
+        # Shown inside the HTML body (``cid:``), not listed as a file to download.
+        attachment |= {"isInline": True, "contentId": file.content_id}
+    return attachment

@@ -163,9 +163,10 @@ async def test_a_suggestion_by_email_is_stored_apart_and_thanked_in_the_thread()
     (thanks,) = feedback.notifications.items
     assert thanks.kind == FEEDBACK_ACK and thanks.recipient_email == "ana@cliente.com"
     assert "Recibimos tu sugerencia" in thanks.subject
-    assert thanks.body.rstrip().endswith("PQRSF JDH") and "Hola Ana," in thanks.body
+    assert "PQRSF JDH" in thanks.body and "Hola Ana," in thanks.body
+    assert thanks.payload["email"]["title"] == "Recibimos tu sugerencia"
     # The thank-you answers the client's own email, and the sender is told to hurry.
-    assert thanks.payload == {"feedback_id": str(stored.id), "graph_id": "g1"}
+    assert thanks.payload["feedback_id"] == str(stored.id) and thanks.payload["graph_id"] == "g1"
     assert feedback.wakes == [1]
     assert stored.reply_notification_id == thanks.id
     # The acknowledgment of a case is not sent: the thank-you replaces it.
