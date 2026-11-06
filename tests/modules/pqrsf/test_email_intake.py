@@ -344,6 +344,56 @@ async def test_a_reply_to_a_closed_case_opens_a_new_one_that_points_back() -> No
 
 
 @pytest.mark.asyncio
+async def test_a_follow_up_only_inbox_opens_no_case_and_answers_nobody() -> None:
+    t = Intake(open_cases=False)
+    t.mail.add(t.message(TEMPLATE))
+
+    report = await t.service.sync()
+
+    assert t.cases() == [] and t.mail.replies == [] and t.mail.marked == []
+    assert report.ignored == 1 and report.created == 0
+    stored = t.emails.messages["<m1@x>"]
+    assert stored.status == "ignored" and "solo da seguimiento" in stored.detail["reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_only_inbox_still_threads_the_answer_of_an_open_case() -> None:
+    # The case comes from the form (no email thread): the answer finds it by its code.
+    open_t = Intake()
+    open_t.mail.add(open_t.message(TEMPLATE))
+    await open_t.service.sync()
+    (case,) = open_t.cases()
+    t = Intake(open_cases=False)
+    t.setup.cases.cases[case.id] = case
+    t.emails.cases = t.setup.cases
+    t.mail.add(t.message("Ya lo revisé", subject=f"RE: {case.code} solicitud"))
+
+    report = await t.service.sync()
+
+    assert report.threaded == 1 and len(t.cases()) == 1
+    (event,) = t.events()
+    assert event.case_id == case.id and event.note == "Ya lo revisé"
+    assert t.mail.replies == []
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_only_inbox_ignores_the_answer_of_a_closed_case() -> None:
+    open_t = Intake()
+    open_t.mail.add(open_t.message(TEMPLATE))
+    await open_t.service.sync()
+    (case,) = open_t.cases()
+    case.status = open_t.setup.finalizada
+    t = Intake(open_cases=False)
+    t.setup.cases.cases[case.id] = case
+    t.emails.cases = t.setup.cases
+    t.mail.add(t.message("Sigue el problema", subject=f"RE: {case.code}"))
+
+    report = await t.service.sync()
+
+    assert report.ignored == 1 and len(t.cases()) == 1 and t.events() == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
     [

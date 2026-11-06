@@ -25,6 +25,7 @@ from app.modules.pqrsf.domain.ports import (
 from app.modules.pqrsf.domain.supplier_messages import (
     MESSAGE_KINDS,
     SupplierContact,
+    clean_cc,
     clean_kind,
     clean_recipients,
 )
@@ -112,6 +113,7 @@ class SupplierMessageService:
         files: Sequence[UploadedFile] = (),
         include_evidence: bool = False,
         include_case_data: bool = True,
+        cc: Sequence[str] = (),
     ) -> SupplierMessageResult:
         """Email a supplier from an open case and record it in the timeline.
 
@@ -130,6 +132,8 @@ class SupplierMessageService:
             files (Sequence[UploadedFile]): New files to attach (kept with the case).
             include_evidence (bool): Also attach the client's photos and video.
             include_case_data (bool): Add client, site and products to the email.
+            cc (Sequence[str]): People of the organization copied (up to 5). Each address
+                gets one copy, on the first email.
 
         Returns:
             SupplierMessageResult: The timeline entry, the files and the queued emails.
@@ -140,6 +144,7 @@ class SupplierMessageService:
             raise ConflictError("El caso está finalizado: no se puede escribir al proveedor")
         kind = clean_kind(kind)
         recipients = clean_recipients(list(to))
+        copied = clean_cc(cc, self.files.cc_domains, exclude=recipients)
         text = clean_multiline(body, "mensaje", 5_000)
         if text is None:
             raise InvalidInputError("El mensaje no puede estar vacío")
@@ -158,6 +163,7 @@ class SupplierMessageService:
         data: dict = {
             "kind": kind,
             "to": recipients,
+            "cc": copied,
             "supplier_code": code or None,
             "supplier_name": name,
             "file_ids": [str(a.id) for a in stored],
@@ -182,7 +188,9 @@ class SupplierMessageService:
             include_case_data,
         )
         queued = []
-        for recipient, notification_id in zip(recipients, notification_ids, strict=True):
+        for position, (recipient, notification_id) in enumerate(
+            zip(recipients, notification_ids, strict=True)
+        ):
             notification = Notification(
                 id=notification_id,
                 kind=SUPPLIER_MESSAGE,
@@ -198,6 +206,8 @@ class SupplierMessageService:
                     "file_ids": data["file_ids"],
                     "request_id": str(request.id) if request else None,
                     "evidence_ids": data["evidence_ids"],
+                    # One copy for the people in CC, not one per supplier address.
+                    "cc": copied if position == 0 else [],
                 },
             )
             await self.notifications.enqueue(notification)

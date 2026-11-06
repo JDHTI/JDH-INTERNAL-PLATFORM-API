@@ -79,9 +79,14 @@ class MailGateway(Protocol):
         ...
 
     async def reply(
-        self, mailbox: str, graph_id: str, text: str, files: Sequence[OutgoingFile] = ()
+        self,
+        mailbox: str,
+        graph_id: str,
+        text: str,
+        files: Sequence[OutgoingFile] = (),
+        cc: Sequence[str] = (),
     ) -> bool:
-        """Answer inside the same conversation, from the mailbox.
+        """Answer inside the same conversation, from the mailbox, copying ``cc``.
 
         Returns:
             bool: ``False`` when the message to answer no longer exists.
@@ -93,7 +98,13 @@ class MailGateway(Protocol):
         ...
 
     async def send(
-        self, mailbox: str, to: str, subject: str, text: str, files: Sequence[OutgoingFile] = ()
+        self,
+        mailbox: str,
+        to: str,
+        subject: str,
+        text: str,
+        files: Sequence[OutgoingFile] = (),
+        cc: Sequence[str] = (),
     ) -> None:
-        """Send a plain-text message from the mailbox to one recipient."""
+        """Send a plain-text message from the mailbox to one recipient, copying ``cc``."""
         ...

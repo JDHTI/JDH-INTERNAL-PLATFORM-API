@@ -43,6 +43,7 @@ _BODY = {
                         "enum": ["request", "response", "improvement", "notice"],
                     },
                     "to": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+                    "cc": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
                     "body": {"type": "string", "maxLength": 5000},
                     "supplier_code": {"type": "string"},
                     "supplier_name": {"type": "string"},
@@ -62,6 +63,7 @@ class SupplierEmailResponse(BaseModel):
     id: UUID
     event_id: UUID | None
     to: str
+    cc: list[str] = []
     subject: str
     status: Literal["pending", "sent", "failed"]
     attempts: int
@@ -95,6 +97,7 @@ def _email(item: Notification) -> SupplierEmailResponse:
         id=item.id,
         event_id=UUID(event_id) if event_id else None,
         to=item.recipient_email,
+        cc=[str(address) for address in item.payload.get("cc") or []],
         subject=item.subject,
         status=item.status,
         attempts=item.attempts,
@@ -120,7 +123,8 @@ async def send_supplier_message(
 ) -> SupplierMessageResponse:
     """Email the supplier from the PQRSF mailbox and record it in the timeline.
 
-    Multipart form: ``kind``, ``to`` (repeated, up to 5), ``body``, optional
+    Multipart form: ``kind``, ``to`` (repeated, up to 5), optional ``cc`` (repeated, up to 5
+    people of the organization, copied on the first email), ``body``, optional
     ``supplier_code`` and ``supplier_name``, ``include_evidence`` (attach the client's
     photos and video), ``include_case_data`` (client, site and products; on by default)
     and ``files``. Only who works the case, and only while it is open.
@@ -138,6 +142,7 @@ async def send_supplier_message(
         principal,
         kind=str(form.get("kind") or ""),
         to=[str(value) for value in form.getlist("to")],
+        cc=[str(value) for value in form.getlist("cc")],
         body=str(form.get("body") or ""),
         supplier_code=str(form.get("supplier_code") or "") or None,
         supplier_name=str(form.get("supplier_name") or "") or None,

@@ -756,6 +756,7 @@ class V1Container(containers.DeclarativeContainer):
         mailbox=config.mail.pqrsf_inbox,
         ignored_senders=config.mail.ignored_senders,
         since=config.mail.since,
+        open_cases=config.mail.open_cases,
         max_attempts=config.mail.max_attempts,
         max_attachments=config.mail.max_attachments,
         max_attachment_bytes=config.mail.max_attachment_bytes,
@@ -779,6 +780,7 @@ class V1Container(containers.DeclarativeContainer):
         notifications=pqrsf_notification_repository,
         storage=storage,
         guard=pqrsf_comment_guard,
+        cc_domains=config.mail.cc_domains,
     )
     pqrsf_supplier_contact_repository = providers.Factory(
         SqlAlchemySupplierContactRepository, database=database

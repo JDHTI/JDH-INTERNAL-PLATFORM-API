@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -18,6 +19,8 @@ MESSAGE_KINDS = {
 }
 # Addresses one message goes to.
 MAX_RECIPIENTS = 5
+# People of the organization copied on one email.
+MAX_CC = 5
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -49,6 +52,39 @@ def clean_recipients(values: list[str]) -> list[str]:
         if len(address) > 320 or not _EMAIL.fullmatch(address):
             raise InvalidInputError(f"El correo {address} no es válido")
     return recipients
+
+
+def clean_cc(
+    values: Sequence[str], domains: Collection[str], exclude: Collection[str] = ()
+) -> list[str]:
+    """Lower-case, unique addresses to copy on an email; only people of the organization.
+
+    Args:
+        values (Sequence[str]): Addresses as received.
+        domains (Collection[str]): Allowed domains (``jdh.com.co``). Empty allows any.
+        exclude (Collection[str]): Addresses that already receive the email (the ``To``).
+
+    Raises:
+        InvalidInputError: Too many, not an email, or outside the organization.
+    """
+
+    skip = {address.strip().lower() for address in exclude}
+    copied = [
+        address
+        for address in dict.fromkeys(value.strip().lower() for value in values if value.strip())
+        if address not in skip
+    ]
+    if len(copied) > MAX_CC:
+        raise InvalidInputError(f"Máximo {MAX_CC} personas en copia (CC)")
+    allowed = {domain.lower().lstrip("@") for domain in domains}
+    for address in copied:
+        if len(address) > 320 or not _EMAIL.fullmatch(address):
+            raise InvalidInputError(f"El correo {address} no es válido")
+        if allowed and address.rsplit("@", 1)[1] not in allowed:
+            raise InvalidInputError(
+                f"{address} no es de la organización: solo se copia a personas de JDH"
+            )
+    return copied
 
 
 def clean_kind(value: str) -> str:

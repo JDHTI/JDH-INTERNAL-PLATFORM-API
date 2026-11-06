@@ -64,7 +64,7 @@ cadena con `0024_app_monitoring` (una sola cabeza). Pasan 831 pruebas y ruff.
 
 - **Base de prueba:** `internal_platform_pqrsf` tiene el maestro de productos cargado (27.792 productos) y un solo usuario.
 - **Base compartida:** `internal_platform` estaba en `0024_app_monitoring`. Con la `0028` ya se puede migrar.
-- **Correo:** las llaves de Graph del buzón están en el `.env` local, pero `MAIL_INTAKE_ENABLED` y `PQRSF_NOTIFICATIONS_ENABLED` siguen apagados.
+- **Correo (servidor `intranet.jdh.local`):** `PQRSF_NOTIFICATIONS_ENABLED=true` desde 2026-11-06 con `PQRSF_NOTIFY_REDIRECT=analista.ti@jdh.com.co`, así que todo lo que sale llega a esa dirección con el asunto `[PRUEBA para …]`. `MAIL_INTAKE_ENABLED` sigue apagado hasta desplegar el modo solo seguimiento (sección 7). Para escribirle a clientes reales hay que vaciar la redirección.
 
 ### Pendientes inmediatos
 
@@ -637,6 +637,13 @@ sigue intacta como evidencia en «Solicitud original».
 Cualquier correo a `pqrsf@jdh.com.co` se convierte en caso (origen `email`) o se suma a uno
 abierto. Usa Microsoft Graph con permisos de aplicación, sin contraseñas de buzón.
 
+> **Modo actual: solo seguimiento (`MAIL_INTAKE_OPEN_CASES=false`).** Los casos nacen del
+> formulario; la plantilla por correo no está en uso. El buzón solo suma a la línea de tiempo
+> (`email_received`) la respuesta del cliente o del proveedor que continúa un caso abierto, por
+> conversación o por el consecutivo en el asunto. Un correo que no continúa un caso abierto, o
+> que responde a uno finalizado, se guarda como `ignored` y no abre caso ni recibe acuse. El
+> resto de esta sección describe el modo con `MAIL_INTAKE_OPEN_CASES=true`.
+
 ### Plantilla
 
 ```
@@ -726,6 +733,10 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
   `files`).
 - **Archivos:** mismas reglas que el correo entrante. Quedan en `/cases/{id}/files` con su
   `comment_event_id`.
+- **`cc`:** con `reply_to_client`, hasta 5 personas de la organización (JSON `cc: [...]` o campo
+  repetido en multipart). Fuera dominio, repetidas o inválidas dan `422`; el cliente no se copia
+  a sí mismo. Con la redirección de pruebas nadie recibe copia. El buscador es
+  `GET /pqrsf/people?q=&limit=` (a diferencia de `/assignees`, no pide ser gestor).
 - **`reply_to_client`:** solo quien trabaja el caso, con el caso abierto y correo del
   solicitante. Si el caso nació por correo, responde en ese hilo; si no, es un correo nuevo con
   el radicado.
@@ -746,6 +757,7 @@ tiempo. El cliente no ve estos mensajes.
 |---|---|
 | `kind` | `request` (Solicitud de información), `response` (Respuesta), `improvement` (Oportunidad de mejora), `notice` (Mensaje informativo) |
 | `to` | Repetible, de 1 a 5 correos |
+| `cc` | Opcional y repetible, hasta 5 personas de la organización (`MAIL_CC_DOMAINS`). Reciben una sola copia, en el primer correo |
 | `body` | Hasta 5000 caracteres |
 | `supplier_code`, `supplier_name` | Opcionales; salen de los productos del caso |
 | `include_case_data` | Por defecto `true`: cliente, sede, fecha y productos con lote, vencimiento, cantidad y factura |
@@ -939,6 +951,8 @@ saca de las ventas del DWH; no se le pide al cliente.
 | `PQRSF_CERTIFICATES_AREA_SLUG` | `calidad` | Área de los certificados |
 | `PQRSF_DOCUMENT_EMAILS_PER_ADDRESS_PER_DAY` / `PQRSF_DOCUMENT_EMAIL_MAX_MB` | 5 / 15 | Correos de documentos |
 | `MAIL_INTAKE_ENABLED` | `false` | Lectura del buzón |
+| `MAIL_INTAKE_OPEN_CASES` | `false` | `false`: el buzón solo da seguimiento (sección 7). `true`: también abre casos con la plantilla |
+| `MAIL_CC_DOMAINS` | `jdh.com.co` | Dominios de las personas que se pueden copiar (CC) |
 | `MAIL_GRAPH_TENANT_ID` / `MAIL_GRAPH_CLIENT_ID` / `MAIL_GRAPH_CLIENT_SECRET` | — | App de Entra del buzón (el **valor** del secreto) |
 | `MAIL_PQRSF_INBOX` / `MAIL_IGNORED_SENDERS` | `pqrsf@jdh.com.co` / `info@jdh.com.co` | Buzones |
 | `MAIL_INTAKE_SINCE`, `MAIL_POLL_INTERVAL_SECONDS`, `MAIL_MAX_ATTEMPTS`, `MAIL_MAX_ATTACHMENTS`, `MAIL_MAX_ATTACHMENT_MB`, `MAIL_MAX_TOTAL_ATTACHMENT_MB`, `MAIL_ATTACHMENT_EXTENSIONS` | ver `.env.example` | Correo entrante |

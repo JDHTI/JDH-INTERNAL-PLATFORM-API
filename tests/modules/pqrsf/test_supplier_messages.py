@@ -50,6 +50,7 @@ class FakeTracking:
 class FakeFiles:
     def __init__(self) -> None:
         self.guard = SimpleNamespace(max_attachment_bytes=1000)
+        self.cc_domains = ("jdh.com.co",)
 
     async def accept_files(self, files):
         return [(f.filename, "pdf", "application/pdf", f.content) for f in files], []
@@ -184,6 +185,42 @@ async def test_a_message_is_validated(values, message) -> None:
 
     with pytest.raises(InvalidInputError, match=message):
         await service.send(case.id, PRINCIPAL, **{**base, **values})
+
+
+@pytest.mark.asyncio
+async def test_the_people_in_copy_get_one_email_not_one_per_supplier_address() -> None:
+    service, case, tracking, *_ = _service()
+
+    result = await service.send(
+        case.id,
+        PRINCIPAL,
+        kind="notice",
+        to=["a@proveedor.com", "b@proveedor.com"],
+        cc=["Luis@jdh.com.co", "luis@jdh.com.co", "a@proveedor.com"],
+        body="Hola",
+    )
+
+    first, second = result.emails
+    assert first.payload["cc"] == ["luis@jdh.com.co"] and second.payload["cc"] == []
+    assert tracking.events[0].data["cc"] == ["luis@jdh.com.co"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cc", "message"),
+    [(["otro@proveedor.com"], "no es de la organización"), (["x"], "no es válido")],
+)
+async def test_the_copy_of_a_supplier_message_is_only_for_people_of_the_organization(
+    cc, message
+) -> None:
+    service, case, tracking, outbox, *_ = _service()
+
+    with pytest.raises(InvalidInputError, match=message):
+        await service.send(
+            case.id, PRINCIPAL, kind="notice", to=["a@proveedor.com"], cc=cc, body="Hola"
+        )
+
+    assert tracking.events == [] and outbox.items == {}
 
 
 @pytest.mark.asyncio

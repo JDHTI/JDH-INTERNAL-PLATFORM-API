@@ -44,6 +44,14 @@ from app.modules.pqrsf.domain.tracking import CaseFilters, TrackingCase
 
 logger = logging.getLogger(__name__)
 
+
+def _copy_of(item: Notification) -> dict[str, list[str]]:
+    """The ``cc`` keyword for the mail gateway: empty when the email copies nobody."""
+
+    copied = [str(address) for address in item.payload.get("cc") or []]
+    return {"cc": copied} if copied else {}
+
+
 _PAGE = 100
 _MAX_PAGES = 200
 
@@ -304,10 +312,13 @@ class NotificationService:
             files = [*await self._certificates(item), *await self._reply_files(item)]
             await self.mail.send(self.mailbox, to, subject, body, files)
             return
+        # People of the organization copied on the email. With a testing redirect nobody
+        # else gets a copy either.
+        copied = {} if self.redirect_to else _copy_of(item)
         if item.kind == SUPPLIER_MESSAGE:
             # A new email (not an answer in a thread): it can carry large evidence files.
             files = [*await self._reply_files(item), *await self._evidence(item)]
-            await self.mail.send(self.mailbox, to, subject, body, files)
+            await self.mail.send(self.mailbox, to, subject, body, files, **copied)
             return
         if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
             await self.mail.send(self.mailbox, to, subject, body)
@@ -317,10 +328,10 @@ class NotificationService:
         # With a testing redirect the reply must not reach the real client, so it is a
         # new email to the redirect address instead of an answer inside their thread.
         if graph_id and not self.redirect_to:
-            if await self.mail.reply(self.mailbox, graph_id, body, files) is not False:
+            if await self.mail.reply(self.mailbox, graph_id, body, files, **copied) is not False:
                 return
             # The message to answer was deleted from the mailbox: write a new email instead.
-        await self.mail.send(self.mailbox, to, subject, body, files)
+        await self.mail.send(self.mailbox, to, subject, body, files, **copied)
 
     async def _certificates(self, item: Notification) -> list[OutgoingFile]:
         """The certificates of a delivery, read from the manager as they are right now."""

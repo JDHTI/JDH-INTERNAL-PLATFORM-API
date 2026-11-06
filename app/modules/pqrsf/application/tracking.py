@@ -617,6 +617,26 @@ class CaseTrackingService:
         await self._require_manager(principal)
         return await self.people.search_users(query, min(max(1, limit), 50))
 
+    async def search_people(
+        self, query: str, principal: Principal, limit: int = 20
+    ) -> list[DirectoryUser]:
+        """Find active people to copy (CC) on a reply; the caller only needs to be signed in.
+
+        The router already requires the PQRSF module, so no manager role is asked here
+        (unlike ``search_assignees``): whoever answers a client may copy a colleague.
+
+        Args:
+            query (str): Text in the name or email.
+            principal (Principal): The caller.
+            limit (int): Maximum number of results.
+
+        Returns:
+            list[DirectoryUser]: Matching users.
+        """
+
+        del principal
+        return await self.people.search_users(query, min(max(1, limit), 50))
+
     # --- Opening cases ---
 
     async def _initial_status(self) -> CaseStatus:

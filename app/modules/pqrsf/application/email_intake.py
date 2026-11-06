@@ -54,6 +54,8 @@ from app.modules.sites.domain.entities import Site
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUEST_TYPE = "peticion"
+# Why an email was left alone when the inbox only follows cases that already exist.
+FOLLOW_UP_ONLY = "El correo no continúa un caso abierto y el buzón solo da seguimiento"
 _EXCERPT = 500
 
 
@@ -108,6 +110,7 @@ class EmailIntakeService:
         allowed_extensions: Collection[str] = (),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         feedback: FeedbackService | None = None,
+        open_cases: bool = True,
     ) -> None:
         """Create the service.
 
@@ -131,8 +134,12 @@ class EmailIntakeService:
             clock (Callable[[], datetime]): Current instant (replaced in tests).
             feedback (FeedbackService | None): Stores and thanks suggestions and compliments;
                 without it they open cases like any other message.
+            open_cases (bool): ``False`` makes the inbox follow-up only: an answer joins the
+                open case it belongs to (conversation or code in the subject); any other
+                email is ignored, so no case opens and no acknowledgment goes out.
         """
 
+        self.open_cases = open_cases
         self.feedback = feedback
         self.mail = mail
         self.emails = emails
@@ -247,6 +254,12 @@ class EmailIntakeService:
                 row.status, row.detail = IGNORED, {**row.detail, "reason": reason}
                 return
             existing = await self._open_case_of(message)
+            if not self.open_cases and (existing is None or existing.is_closed):
+                # Follow-up only: an email that continues no open case is left alone, and
+                # nobody is answered.
+                row.status = IGNORED
+                row.detail = {**row.detail, "reason": FOLLOW_UP_ONLY}
+                return
             if existing is not None:
                 await self._join(message, row, existing)
             else:

@@ -25,9 +25,11 @@ class FakeComments:
     def __init__(self) -> None:
         self.guard = SimpleNamespace(max_attachment_bytes=1000)
         self.calls: list[tuple] = []
+        self.copies: list[list[str]] = []
 
-    async def comment(self, case_id, body, principal, files=(), reply_to_client=False):
+    async def comment(self, case_id, body, principal, files=(), reply_to_client=False, cc=()):
         self.calls.append((case_id, body, list(files), reply_to_client))
+        self.copies.append(list(cc))
         event = CaseEvent(
             id=uuid.uuid4(),
             case_id=case_id,
@@ -130,6 +132,36 @@ def test_a_json_comment_can_ask_for_the_client_reply(client, comments) -> None:
     assert reply["to"] == "cliente@empresa.com" and reply["status"] == "pending"
     assert reply["event_id"] == response.json()["id"]
     assert comments.calls[0][3] is True
+
+
+def test_the_people_to_copy_reach_the_service_from_json_and_from_multipart(
+    client, comments
+) -> None:
+    people = ["luis@jdh.com.co", "ana@jdh.com.co"]
+
+    json_response = client.post(URL, json={"body": "Hola", "reply_to_client": True, "cc": people})
+    form_response = client.post(
+        URL,
+        data={"body": "Hola", "reply_to_client": "true", "cc": people},
+        files=[("files", ("soporte.pdf", b"%PDF-1.7 hola", "application/pdf"))],
+    )
+
+    assert json_response.status_code == 201, json_response.text
+    assert form_response.status_code == 201, form_response.text
+    assert comments.copies == [people, people]
+
+
+def test_more_than_five_copies_is_a_validation_error(client, comments) -> None:
+    response = client.post(
+        URL,
+        json={
+            "body": "Hola",
+            "reply_to_client": True,
+            "cc": [f"p{i}@jdh.com.co" for i in range(6)],
+        },
+    )
+
+    assert response.status_code == 422 and comments.calls == []
 
 
 def test_a_multipart_comment_carries_the_files_and_the_flag(client, comments) -> None:
