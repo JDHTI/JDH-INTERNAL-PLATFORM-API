@@ -203,6 +203,13 @@ class OrderResponse(BaseModel):
     lines: list[LineResponse]
 
 
+class OperationCenterCount(BaseModel):
+    """An operation center (C.O. factura) of the file and how many orders it has."""
+
+    code: str
+    order_count: int
+
+
 class OrderPageResponse(BaseModel):
     """A page of orders and the order count per status (before the status filter)."""
 
@@ -212,6 +219,8 @@ class OrderPageResponse(BaseModel):
     size: int
     counts: dict[str, int]
     threshold_released_count: int
+    # Every operation center of the whole file, whatever the filters, to offer them all.
+    operation_centers: list[OperationCenterCount]
 
 
 class CatalogItem(BaseModel):
@@ -503,6 +512,7 @@ async def list_orders(
     status_filter: LineStatus | None = Query(default=None, alias="status"),  # noqa: B008
     reason: Reason | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
+    operation_center: str | None = Query(default=None, max_length=20),
     margin_threshold_points: Decimal | None = _TRY_THRESHOLD,
     sort: Literal["attention", "file"] = Query(default="attention"),
     page: int = Query(default=1, ge=1),
@@ -515,7 +525,8 @@ async def list_orders(
     `attention` (default) lists first the orders, and inside each the lines, that have no
     support, then by margin from lowest to highest; `file` keeps the file order. With
     `margin_threshold_points` the statuses and counts come out as if the file had that
-    threshold, without saving it; `PUT /{id}/margin-threshold` saves it.
+    threshold, without saving it; `PUT /{id}/margin-threshold` saves it. `operation_center`
+    keeps the orders of one C.O. factura; `operation_centers` lists every one in the file.
     """
 
     result = await service.orders(
@@ -523,6 +534,7 @@ async def list_orders(
         status=status_filter,
         reason=reason,
         q=q,
+        operation_center=operation_center,
         margin_threshold_points=margin_threshold_points,
         sort=sort,
         page=page,
@@ -535,6 +547,10 @@ async def list_orders(
         size=result.size,
         counts=result.counts,
         threshold_released_count=result.threshold_released_count,
+        operation_centers=[
+            OperationCenterCount(code=code, order_count=count)
+            for code, count in result.operation_centers
+        ],
     )
 
 

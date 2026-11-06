@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -414,6 +415,7 @@ class OrderValidationService:
         status: str | None = None,
         reason: str | None = None,
         q: str | None = None,
+        operation_center: str | None = None,
         margin_threshold_points: Decimal | None = None,
         sort: str = "attention",
         page: int = 1,
@@ -426,6 +428,8 @@ class OrderValidationService:
             status (str | None): Only orders ready for release or pending.
             reason (str | None): Only orders with at least one line for this reason.
             q (str | None): Free text over document, client, supplier and SKU.
+            operation_center (str | None): Only the orders of this operation center
+                (C.O. factura, the order header's).
             margin_threshold_points (Decimal | None): Try another margin threshold, in points,
                 without saving it: statuses, counts and margins come out as if the file had it.
                 The saved threshold is used when omitted.
@@ -452,9 +456,14 @@ class OrderValidationService:
         orders = await self._orders_of(batch_id, threshold)
         # Whether the threshold releases anything is a fact of the file, not of the search.
         threshold_released = sum(1 for order in orders if order.released_by_threshold)
+        # The centers of the whole file, so the filter always offers all of them.
+        centers = Counter(center for order in orders if (center := order.first.operation_center))
         term = " ".join((q or "").lower().split())
         if term:
             orders = [order for order in orders if _matches(order, term)]
+        center_filter = (operation_center or "").strip()
+        if center_filter:
+            orders = [order for order in orders if order.first.operation_center == center_filter]
         if reason:
             orders = [
                 order
@@ -476,6 +485,7 @@ class OrderValidationService:
             size=size,
             counts=counts,
             threshold_released_count=threshold_released,
+            operation_centers=tuple(sorted(centers.items())),
         )
 
     def rule_catalog(self) -> tuple[Section, ...]:
