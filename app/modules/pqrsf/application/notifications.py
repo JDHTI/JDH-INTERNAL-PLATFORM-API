@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from app.core.errors import DependencyUnavailableError, ForbiddenError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
 from app.modules.mail.domain import MailGateway, OutgoingFile
+from app.modules.mail.layout import BrandedEmail, logo_file, render_fragment, render_html
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
@@ -22,6 +23,7 @@ from app.modules.pqrsf.domain.notifications import (
     GRACE,
     OVERDUE_REMINDER,
     PENDING,
+    REQUEST_ACK,
     SENT,
     SUPPLIER_MESSAGE,
     Notification,
@@ -320,18 +322,27 @@ class NotificationService:
             files = [*await self._reply_files(item), *await self._evidence(item)]
             await self.mail.send(self.mailbox, to, subject, body, files, **copied)
             return
-        if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK):
+        if item.kind not in (CLIENT_REPLY, FEEDBACK_ACK, REQUEST_ACK):
             await self.mail.send(self.mailbox, to, subject, body)
             return
         files = await self._reply_files(item)
+        # Emails to the customer queued with their content go out in the JDH layout, with
+        # the logo inline; older ones in the queue keep their plain text.
+        branded = item.payload.get("email")
+        content = BrandedEmail.from_payload(branded) if branded else None
+        options: dict = {**copied, "html": True} if content else copied
+        if content:
+            files = [*files, logo_file()]
         graph_id = item.payload.get("graph_id")
         # With a testing redirect the reply must not reach the real client, so it is a
         # new email to the redirect address instead of an answer inside their thread.
         if graph_id and not self.redirect_to:
-            if await self.mail.reply(self.mailbox, graph_id, body, files, **copied) is not False:
+            text = render_fragment(content) if content else body
+            if await self.mail.reply(self.mailbox, graph_id, text, files, **options) is not False:
                 return
             # The message to answer was deleted from the mailbox: write a new email instead.
-        await self.mail.send(self.mailbox, to, subject, body, files, **copied)
+        text = render_html(content) if content else body
+        await self.mail.send(self.mailbox, to, subject, text, files, **options)
 
     async def _certificates(self, item: Notification) -> list[OutgoingFile]:
         """The certificates of a delivery, read from the manager as they are right now."""

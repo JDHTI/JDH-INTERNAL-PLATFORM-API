@@ -274,6 +274,32 @@ async def test_a_reply_to_a_message_that_no_longer_exists_says_so(files) -> None
 
 
 @pytest.mark.asyncio
+async def test_an_html_email_shows_its_logo_inline() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+    logo = OutgoingFile("jdh-logo.png", "image/png", b"PNG", "jdh-logo")
+
+    await api.send(
+        MAILBOX, "ana@cliente.com", "Radicamos tu queja", "<p>Hola</p>", [logo], html=True
+    )
+
+    message = json.loads(graph.requests[0].content)["message"]
+    assert message["body"] == {"contentType": "HTML", "content": "<p>Hola</p>"}
+    (attachment,) = message["attachments"]
+    assert attachment["isInline"] is True and attachment["contentId"] == "jdh-logo"
+
+
+@pytest.mark.asyncio
+async def test_an_html_reply_is_not_escaped_again() -> None:
+    api, graph = client(lambda r: httpx.Response(202))
+
+    await api.reply(MAILBOX, "g1", "<table><tr><td>Hola</td></tr></table>", html=True)
+
+    assert json.loads(graph.requests[0].content) == {
+        "comment": "<table><tr><td>Hola</td></tr></table>"
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_attaches_the_files_inside_the_message() -> None:
     api, graph = client(lambda r: httpx.Response(202))
 

@@ -16,6 +16,8 @@ OVERDUE_REMINDER = "overdue_reminder"
 CLIENT_REPLY = "client_reply"
 # The automatic thank-you to whoever sent a suggestion or a compliment.
 FEEDBACK_ACK = "feedback_ack"
+# The acknowledgment with the radicado to whoever filed a request on the public form.
+REQUEST_ACK = "request_ack"
 # The certificates a customer asked for on the public form, attached from the document manager.
 DOCUMENT_DELIVERY = "document_delivery"
 # A message to a supplier written from a case (request, response, improvement, notice).

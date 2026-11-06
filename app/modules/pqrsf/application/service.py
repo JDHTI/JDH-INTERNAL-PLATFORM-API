@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
@@ -17,6 +17,8 @@ from app.core.errors import (
     InvalidInputError,
     NotFoundError,
 )
+from app.modules.mail.layout import render_text
+from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.domain.entities import (
@@ -45,16 +47,18 @@ from app.modules.pqrsf.domain.entities import (
     validate_idempotency_key,
 )
 from app.modules.pqrsf.domain.feedback import ORIGIN_FORM, FeedbackFile
+from app.modules.pqrsf.domain.notifications import REQUEST_ACK, Notification
 from app.modules.pqrsf.domain.ports import (
     BinaryStorage,
     CaseOpener,
     ImageProcessor,
     MalwareScanner,
+    NotificationRepository,
     PqrsfRepository,
     ProductCatalog,
     VideoInspector,
 )
-from app.modules.pqrsf.domain.tracking import Dependency
+from app.modules.pqrsf.domain.tracking import Dependency, TrackingCase
 from app.modules.sites.application.service import SiteService
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,10 @@ class PqrsfService:
         video_inspector: VideoInspector | None = None,
         max_videos: int = 1,
         max_video_bytes: int = 20 * 1024 * 1024,
+        notifications: NotificationRepository | None = None,
+        acknowledge: bool = False,
+        wake: Callable[[], None] | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         """Create the service.
 
@@ -127,8 +135,17 @@ class PqrsfService:
                 videos are rejected.
             max_videos (int): Maximum number of videos per request.
             max_video_bytes (int): Maximum bytes per video.
+            notifications (NotificationRepository | None): The outbox of the acknowledgment.
+            acknowledge (bool): Email the requester the radicado of the case their request
+                opened (the PQRSF emails are switched on).
+            wake (Callable[[], None] | None): Wakes the sender so the email leaves at once.
+            clock (Callable[[], datetime]): Current instant (replaced in tests).
         """
 
+        self.notifications = notifications
+        self.acknowledge = acknowledge and notifications is not None
+        self.wake = wake
+        self.clock = clock
         self.products = products
         self.video_inspector = video_inspector
         self.max_videos = max_videos
@@ -333,17 +350,59 @@ class PqrsfService:
                 return answered
         if self.cases is None:
             return result
+        case = None
         try:
             if result.replayed:
                 code = await self.cases.code_for_request(result.request.id)
                 if code is None:
-                    code = (await self.cases.open_for_request(result.request)).code
+                    case = await self.cases.open_for_request(result.request)
+                    code = case.code
             else:
-                code = (await self.cases.open_for_request(result.request)).code
+                case = await self.cases.open_for_request(result.request)
+                code = case.code
         except Exception:
             logger.exception("Could not open the follow-up case of PQRSF %s", result.request.id)
             return result
+        if case is not None:
+            await self._acknowledge(result.request, case)
         return replace(result, tracking_code=code)
+
+    async def _acknowledge(self, request: PqrsfRequest, case: TrackingCase) -> None:
+        """Queue the email with the radicado to the requester; never fails the submission.
+
+        The dedupe key is the request: a replayed submission does not send it twice.
+        """
+
+        if not self.acknowledge or not request.email:
+            return
+        case_id, code = case.id, case.code
+        assert self.notifications is not None
+        try:
+            subject, content = templates.request_received(
+                request.request_type.name,
+                code,
+                request.created_at or self.clock(),
+                request.full_name,
+            )
+            queued = await self.notifications.enqueue(
+                Notification(
+                    id=uuid4(),
+                    kind=REQUEST_ACK,
+                    recipient_email=request.email,
+                    recipient_user_id=None,
+                    subject=subject,
+                    body=render_text(content),
+                    case_id=case_id,
+                    dedupe_key=f"{REQUEST_ACK}:{request.id}",
+                    next_attempt_at=self.clock(),
+                    payload={"request_id": str(request.id), "email": content.to_payload()},
+                )
+            )
+        except Exception:
+            logger.exception("Could not queue the acknowledgment of PQRSF %s", request.id)
+            return
+        if queued and self.wake is not None:
+            self.wake()
 
     async def _answer_documents(self, result: CreateResult) -> CreateResult | None:
         """Send the certificates that are configured and open a case for the rest.

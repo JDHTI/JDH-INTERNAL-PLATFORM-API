@@ -706,12 +706,26 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
 - **Pruebas:** con `PQRSF_NOTIFY_REDIRECT` todo llega a esa dirección, con el asunto
   `[PRUEBA para …]`.
 - **Textos:** viven en `application/notification_templates.py`.
+- **Plantilla JDH:** los correos al cliente (acuse de radicado, actualizaciones y agradecimientos)
+  salen en HTML con la plantilla general de JDH (`app/modules/mail/layout.py`): encabezado negro
+  con el logo blanco (adjunto *inline*, `cid:jdh-logo`, porque la intranet no es pública), título,
+  saludo, mensaje, recuadro de datos con el radicado resaltado en azul JDH y pie. El contenido
+  viaja en la cola como JSON (`payload.email`) y se arma al enviar; `body` guarda la versión en
+  texto plano. Los correos internos (asignación, resumen, recordatorio) siguen en texto plano.
+- **Acuse de radicado (`request_ack`):** al abrir el caso de una solicitud del formulario
+  (petición, queja o reclamo) se envía «Radicamos tu {tipo}» con el radicado, el tipo y la fecha
+  de recepción (hora de Colombia). Las sugerencias y felicitaciones no tienen radicado: reciben su
+  agradecimiento. Una solicitud de documentos respondida en automático tampoco recibe acuse: el
+  correo de los certificados ya nombra el caso. Una sola vez por solicitud (`request_ack:{id}`).
+- **Actualizaciones:** la respuesta al cliente desde el caso (`reply_to_client`) usa la misma
+  plantilla, con «Actualización de tu {tipo}» y el texto que escribe quien gestiona el caso.
 
 | Correo | Cuándo | A quién |
 |---|---|---|
 | Aviso de asignación | Alguien asigna el caso a otra persona (o lo crea asignado) | Nuevo responsable |
+| Acuse de radicado | Caso abierto desde el formulario (petición, queja o reclamo) | Solicitante |
 | Acuse por correo | Caso abierto desde el buzón | Remitente, en el hilo |
-| Respuesta parcial al cliente | Comentario con `reply_to_client` | Solicitante |
+| Actualización al cliente | Comentario con `reply_to_client` | Solicitante |
 | Agradecimiento | Sugerencia o felicitación | Remitente |
 | Certificados / documento del caso | Sección 10 | Solicitante |
 | Mensaje al proveedor | Sección 9 | Proveedor |
@@ -1026,7 +1040,7 @@ de la UI.
 | Fase | Contenido | Necesita |
 |---|---|---|
 | 0 | Insumos de Calidad: matriz de asuntos y causales con dependencia, ruta, producto y criticidad; cuadro P.13; tiempos por criticidad; formatos de OM y ACPM; plantillas de respuesta por causal; motivos de devolución de CIESA; dueños de proceso por sede; contactos de proveedores; clientes que exigen ACPM | Calidad |
-| 2 | Acuse con radicado al solicitante del formulario; aviso inmediato a la dependencia (urgente en quejas); mensajes automáticos por estado (`notify_client`, `client_message`) | P3, P4 |
+| 2 | Aviso inmediato a la dependencia (urgente en quejas); mensajes automáticos por estado (`notify_client`, `client_message`) | P3, P4 |
 | 3 | Estados de escalado y remisión; OM con formato DOCX/PDF y resultado del proveedor (procede/no procede, decisión del director del canal); dueños de proceso por dependencia y sede con remisión y acceso al caso; recordatorio al proveedor | Fase 0, P5 |
 | 4 | Facturas del DWH (verificar la factura, fecha de entrega, autocompletar en el interno); órdenes de recogida, motivos y NC enlazados al caso con un trabajo diario; existencias del lote | Vistas del DWH |
 | 5 | Criticidad por causal con su SLA; respuesta formal por plantilla (DOCX editable → PDF, con `docxtpl` y un conversor como Gotenberg); ACPM; lista de cierre por ruta | Fase 0, P8, P9 |
@@ -1038,7 +1052,7 @@ de la UI.
 
 | # | Automatización | Estado |
 |---|---|---|
-| A1 | Acuse al cliente con radicado | Por correo: hecho. Formulario: fase 2 |
+| A1 | Acuse al cliente con radicado | Hecho, por correo y por formulario, con la plantilla JDH |
 | A2 | Aviso de asignación | Hecho |
 | A3 | Recordatorios por vencimiento | Recordatorio diario de vencidos: hecho. «Vence mañana/hoy» y casos sin asignar: pendiente |
 | A4 | Resumen diario y semanal | Diario: hecho. Semanal con indicadores de SLA: pendiente |

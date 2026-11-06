@@ -216,10 +216,13 @@ async def test_replying_to_the_client_queues_the_email_with_the_files_and_the_si
     (item,) = env.outbox.items
     assert item.kind == CLIENT_REPLY and item.recipient_email == CLIENT
     assert item.case_id == case.id and item.status == "pending"
-    assert item.subject.startswith(f"Respuesta a tu solicitud {case.code}")
-    assert item.body.startswith("Hola Ana Pérez,\n\nYa revisamos tu factura.")
-    assert f"Consecutivo de tu solicitud: {case.code}" in item.body
-    assert item.body.rstrip().endswith("PQRSF JDH") and "equipo" not in item.body.lower()
+    assert item.subject.startswith(f"Actualización de tu solicitud {case.code}")
+    assert item.body.startswith("Hola Ana,\n\nYa revisamos tu factura.")
+    assert f"Radicado: {case.code}" in item.body and "equipo" not in item.body.lower()
+    # The branded email travels with the queued item and is rendered when it is sent.
+    email = item.payload["email"]
+    assert email["paragraphs"] == ["Ya revisamos tu factura."]
+    assert email["facts"][0] == ["Radicado", case.code]
     assert item.payload["file_ids"] == [str(f.id) for f in result.files]
     assert item.payload["event_id"] == str(result.event.event.id)
     assert item.dedupe_key == f"client_reply:{result.event.event.id}"
@@ -335,16 +338,21 @@ class FakeMailbox:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.copies: list[list[str]] = []
+        self.html: list[bool] = []
         self.reply_found = True
 
-    async def reply(self, mailbox, graph_id, text, files=(), cc=()):
-        self.calls.append(("reply", graph_id, text, list(files)))
+    async def reply(self, mailbox, graph_id, text, files=(), cc=(), html=False):
+        self.calls.append(("reply", graph_id, text, [f for f in files if not f.content_id]))
         self.copies.append(list(cc))
+        self.html.append(html)
+        self.inline = [f for f in files if f.content_id]
         return self.reply_found
 
-    async def send(self, mailbox, to, subject, text, files=(), cc=()):
-        self.calls.append(("send", to, subject, text, list(files)))
+    async def send(self, mailbox, to, subject, text, files=(), cc=(), html=False):
+        self.calls.append(("send", to, subject, text, [f for f in files if not f.content_id]))
         self.copies.append(list(cc))
+        self.html.append(html)
+        self.inline = [f for f in files if f.content_id]
 
 
 def _sender(env: Env, redirect: str | None = None) -> tuple[NotificationService, FakeMailbox]:
@@ -385,7 +393,10 @@ async def test_the_reply_goes_inside_the_clients_thread_with_its_files() -> None
     assert await service.dispatch() == 1
 
     ((kind, graph_id, text, files),) = mailbox.calls
-    assert (kind, graph_id, text) == ("reply", "graph-msg-9", item.body)
+    assert (kind, graph_id) == ("reply", "graph-msg-9")
+    # Inside a thread the layout goes as a fragment (Graph quotes the original below it).
+    assert text.startswith("<table") and "Listo" in text and "<html" not in text
+    assert mailbox.html == [True] and [f.content_id for f in mailbox.inline] == ["jdh-logo"]
     assert files == [OutgoingFile("soporte.pdf", "application/pdf", PDF)]
     assert item.status == "sent"
 
@@ -413,7 +424,11 @@ async def test_a_case_that_did_not_come_by_email_is_answered_with_a_new_email() 
 
     await service.dispatch()
 
-    assert mailbox.calls == [("send", CLIENT, item.subject, item.body, [])]
+    ((kind, to, subject, text, files),) = mailbox.calls
+    assert (kind, to, subject, files) == ("send", CLIENT, item.subject, [])
+    assert text.startswith("<!DOCTYPE html>") and 'src="cid:jdh-logo"' in text
+    assert "Listo" in text and item.payload["email"]["facts"][0][1] in text
+    assert mailbox.html == [True] and len(mailbox.inline) == 1
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from app.core.errors import DependencyUnavailableError, ForbiddenError, NotFoundError
 from app.modules.identity.domain.principal import DirectoryUser, Principal
+from app.modules.mail.layout import render_text
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.domain.entities import AreaRef, RequestType
 from app.modules.pqrsf.domain.feedback import (
@@ -165,14 +166,14 @@ class FeedbackService:
         if reason is not None:
             await self.repository.set_reply(feedback.id, None, reason)
             return
-        subject, body = templates.feedback_ack(feedback.request_type.code, feedback.full_name)
+        subject, content = templates.feedback_ack(feedback.request_type.code, feedback.full_name)
         notification = Notification(
             id=uuid4(),
             kind=FEEDBACK_ACK,
             recipient_email=feedback.email,
             recipient_user_id=None,
             subject=subject,
-            body=body,
+            body=render_text(content),
             case_id=None,
             dedupe_key=(
                 f"{FEEDBACK_ACK}:conversation:{conversation_id}"
@@ -180,7 +181,11 @@ class FeedbackService:
                 else f"{FEEDBACK_ACK}:{feedback.id}"
             ),
             next_attempt_at=self.clock(),
-            payload={"feedback_id": str(feedback.id), "graph_id": graph_id},
+            payload={
+                "feedback_id": str(feedback.id),
+                "graph_id": graph_id,
+                "email": content.to_payload(),
+            },
         )
         if await self.notifications.enqueue(notification):
             await self.repository.set_reply(feedback.id, notification.id, None)

@@ -851,4 +851,7 @@ class V1Container(containers.DeclarativeContainer):
         video_inspector=pqrsf_video_inspector,
         max_videos=config.pqrsf.max_videos,
         max_video_bytes=config.pqrsf.max_video_bytes,
+        notifications=pqrsf_notification_repository,
+        acknowledge=config.pqrsf.notifications_enabled,
+        wake=pqrsf_wakeup.provided.set,
     )

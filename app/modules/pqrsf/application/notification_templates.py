@@ -1,14 +1,17 @@
-"""Plain-text bodies of the PQRSF notifications.
+"""Wording of the PQRSF notifications.
 
-Each function returns ``(subject, body)``. They are the only place the wording lives,
-so moving to HTML templates later means replacing these functions and nothing else.
+Each function returns ``(subject, body)``. Emails to the team are plain text; emails to
+the customer (acknowledgment, updates, thank-yous) return a :class:`BrandedEmail`, the
+content of the JDH layout. They are the only place the wording lives.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
+from app.modules.mail.layout import BrandedEmail
 from app.modules.pqrsf.domain.entities import ClaimedProduct
 from app.modules.pqrsf.domain.tracking import TrackingCase
 
@@ -89,22 +92,101 @@ def assignment(
 
 SIGNATURE = "PQRSF JDH"
 
+_MONTHS = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+_LOCAL = ZoneInfo("America/Bogota")
+# What the customer can do after any email: answering keeps the case together.
+_ANSWER_HINT = (
+    "Si necesitas agregar información, responde a este correo conservando el radicado en el asunto."
+)
 
-def client_reply(case: TrackingCase, text: str) -> tuple[str, str]:
-    """A partial reply to the client, written by the team from a case comment.
 
-    The subject carries the consecutive, so the client's answer finds its case even when
-    the conversation is lost; a reply sent inside a thread keeps the original subject.
+def _first_name(name: str | None) -> str:
+    return (name or "").strip().split(" ")[0] if (name or "").strip() else ""
+
+
+def _greeting(name: str | None) -> str:
+    first = _first_name(name)
+    return f"Hola {first}," if first else "Hola,"
+
+
+def received_at_text(value: datetime) -> str:
+    """«6 de noviembre de 2026, 9:41 a. m.» in Colombian time."""
+
+    local = value.astimezone(_LOCAL) if value.tzinfo else value
+    hour = local.hour % 12 or 12
+    meridian = "a. m." if local.hour < 12 else "p. m."
+    return (
+        f"{local.day} de {_MONTHS[local.month - 1]} de {local.year}, "
+        f"{hour}:{local.minute:02d} {meridian}"
+    )
+
+
+def request_received(
+    type_name: str, code: str, received_at: datetime, name: str | None
+) -> tuple[str, BrandedEmail]:
+    """The acknowledgment of a request filed on the public form, with its radicado.
+
+    Only requests that open a case get one (petitions, complaints, claims): suggestions
+    and compliments have no radicado and get their own thank-you. The subject carries
+    the radicado, so an answer from the customer finds its case.
     """
 
-    greeting = f"Hola {case.requester_name}," if case.requester_name else "Hola,"
-    subject = f"Respuesta a tu solicitud {case.code}"
+    kind = type_name.strip().lower() or "solicitud"
+    content = BrandedEmail(
+        title=f"Radicamos tu {kind}",
+        greeting=_greeting(name),
+        paragraphs=(
+            f"Recibimos tu {kind}. Este es el radicado con el que le haremos seguimiento:",
+        ),
+        facts=(
+            ("Radicado", code),
+            ("Tipo de solicitud", type_name.strip()),
+            ("Fecha de recepción", received_at_text(received_at)),
+        ),
+        closing=(
+            "Te daremos pronta respuesta. Mantente pendiente de tu correo: por este medio "
+            "te contaremos los avances.",
+            _ANSWER_HINT,
+        ),
+        footnote=(
+            "Recibiste este correo porque radicaste una solicitud en el formulario PQRSF de JDH."
+        ),
+    )
+    return f"Radicamos tu {kind}: {code}", content
+
+
+def client_reply(case: TrackingCase, text: str) -> tuple[str, BrandedEmail]:
+    """An update to the client, written by the team from the case (a comment sent to them).
+
+    Same layout as the acknowledgment; the message is what the team wrote. The subject
+    carries the consecutive, so the client's answer finds its case even when the
+    conversation is lost; a reply sent inside a thread keeps the original subject.
+    """
+
+    subject = f"Actualización de tu solicitud {case.code}"
     if case.subject:
         subject += f": {case.subject[:80]}"
-    body = (
-        f"{greeting}\n\n{text.strip()}\n\nConsecutivo de tu solicitud: {case.code}\n\n{SIGNATURE}"
+    content = BrandedEmail(
+        title=f"Actualización de tu {case.request_type.name.strip().lower() or 'solicitud'}",
+        greeting=_greeting(case.requester_name),
+        paragraphs=(text.strip(),),
+        facts=(("Radicado", case.code), ("Tipo de solicitud", case.request_type.name)),
+        closing=(_ANSWER_HINT,),
     )
-    return subject, body
+    return subject, content
 
 
 def supplier_message(
@@ -142,11 +224,9 @@ def supplier_message(
     return subject, "\n".join(lines) + f"\n\n{SIGNATURE}"
 
 
-def feedback_ack(kind_code: str, name: str | None) -> tuple[str, str]:
-    """The generic thank-you for a suggestion or a compliment, signed PQRSF JDH."""
+def feedback_ack(kind_code: str, name: str | None) -> tuple[str, BrandedEmail]:
+    """The generic thank-you for a suggestion or a compliment; they carry no radicado."""
 
-    first = (name or "").strip().split(" ")[0] if (name or "").strip() else ""
-    greeting = f"Hola {first}," if first else "Hola,"
     if kind_code == "felicitacion":
         title = "Recibimos tu felicitación"
         text = (
@@ -159,7 +239,7 @@ def feedback_ack(kind_code: str, name: str | None) -> tuple[str, str]:
             "Recibimos tu sugerencia. Agradecemos tu mensaje: nos ayuda a mejorar "
             "nuestro servicio y la tendremos en cuenta."
         )
-    return title, f"{greeting}\n\n{text}\n\n{SIGNATURE}"
+    return title, BrandedEmail(title=title, greeting=_greeting(name), paragraphs=(text,))
 
 
 def document_delivery(

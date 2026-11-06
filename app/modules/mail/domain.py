@@ -26,6 +26,8 @@ class OutgoingFile:
     name: str
     content_type: str
     content: bytes
+    # Set for a picture the HTML body shows inline (``<img src="cid:…">``), like the logo.
+    content_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,8 +87,11 @@ class MailGateway(Protocol):
         text: str,
         files: Sequence[OutgoingFile] = (),
         cc: Sequence[str] = (),
+        html: bool = False,
     ) -> bool:
         """Answer inside the same conversation, from the mailbox, copying ``cc``.
+
+        With ``html`` the text is an HTML fragment (the branded layout) instead of plain text.
 
         Returns:
             bool: ``False`` when the message to answer no longer exists.
@@ -105,6 +110,10 @@ class MailGateway(Protocol):
         text: str,
         files: Sequence[OutgoingFile] = (),
         cc: Sequence[str] = (),
+        html: bool = False,
     ) -> None:
-        """Send a plain-text message from the mailbox to one recipient, copying ``cc``."""
+        """Send a message from the mailbox to one recipient, copying ``cc``.
+
+        The text is plain unless ``html`` (then an HTML document, the branded layout).
+        """
         ...
