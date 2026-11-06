@@ -481,7 +481,9 @@ async def test_list_and_delete(service, advisor, approver) -> None:
         await service.get(advisor, quotation.id)
 
 
-async def test_bi_quotes_too_and_edits_only_its_own(service, advisor, approver) -> None:
+async def test_bi_has_the_whole_quoter(service, advisor, approver, warehouse, masters) -> None:
+    masters.catalog["26278"] = product("26278")
+    warehouse.cost_rows["26278"] = cost("26278", inventory="60000")
     permissions = await service.permissions(approver)
     assert permissions.can_manage and permissions.can_validate
 
@@ -489,10 +491,16 @@ async def test_bi_quotes_too_and_edits_only_its_own(service, advisor, approver) 
     assert own.created_by == approver.email
     advisors = (await service.create(advisor, NIT, 6)).quotation
 
-    # BI reads the advisor's quotation to validate it, but does not edit it.
-    assert (await service.get(approver, advisors.id)).quotation.id == advisors.id
+    # BI edits the advisor's quotation too: refresh, add products, delete.
+    refreshed = await service.refresh(approver, advisors.id, advisors.version)
+    added, _ = await service.add_lines(
+        approver, advisors.id, refreshed.quotation.version, ["26278"]
+    )
+    assert added.quotation.version > advisors.version
+    # Another advisor (Comercial, no validation) neither opens nor edits it.
+    colleague = person(advisor.email)
     with pytest.raises(ForbiddenError):
-        await service.refresh(approver, advisors.id, advisors.version)
+        await service.refresh(colleague, advisors.id, added.quotation.version)
     # The advisor never reaches the one BI made.
     with pytest.raises(ForbiddenError):
         await service.get(advisor, own.id)
@@ -500,6 +508,9 @@ async def test_bi_quotes_too_and_edits_only_its_own(service, advisor, approver) 
         approver, mine=True, status=None, customer_nit=None, q=None, page=1, size=20
     )
     assert [item.id for item in mine.items] == [own.id]
+    await service.delete(approver, advisors.id)
+    with pytest.raises(NotFoundError):
+        await service.get(approver, advisors.id)
 
 
 async def test_a_moderator_reads_every_quotation(service, advisor) -> None:
