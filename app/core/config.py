@@ -226,7 +226,7 @@ class Settings(BaseSettings):
     # price may leave the margin at most MAX_POINTS_BELOW_TARGET points below the target.
     QUOTATIONS_MANAGER_AREA_SLUG: str = "comercial"
     # Members of this area (plus admins) validate a confirmed price list; then its files are
-    # released. BI keeps the price lists and the margin master.
+    # released. BI keeps the price lists and the margin master, and quotes too.
     QUOTATIONS_APPROVER_AREA_SLUG: str = "bi"
     # Largest quotation workbook accepted back (bulk prices and margins).
     QUOTATIONS_MAX_UPLOAD_MB: int = 10

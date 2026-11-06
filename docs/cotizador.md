@@ -203,8 +203,14 @@ uno en el ambiente de pruebas de SIESA.
 ## API (`/api/v1/quotations`)
 
 Leer exige ser administrador, miembro del área comercial (`QUOTATIONS_MANAGER_AREA_SLUG`) o del
-área que valida (`QUOTATIONS_APPROVER_AREA_SLUG`); editar, solo comercial; validar, solo quien
-valida. `/permissions` y `/rules` están abiertas. Las operaciones que leen el DWH (crear,
+área que valida (`QUOTATIONS_APPROVER_AREA_SLUG`). Cotizan las dos áreas: quien gestiona el
+cotizador en Comercial o en BI. Cada quien edita solo las cotizaciones que creó (los
+administradores, todas). Validar, solo quien valida.
+
+Qué cotizaciones ve cada uno: quien valida (BI y administradores) y los moderadores ven todas; el
+resto, también supervisores y líderes de Comercial, solo las que creó. `GET /quotations` les
+ignora `mine=false` y `GET /quotations/{id}` responde 403 con una ajena. `created_by` (correo)
+dice quién la creó. `/permissions` y `/rules` están abiertas. Las operaciones que leen el DWH (crear,
 refrescar, agregar, confirmar una creación, «mis clientes») responden 503 si no está disponible.
 Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 
@@ -269,8 +275,8 @@ Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_
 
 | Variable | Defecto | Uso |
 | --- | --- | --- |
-| `QUOTATIONS_MANAGER_AREA_SLUG` | `comercial` | quién cotiza |
-| `QUOTATIONS_APPROVER_AREA_SLUG` | `bi` | quién valida |
+| `QUOTATIONS_MANAGER_AREA_SLUG` | `comercial` | quién cotiza (además de BI) |
+| `QUOTATIONS_APPROVER_AREA_SLUG` | `bi` | quién valida; también cotiza |
 | `QUOTATIONS_MAX_POINTS_BELOW_TARGET` | `1` | puntos bajo el objetivo que se toleran |
 | `QUOTATIONS_MAX_LINES` | `3000` | referencias máximas por cotización |
 | `QUOTATIONS_MAX_UPLOAD_MB` | `10` | tamaño máximo de la plantilla que se sube |
