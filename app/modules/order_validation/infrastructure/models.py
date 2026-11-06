@@ -47,6 +47,8 @@ class OrderValidationBatchModel(Base):
     order_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ready_line_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     ready_order_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Orders a person marked as released; not part of ready_order_count.
+    released_order_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # Margin a line may fall short by and still be released, as a fraction (0.005 = 0,5 pts).
     margin_threshold: Mapped[Decimal] = mapped_column(
         Numeric(8, 6), nullable=False, server_default="0"

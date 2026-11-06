@@ -29,6 +29,11 @@ HEADERS: dict[str, str] = {
     "c o factura": "operation_center",
     "co factura": "operation_center",
     "centro de operacion": "operation_center",
+    # SIESA exports also name it without "factura" or the "de".
+    "c o": "operation_center",
+    "co": "operation_center",
+    "centro operacion": "operation_center",
+    "centro de operacion factura": "operation_center",
     "fecha": "order_date",
     "fecha pedido": "order_date",
     "nro documento": "document",

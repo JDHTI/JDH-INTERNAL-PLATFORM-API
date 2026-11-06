@@ -216,6 +216,8 @@ class Batch:
     ready_order_count: int
     # Margin points a line may fall short by and still be released, as a fraction.
     margin_threshold: Decimal = Decimal(0)
+    # Orders a person marked as released; they no longer count as ready or pending.
+    released_order_count: int = 0
 
     @property
     def pending_line_count(self) -> int:
@@ -227,7 +229,7 @@ class Batch:
     def pending_order_count(self) -> int:
         """Orders still waiting for a person."""
 
-        return self.order_count - self.ready_order_count
+        return self.order_count - self.ready_order_count - self.released_order_count
 
 
 @dataclass(frozen=True)

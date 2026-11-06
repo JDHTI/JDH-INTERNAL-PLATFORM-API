@@ -53,6 +53,13 @@ ROW = [
 ]
 
 
+@pytest.mark.parametrize("header", ["C.O.", "CO", "Centro operación", "C.O. factura"])
+def test_the_operation_center_is_read_under_its_other_names(header: str) -> None:
+    (line,) = SpreadsheetOrderReader().read("p.xlsx", workbook([header, *HEADER[1:]], ROW))
+
+    assert line.operation_center == "004"
+
+
 def workbook(*rows, title: str | None = None) -> bytes:
     book = openpyxl.Workbook()
     sheet = book.active

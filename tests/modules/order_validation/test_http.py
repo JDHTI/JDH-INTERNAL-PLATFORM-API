@@ -116,9 +116,12 @@ def test_approve_unapprove_and_delete(client) -> None:
         f"{BASE}/{batch['id']}/approvals", json={"documents": ["PV-2"], "note": "Gerencia"}
     )
     assert approved.status_code == 200
-    assert approved.json()["ready_order_count"] == 2 and approved.json()["pending_line_count"] == 1
+    assert approved.json()["released_order_count"] == 1
+    assert approved.json()["ready_order_count"] == 1 and approved.json()["pending_line_count"] == 1
     pv2 = client.get(orders_url, params={"q": "PV-2"}).json()["items"][0]
-    assert pv2["status"] == "listo_para_liberar" and pv2["status_label"] == "Listo para liberación"
+    assert pv2["status"] == "liberado" and pv2["status_label"] == "Liberado"
+    released = client.get(orders_url, params={"status": "liberado"}).json()
+    assert [item["document"] for item in released["items"]] == ["PV-2"]
     assert pv2["manual_approval"]["approved_by"] == MANAGER
     assert pv2["manual_approval"]["note"] == "Gerencia"
     in_file = client.get(orders_url, params={"sort": "file"}).json()["items"]
@@ -132,7 +135,8 @@ def test_approve_unapprove_and_delete(client) -> None:
 
     assert client.delete(f"{orders_url}/PV-2/approval").status_code == 204
     assert client.delete(f"{orders_url}/PV-2/approval").status_code == 404
-    assert client.get(f"{BASE}/{batch['id']}").json()["ready_order_count"] == 1
+    restored = client.get(f"{BASE}/{batch['id']}").json()
+    assert (restored["ready_order_count"], restored["released_order_count"]) == (1, 0)
 
     assert client.delete(f"{BASE}/{batch['id']}").status_code == 204
     assert client.get(f"{BASE}/{batch['id']}").status_code == 404

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 READY = "listo_para_liberar"
 PENDING = "pendiente_validacion"
+# A person marked the order as released; only orders take it, never a line.
+RELEASED = "liberado"
 
-# The status of a line and of an order: an order is ready only when every line is.
+# The status of a line: an order is ready only when every line is.
 STATUSES = (READY, PENDING)
+# The status of an order: the validation's, or released by a person.
+ORDER_STATUSES = (READY, PENDING, RELEASED)
 
 STATUS_LABELS = {
     READY: "Listo para liberación",
     PENDING: "Pendiente de validación",
+    RELEASED: "Liberado",
 }
 
 # Why a line got its status. The first two release it; the rest leave it pending. The margin

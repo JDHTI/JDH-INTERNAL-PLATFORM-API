@@ -249,9 +249,11 @@ def test_order_status_and_batch_counts() -> None:
         (line(document=document), rules.LineResult(status, "sin_acuerdo", ""))
         for document, status in (("A", ready), ("A", pending), ("B", ready))
     ]
-    assert rules.summarize_batch(items) == (3, 2, 2, 1)
-    # A manual approval makes the order ready; its lines keep their status.
-    assert rules.summarize_batch(items, {"A"}) == (3, 2, 2, 2)
+    assert rules.summarize_batch(items) == (3, 2, 2, 1, 0)
+    # A person's mark releases the order (counted apart); its lines keep their status.
+    assert rules.summarize_batch(items, {"A"}) == (3, 2, 2, 1, 1)
+    # A ready order marked by hand leaves the ready count for the released one.
+    assert rules.summarize_batch(items, {"B"}) == (3, 2, 2, 0, 1)
 
 
 def test_the_margin_of_the_channel_is_the_reference() -> None:
@@ -577,8 +579,8 @@ def test_a_full_margin_product_is_only_released_by_hand() -> None:
     assert rules.release_by_margin(items, D("0.05")) is None
     assert rules.release_basis(items, False, D("0.05")) is None
     assert rules.release_basis(items, True, D("0")) == "manual"
-    assert rules.summarize_batch(items) == (2, 1, 1, 0)
-    assert rules.summarize_batch(items, {"PV-1"}) == (2, 1, 1, 1)
+    assert rules.summarize_batch(items) == (2, 1, 1, 0, 0)
+    assert rules.summarize_batch(items, {"PV-1"}) == (2, 1, 1, 0, 1)
     (alert,) = rules.order_alerts(items)
     assert alert.code == "margen_100" and alert.row_numbers == (3,)
     # It stays out of the order margin: it carries no cost.

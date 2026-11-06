@@ -284,22 +284,22 @@ class OrderValidationService:
         documents: Sequence[str],
         note: str | None = None,
     ) -> Batch:
-        """Release pending orders by hand, all or nothing.
+        """Mark orders as released, pending or ready alike, all or nothing.
 
-        The approval belongs to the order: its lines keep their own result, and
-        re-validating the file keeps the approval.
+        The mark belongs to the order: its lines keep their own result, and
+        re-validating the file keeps the mark.
 
         Raises:
             ForbiddenError: If the caller is not a manager.
             NotFoundError: If the file does not exist or a document is not in it.
-            ConflictError: If one of the orders is not pending any more.
+            ConflictError: If one of the orders is already released.
             InvalidInputError: If no document is sent or the note is too long.
         """
 
         await self._require_manager(principal)
         wanted = list(dict.fromkeys(item.strip() for item in documents if item and item.strip()))
         if not wanted:
-            raise InvalidInputError("Indica al menos un pedido para aprobar")
+            raise InvalidInputError("Indica al menos un pedido para marcar como liberado")
         text = " ".join((note or "").split()) or None
         if text and len(text) > MAX_NOTE_LENGTH:
             raise InvalidInputError(f"La nota admite máximo {MAX_NOTE_LENGTH} caracteres")
@@ -311,10 +311,12 @@ class OrderValidationService:
         missing = [document for document in wanted if document not in orders]
         if missing:
             raise NotFoundError(f"Pedidos que no están en el archivo: {', '.join(missing)}")
-        settled = [document for document in wanted if orders[document].status != vocabulary.PENDING]
+        settled = [
+            document for document in wanted if orders[document].status == vocabulary.RELEASED
+        ]
         if settled:
             raise ConflictError(
-                f"Estos pedidos ya no están pendientes: {', '.join(settled)}; no se aprobó ninguno"
+                f"Estos pedidos ya están liberados: {', '.join(settled)}; no se marcó ninguno"
             )
         now = datetime.now(UTC)
         return await self.repository.approve(
@@ -323,16 +325,16 @@ class OrderValidationService:
         )
 
     async def remove_approval(self, principal: Principal, batch_id: UUID, document: str) -> None:
-        """Undo a manual approval; the order goes back to what the validation says.
+        """Undo a release mark; the order goes back to what the validation says.
 
         Raises:
             ForbiddenError: If the caller is not a manager.
-            NotFoundError: If the order has no manual approval.
+            NotFoundError: If the order is not marked as released.
         """
 
         await self._require_manager(principal)
         if not await self.repository.remove_approval(batch_id, document.strip()):
-            raise NotFoundError("El pedido no tiene aprobación manual")
+            raise NotFoundError("El pedido no está marcado como liberado")
 
     async def delete(self, principal: Principal, batch_id: UUID) -> None:
         """Delete a file with its lines and approvals.
@@ -351,8 +353,8 @@ class OrderValidationService:
     async def _orders_of(self, batch_id: UUID, threshold: Decimal) -> list[OrderView]:
         """Every order of a file in file order.
 
-        An order is ready when all its lines are, when a person approved it, or when the margin
-        `threshold` releases it (`release_basis` says which).
+        An order a person marked is released (`release_basis` is `manual`). Otherwise it is
+        ready when all its lines are or when the margin `threshold` releases it.
         """
 
         approvals = await self.repository.approvals(batch_id)
@@ -367,7 +369,13 @@ class OrderValidationService:
             orders.append(
                 OrderView(
                     document=document,
-                    status=vocabulary.READY if basis else vocabulary.PENDING,
+                    status=(
+                        vocabulary.RELEASED
+                        if document in approvals
+                        else vocabulary.READY
+                        if basis
+                        else vocabulary.PENDING
+                    ),
                     lines=lines,
                     total_amount=_total(lines),
                     manual_approval=approvals.get(document),
@@ -443,8 +451,10 @@ class OrderValidationService:
         """
 
         self._bounds(page, size)
-        if status is not None and status not in vocabulary.STATUSES:
-            raise InvalidInputError(f"status debe ser uno de: {', '.join(vocabulary.STATUSES)}")
+        if status is not None and status not in vocabulary.ORDER_STATUSES:
+            raise InvalidInputError(
+                f"status debe ser uno de: {', '.join(vocabulary.ORDER_STATUSES)}"
+            )
         if reason is not None and reason not in vocabulary.REASONS:
             raise InvalidInputError(f"reason debe ser uno de: {', '.join(vocabulary.REASONS)}")
         if sort not in SORTS:
@@ -470,7 +480,7 @@ class OrderValidationService:
                 for order in orders
                 if any(item.result.reason == reason for item in order.lines)
             ]
-        counts = {value: 0 for value in vocabulary.STATUSES}
+        counts = {value: 0 for value in vocabulary.ORDER_STATUSES}
         for order in orders:
             counts[order.status] += 1
         if status:
@@ -500,7 +510,7 @@ class OrderValidationService:
         return {
             "statuses": [
                 {"value": value, "label": vocabulary.STATUS_LABELS[value]}
-                for value in vocabulary.STATUSES
+                for value in vocabulary.ORDER_STATUSES
             ],
             "reasons": [
                 {
