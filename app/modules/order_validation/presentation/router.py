@@ -41,6 +41,8 @@ _principal = Depends(get_current_principal)
 _TRY_THRESHOLD = Query(default=None, ge=0, le=20, description="Try a threshold without saving it")
 
 LineStatus = Literal["listo_para_liberar", "pendiente_validacion"]
+# An order also takes `liberado` once a person marks it as released.
+OrderStatus = Literal["listo_para_liberar", "pendiente_validacion", "liberado"]
 Reason = Literal[
     "cumple_con_apoyo",
     "cumple_margen_lista",
@@ -72,6 +74,8 @@ class BatchResponse(BaseModel):
     pending_line_count: int
     ready_order_count: int
     pending_order_count: int
+    # Marked as released by a person; counted in neither ready nor pending.
+    released_order_count: int
     margin_threshold_points: Decimal
 
 
@@ -176,11 +180,11 @@ class RevalidateRequest(BaseModel):
 
 
 class OrderResponse(BaseModel):
-    """An order with its lines: ready when every line is, or when a person approved it."""
+    """An order with its lines: released when a person marked it, ready when every line is."""
 
     document: str
     manual_approval: ManualApprovalResponse | None
-    status: LineStatus
+    status: OrderStatus
     status_label: str
     order_date: date | None
     operation_center: str | None
@@ -277,6 +281,7 @@ def _batch(batch: Batch) -> BatchResponse:
         pending_line_count=batch.pending_line_count,
         ready_order_count=batch.ready_order_count,
         pending_order_count=batch.pending_order_count,
+        released_order_count=batch.released_order_count,
         margin_threshold_points=(batch.margin_threshold * 100).quantize(Decimal("0.01")),
     )
 
@@ -509,7 +514,7 @@ async def get_batch(
 @inject
 async def list_orders(
     batch_id: UUID,
-    status_filter: LineStatus | None = Query(default=None, alias="status"),  # noqa: B008
+    status_filter: OrderStatus | None = Query(default=None, alias="status"),  # noqa: B008
     reason: Reason | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
     operation_center: str | None = Query(default=None, max_length=20),
@@ -605,11 +610,11 @@ async def set_margin_threshold(
     "/{batch_id}/approvals",
     dependencies=[_READ_GATE],
     response_model=BatchResponse,
-    summary="Approve pending orders by hand",
+    summary="Mark orders as released",
     description=(
-        "All or nothing: 404 if a document is not in the file, 409 if one is not pending "
-        "any more. The approval belongs to the order; its lines keep their result, and "
-        "re-validating keeps it."
+        "Pending or ready orders become `liberado`. All or nothing: 404 if a document is not "
+        "in the file, 409 if one is already released. The mark belongs to the order; its "
+        "lines keep their result, and re-validating keeps it."
     ),
 )
 @inject
@@ -619,7 +624,7 @@ async def approve_orders(
     principal: Principal = _principal,
     service: OrderValidationService = _service,
 ) -> BatchResponse:
-    """Release pending orders. Managers only."""
+    """Mark orders as released. Managers only."""
 
     return _batch(await service.approve(principal, batch_id, body.documents, body.note))
 
@@ -628,7 +633,7 @@ async def approve_orders(
     "/{batch_id}/orders/{document}/approval",
     dependencies=[_READ_GATE],
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Remove a manual approval",
+    summary="Undo a release mark",
 )
 @inject
 async def remove_approval(

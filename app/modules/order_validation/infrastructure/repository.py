@@ -52,6 +52,7 @@ def _batch(model: OrderValidationBatchModel) -> Batch:
         ready_line_count=model.ready_line_count,
         ready_order_count=model.ready_order_count,
         margin_threshold=model.margin_threshold,
+        released_order_count=model.released_order_count,
     )
 
 
@@ -98,13 +99,14 @@ def _apply_counts(
 ) -> None:
     """Counts of the file: an order is ready by its lines, a manual approval or its margin."""
 
-    lines, orders, ready_lines, ready_orders = summarize_batch(
+    lines, orders, ready_lines, ready_orders, released_orders = summarize_batch(
         items, approved, model.margin_threshold or Decimal(0), policy
     )
     model.line_count = lines
     model.order_count = orders
     model.ready_line_count = ready_lines
     model.ready_order_count = ready_orders
+    model.released_order_count = released_orders
 
 
 async def _recount(session: Any, batch: OrderValidationBatchModel, policy: OrderPolicy) -> None:

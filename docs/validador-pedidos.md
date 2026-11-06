@@ -24,7 +24,7 @@ por su encabezado, en cualquier orden, y el encabezado puede estar debajo de un 
 | `PROVEEDOR` | `359 - LOCERIA COLOMBIANA S.A.` → código comercial `359` | sí |
 | `Fecha` | fecha del pedido; define la vigencia de los apoyos | no |
 | `Vlr. imp. IMPTOLIC` | impuesto al licor por unidad que ya trae la línea (ver [Impuesto al licor](#impuesto-al-licor)) | no |
-| `Cant. pedida`, `CANAL`, `Bodega`, `Lista de precios fact`, `C.O. factura`, `Estado docto.`, `Razon social cliente factura`, `Nombre vendedor cliente`, `Desc. item`, `Retenido margen` | se guardan y se muestran | no |
+| `Cant. pedida`, `CANAL`, `Bodega`, `Lista de precios fact`, `C.O. factura` (también `C.O.`, `CO`, `Centro de operación`), `Estado docto.`, `Razon social cliente factura`, `Nombre vendedor cliente`, `Desc. item`, `Retenido margen` | se guardan y se muestran | no |
 
 Una celda ilegible no descarta la fila: queda vacía, la línea guarda el problema y sale
 pendiente con `datos_incompletos`. Límites: `ORDER_VALIDATION_MAX_UPLOAD_MB` (10) y
@@ -240,16 +240,20 @@ apoyo** (`sin_acuerdo`), y dentro de cada grupo por **margen del pedido de menor
 (los que no tienen margen, al final). Las líneas de cada pedido se ordenan igual: sin apoyo
 primero y por margen de menor a mayor. `sort=file` conserva el orden del archivo.
 
-## Aprobación manual
+## Marcar como liberado
 
-Quien gestiona puede liberar pedidos pendientes a mano, por selección y en bloque: o se
-aprueban todos los enviados o ninguno (si uno no está en el archivo es 404; si uno ya no
-está pendiente, 409). Se guarda quién, cuándo y una nota opcional (máximo 500
-caracteres). La aprobación es del pedido: sus líneas conservan su estado y motivo, así
-que `ready_line_count` y el filtro `reason` no cambian, mientras que el estado del pedido,
-el filtro `status`, `counts` y `ready_order_count` lo cuentan como listo. **Revalidar
-conserva las aprobaciones** (son decisiones de una persona). Quitar la aprobación devuelve
-el pedido a lo que diga la validación. Borrar un archivo borra sus líneas y aprobaciones.
+Quien gestiona marca pedidos como **liberados** (`liberado`), por selección y en bloque,
+estén pendientes o listos para liberación: o se marcan todos los enviados o ninguno (si uno
+no está en el archivo es 404; si uno ya está liberado, 409). Se guarda quién, cuándo y una
+nota opcional (máximo 500 caracteres) en `manual_approval`. La marca es del pedido: sus
+líneas conservan su estado y motivo, así que `ready_line_count` y el filtro `reason` no
+cambian. El estado del pedido pasa a `liberado` (`release_basis: manual`); el filtro
+`status=liberado`, `counts.liberado` y `released_order_count` lo cuentan aparte, y ya no
+suma en `ready_order_count` ni en `pending_order_count`. **Revalidar conserva las marcas**
+(son decisiones de una persona). Quitar la marca devuelve el pedido a lo que diga la
+validación. Borrar un archivo borra sus líneas y marcas.
+
+La migración `0049` pasó las aprobaciones manuales que ya existían a `liberado`.
 
 Cada línea guarda todos los apoyos evaluados (`checks`) con su resultado, margen con
 apoyo, margen objetivo y una explicación en español, y el apoyo que decidió
@@ -271,8 +275,8 @@ cualquiera de esas dos áreas, el líder o responsable del área, y los administ
 | `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `released_by_threshold`, `threshold_released_count` (de la lista), `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `operation_center` (C.O. factura del pedido), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado. `operation_centers` (`[{code, order_count}]`, por código) lista todos los C.O. del archivo con sus pedidos, sin importar los filtros |
 | `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos y márgenes como están ahora. Cuerpo opcional `{"margin_threshold_points": 0.5}`; sin valor conserva el umbral guardado. Conserva las aprobaciones manuales |
 | `PUT /order-validations/{id}/margin-threshold` | `{"margin_threshold_points": 0.5}`: guarda el umbral del archivo y recalcula qué pedidos libera, sin revalidar las líneas; conserva las aprobaciones |
-| `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: aprueba a mano pedidos pendientes, todo o nada; devuelve el archivo con sus conteos |
-| `DELETE /order-validations/{id}/orders/{document}/approval` | Quita la aprobación manual (204) |
+| `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: marca como liberados pedidos pendientes o listos, todo o nada; devuelve el archivo con sus conteos (`released_order_count`) |
+| `DELETE /order-validations/{id}/orders/{document}/approval` | Quita la marca de liberado (204) |
 | `DELETE /order-validations/{id}` | Borra el archivo con sus líneas y aprobaciones (204) |
 | `GET /order-validations/catalogs` | Estados, motivos y alertas con su etiqueta |
 | `GET /order-validations/rules` | Las reglas que aplica el validador, por secciones (`linea`, `pedido`, `aprobacion`), cada una con `code`, `title`, `description`, `effect` (`libera`, `retiene`, `alerta`, `informa`) y `parameters` con los valores vigentes. Abierta a todo usuario autenticado |

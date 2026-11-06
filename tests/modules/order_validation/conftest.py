@@ -76,7 +76,7 @@ class FakeBatchRepository:
         self.approved: dict[UUID, dict[str, ManualApproval]] = {}
 
     def _counted(self, batch: Batch, lines: Sequence[StoredLine]) -> Batch:
-        total, orders, ready, ready_orders = summarize_batch(
+        total, orders, ready, ready_orders, released_orders = summarize_batch(
             ((item.line, item.result) for item in lines),
             self.approved.get(batch.id, {}),
             batch.margin_threshold,
@@ -87,6 +87,7 @@ class FakeBatchRepository:
             order_count=orders,
             ready_line_count=ready,
             ready_order_count=ready_orders,
+            released_order_count=released_orders,
         )
 
     async def create(self, batch_id, file_name, actor, now, lines, margin_threshold) -> Batch:

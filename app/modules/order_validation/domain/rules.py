@@ -773,11 +773,12 @@ def summarize_batch(
     approved: Collection[str] = (),
     threshold: Decimal = ZERO,
     policy: OrderPolicy = DEFAULT_POLICY,
-) -> tuple[int, int, int, int]:
-    """Counts of a batch: lines, orders, ready lines and ready orders.
+) -> tuple[int, int, int, int, int]:
+    """Counts of a batch: lines, orders, ready lines, ready orders and released orders.
 
-    An order is ready when all its lines are, when a person approved it, or when its margin
-    releases it (see :func:`release_basis`). Its lines keep their own status either way.
+    An order a person marked (``approved``) is released and counts only there. Any other order
+    is ready when all its lines are or when its margin releases it (see :func:`release_basis`).
+    Its lines keep their own status either way.
     """
 
     orders: dict[str, list[tuple[OrderLine, LineResult]]] = {}
@@ -787,9 +788,10 @@ def summarize_batch(
     ready_lines = sum(
         1 for pairs in orders.values() for _, result in pairs if result.status == vocabulary.READY
     )
+    released_orders = sum(1 for document in orders if document in approved)
     ready_orders = sum(
         1
         for document, pairs in orders.items()
-        if release_basis(pairs, document in approved, threshold, policy) is not None
+        if document not in approved and release_basis(pairs, False, threshold, policy) is not None
     )
-    return line_count, len(orders), ready_lines, ready_orders
+    return line_count, len(orders), ready_lines, ready_orders, released_orders

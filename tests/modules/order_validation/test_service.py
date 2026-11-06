@@ -49,7 +49,7 @@ async def test_orders_group_lines_and_filter(service, source, manager) -> None:
     page = await service.orders(batch.id, sort="file")
     assert [order.document for order in page.items] == ["PV-1", "PV-2"]
     assert [order.status for order in page.items] == ["listo_para_liberar", "pendiente_validacion"]
-    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1}
+    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1, "liberado": 0}
     pv2 = page.items[1]
     assert len(pv2.lines) == 2 and pv2.ready_line_count == 1
     assert pv2.total_amount == D("118628") * 24 * 2
@@ -135,7 +135,7 @@ async def test_unknown_batch_and_bad_filters(service, manager) -> None:
         await service.revalidate(manager, uuid4())
     batch = await service.upload(manager, "p.xlsx", report())
     with pytest.raises(InvalidInputError):
-        await service.orders(batch.id, status="liberado")
+        await service.orders(batch.id, status="aprobado")
     with pytest.raises(InvalidInputError):
         await service.orders(batch.id, size=500)
 
@@ -146,48 +146,55 @@ def test_catalogs_label_every_status_and_reason(service) -> None:
     assert [item["value"] for item in catalogs["statuses"]] == [
         "listo_para_liberar",
         "pendiente_validacion",
+        "liberado",
     ]
+    assert catalogs["statuses"][2]["label"] == "Liberado"
     ready = [
         item["value"] for item in catalogs["reasons"] if item["status"] == "listo_para_liberar"
     ]
     assert ready == ["cumple_con_apoyo", "cumple_margen_lista"]
 
 
-async def test_manual_approval_makes_the_order_ready_and_keeps_its_lines(
+async def test_marking_an_order_releases_it_and_keeps_its_lines(service, source, manager) -> None:
+    source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
+    batch = await service.upload(manager, "p.xlsx", report())
+
+    marked = await service.approve(manager, batch.id, ["PV-2"], "  Autorizado por gerencia  ")
+
+    assert (marked.ready_order_count, marked.pending_order_count) == (1, 0)
+    assert marked.released_order_count == 1
+    # Lines keep what the validation said.
+    assert (marked.ready_line_count, marked.pending_line_count) == (2, 1)
+    page = await service.orders(batch.id, sort="file")
+    pv2 = page.items[1]
+    assert pv2.status == "liberado" and pv2.release_basis == "manual"
+    assert pv2.manual_approval.approved_by == manager.email
+    assert pv2.manual_approval.note == "Autorizado por gerencia"
+    assert [line.result.reason for line in pv2.lines] == ["cumple_con_apoyo", "sin_acuerdo"]
+    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 0, "liberado": 1}
+    assert (await service.orders(batch.id, reason="sin_acuerdo")).total == 1
+    assert (await service.orders(batch.id, status="liberado")).total == 1
+
+
+async def test_marking_is_all_or_nothing_and_takes_ready_orders_too(
     service, source, manager
 ) -> None:
     source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
     batch = await service.upload(manager, "p.xlsx", report())
 
-    approved = await service.approve(manager, batch.id, ["PV-2"], "  Autorizado por gerencia  ")
-
-    assert (approved.ready_order_count, approved.pending_order_count) == (2, 0)
-    # Lines keep what the validation said.
-    assert (approved.ready_line_count, approved.pending_line_count) == (2, 1)
-    page = await service.orders(batch.id, sort="file")
-    pv2 = page.items[1]
-    assert pv2.status == "listo_para_liberar"
-    assert pv2.manual_approval.approved_by == manager.email
-    assert pv2.manual_approval.note == "Autorizado por gerencia"
-    assert [line.result.reason for line in pv2.lines] == ["cumple_con_apoyo", "sin_acuerdo"]
-    assert page.counts == {"listo_para_liberar": 2, "pendiente_validacion": 0}
-    assert (await service.orders(batch.id, reason="sin_acuerdo")).total == 1
-    assert (await service.orders(batch.id, status="pendiente_validacion")).total == 0
-
-
-async def test_approval_is_all_or_nothing(service, source, manager) -> None:
-    source.items.append(agreement(supplier_value=D("0.05"), target_margin_pct=D("0.14")))
-    batch = await service.upload(manager, "p.xlsx", report())
-
-    with pytest.raises(ConflictError, match="PV-1"):
-        await service.approve(manager, batch.id, ["PV-2", "PV-1"])
     with pytest.raises(NotFoundError, match="PV-9"):
         await service.approve(manager, batch.id, ["PV-2", "PV-9"])
-    assert (await service.get_batch(batch.id)).ready_order_count == 1
+    assert (await service.get_batch(batch.id)).released_order_count == 0
 
-    await service.approve(manager, batch.id, ["PV-2"])
-    with pytest.raises(ConflictError):
-        await service.approve(manager, batch.id, ["PV-2"])
+    # PV-1 is ready and PV-2 pending: both can be released at once.
+    both = await service.approve(manager, batch.id, ["PV-1", "PV-2"])
+    assert (both.ready_order_count, both.pending_order_count, both.released_order_count) == (
+        0,
+        0,
+        2,
+    )
+    with pytest.raises(ConflictError, match="PV-1"):
+        await service.approve(manager, batch.id, ["PV-1"])
     with pytest.raises(InvalidInputError):
         await service.approve(manager, batch.id, [" "])
     with pytest.raises(InvalidInputError, match="500"):
@@ -200,10 +207,11 @@ async def test_removing_the_approval_and_revalidating(service, source, manager) 
 
     # Re-validating recomputes the lines and keeps the people's decisions.
     again = await service.revalidate(manager, batch.id)
-    assert again.ready_order_count == 2 and again.ready_line_count == 0
+    assert again.released_order_count == 2 and again.ready_line_count == 0
 
     await service.remove_approval(manager, batch.id, "PV-2")
-    assert (await service.get_batch(batch.id)).ready_order_count == 1
+    after = await service.get_batch(batch.id)
+    assert (after.released_order_count, after.pending_order_count) == (1, 1)
     assert (await service.orders(batch.id, sort="file")).items[1].manual_approval is None
     with pytest.raises(NotFoundError):
         await service.remove_approval(manager, batch.id, "PV-2")
@@ -247,7 +255,7 @@ async def test_the_threshold_releases_orders_by_their_margin_and_is_kept(
     assert pv1.lines[0].result.reason == "sin_acuerdo"
     assert pv1.margin_pct == D("0.100000") and pv1.margin_with_threshold_pct == D("0.105000")
     assert pv2.status == "pendiente_validacion" and pv2.release_basis is None
-    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1}
+    assert page.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1, "liberado": 0}
 
     # Revalidating keeps the stored threshold; a new value replaces it.
     assert (await service.revalidate(manager, with_threshold.id)).ready_order_count == 1
@@ -266,15 +274,16 @@ async def test_the_threshold_can_be_tried_and_then_saved(service, source, manage
     tried = await service.orders(batch.id, margin_threshold_points=D("0.5"))
     saved = await service.get_batch(batch.id)
 
-    assert tried.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1}
+    assert tried.counts == {"listo_para_liberar": 1, "pendiente_validacion": 1, "liberado": 0}
     assert saved.margin_threshold == D("0") and saved.ready_order_count == 0
     after = await service.set_threshold(manager, batch.id, D("0.5"))
     assert after.margin_threshold == D("0.005") and after.ready_order_count == 1
     assert (await service.orders(batch.id)).counts == tried.counts
-    # A manual approval and the threshold do not cancel each other.
-    approved = await service.approve(manager, batch.id, ["PV-2"])
-    assert approved.ready_order_count == 2
-    assert (await service.set_threshold(manager, batch.id, D("0"))).ready_order_count == 1
+    # A release mark and the threshold do not cancel each other.
+    marked = await service.approve(manager, batch.id, ["PV-2"])
+    assert (marked.ready_order_count, marked.released_order_count) == (1, 1)
+    cleared = await service.set_threshold(manager, batch.id, D("0"))
+    assert (cleared.ready_order_count, cleared.released_order_count) == (0, 1)
     with pytest.raises(ForbiddenError):
         await service.set_threshold(person("otro@jdh.com.co"), batch.id, D("1"))
     with pytest.raises(InvalidInputError, match="umbral"):
@@ -360,7 +369,7 @@ async def test_a_wine_without_its_tax_is_held_back_and_only_a_person_releases_it
     assert (batch.ready_order_count, batch.pending_order_count) == (1, 1)
     # A person can release it.
     approved = await service.approve(manager, batch.id, ["NO-TAX"])
-    assert approved.ready_order_count == 2
+    assert (approved.ready_order_count, approved.released_order_count) == (1, 1)
 
 
 async def test_orders_released_by_margin_say_whether_the_threshold_was_needed(
@@ -436,11 +445,11 @@ async def test_an_order_with_a_full_margin_product_is_released_only_by_hand(
 
     approved = await service.approve(manager, batch.id, ["PV-3"])
 
-    assert approved.ready_order_count == 2
+    assert (approved.ready_order_count, approved.released_order_count) == (1, 1)
     pv3 = next(
         order for order in (await service.orders(batch.id)).items if order.document == "PV-3"
     )
-    assert pv3.status == "listo_para_liberar" and pv3.release_basis == "manual"
+    assert pv3.status == "liberado" and pv3.release_basis == "manual"
     # The line keeps its reason and the alert stays in the breakdown.
     assert [alert.code for alert in pv3.alerts] == ["margen_100"]
 
