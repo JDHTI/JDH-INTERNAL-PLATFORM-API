@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
@@ -29,6 +29,7 @@ from app.modules.pqrsf.domain.notifications import (
     Notification,
 )
 from app.modules.pqrsf.domain.ports import BinaryStorage, EmailRepository, NotificationRepository
+from app.modules.pqrsf.domain.supplier_messages import clean_cc
 from app.modules.pqrsf.domain.tracking import TrackingCase
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class CaseCommentService:
         storage: BinaryStorage,
         guard: AttachmentGuard,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        cc_domains: Collection[str] = (),
     ) -> None:
         """Create the service.
 
@@ -95,6 +97,7 @@ class CaseCommentService:
             storage (BinaryStorage): Private bucket for the files.
             guard (AttachmentGuard): The same file rules as email intake.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
+            cc_domains (Collection[str]): Domains whose people may be copied on a reply.
         """
 
         self.tracking = tracking
@@ -103,6 +106,7 @@ class CaseCommentService:
         self.storage = storage
         self.guard = guard
         self.clock = clock
+        self.cc_domains = tuple(cc_domains)
 
     async def comment(
         self,
@@ -111,6 +115,7 @@ class CaseCommentService:
         principal: Principal,
         files: Sequence[UploadedFile] = (),
         reply_to_client: bool = False,
+        cc: Sequence[str] = (),
     ) -> CommentResult:
         """Add a comment, store its files and, if asked, email it to the client.
 
@@ -124,6 +129,8 @@ class CaseCommentService:
             principal (Principal): The author.
             files (Sequence[UploadedFile]): Files to attach to the comment (and the email).
             reply_to_client (bool): Also email the comment to the requester.
+            cc (Sequence[str]): People of the organization copied on that email (up to 5);
+                only with ``reply_to_client``.
 
         Returns:
             CommentResult: The timeline entry, the stored files and the queued reply.
@@ -138,6 +145,9 @@ class CaseCommentService:
         if text is None:
             raise InvalidInputError("El comentario no puede estar vacío")
         recipient = ""
+        copied: list[str] = []
+        if cc and not reply_to_client:
+            raise InvalidInputError("La copia (CC) solo aplica al responder al cliente")
         if reply_to_client:
             if case.is_closed:
                 raise ConflictError("El caso está finalizado: no se puede responder al cliente")
@@ -146,6 +156,7 @@ class CaseCommentService:
                 raise InvalidInputError(
                     "El caso no tiene un correo del solicitante para responderle"
                 )
+            copied = clean_cc(cc, self.cc_domains, exclude=[recipient])
 
         accepted, rejected = await self.accept_files(files)
         if reply_to_client and sum(len(a[3]) for a in accepted) > REPLY_ATTACHMENT_LIMIT:
@@ -159,7 +170,11 @@ class CaseCommentService:
         if rejected:
             data["rejected_files"] = rejected
         if reply_to_client:
-            data["client_reply"] = {"to": recipient, "notification_id": str(notification_id)}
+            data["client_reply"] = {
+                "to": recipient,
+                "cc": copied,
+                "notification_id": str(notification_id),
+            }
         try:
             event = await self.tracking.add_comment(case.id, text, principal, data)
             attachments = [replace(a, comment_event_id=event.event.id) for a in stored]
@@ -170,7 +185,9 @@ class CaseCommentService:
 
         reply = None
         if reply_to_client:
-            reply = await self._queue_reply(case, text, recipient, notification_id, event, stored)
+            reply = await self._queue_reply(
+                case, text, recipient, notification_id, event, stored, copied
+            )
         return CommentResult(event, attachments, rejected, reply)
 
     async def list_client_replies(self, case_id: UUID, principal: Principal) -> list[Notification]:
@@ -299,6 +316,7 @@ class CaseCommentService:
         notification_id: UUID,
         event: EventView,
         stored: list[CaseAttachment],
+        cc: Sequence[str] = (),
     ) -> Notification:
         subject, body = templates.client_reply(case, text)
         notification = Notification(
@@ -315,6 +333,7 @@ class CaseCommentService:
                 "event_id": str(event.event.id),
                 "file_ids": [str(a.id) for a in stored],
                 "graph_id": await self.emails.latest_inbound_graph_id(case.id),
+                "cc": list(cc),
             },
         )
         await self.notifications.enqueue(notification)

@@ -252,6 +252,12 @@ class Settings(BaseSettings):
     # ISO date-time. On the first sync only mail received from then on opens cases;
     # empty means "from the moment it is switched on" (the old inbox is left alone).
     MAIL_INTAKE_SINCE: str = ""
+    # False: the mailbox only follows cases that already exist (an answer from the client or
+    # the supplier joins its case by the code in the subject); any other email is ignored.
+    # True also opens cases from template emails.
+    MAIL_INTAKE_OPEN_CASES: bool = False
+    # Comma-separated domains whose addresses may be copied (CC) on a reply from a case.
+    MAIL_CC_DOMAINS: str = "jdh.com.co"
     MAIL_POLL_INTERVAL_SECONDS: int = 120
     MAIL_MAX_ATTEMPTS: int = 5
     MAIL_MAX_ATTACHMENTS: int = 10
@@ -544,6 +550,8 @@ class Settings(BaseSettings):
                 "client_secret": self.MAIL_GRAPH_CLIENT_SECRET.get_secret_value(),
                 "pqrsf_inbox": self.MAIL_PQRSF_INBOX,
                 "since": self.mail_intake_since,
+                "open_cases": self.MAIL_INTAKE_OPEN_CASES,
+                "cc_domains": _split_lower(self.MAIL_CC_DOMAINS),
                 "ignored_senders": _split_lower(self.MAIL_IGNORED_SENDERS),
                 "max_attempts": self.MAIL_MAX_ATTEMPTS,
                 "max_attachments": self.MAIL_MAX_ATTACHMENTS,

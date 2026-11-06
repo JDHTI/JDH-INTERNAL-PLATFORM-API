@@ -143,7 +143,12 @@ class GraphMailClient(GraphAppClient):
         return response.content
 
     async def reply(
-        self, mailbox: str, graph_id: str, text: str, files: Sequence[OutgoingFile] = ()
+        self,
+        mailbox: str,
+        graph_id: str,
+        text: str,
+        files: Sequence[OutgoingFile] = (),
+        cc: Sequence[str] = (),
     ) -> bool:
         """Reply in the same conversation; Graph quotes the original and keeps the thread.
 
@@ -155,14 +160,13 @@ class GraphMailClient(GraphAppClient):
         """
 
         message = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(graph_id)}"
+        body: dict[str, Any] = {"comment": _html(text)}
+        if cc:
+            body["message"] = {"ccRecipients": _recipients(cc)}
         if not files:
-            response = await self._request(
-                "POST", f"{message}/reply", json={"comment": _html(text)}, missing=(404,)
-            )
+            response = await self._request("POST", f"{message}/reply", json=body, missing=(404,))
             return response is not None
-        draft = await self._request(
-            "POST", f"{message}/createReply", json={"comment": _html(text)}, missing=(404,)
-        )
+        draft = await self._request("POST", f"{message}/createReply", json=body, missing=(404,))
         if draft is None:
             return False
         draft_url = f"{GRAPH_URL}/users/{_segment(mailbox)}/messages/{_segment(draft.json()['id'])}"
@@ -184,15 +188,23 @@ class GraphMailClient(GraphAppClient):
         )
 
     async def send(
-        self, mailbox: str, to: str, subject: str, text: str, files: Sequence[OutgoingFile] = ()
+        self,
+        mailbox: str,
+        to: str,
+        subject: str,
+        text: str,
+        files: Sequence[OutgoingFile] = (),
+        cc: Sequence[str] = (),
     ) -> None:
         """Send a plain-text message from the mailbox; it is kept in its Sent Items."""
 
         message: dict[str, Any] = {
             "subject": subject,
             "body": {"contentType": "Text", "content": text},
-            "toRecipients": [{"emailAddress": {"address": to}}],
+            "toRecipients": _recipients([to]),
         }
+        if cc:
+            message["ccRecipients"] = _recipients(cc)
         user = f"{GRAPH_URL}/users/{_segment(mailbox)}"
         if sum(len(file.content) for file in files) >= _DRAFT_THRESHOLD:
             # Too big for one JSON request: create a draft, attach each file, send it.
@@ -251,6 +263,10 @@ class GraphMailClient(GraphAppClient):
                 raise DependencyUnavailableError(
                     f"Microsoft Graph respondió {response.status_code} al subir el adjunto"
                 )
+
+
+def _recipients(addresses: Sequence[str]) -> list[dict[str, Any]]:
+    return [{"emailAddress": {"address": address}} for address in addresses]
 
 
 def _html(text: str) -> str:

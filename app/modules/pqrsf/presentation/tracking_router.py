@@ -443,6 +443,7 @@ class CommentRequest(BaseModel):
 
     body: str = Field(min_length=1, max_length=5_000)
     reply_to_client: bool = False
+    cc: list[str] = Field(default_factory=list, max_length=5)
 
 
 class UpdateItemRequest(BaseModel):
@@ -947,6 +948,20 @@ async def search_assignees(
     return [PersonResponse(id=u.id, display_name=u.display_name, email=u.email) for u in users]
 
 
+@router.get("/people", response_model=list[PersonResponse], summary="Search people to copy (CC)")
+@inject
+async def search_people(
+    q: str = Query(default="", max_length=100),
+    limit: int = Query(default=20, ge=1, le=50),
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> list[PersonResponse]:
+    """Find active people of the organization to copy on a reply (anyone who sees PQRSF)."""
+
+    users = await service.search_people(q, principal, limit)
+    return [PersonResponse(id=u.id, display_name=u.display_name, email=u.email) for u in users]
+
+
 # --- Cases (static paths before /cases/{case_id}) ---
 
 
@@ -1355,6 +1370,7 @@ class ClientReplyResponse(BaseModel):
     id: UUID
     event_id: UUID | None
     to: str
+    cc: list[str] = []
     status: Literal["pending", "sent", "failed"]
     attempts: int
     error: str | None
@@ -1376,6 +1392,7 @@ def _client_reply(item: Notification) -> ClientReplyResponse:
         id=item.id,
         event_id=UUID(event_id) if event_id else None,
         to=item.recipient_email,
+        cc=[str(address) for address in item.payload.get("cc") or []],
         status=item.status,
         attempts=item.attempts,
         error=item.error,
@@ -1394,6 +1411,7 @@ _COMMENT_BODY = {
                 "properties": {
                     "body": {"type": "string", "maxLength": 5000},
                     "reply_to_client": {"type": "boolean", "default": False},
+                    "cc": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
                 },
             }
         },
@@ -1404,6 +1422,7 @@ _COMMENT_BODY = {
                 "properties": {
                     "body": {"type": "string", "maxLength": 5000},
                     "reply_to_client": {"type": "boolean", "default": False},
+                    "cc": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
                     "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
                 },
             }
@@ -1416,11 +1435,16 @@ _TRUE = {"1", "true", "yes", "on"}
 
 async def _read_comment(
     request: Request, max_file_bytes: int
-) -> tuple[str, bool, list[UploadedFile]]:
-    """Read a comment sent as JSON (text only) or as a multipart form with files."""
+) -> tuple[str, bool, list[UploadedFile], list[str]]:
+    """Read a comment sent as JSON (text only) or as a multipart form with files.
+
+    Returns:
+        tuple[str, bool, list[UploadedFile], list[str]]: Text, whether it also goes to the
+        client, its files and the people to copy on that email.
+    """
 
     if request.headers.get("content-type", "").startswith("multipart/form-data"):
-        form = await request.form(max_files=_MAX_COMMENT_FILES, max_fields=20)
+        form = await request.form(max_files=_MAX_COMMENT_FILES, max_fields=30)
         files = [
             UploadedFile(upload.filename or "archivo", await upload.read(max_file_bytes + 1))
             for upload in form.getlist("files")
@@ -1430,6 +1454,7 @@ async def _read_comment(
             str(form.get("body") or ""),
             str(form.get("reply_to_client") or "").lower() in _TRUE,
             files,
+            [str(value) for value in form.getlist("cc")],
         )
     try:
         payload = CommentRequest.model_validate_json(await request.body())
@@ -1437,7 +1462,7 @@ async def _read_comment(
         raise InvalidInputError(
             "El comentario no es válido: escribe un texto de hasta 5000 caracteres"
         ) from exc
-    return payload.body, payload.reply_to_client, []
+    return payload.body, payload.reply_to_client, [], payload.cc
 
 
 @router.post(
@@ -1462,8 +1487,8 @@ async def comment_case(
     case. The email goes through a queue: ``client_reply.status`` says where it stands.
     """
 
-    text, reply, uploads = await _read_comment(request, service.guard.max_attachment_bytes)
-    result = await service.comment(case_id, text, principal, uploads, reply)
+    text, reply, uploads, copied = await _read_comment(request, service.guard.max_attachment_bytes)
+    result = await service.comment(case_id, text, principal, uploads, reply, copied)
     return CommentResponse(
         **_event(result.event).model_dump(),
         files=[

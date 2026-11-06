@@ -90,6 +90,7 @@ class Env:
             storage=self.bucket,
             guard=guard,
             clock=lambda: NOW,
+            cc_domains=["jdh.com.co"],
         )
         self.worker = self.s.responsible
         self.s.managers.managers.add(self.s.responsible.user_id)
@@ -223,7 +224,7 @@ async def test_replying_to_the_client_queues_the_email_with_the_files_and_the_si
     assert item.payload["event_id"] == str(result.event.event.id)
     assert item.dedupe_key == f"client_reply:{result.event.event.id}"
     reply = result.event.event.data["client_reply"]
-    assert reply == {"to": CLIENT, "notification_id": str(item.id)}
+    assert reply == {"to": CLIENT, "cc": [], "notification_id": str(item.id)}
     assert result.client_reply is item
 
 
@@ -333,14 +334,17 @@ async def test_the_delivery_state_is_listed_and_a_failed_reply_can_be_retried() 
 class FakeMailbox:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.copies: list[list[str]] = []
         self.reply_found = True
 
-    async def reply(self, mailbox, graph_id, text, files=()):
+    async def reply(self, mailbox, graph_id, text, files=(), cc=()):
         self.calls.append(("reply", graph_id, text, list(files)))
+        self.copies.append(list(cc))
         return self.reply_found
 
-    async def send(self, mailbox, to, subject, text, files=()):
+    async def send(self, mailbox, to, subject, text, files=(), cc=()):
         self.calls.append(("send", to, subject, text, list(files)))
+        self.copies.append(list(cc))
 
 
 def _sender(env: Env, redirect: str | None = None) -> tuple[NotificationService, FakeMailbox]:
@@ -423,6 +427,73 @@ async def test_the_testing_redirect_never_reaches_the_client_nor_replies_in_its_
     ((kind, to, subject, _, files),) = mailbox.calls
     assert kind == "send" and to == "analista.ti@jdh.com.co"
     assert subject == f"[PRUEBA para {CLIENT}] {item.subject}" and len(files) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_reply_copies_the_people_of_the_organization() -> None:
+    env = Env()
+    case = await env.case()
+
+    result = await env.service.comment(
+        case.id,
+        "Te escribimos",
+        env.s.admin,
+        reply_to_client=True,
+        cc=[" Luis.Mora@JDH.com.co ", "luis.mora@jdh.com.co", CLIENT, "ana.ruiz@jdh.com.co"],
+    )
+
+    (item,) = env.outbox.items
+    # Unique, lower-case, and the client is not copied on their own email.
+    assert item.payload["cc"] == ["luis.mora@jdh.com.co", "ana.ruiz@jdh.com.co"]
+    assert result.event.event.data["client_reply"]["cc"] == item.payload["cc"]
+    service, mailbox = _sender(env)
+    await service.dispatch()
+    assert mailbox.copies == [["luis.mora@jdh.com.co", "ana.ruiz@jdh.com.co"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cc", "reason"),
+    [
+        (["externo@proveedor.com"], "no es de la organización"),
+        (["no-es-correo"], "no es válido"),
+        ([f"p{i}@jdh.com.co" for i in range(6)], "Máximo 5"),
+    ],
+)
+async def test_the_copy_only_takes_valid_people_of_the_organization(cc, reason) -> None:
+    env = Env()
+    case = await env.case()
+
+    with pytest.raises(InvalidInputError, match=reason):
+        await env.service.comment(case.id, "Hola", env.s.admin, reply_to_client=True, cc=cc)
+
+    assert env.outbox.items == [] and env.comment_events() == []
+
+
+@pytest.mark.asyncio
+async def test_a_copy_without_a_reply_to_the_client_is_refused() -> None:
+    env = Env()
+    case = await env.case()
+
+    with pytest.raises(InvalidInputError, match="solo aplica al responder"):
+        await env.service.comment(case.id, "Nota", env.s.admin, cc=["luis@jdh.com.co"])
+
+
+@pytest.mark.asyncio
+async def test_the_testing_redirect_copies_nobody() -> None:
+    env = Env()
+    await env.service.comment(
+        (await env.case()).id,
+        "Hola",
+        env.s.admin,
+        reply_to_client=True,
+        cc=["luis@jdh.com.co"],
+    )
+    service, mailbox = _sender(env, redirect="analista.ti@jdh.com.co")
+
+    await service.dispatch()
+
+    assert mailbox.copies == [[]]
 
 
 @pytest.mark.asyncio
