@@ -347,6 +347,14 @@ class CaseRepository(Protocol):
         """Append a timeline entry that changes nothing else (a comment)."""
         ...
 
+    async def set_news(self, case_id: UUID, at: datetime) -> bool:
+        """Flag news on a case; ``False`` when it already had unseen news (that time stays)."""
+        ...
+
+    async def clear_news(self, case_id: UUID) -> bool:
+        """Clear the news flag; ``True`` when the case had news."""
+        ...
+
     async def list_events(self, case_id: UUID) -> list[CaseEvent]:
         """List the timeline oldest first."""
         ...
@@ -648,6 +656,20 @@ class AssignmentNotifier(Protocol):
         self, case: TrackingCase, assignee: DirectoryUser, actor: Principal, note: str | None
     ) -> None:
         """Queue the «you have a new case» email."""
+        ...
+
+    async def case_news(self, case: TrackingCase, sender: str, excerpt: str) -> None:
+        """Tell who works the case that an email from outside joined it."""
+        ...
+
+
+class Bell(Protocol):
+    """The intranet bell (and Web Push) of platform users."""
+
+    async def ring(
+        self, user_ids: list[UUID], key: str, title: str, summary: str, path: str
+    ) -> None:
+        """Put one notice in these users' bells; the key makes a repeat harmless."""
         ...
 
 

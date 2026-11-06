@@ -90,6 +90,41 @@ def assignment(
     return f"Nuevo caso asignado: {case.code}", "\n".join(lines) + "\n" + _link(url) + _FOOTER
 
 
+def news_sender(case: TrackingCase, sender: str) -> str:
+    """Who wrote, as the team knows them: the client by name, anyone else by address."""
+
+    if case.requester_email and sender.lower() == case.requester_email.lower():
+        return f"El cliente ({case.requester_name})" if case.requester_name else "El cliente"
+    return sender or "Un remitente externo"
+
+
+def case_news(
+    case: TrackingCase,
+    recipient_name: str | None,
+    sender: str,
+    excerpt: str,
+    url: str | None,
+) -> tuple[str, str]:
+    """«There is news on your case»: an email from outside joined a case they work."""
+
+    who = news_sender(case, sender)
+    lines = [
+        f"Hola {_name(recipient_name)},",
+        "",
+        f"{who} escribió por correo en el caso {case.code}.",
+        "",
+        f"Consecutivo: {case.code}",
+        f"Tipo: {case.request_type.name}",
+    ]
+    if case.subject:
+        lines.append(f"Motivo: {case.subject}")
+    lines.append(f"Fecha límite: {_day(case.due_on)}")
+    text = excerpt.strip()
+    if text:
+        lines += ["", "Mensaje:", text[:1_000]]
+    return f"Novedad en el caso {case.code}", "\n".join(lines) + "\n" + _link(url) + _FOOTER
+
+
 SIGNATURE = "PQRSF JDH"
 
 _MONTHS = (

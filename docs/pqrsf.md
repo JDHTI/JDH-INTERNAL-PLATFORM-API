@@ -400,6 +400,7 @@ Catálogo configurable (`code`, `name`, `color`, `sort_order`, `is_initial`, `is
 | Regla | Detalle |
 |---|---|
 | Leída automática | `POST /cases/{id}/read` al abrir el detalle: si quien abre es el responsable y es la primera vez, fija `first_read_at` y pasa de inicial a `leida` |
+| Novedad | Un correo del cliente o del proveedor que se une al caso fija `news_at` («Novedad»), sin tocar el estado ni el plazo. Se limpia cuando lo abre su responsable o un gestor (`POST /cases/{id}/read`); quien solo sigue el caso no la limpia |
 | En curso automática | Al registrar la primera respuesta de un documento, `recibida`/`leida` pasa a `en_curso` |
 | Cerrar | Exige respuesta en todos los documentos y causal en los tardíos. Fija `closed_at` |
 | Reabrir | Exige nota. Un caso cerrado es de solo lectura salvo comentarios y estado |
@@ -489,7 +490,7 @@ porque trae el cambio de estado.
 
 Filtros de `/cases`, `/summary` y `/export`:
 - `status_id` (repetible), `request_type_id`, `assignee_user_id`, `unassigned`;
-- `dependency_id`, `site_id`, `open_only`, `overdue`, `due_today`;
+- `dependency_id`, `site_id`, `open_only`, `overdue`, `due_today`, `with_news` (con novedad);
 - `received_from`, `received_to`, `q`, `mine`;
 - `sort`: `received_on`, `due_on`, `code`, `updated_at`, con `-` para descendente;
 - `page`, `size` (máximo 100).
@@ -676,7 +677,7 @@ Descripción:
 | Situación | Resultado |
 |---|---|
 | Correo nuevo | Caso nuevo y acuse con el radicado, en el mismo hilo |
-| Misma conversación o radicado en el asunto, caso abierto | Evento `email_received` en la línea de tiempo |
+| Misma conversación o radicado en el asunto, caso abierto | Evento `email_received` en la línea de tiempo, novedad en el caso (`news_at`) y aviso a quien lo trabaja (sección 8) |
 | Misma conversación y caso finalizado | Caso nuevo con `related_case` |
 | `Tipo: Sugerencia` / `Felicitación` | Se guarda como sugerencia y se agradece en el hilo |
 | Enviado por `pqrsf@`/`info@`, automático, `bulk`, `no-reply` | Ignorado |
@@ -719,10 +720,17 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
   correo de los certificados ya nombra el caso. Una sola vez por solicitud (`request_ack:{id}`).
 - **Actualizaciones:** la respuesta al cliente desde el caso (`reply_to_client`) usa la misma
   plantilla, con «Actualización de tu {tipo}» y el texto que escribe quien gestiona el caso.
+- **Novedad (`case_news`):** cuando un correo del cliente o del proveedor se une a un caso
+  abierto, el responsable recibe «Novedad en el caso {radicado}» por correo y en la campana de la
+  intranet (con Web Push, fuente `PQRSF`, enlace al caso). Sin responsable, va a los miembros de
+  Calidad. Se avisa solo cuando el caso pasa a tener novedad: más correos antes de que alguien lo
+  abra se suman a la línea de tiempo sin repetir el aviso. La campana suena aunque
+  `PQRSF_NOTIFICATIONS_ENABLED` esté apagado, porque no sale de la intranet.
 
 | Correo | Cuándo | A quién |
 |---|---|---|
 | Aviso de asignación | Alguien asigna el caso a otra persona (o lo crea asignado) | Nuevo responsable |
+| Novedad en el caso | Un correo del cliente o del proveedor se une a un caso abierto | Responsable (o Calidad), también en la campana |
 | Acuse de radicado | Caso abierto desde el formulario (petición, queja o reclamo) | Solicitante |
 | Acuse por correo | Caso abierto desde el buzón | Remitente, en el hilo |
 | Actualización al cliente | Comentario con `reply_to_client` | Solicitante |

@@ -15,6 +15,7 @@ from app.modules.mail.layout import BrandedEmail, logo_file, render_fragment, re
 from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
+    CASE_NEWS,
     CLIENT_REPLY,
     DAILY_SUMMARY,
     DOCUMENT_DELIVERY,
@@ -31,6 +32,7 @@ from app.modules.pqrsf.domain.notifications import (
     retry_after,
 )
 from app.modules.pqrsf.domain.ports import (
+    Bell,
     BinaryStorage,
     CaseRepository,
     DocumentFileSource,
@@ -81,6 +83,7 @@ class NotificationService:
         documents: DocumentFileSource | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         requests: PqrsfRepository | None = None,
+        bell: Bell | None = None,
     ) -> None:
         """Create the service.
 
@@ -104,9 +107,11 @@ class NotificationService:
             clock (Callable[[], datetime]): Current instant (replaced in tests).
             requests (PqrsfRepository | None): Public requests, to attach the client's
                 evidence to supplier messages.
+            bell (Bell | None): The intranet bell, for news on a case.
         """
 
         self.requests = requests
+        self.bell = bell
         self.repository = repository
         self.cases = cases
         self.people = people
@@ -174,6 +179,60 @@ class NotificationService:
                 next_attempt_at=self.clock(),
             )
         )
+
+    # --- News on a case ---
+
+    async def case_news(self, case: TrackingCase, sender: str, excerpt: str) -> None:
+        """Tell who works the case that an email from the client or a supplier joined it.
+
+        The responsible gets it; a case without one goes to the whole team. It rings
+        their bell (and Web Push) and queues an email. The bell does not depend on
+        ``enabled``: it never leaves the intranet.
+        """
+
+        recipients = await self._news_recipients(case)
+        if not recipients:
+            return
+        who = templates.news_sender(case, sender)
+        if self.bell is not None:
+            try:
+                await self.bell.ring(
+                    [user.id for user in recipients],
+                    f"pqrsf-news:{case.id}:{self.clock().isoformat()}",
+                    f"Novedad en el caso {case.code}",
+                    f"{who} escribió por correo",
+                    f"/{self.area_slug}/pqrsf/{case.id}",
+                )
+            except Exception:
+                logger.warning("Could not ring the bell for case %s", case.code, exc_info=True)
+        if not self.enabled:
+            return
+        for user in recipients:
+            subject, body = templates.case_news(
+                case, user.display_name, sender, excerpt, self._url(case)
+            )
+            await self.repository.enqueue(
+                Notification(
+                    id=uuid4(),
+                    kind=CASE_NEWS,
+                    recipient_email=user.email or "",
+                    recipient_user_id=user.id,
+                    subject=subject,
+                    body=body,
+                    case_id=case.id,
+                    dedupe_key=None,
+                    next_attempt_at=self.clock(),
+                )
+            )
+
+    async def _news_recipients(self, case: TrackingCase) -> list[DirectoryUser]:
+        if case.assignee_user_id is not None:
+            owner = (await self.people.get_users({case.assignee_user_id})).get(
+                case.assignee_user_id
+            )
+            if owner is not None and owner.is_active and owner.email:
+                return [owner]
+        return await self._team_users()
 
     # --- Scheduled jobs ---
 

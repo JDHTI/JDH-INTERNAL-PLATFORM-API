@@ -181,6 +181,19 @@ class FakeCases:
     async def add_event(self, event):
         self.events.append(event)
 
+    async def set_news(self, case_id, at):
+        case = self.cases[case_id]
+        if case.news_at is not None:
+            return False
+        case.news_at = at
+        return True
+
+    async def clear_news(self, case_id):
+        case = self.cases[case_id]
+        had = case.news_at is not None
+        case.news_at = None
+        return had
+
     async def list_events(self, case_id):
         return [e for e in self.events if e.case_id == case_id]
 
@@ -1050,3 +1063,69 @@ async def test_typing_the_executive_drops_the_invoice_link() -> None:
 
     assert view.case.sales_executive_source == "manual"
     assert view.case.sales_executive_user_id is None
+
+
+class _NewsNotifier:
+    def __init__(self) -> None:
+        self.news: list[tuple[str, str, str]] = []
+
+    async def case_news(self, case, sender, excerpt):
+        self.news.append((case.code, sender, excerpt))
+
+
+@pytest.mark.asyncio
+async def test_an_email_on_a_case_flags_news_and_tells_who_works_it_once() -> None:
+    s = Setup()
+    notifier = _NewsNotifier()
+    s.service.notifier = notifier
+    view = await s.service.create_case(s.command(), s.seller)
+    case_id = view.case.id
+
+    await s.service.record_email(case_id, uuid.uuid4(), "cliente@x.co", "¿Novedades?", {})
+    first_flag = s.cases.cases[case_id].news_at
+    await s.service.record_email(case_id, uuid.uuid4(), "cliente@x.co", "Sigo esperando", {})
+
+    assert first_flag is not None
+    # The second email joins the timeline but the flag keeps its time and nobody is told twice.
+    assert s.cases.cases[case_id].news_at == first_flag
+    assert notifier.news == [(view.case.code, "cliente@x.co", "¿Novedades?")]
+    received = [e for e in s.cases.events if e.event_type == "email_received"]
+    assert len(received) == 2
+    # The status does not move.
+    assert s.cases.cases[case_id].status.code == "recibida"
+
+
+@pytest.mark.asyncio
+async def test_the_news_clears_when_someone_who_works_the_case_opens_it() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+    await s.service.record_email(view.case.id, uuid.uuid4(), "cliente@x.co", "Hola", {})
+
+    # Who raised the case only follows it: opening it does not clear the news.
+    seen_by_seller = await s.service.mark_read(view.case.id, s.seller)
+    assert seen_by_seller.case.news_at is not None
+
+    seen = await s.service.mark_read(view.case.id, s.responsible)
+    assert seen.case.news_at is None
+    assert s.cases.cases[view.case.id].news_at is None
+
+    # A new email after that flags it again.
+    await s.service.record_email(view.case.id, uuid.uuid4(), "cliente@x.co", "Otra", {})
+    assert s.cases.cases[view.case.id].news_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_notice_does_not_lose_the_email() -> None:
+    class Broken:
+        async def case_news(self, case, sender, excerpt):
+            raise RuntimeError("smtp down")
+
+    s = Setup()
+    s.service.notifier = Broken()
+    view = await s.service.create_case(s.command(), s.seller)
+
+    await s.service.record_email(view.case.id, uuid.uuid4(), "cliente@x.co", "Hola", {})
+
+    assert s.cases.cases[view.case.id].news_at is not None
+    assert any(e.event_type == "email_received" for e in s.cases.events)

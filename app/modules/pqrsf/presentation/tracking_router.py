@@ -267,6 +267,8 @@ class CaseResponse(BaseModel):
     requester_email: str | None
     request_id: UUID | None
     first_read_at: datetime | None
+    # An email from the client or a supplier nobody who works the case has opened yet.
+    news_at: datetime | None = None
     closed_at: datetime | None
     legacy: dict | None
     items: list[CaseItemResponse]
@@ -364,6 +366,7 @@ class CaseSummaryResponse(BaseModel):
     overdue: int
     due_today: int
     unassigned: int
+    with_news: int = 0
     by_status: list[CountBucketResponse]
     by_type: list[CountBucketResponse]
 
@@ -612,6 +615,7 @@ def _case(view: CaseView) -> CaseResponse:
         requester_email=case.requester_email,
         request_id=case.request_id,
         first_read_at=case.first_read_at,
+        news_at=case.news_at,
         closed_at=case.closed_at,
         legacy=case.legacy,
         items=[_item(item, view.overdue_item_ids) for item in case.items],
@@ -701,6 +705,7 @@ def _summary(value: CaseSummary) -> CaseSummaryResponse:
         overdue=value.overdue,
         due_today=value.due_today,
         unassigned=value.unassigned,
+        with_news=value.with_news,
         by_status=[
             CountBucketResponse.model_validate(b, from_attributes=True) for b in value.by_status
         ],
@@ -720,6 +725,7 @@ def _filters(
     open_only: bool = False,
     overdue: bool = False,
     due_today: bool = False,
+    with_news: bool = False,
     received_from: date | None = None,
     received_to: date | None = None,
     q: str | None = Query(default=None, max_length=100),
@@ -737,6 +743,7 @@ def _filters(
         open_only=open_only,
         overdue=overdue,
         due_today=due_today,
+        with_news=with_news,
         received_from=received_from,
         received_to=received_to,
         query=q.strip() if q and q.strip() else None,

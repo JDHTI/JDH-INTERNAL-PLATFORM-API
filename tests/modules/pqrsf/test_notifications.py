@@ -11,6 +11,7 @@ from app.modules.pqrsf.application import notification_templates as templates
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
+    CASE_NEWS,
     DAILY_SUMMARY,
     MAX_ATTEMPTS,
     OVERDUE_REMINDER,
@@ -182,6 +183,72 @@ class Env:
 
     def kinds(self, kind=None):
         return [i for i in self.outbox.items if kind is None or i.kind == kind]
+
+
+# --- News on a case ---
+
+
+class FakeBell:
+    def __init__(self) -> None:
+        self.rung: list[tuple] = []
+
+    async def ring(self, user_ids, key, title, summary, path):
+        self.rung.append((sorted(user_ids), title, summary, path))
+
+
+@pytest.mark.asyncio
+async def test_an_email_on_an_assigned_case_tells_its_responsible_by_bell_and_email() -> None:
+    env = Env()
+    bell = env.service.bell = FakeBell()
+    case = await env.new_case(assignee=env.carla, creator=env.s.admin)
+    env.outbox.items.clear()
+
+    await env.s.service.record_email(case.id, uuid.uuid4(), "proveedor@x.co", "Ya enviamos", {})
+
+    (item,) = env.kinds(CASE_NEWS)
+    assert item.recipient_email == "carla@jdh.com.co" and item.case_id == case.id
+    assert item.subject == f"Novedad en el caso {case.code}"
+    assert "proveedor@x.co escribió por correo" in item.body and "Ya enviamos" in item.body
+    assert f"http://localhost:3000/calidad/pqrsf/{case.id}" in item.body
+    assert bell.rung == [
+        (
+            [env.carla.user_id],
+            f"Novedad en el caso {case.code}",
+            "proveedor@x.co escribió por correo",
+            f"/calidad/pqrsf/{case.id}",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_news_on_a_case_without_responsible_goes_to_the_team() -> None:
+    env = Env()
+    bell = env.service.bell = FakeBell()
+    case = await env.new_case()
+    env.s.cases.cases[case.id].requester_email = "Cliente@X.co"
+    env.s.cases.cases[case.id].requester_name = "Ana Cliente"
+
+    await env.s.service.record_email(case.id, uuid.uuid4(), "cliente@x.co", "Hola", {})
+
+    assert sorted(i.recipient_email for i in env.kinds(CASE_NEWS)) == [
+        "ana@jdh.com.co",
+        "beto@jdh.com.co",
+    ]
+    assert "El cliente (Ana Cliente) escribió por correo" in env.kinds(CASE_NEWS)[0].body
+    assert bell.rung[0][0] == sorted([env.ana.user_id, env.beto.user_id])
+
+
+@pytest.mark.asyncio
+async def test_with_emails_off_the_news_still_rings_the_bell() -> None:
+    env = Env()
+    env.service.enabled = False
+    bell = env.service.bell = FakeBell()
+    case = await env.new_case(assignee=env.carla, creator=env.s.admin)
+
+    await env.s.service.record_email(case.id, uuid.uuid4(), "cliente@x.co", "Hola", {})
+
+    assert env.kinds(CASE_NEWS) == []
+    assert len(bell.rung) == 1
 
 
 # --- Assignment notice ---

@@ -261,6 +261,9 @@ class TrackingCase:
     pickup_order_number: str | None = None
     delivery_date: date | None = None
     products: list[CaseProduct] = field(default_factory=list)
+    # When an email from the client or a supplier joined the case and nobody who works it
+    # has opened it since; ``None`` once seen. The status and the due date do not change.
+    news_at: datetime | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -287,6 +290,8 @@ class CaseFilters:
     open_only: bool = False
     overdue: bool = False
     due_today: bool = False
+    # Only cases with an email nobody who works them has opened yet.
+    with_news: bool = False
     received_from: date | None = None
     received_to: date | None = None
     query: str | None = None
@@ -340,6 +345,8 @@ class CaseSummary:
     unassigned: int
     by_status: list[CountBucket]
     by_type: list[CountBucket]
+    # Open cases with news nobody who works them has seen.
+    with_news: int = 0
 
 
 @dataclass(frozen=True)

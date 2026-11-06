@@ -10,6 +10,8 @@ from app.core.errors import InvalidInputError
 
 # Kinds of notification.
 ASSIGNMENT = "assignment"
+# «There is news on your case»: an email from the client or a supplier joined it.
+CASE_NEWS = "case_news"
 DAILY_SUMMARY = "daily_summary"
 OVERDUE_REMINDER = "overdue_reminder"
 # A partial reply to the client written from a case comment.
