@@ -42,12 +42,30 @@ class CaseView:
 
 
 @dataclass(frozen=True)
+class ForwardState:
+    """Whether an email received on a case can go, or went, on to the customer.
+
+    ``sender_role`` is ``supplier``, ``customer`` or ``external``. Only a supplier's
+    answer is forwardable, once, while the case is open, has the requester's email and
+    the caller can work it.
+    """
+
+    sender_role: str
+    forwardable: bool
+    forwarded_at: datetime | None = None
+    forwarded_by: str | None = None
+    forwarded_to: str | None = None
+
+
+@dataclass(frozen=True)
 class EventView:
     """A timeline entry with its author and how it reads on screen."""
 
     event: CaseEvent
     actor: DirectoryUser | None
     summary: EventSummary | None = None
+    # Only on ``email_received`` events of a case detail.
+    forward: ForwardState | None = None
 
 
 @dataclass(frozen=True)

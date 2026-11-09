@@ -415,6 +415,10 @@ class EmailRepository(Protocol):
         """Find a stored message by its Internet message id."""
         ...
 
+    async def get_message_by_id(self, message_id: UUID) -> EmailMessage | None:
+        """Find a stored message by its own identifier."""
+        ...
+
     async def save_message(self, message: EmailMessage) -> None:
         """Update the status, case, attempts and detail of a stored message."""
         ...

@@ -17,6 +17,7 @@ from app.modules.pqrsf.domain.notifications import (
     ASSIGNMENT,
     CASE_NEWS,
     CLIENT_REPLY,
+    CUSTOMER_FORWARD,
     DAILY_SUMMARY,
     DOCUMENT_DELIVERY,
     FAILED,
@@ -84,6 +85,7 @@ class NotificationService:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         requests: PqrsfRepository | None = None,
         bell: Bell | None = None,
+        noreply_sender: str = "",
     ) -> None:
         """Create the service.
 
@@ -108,10 +110,12 @@ class NotificationService:
             requests (PqrsfRepository | None): Public requests, to attach the client's
                 evidence to supplier messages.
             bell (Bell | None): The intranet bell, for news on a case.
+            noreply_sender (str): Mailbox nobody reads, for forwards to the customer.
         """
 
         self.requests = requests
         self.bell = bell
+        self.noreply_sender = noreply_sender.strip()
         self.repository = repository
         self.cases = cases
         self.people = people
@@ -372,6 +376,16 @@ class NotificationService:
         if item.kind == DOCUMENT_DELIVERY:
             files = [*await self._certificates(item), *await self._reply_files(item)]
             await self.mail.send(self.mailbox, to, subject, body, files)
+            return
+        if item.kind == CUSTOMER_FORWARD:
+            # From the mailbox nobody reads: the customer's answers must not reach a case.
+            if not self.noreply_sender:
+                raise DependencyUnavailableError("No hay cuenta no-reply configurada")
+            content = BrandedEmail.from_payload(item.payload.get("email") or {})
+            files = [*await self._reply_files(item), logo_file()]
+            await self.mail.send(
+                self.noreply_sender, to, subject, render_html(content), files, html=True
+            )
             return
         # People of the organization copied on the email. With a testing redirect nobody
         # else gets a copy either.

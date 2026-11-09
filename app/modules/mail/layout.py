@@ -42,6 +42,10 @@ class BrandedEmail:
         closing (tuple[str, ...]): Lines after the box (what happens next).
         eyebrow (str): Small line above the title: the module that writes.
         footnote (str | None): Small print at the bottom.
+        notice (str | None): A warning boxed under the title (an email nobody reads
+            answers to says so here).
+        quote (str | None): Text someone else wrote, shown apart after the message
+            (a supplier's answer passed on to the customer).
     """
 
     title: str
@@ -51,6 +55,8 @@ class BrandedEmail:
     closing: tuple[str, ...] = ()
     eyebrow: str = "PQRSF · Servicio al cliente"
     footnote: str | None = None
+    notice: str | None = None
+    quote: str | None = None
 
     def to_payload(self) -> dict:
         """JSON form, kept with the queued email until it is sent."""
@@ -63,6 +69,8 @@ class BrandedEmail:
             "closing": list(self.closing),
             "eyebrow": self.eyebrow,
             "footnote": self.footnote,
+            "notice": self.notice,
+            "quote": self.quote,
         }
 
     @classmethod
@@ -77,6 +85,8 @@ class BrandedEmail:
             closing=tuple(str(line) for line in value.get("closing") or ()),
             eyebrow=str(value.get("eyebrow") or BrandedEmail.eyebrow),
             footnote=value.get("footnote"),
+            notice=value.get("notice"),
+            quote=value.get("quote"),
         )
 
 
@@ -84,9 +94,13 @@ def render_text(email: BrandedEmail) -> str:
     """The plain-text version: what the queue lists and what a text-only reader sees."""
 
     parts: list[str] = []
+    if email.notice:
+        parts.append(f"IMPORTANTE: {email.notice.strip()}")
     if email.greeting:
         parts.append(email.greeting)
     parts += [p.strip() for p in email.paragraphs if p.strip()]
+    if email.quote and email.quote.strip():
+        parts.append("\n".join(f"> {line}" for line in email.quote.strip().splitlines()))
     if email.facts:
         parts.append("\n".join(f"{label}: {value}" for label, value in email.facts))
     parts += [line.strip() for line in email.closing if line.strip()]
@@ -123,9 +137,13 @@ def render_fragment(email: BrandedEmail) -> str:
     """The layout without the document around it (for a reply inside a thread)."""
 
     body = [_eyebrow(email.eyebrow), _title(email.title)]
+    if email.notice:
+        body.append(_notice(email.notice))
     if email.greeting:
         body.append(_paragraph(email.greeting))
     body += [_paragraph(text) for text in _split(email.paragraphs)]
+    if email.quote and email.quote.strip():
+        body.append(_quote(email.quote))
     if email.facts:
         body.append(_facts(email.facts))
     body += [_paragraph(text) for text in _split(email.closing)]
@@ -181,6 +199,31 @@ def _paragraph(text: str) -> str:
     return (
         f'<p style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{_DARK_GRAY};'
         f'font-family:{_FONT};">{_lines(text)}</p>'
+    )
+
+
+def _notice(text: str) -> str:
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="margin:0 0 20px 0;">'
+        f'<tr><td style="border:1px solid {_BLACK};padding:12px 16px;">'
+        f'<p style="margin:0;font-size:13px;line-height:20px;font-weight:700;color:{_BLACK};'
+        f'font-family:{_FONT};">{_lines(text)}</p></td></tr></table>'
+    )
+
+
+def _quote(text: str) -> str:
+    blocks = [block for block in text.replace("\r\n", "\n").split("\n\n") if block.strip()]
+    paragraphs = "".join(
+        f'<p style="margin:0 0 12px 0;font-size:14px;line-height:22px;color:{_DARK_GRAY};'
+        f'font-family:{_FONT};">{_lines(block)}</p>'
+        for block in blocks
+    )
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="margin:0 0 20px 0;">'
+        f'<tr><td style="border-left:4px solid {_MID_GRAY};padding:12px 16px 0 16px;">'
+        f"{paragraphs}</td></tr></table>"
     )
 
 

@@ -85,6 +85,7 @@ from app.modules.pqrsf.application.comments import CaseCommentService
 from app.modules.pqrsf.application.document_delivery import DocumentDeliveryService
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.feedback import FeedbackService
+from app.modules.pqrsf.application.forwards import CustomerForwardService
 from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
@@ -415,6 +416,7 @@ class V1Container(containers.DeclarativeContainer):
         documents=pqrsf_manager_files,
         requests=pqrsf_repository,
         bell=notification_service,
+        noreply_sender=config.mail.noreply_sender,
     )
     pqrsf_sales_lookup = providers.Factory(
         WarehouseSalesLookup, connection=data_provider, schema=settings.provided.DWH_SCHEMA
@@ -429,6 +431,7 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         notifier=pqrsf_notification_service,
         sales=pqrsf_sales_lookup,
+        customer_forwarding=providers.Callable(bool, config.mail.noreply_sender),
     )
     # --- Commercial masters (DWH mirror) and supplier supports ---
     commercial_master_repository = providers.Factory(
@@ -782,6 +785,14 @@ class V1Container(containers.DeclarativeContainer):
         storage=storage,
         guard=pqrsf_comment_guard,
         cc_domains=config.mail.cc_domains,
+    )
+    pqrsf_forward_service = providers.Factory(
+        CustomerForwardService,
+        tracking=pqrsf_tracking_service,
+        emails=pqrsf_email_repository,
+        notifications=pqrsf_notification_repository,
+        noreply_sender=config.mail.noreply_sender,
+        mailbox=config.mail.pqrsf_inbox,
     )
     pqrsf_supplier_contact_repository = providers.Factory(
         SqlAlchemySupplierContactRepository, database=database

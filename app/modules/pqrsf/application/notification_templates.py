@@ -224,6 +224,42 @@ def client_reply(case: TrackingCase, text: str) -> tuple[str, BrandedEmail]:
     return subject, content
 
 
+AUTOMATIC_NOTICE = (
+    "Este es un correo automático: no lo respondas. Las respuestas a esta dirección no se "
+    "leen ni se procesan."
+)
+
+
+def customer_forward(
+    case: TrackingCase, supplier_text: str, note: str | None, mailbox: str
+) -> tuple[str, BrandedEmail]:
+    """A supplier's answer passed on to the customer by whoever works the case.
+
+    It leaves from a mailbox nobody reads, so it says so at the top and tells where to
+    write instead. The subject is fixed: «Novedad caso {radicado}».
+    """
+
+    kind = case.request_type.name.strip().lower() or "solicitud"
+    paragraphs = [f"Tenemos una novedad sobre tu {kind}."]
+    if note and note.strip():
+        paragraphs.append(note.strip())
+    paragraphs.append("Esta es la respuesta que recibimos:")
+    content = BrandedEmail(
+        title=f"Novedad de tu {kind}",
+        greeting=_greeting(case.requester_name),
+        notice=AUTOMATIC_NOTICE,
+        paragraphs=tuple(paragraphs),
+        quote=supplier_text.strip() or None,
+        facts=(("Radicado", case.code), ("Tipo de solicitud", case.request_type.name)),
+        closing=(
+            f"Si necesitas agregar información, escríbenos a {mailbox} con el radicado "
+            f"{case.code} en el asunto.",
+        ),
+        footnote="Correo automático enviado desde una cuenta que no recibe respuestas.",
+    )
+    return f"Novedad caso {case.code}", content
+
+
 def supplier_message(
     case: TrackingCase,
     kind_label: str,

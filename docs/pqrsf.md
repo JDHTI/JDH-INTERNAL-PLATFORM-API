@@ -735,6 +735,7 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
 | Acuse por correo | Caso abierto desde el buzón | Remitente, en el hilo |
 | Actualización al cliente | Comentario con `reply_to_client` | Solicitante |
 | Agradecimiento | Sugerencia o felicitación | Remitente |
+| Novedad caso (respuesta del proveedor) | Alguien la envía a mano desde el caso (sección 9) | Solicitante, desde la cuenta no-reply |
 | Certificados / documento del caso | Sección 10 | Solicitante |
 | Mensaje al proveedor | Sección 9 | Proveedor |
 | `daily_summary` (17:30) | Días hábiles | Miembros de Calidad: casos abiertos y vencidos |
@@ -799,6 +800,44 @@ tiempo. El cliente no ve estos mensajes.
   La tabla se llena sola al enviar; el catálogo de Abastecimiento se puede cargar ahí.
 - **UI:** acción «Escribir al proveedor» en el detalle, con el estado de cada correo bajo el
   evento y «Reintentar».
+
+### Enviar al cliente la respuesta del proveedor
+
+Quien trabaja el caso decide si el cliente ve la respuesta de un proveedor: es manual y nunca
+sale sola.
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| POST | `/pqrsf/cases/{case_id}/events/{event_id}/forward-to-customer/preview` | Devuelve `{to, sender, subject, html, text, attachments}` sin enviar nada |
+| POST | `/pqrsf/cases/{case_id}/events/{event_id}/forward-to-customer` | Encola el correo y registra el evento (`201`, `ForwardResponse` con `delivery`) |
+
+- **Cuerpo:** `{note?: string}` (hasta 2000 caracteres), opcional, con lo que el equipo quiere
+  agregarle al cliente.
+- **Quién:** el responsable o un gestor (`403` si no).
+- **Qué se puede enviar:** solo un `email_received` cuyo remitente es un proveedor (una dirección
+  a la que el caso le escribió).
+- **Errores:**
+  - `404` si el evento no es un correo del caso;
+  - `422` si es del cliente o el caso no tiene correo del solicitante;
+  - `409` si ya se envió o el caso está finalizado;
+  - `503` sin cuenta no-reply.
+- **Correo:** asunto fijo «Novedad caso {radicado}».
+  - Sale de `MAIL_NOREPLY_SENDER`, con la plantilla JDH (kind `customer_forward`).
+  - Lleva arriba, en un recuadro, que es un correo automático y que sus respuestas no se leen ni
+    se procesan, y dice que escriba a `pqrsf@` con el radicado si necesita agregar algo.
+  - Incluye el texto del proveedor sin el historial citado, la nota (si hay) y los adjuntos de
+    ese correo.
+  - Como sale de otra cuenta, la respuesta del cliente nunca llega al caso.
+- **Una sola vez:** la cola usa `customer_forward:{event_id}`; dos clics a la vez envían un correo.
+- **Línea de tiempo:** evento `forwarded_to_customer` («Envió al cliente la respuesta de …») con
+  `source_event_id`, `from`, `to`, `notification_id` y `file_ids`.
+- **En el `email_received` del detalle:** la API expone estos campos.
+  - `sender_role`: `supplier`, `customer` o `external`.
+  - `forwardable`: `true` solo si es del proveedor, no se ha enviado, el caso está abierto, tiene
+    correo del solicitante, quien consulta lo trabaja y hay cuenta no-reply.
+  - `forwarded_at`, `forwarded_by` y `forwarded_to`.
+- **Pruebas:** con `PQRSF_NOTIFY_REDIRECT` llega a esa dirección como los demás correos. La vista
+  previa muestra el mismo HTML que recibirá el cliente.
 
 La OM con formato (DOCX/PDF) y el registro del resultado (procede o no procede) van en la fase 3.
 
@@ -975,6 +1014,7 @@ saca de las ventas del DWH; no se le pide al cliente.
 | `MAIL_INTAKE_ENABLED` | `false` | Lectura del buzón |
 | `MAIL_INTAKE_OPEN_CASES` | `false` | `false`: el buzón solo da seguimiento (sección 7). `true`: también abre casos con la plantilla |
 | `MAIL_CC_DOMAINS` | `jdh.com.co` | Dominios de las personas que se pueden copiar (CC) |
+| `MAIL_NOREPLY_SENDER` | vacío | Cuenta que nadie lee para enviar al cliente la respuesta de un proveedor. La app de Graph necesita `Mail.Send` sobre ella (agregarla a la *Application Access Policy*). Vacío apaga ese envío |
 | `MAIL_GRAPH_TENANT_ID` / `MAIL_GRAPH_CLIENT_ID` / `MAIL_GRAPH_CLIENT_SECRET` | — | App de Entra del buzón (el **valor** del secreto) |
 | `MAIL_PQRSF_INBOX` / `MAIL_IGNORED_SENDERS` | `pqrsf@jdh.com.co` / `info@jdh.com.co` | Buzones |
 | `MAIL_INTAKE_SINCE`, `MAIL_POLL_INTERVAL_SECONDS`, `MAIL_MAX_ATTEMPTS`, `MAIL_MAX_ATTACHMENTS`, `MAIL_MAX_ATTACHMENT_MB`, `MAIL_MAX_TOTAL_ATTACHMENT_MB`, `MAIL_ATTACHMENT_EXTENSIONS` | ver `.env.example` | Correo entrante |
