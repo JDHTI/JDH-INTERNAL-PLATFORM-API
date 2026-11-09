@@ -401,7 +401,7 @@ Catálogo configurable (`code`, `name`, `color`, `sort_order`, `is_initial`, `is
 |---|---|
 | Leída automática | `POST /cases/{id}/read` al abrir el detalle: si quien abre es el responsable y es la primera vez, fija `first_read_at` y pasa de inicial a `leida` |
 | Novedad | Un correo del cliente o del proveedor que se une al caso fija `news_at` («Novedad»), sin tocar el estado ni el plazo. Se limpia cuando lo abre su responsable o un gestor (`POST /cases/{id}/read`); quien solo sigue el caso no la limpia |
-| En curso automática | Al registrar la primera respuesta de un documento, `recibida`/`leida` pasa a `en_curso` |
+| En curso automática | Cualquier trabajo de quien trabaja el caso (responsable o gestor) pasa `recibida`/`leida` a `en_curso`, con un `status_changed` que dice qué lo movió: un seguimiento o respuesta al cliente, un mensaje al proveedor, enviar al cliente la respuesta del proveedor, editar el caso, o agregar, editar, responder o quitar un documento. No lo mueven abrir el caso, asignarlo, un cambio manual de estado, los correos que llegan ni el comentario de quien solo sigue el caso (quien lo radicó o el vendedor) |
 | Cerrar | Exige respuesta en todos los documentos y causal en los tardíos. Fija `closed_at` |
 | Reabrir | Exige nota. Un caso cerrado es de solo lectura salvo comentarios y estado |
 
@@ -436,8 +436,15 @@ reglas. Un responsable debe haber iniciado sesión una vez.
   historial del módulo. No se edita ni se borra.
 - **Caso eliminado:** se registra el evento `deleted` con motivo, y sus eventos pierden solo el
   vínculo.
-- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos. Se
-  purgan a los 90 días.
+- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos.
+  - Las visitas a la bandeja (`inbox_opened`) se purgan a los 90 días.
+  - Las aperturas de un caso (`read`, `viewed`) se conservan para analítica.
+- **Aperturas fuera de la línea de tiempo:** el detalle del caso no trae `read` ni `viewed`. Se
+  consultan en `GET /pqrsf/cases/{id}/openings`, con el mismo permiso de ver el caso:
+  - `people[]`: `{user, user_id, first_opened_at, last_opened_at, visits}`, de la más reciente
+    a la más antigua;
+  - `entries[]`: cada apertura como evento, de la más nueva a la más antigua. La primera
+    apertura del responsable (`read`) trae el paso a «Leída».
 - **Consultas:** `GET /pqrsf/activity` (gestores, paginado por `before`) y
   `GET /pqrsf/activity/last-seen`.
 
@@ -456,8 +463,8 @@ Cada evento (detalle del caso y `/pqrsf/activity`) trae, además de `event_type`
 | Evento | Se lee |
 |---|---|
 | `created` (formulario / correo / interno) | Sistema · Creó el caso desde el formulario público / desde un correo de x@y / Ana · Creó el caso |
-| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída |
-| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja |
+| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída (solo en aperturas y en `/activity`) |
+| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja (solo en aperturas y en `/activity`) |
 | `assigned` | Asignó el caso a Juan / Tomó el caso / Quitó el responsable / asignación automática |
 | `status_changed` | Cambió el estado / Finalizó el caso / Reabrió el caso, con el chip de estados |
 | `updated` | Editó el asunto y la sede |

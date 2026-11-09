@@ -15,6 +15,7 @@ from app.modules.pqrsf.application.dto import (
     CaseAccess,
     CaseChanges,
     CaseDetail,
+    CaseOpenings,
     CaseView,
     CaseViewPage,
     EventView,
@@ -22,6 +23,7 @@ from app.modules.pqrsf.application.dto import (
     ImportedCase,
     ItemChanges,
     LastSeenView,
+    PersonOpenings,
     TrackingCatalog,
 )
 from app.modules.pqrsf.domain.email import EVENT_EMAIL_RECEIVED, EmailCaseInput
@@ -57,6 +59,7 @@ from app.modules.pqrsf.domain.timeline import (
 from app.modules.pqrsf.domain.tracking import (
     ACCESS_REPEAT_WINDOW,
     ACCESS_RETENTION,
+    CASE_OPENING_TYPES,
     CASE_SORTS,
     IN_PROGRESS_STATUS_CODE,
     READ_STATUS_CODE,
@@ -114,6 +117,9 @@ EXPORT_HEADER = [
 ]
 _CLOSED_MESSAGE = "El caso está finalizado: reábrelo para modificarlo"
 _ITEM_LIMIT = 200
+# Notes of the automatic move to «En curso», by what started the work.
+_WORK_STARTED = "Cambio automático al registrar actividad en el caso"
+_FIRST_RESPONSE = "Cambio automático al registrar la primera respuesta"
 
 
 def _forward_state(
@@ -1130,6 +1136,9 @@ class CaseTrackingService:
         can_forward = access.can_work and not case.is_closed and "@" in (case.requester_email or "")
         views = []
         for event in events:
+            if event.event_type in CASE_OPENING_TYPES:
+                # Who opened the case is kept apart (``case_openings``), not in the timeline.
+                continue
             view = self._event_view(event, actors, context)
             if event.event_type == EVENT_EMAIL_RECEIVED:
                 view = replace(
@@ -1140,6 +1149,51 @@ class CaseTrackingService:
         return CaseDetail(
             view=await self._view(case, principal, is_manager), events=views, request=request
         )
+
+    async def case_openings(self, case_id: UUID, principal: Principal) -> CaseOpenings:
+        """Who opened the case and when, for anyone who can see it.
+
+        Openings are kept for analytics but stay out of the timeline: each person's first
+        and last opening and visit count, then every opening newest first (the first
+        opening by its responsible, ``read``, tells the move to «Leída»).
+
+        Args:
+            case_id (UUID): Case identifier.
+            principal (Principal): The caller.
+
+        Returns:
+            CaseOpenings: The people and the entries.
+        """
+
+        case, _, _ = await self._load(case_id, principal)
+        openings = [
+            e
+            for e in await self.repository.list_events(case.id)
+            if e.event_type in CASE_OPENING_TYPES and e.actor_user_id is not None
+        ]
+        users = await self.people.get_users({e.actor_user_id for e in openings})
+        context = TimelineContext(
+            statuses={s.id: s for s in await self.repository.list_statuses(True)}
+        )
+        by_person: dict[UUID, list[CaseEvent]] = {}
+        for event in openings:
+            by_person.setdefault(event.actor_user_id, []).append(event)
+        people = [
+            PersonOpenings(
+                user_id=user_id,
+                user=users.get(user_id),
+                first_opened_at=min(e.created_at for e in events),
+                last_opened_at=max(e.created_at for e in events),
+                visits=len(events),
+            )
+            for user_id, events in by_person.items()
+        ]
+        people.sort(key=lambda p: p.last_opened_at, reverse=True)
+        entries = [
+            self._event_view(e, users, context)
+            for e in sorted(openings, key=lambda e: e.created_at, reverse=True)
+        ]
+        return CaseOpenings(people, entries)
 
     async def list_events_of(self, case: TrackingCase) -> list[CaseEvent]:
         """The timeline of a case already loaded with its access checked."""
@@ -1165,6 +1219,9 @@ class CaseTrackingService:
             case.id, EVENT_FORWARDED_TO_CUSTOMER, principal.user_id, note=note, data=data
         )
         await self.repository.add_event(event)
+        await self._progress_on_work(
+            case, principal.user_id, "Cambio automático al enviar una novedad al cliente"
+        )
         actors = await self.people.get_users({principal.user_id})
         return self._event_view(event, actors, TimelineContext())
 
@@ -1342,7 +1399,11 @@ class CaseTrackingService:
             return await self._view(case, principal, await self.managers.is_manager(principal))
         self._refresh_dates(case)
         event = self._event(case.id, EventType.UPDATED, principal.user_id, data={"fields": changed})
-        stored = await self.repository.save_case(case, [event])
+        events = [event]
+        await self._start_progress(
+            case, principal.user_id, events, "Cambio automático al editar el caso"
+        )
+        stored = await self.repository.save_case(case, events)
         return await self._view(stored, principal, await self.managers.is_manager(principal))
 
     def _apply_follow_up(
@@ -1571,12 +1632,17 @@ class CaseTrackingService:
             EventView: The new timeline entry.
         """
 
-        case, _, _ = await self._load(case_id, principal)
+        case, access, _ = await self._load(case_id, principal)
         text = clean_multiline(body, "comentario", 5_000)
         if text is None:
             raise InvalidInputError("El comentario no puede estar vacío")
         event = self._event(case.id, EventType.COMMENT, principal.user_id, note=text, data=data)
         await self.repository.add_event(event)
+        if access.can_work:
+            # A note from who only follows the case (who filed it, the seller) is not work.
+            await self._progress_on_work(
+                case, principal.user_id, "Cambio automático al registrar un seguimiento"
+            )
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor, describe(event, actor, TimelineContext()))
 
@@ -1602,6 +1668,9 @@ class CaseTrackingService:
             case.id, EVENT_SUPPLIER_MESSAGE, principal.user_id, note=text, data=data
         )
         await self.repository.add_event(event)
+        await self._progress_on_work(
+            case, principal.user_id, "Cambio automático al escribir al proveedor"
+        )
         actor = (await self.people.get_users([principal.user_id])).get(principal.user_id)
         return EventView(event, actor, describe(event, actor, TimelineContext()))
 
@@ -1620,9 +1689,9 @@ class CaseTrackingService:
     async def record_inbox_visit(self, principal: Principal) -> None:
         """Record that the person opened the PQRSF inbox.
 
-        One record per person every 30 minutes; each one also purges the access
-        records past the 90-day retention, so the table stays bounded without a
-        scheduler. Only access records are ever purged.
+        One record per person every 30 minutes; each one also purges the inbox visits
+        past the 90-day retention, so the table stays bounded without a scheduler.
+        Openings of a case are kept for analytics; nothing else is ever purged.
 
         Args:
             principal (Principal): The caller.
@@ -1698,8 +1767,15 @@ class CaseTrackingService:
         users = await self.people.get_users(row.user_id for row in rows)
         return [LastSeenView(users.get(row.user_id), row.user_id, row.last_seen_at) for row in rows]
 
-    async def _start_progress(self, case: TrackingCase, actor: UUID, events: list) -> None:
-        """Move a case that is still received/read to ``en_curso`` on first work."""
+    async def _start_progress(
+        self, case: TrackingCase, actor: UUID, events: list, reason: str = _WORK_STARTED
+    ) -> None:
+        """Move a case that is still received/read to ``en_curso`` when the team works it.
+
+        Any work by whoever works the case counts: a comment, a message to the supplier or
+        the customer, an edit, a document. Opening it, assigning it, a manual status change
+        and emails that arrive do not.
+        """
 
         if case.status.is_terminal:
             return
@@ -1715,12 +1791,20 @@ class CaseTrackingService:
                 case.id,
                 EventType.STATUS_CHANGED,
                 actor,
-                note="Cambio automático al registrar la primera respuesta",
+                note=reason,
                 from_status=case.status.id,
                 to_status=target.id,
             )
         )
         case.status = target
+
+    async def _progress_on_work(self, case: TrackingCase, actor: UUID, reason: str) -> None:
+        """After work recorded on its own (a comment, a message), move the case to en curso."""
+
+        events: list = []
+        await self._start_progress(case, actor, events, reason)
+        if events:
+            await self.repository.save_case(case, events)
 
     async def add_item(self, case_id: UUID, value: ItemInput, principal: Principal) -> CaseView:
         """Add a requested document to the case.
@@ -1749,7 +1833,11 @@ class CaseTrackingService:
             principal.user_id,
             data={"item_id": str(item.id), "document": _item_name(item)},
         )
-        await self.repository.save_case(case, [event])
+        events = [event]
+        await self._start_progress(
+            case, principal.user_id, events, "Cambio automático al agregar un documento"
+        )
+        await self.repository.save_case(case, events)
         return await self._reload_view(case.id, principal)
 
     def today(self) -> date:
@@ -1831,8 +1919,14 @@ class CaseTrackingService:
                 },
             )
         ]
-        if not was_responded and item.responded_on is not None:
-            await self._start_progress(case, principal.user_id, events)
+        await self._start_progress(
+            case,
+            principal.user_id,
+            events,
+            _FIRST_RESPONSE
+            if not was_responded and item.responded_on is not None
+            else _WORK_STARTED,
+        )
         await self.repository.save_case(case, events)
         return await self._reload_view(case.id, principal)
 
@@ -1862,7 +1956,11 @@ class CaseTrackingService:
             principal.user_id,
             data={"item_id": str(item.id), "document": _item_name(item)},
         )
-        await self.repository.save_case(case, [event])
+        events = [event]
+        await self._start_progress(
+            case, principal.user_id, events, "Cambio automático al quitar un documento"
+        )
+        await self.repository.save_case(case, events)
         return await self._reload_view(case.id, principal)
 
     async def _reload_view(self, case_id: UUID, principal: Principal) -> CaseView:
