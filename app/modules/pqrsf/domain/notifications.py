@@ -24,6 +24,8 @@ REQUEST_ACK = "request_ack"
 DOCUMENT_DELIVERY = "document_delivery"
 # A message to a supplier written from a case (request, response, improvement, notice).
 SUPPLIER_MESSAGE = "supplier_message"
+# A supplier's answer passed on to the customer by hand, from the no-reply mailbox.
+CUSTOMER_FORWARD = "customer_forward"
 
 # Statuses of a queued email.
 PENDING = "pending"

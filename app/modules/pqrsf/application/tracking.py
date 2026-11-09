@@ -18,6 +18,7 @@ from app.modules.pqrsf.application.dto import (
     CaseView,
     CaseViewPage,
     EventView,
+    ForwardState,
     ImportedCase,
     ItemChanges,
     LastSeenView,
@@ -45,9 +46,12 @@ from app.modules.pqrsf.domain.ports import (
 )
 from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_candidates
 from app.modules.pqrsf.domain.timeline import (
+    EVENT_FORWARDED_TO_CUSTOMER,
     EVENT_SUPPLIER_MESSAGE,
     TimelineContext,
     describe,
+    forwards_by_source,
+    sender_role,
     supplier_addresses,
 )
 from app.modules.pqrsf.domain.tracking import (
@@ -112,6 +116,29 @@ _CLOSED_MESSAGE = "El caso está finalizado: reábrelo para modificarlo"
 _ITEM_LIMIT = 200
 
 
+def _forward_state(
+    event: CaseEvent,
+    context: TimelineContext,
+    forwards: dict[str, CaseEvent],
+    actors: dict[UUID, DirectoryUser],
+    can_forward: bool,
+) -> ForwardState:
+    """Who wrote a received email and whether it can go, or went, to the customer."""
+
+    role = sender_role(event.data or {}, context)
+    sent = forwards.get(str(event.id))
+    if sent is None:
+        return ForwardState(role, can_forward and role == "supplier")
+    actor = actors.get(sent.actor_user_id) if sent.actor_user_id else None
+    return ForwardState(
+        role,
+        False,
+        forwarded_at=sent.created_at,
+        forwarded_by=(actor.display_name or actor.email) if actor else None,
+        forwarded_to=(sent.data or {}).get("to"),
+    )
+
+
 class CaseTrackingService:
     """Coordinate the follow-up of PQRSF cases.
 
@@ -130,6 +157,7 @@ class CaseTrackingService:
         calendar: BusinessCalendar,
         notifier: AssignmentNotifier | None = None,
         sales: SalesLookup | None = None,
+        customer_forwarding: bool = False,
     ) -> None:
         """Create the service.
 
@@ -143,8 +171,11 @@ class CaseTrackingService:
             notifier (AssignmentNotifier | None): Emails the new responsible of a case.
             sales (SalesLookup | None): Sales data, to take the sales executive of a
                 complaint or claim from its invoice; without it the field stays empty.
+            customer_forwarding (bool): Whether a supplier's answer can be passed on to the
+                customer (a no-reply mailbox is configured).
         """
 
+        self.customer_forwarding = customer_forwarding
         self.sales = sales
         self.notifier = notifier
         self.repository = repository
@@ -1087,7 +1118,7 @@ class CaseTrackingService:
             CaseDetail: The case, its events and the public request if any.
         """
 
-        case, _, is_manager = await self._load(case_id, principal)
+        case, access, is_manager = await self._load(case_id, principal)
         events = await self.repository.list_events(case.id)
         actors = await self.people.get_users(
             {e.actor_user_id for e in events if e.actor_user_id is not None}
@@ -1099,11 +1130,52 @@ class CaseTrackingService:
             requester_email=case.requester_email,
             supplier_addresses=supplier_addresses(events),
         )
-        return CaseDetail(
-            view=await self._view(case, principal, is_manager),
-            events=[self._event_view(e, actors, context) for e in events],
-            request=request,
+        forwards = forwards_by_source(events)
+        can_forward = (
+            self.customer_forwarding
+            and access.can_work
+            and not case.is_closed
+            and "@" in (case.requester_email or "")
         )
+        views = []
+        for event in events:
+            view = self._event_view(event, actors, context)
+            if event.event_type == EVENT_EMAIL_RECEIVED:
+                view = replace(
+                    view,
+                    forward=_forward_state(event, context, forwards, actors, can_forward),
+                )
+            views.append(view)
+        return CaseDetail(
+            view=await self._view(case, principal, is_manager), events=views, request=request
+        )
+
+    async def list_events_of(self, case: TrackingCase) -> list[CaseEvent]:
+        """The timeline of a case already loaded with its access checked."""
+
+        return await self.repository.list_events(case.id)
+
+    async def record_forward(
+        self, case: TrackingCase, principal: Principal, note: str | None, data: dict
+    ) -> EventView:
+        """Write that someone passed a supplier's answer on to the customer.
+
+        Args:
+            case (TrackingCase): The case, already checked for work access.
+            principal (Principal): Who forwarded it.
+            note (str | None): What they added for the customer.
+            data (dict): The source event, the recipient and the queued email.
+
+        Returns:
+            EventView: The new timeline entry.
+        """
+
+        event = self._event(
+            case.id, EVENT_FORWARDED_TO_CUSTOMER, principal.user_id, note=note, data=data
+        )
+        await self.repository.add_event(event)
+        actors = await self.people.get_users({principal.user_id})
+        return self._event_view(event, actors, TimelineContext())
 
     @staticmethod
     def _event_view(

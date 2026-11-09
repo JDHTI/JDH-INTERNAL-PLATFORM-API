@@ -120,6 +120,13 @@ class SqlAlchemyEmailRepository:
             )
             return _message(model) if model else None
 
+    async def get_message_by_id(self, message_id: UUID) -> EmailMessage | None:
+        """Find a stored message by its own identifier."""
+
+        async with self.database.session_factory() as session:
+            model = await session.get(EmailMessageModel, message_id)
+            return _message(model) if model else None
+
     async def save_message(self, message: EmailMessage) -> None:
         """Update the mutable fields of a stored message."""
 

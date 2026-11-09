@@ -258,6 +258,10 @@ class Settings(BaseSettings):
     MAIL_INTAKE_OPEN_CASES: bool = False
     # Comma-separated domains whose addresses may be copied (CC) on a reply from a case.
     MAIL_CC_DOMAINS: str = "jdh.com.co"
+    # Mailbox nobody reads, for emails whose answers must not reach a case (a supplier's
+    # answer passed on to the customer). The Graph app needs Mail.Send on it (add it to the
+    # Application Access Policy). Empty turns that forwarding off.
+    MAIL_NOREPLY_SENDER: str = ""
     MAIL_POLL_INTERVAL_SECONDS: int = 120
     MAIL_MAX_ATTEMPTS: int = 5
     MAIL_MAX_ATTACHMENTS: int = 10
@@ -552,6 +556,7 @@ class Settings(BaseSettings):
                 "since": self.mail_intake_since,
                 "open_cases": self.MAIL_INTAKE_OPEN_CASES,
                 "cc_domains": _split_lower(self.MAIL_CC_DOMAINS),
+                "noreply_sender": self.MAIL_NOREPLY_SENDER.strip().lower(),
                 "ignored_senders": _split_lower(self.MAIL_IGNORED_SENDERS),
                 "max_attempts": self.MAIL_MAX_ATTEMPTS,
                 "max_attachments": self.MAIL_MAX_ATTACHMENTS,

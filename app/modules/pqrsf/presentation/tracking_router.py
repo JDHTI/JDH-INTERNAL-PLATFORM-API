@@ -27,6 +27,7 @@ from app.modules.pqrsf.application.dto import (
     EventView,
     ItemChanges,
 )
+from app.modules.pqrsf.application.forwards import CustomerForwardService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
 from app.modules.pqrsf.application.tracking import CaseTrackingService
@@ -61,6 +62,7 @@ _tracking = Depends(Provide[ApplicationContainer.v1_container.pqrsf_tracking_ser
 _pqrsf = Depends(Provide[ApplicationContainer.v1_container.pqrsf_service])
 _case_files = Depends(Provide[ApplicationContainer.v1_container.pqrsf_case_attachment_service])
 _comments = Depends(Provide[ApplicationContainer.v1_container.pqrsf_comment_service])
+_forwards = Depends(Provide[ApplicationContainer.v1_container.pqrsf_forward_service])
 _notifications = Depends(Provide[ApplicationContainer.v1_container.pqrsf_notification_service])
 _principal = Depends(get_current_principal)
 
@@ -308,6 +310,14 @@ class CaseEventResponse(BaseModel):
     # ``lifecycle``, ``access``, ``assignment``, ``status``, ``communication``, ``documents``.
     category: str = "lifecycle"
     status_change: StatusChangeResponse | None = None
+    # Only on ``email_received`` of a case detail: who wrote it (``supplier``, ``customer``
+    # or ``external``), whether the caller can send it to the customer now, and when and
+    # by whom it was sent.
+    sender_role: Literal["supplier", "customer", "external"] | None = None
+    forwardable: bool = False
+    forwarded_at: datetime | None = None
+    forwarded_by: str | None = None
+    forwarded_to: str | None = None
 
 
 class ActivityEventResponse(CaseEventResponse):
@@ -668,6 +678,14 @@ def _event(value: EventView) -> CaseEventResponse:
                 if summary.status_from or summary.status_to
                 else None
             ),
+        }
+    if value.forward is not None:
+        told |= {
+            "sender_role": value.forward.sender_role,
+            "forwardable": value.forward.forwardable,
+            "forwarded_at": value.forward.forwarded_at,
+            "forwarded_by": value.forward.forwarded_by,
+            "forwarded_to": value.forward.forwarded_to,
         }
     return CaseEventResponse(
         id=event.id,
@@ -1545,6 +1563,89 @@ async def retry_client_reply(
     """Send a reply again after its delivery gave up (the responsible or a manager)."""
 
     return _client_reply(await service.retry_client_reply(case_id, notification_id, principal))
+
+
+class ForwardRequest(BaseModel):
+    """What the team adds for the customer when passing a supplier's answer on."""
+
+    note: str | None = Field(default=None, max_length=2_000)
+
+
+class ForwardPreviewResponse(BaseModel):
+    """The email the customer would get, without sending it."""
+
+    to: str
+    sender: str
+    subject: str
+    html: str
+    text: str
+    attachments: list[str]
+
+
+class ForwardResponse(CaseEventResponse):
+    """The ``forwarded_to_customer`` entry and the email it queued."""
+
+    delivery: ClientReplyResponse
+
+
+_FORWARD_PATH = "/cases/{case_id}/events/{event_id}/forward-to-customer"
+
+
+@router.post(
+    f"{_FORWARD_PATH}/preview",
+    response_model=ForwardPreviewResponse,
+    summary="Preview a supplier's answer forwarded to the customer",
+)
+@inject
+async def preview_forward_to_customer(
+    case_id: UUID,
+    event_id: UUID,
+    payload: ForwardRequest | None = None,
+    principal: Principal = _principal,
+    service: CustomerForwardService = _forwards,
+) -> ForwardPreviewResponse:
+    """The email exactly as the customer would get it (subject, HTML, text, files).
+
+    Sends nothing. Same checks as the send, so a preview that works means the send will.
+    """
+
+    preview = await service.preview(case_id, event_id, payload.note if payload else None, principal)
+    return ForwardPreviewResponse(
+        to=preview.to,
+        sender=preview.sender,
+        subject=preview.subject,
+        html=preview.html,
+        text=preview.text,
+        attachments=preview.attachments,
+    )
+
+
+@router.post(
+    _FORWARD_PATH,
+    response_model=ForwardResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Forward a supplier's answer to the customer",
+)
+@inject
+async def forward_to_customer(
+    case_id: UUID,
+    event_id: UUID,
+    payload: ForwardRequest | None = None,
+    principal: Principal = _principal,
+    service: CustomerForwardService = _forwards,
+) -> ForwardResponse:
+    """Email a supplier's answer (an ``email_received`` event) to the customer, by hand.
+
+    Only the responsible of the case or a manager; only a supplier's answer, once; the case
+    must be open and have the requester's email. It leaves from the no-reply mailbox and
+    says that answers to it are not read. The timeline gets a ``forwarded_to_customer``
+    entry and the original email shows ``forwarded_at`` and ``forwarded_by``.
+    """
+
+    result = await service.forward(case_id, event_id, payload.note if payload else None, principal)
+    return ForwardResponse(
+        **_event(result.event).model_dump(), delivery=_client_reply(result.notification)
+    )
 
 
 class JobScheduleModel(BaseModel):

@@ -28,6 +28,8 @@ CLASSIFICATION = "classification"
 
 # A message to the supplier, written from the case.
 EVENT_SUPPLIER_MESSAGE = "supplier_message"
+# A supplier's answer (an ``email_received`` event) passed on to the customer by hand.
+EVENT_FORWARDED_TO_CUSTOMER = "forwarded_to_customer"
 SUPPLIER_MESSAGE_KINDS = {
     "request": "una solicitud de información",
     "response": "una respuesta",
@@ -92,6 +94,16 @@ def supplier_addresses(events: Collection[CaseEvent]) -> set[str]:
         if event.event_type == EVENT_SUPPLIER_MESSAGE:
             found.update(address.lower() for address in event.data.get("to", []))
     return found
+
+
+def forwards_by_source(events: Collection[CaseEvent]) -> dict[str, CaseEvent]:
+    """Each forward to the customer, by the id of the received email it passed on."""
+
+    return {
+        str(event.data.get("source_event_id")): event
+        for event in events
+        if event.event_type == EVENT_FORWARDED_TO_CUSTOMER and event.data.get("source_event_id")
+    }
 
 
 def describe(
@@ -166,6 +178,9 @@ def describe(
         return EventSummary(kind, name, f"Envió {what} a {target}", COMMUNICATION)
     if event_type == EVENT_EMAIL_RECEIVED:
         return _email(data, context)
+    if event_type == EVENT_FORWARDED_TO_CUSTOMER:
+        source = data.get("from") or "el proveedor"
+        return EventSummary(kind, name, f"Envió al cliente la respuesta de {source}", COMMUNICATION)
     # An event this module does not tell yet still reads in Spanish.
     return EventSummary(kind, name, "Registró un cambio en el caso", LIFECYCLE)
 
@@ -201,6 +216,13 @@ def _email(data: dict, context: TimelineContext) -> EventSummary:
             CLIENT, context.requester_name or sender, "Escribió por correo", COMMUNICATION
         )
     return EventSummary(EXTERNAL, sender or "Remitente", "Escribió por correo", COMMUNICATION)
+
+
+def sender_role(data: dict, context: TimelineContext) -> str:
+    """Who wrote an ``email_received``: ``supplier``, ``customer`` or ``external``."""
+
+    kind = _email(data, context).actor_kind
+    return {SUPPLIER: "supplier", CLIENT: "customer"}.get(kind, "external")
 
 
 def _status_name(context: TimelineContext, status_id: UUID | None) -> str | None:

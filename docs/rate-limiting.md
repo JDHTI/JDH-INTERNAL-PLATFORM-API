@@ -227,6 +227,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/cases/{case_id}/comments` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/deliveries` | `read` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/documents/search` | `read` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/events/{event_id}/forward-to-customer` | `relaxed` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/events/{event_id}/forward-to-customer/preview` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files` | `read` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files/{file_id}/download` | `read` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/items` | `relaxed` |  |
