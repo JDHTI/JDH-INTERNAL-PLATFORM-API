@@ -1,8 +1,10 @@
 """HTTP contract of ``/api/v1/quotations``."""
 
 import io
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +13,7 @@ from openpyxl import load_workbook
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.quotations.domain.entities import ItemInfo
 from tests.modules.quotations.conftest import APPROVER, MANAGER, NIT
 from tests.modules.supplier_supports.conftest import person
 
@@ -353,6 +356,24 @@ def test_the_requested_products_contract(client) -> None:
     assert promoted.status_code == 200
     assert [line["sku"] for line in promoted.json()["lines"]] == ["2537", "26278"]
     assert promoted.json()["lines"][-1]["origin"] == "agregado"
+
+
+def test_categories_are_filled_on_read_and_never_break_it(client, warehouse, repository) -> None:
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+    stored = repository.items[UUID(quotation["id"])]
+    old = replace(stored, lines=tuple(replace(line, category=None) for line in stored.lines))
+    repository.items[old.quotation.id] = old
+    url = f"{BASE}/{quotation['id']}"
+
+    warehouse.down = True
+    down = client.get(url)
+    assert down.status_code == 200 and down.json()["lines"][0]["category"] is None
+
+    warehouse.down = False
+    warehouse.item_rows["2537"] = ItemInfo("2537", "Abrasivo", "UNID", category="ASEO")
+    filled = client.get(url).json()
+    assert filled["lines"][0]["category"] == "ASEO" and filled["version"] == 1
+    assert filled["updated_at"] == quotation["updated_at"]
 
 
 def test_errors_are_spanish_and_typed(client, warehouse) -> None:

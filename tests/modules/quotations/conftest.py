@@ -209,6 +209,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.items: dict[UUID, QuotationDetail] = {}
         self.products: dict[UUID, RequestedProduct] = {}
+        self.category_writes: list[dict[UUID, str]] = []
 
     def _attach(self, detail: QuotationDetail | None) -> QuotationDetail | None:
         """Lines read with their registry entry as it is now, like the real repository."""
@@ -233,6 +234,15 @@ class FakeRepository:
 
     async def get(self, quotation_id):
         return self._attach(self.items.get(quotation_id))
+
+    async def set_categories(self, quotation_id, categories):
+        self.category_writes.append(dict(categories))
+        detail = self.items[quotation_id]
+        lines = tuple(
+            replace(line, category=categories[line.id]) if line.id in categories else line
+            for line in detail.lines
+        )
+        self.items[quotation_id] = QuotationDetail(detail.quotation, lines)
 
     async def get_requested_product(self, product_id):
         return self.products.get(product_id)

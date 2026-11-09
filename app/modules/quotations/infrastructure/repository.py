@@ -314,6 +314,30 @@ class SqlAlchemyQuotationRepository:
             result = await session.execute(delete(Q).where(Q.id == quotation_id))
         return bool(result.rowcount)
 
+    async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None:
+        """Store the category of some lines, by line id. The header is not touched: no new
+        version, no new ``updated_at``.
+
+        Args:
+            quotation_id (UUID): Quotation the lines belong to.
+            categories (dict[UUID, str]): Category by line id.
+        """
+
+        if not categories:
+            return
+        table = L.__table__
+        async with self.database.session_factory() as session, session.begin():
+            await session.execute(
+                update(table).where(
+                    table.c.id == bindparam("line_id"),
+                    table.c.quotation_id == bindparam("owner_id"),
+                ),
+                [
+                    {"line_id": line_id, "owner_id": quotation_id, "category": category}
+                    for line_id, category in categories.items()
+                ],
+            )
+
     # ------------------------------------------------------------ requested products
 
     async def get_requested_product(self, product_id: UUID) -> RequestedProduct | None:

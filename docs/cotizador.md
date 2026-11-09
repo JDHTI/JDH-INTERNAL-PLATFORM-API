@@ -340,7 +340,7 @@ vat}], liquor_tax, total} | null` y `lines`.
 | Campo | |
 | --- | --- |
 | `sku`, `description`, `unit`, `pack_factor` | referencia, descripción, unidad de inventario y empaque |
-| `category` | categoría del producto en SIESA (`consumo.productos.categoria`); `null` si no se conoce y en un producto solo para cotización. Las cotizaciones guardadas antes de `0050` la traen al refrescar |
+| `category` | categoría del producto en SIESA (`consumo.productos.categoria`); `null` si no se conoce y en un producto solo para cotización. Si una línea de SIESA no la tiene (guardada antes de `0050`), se busca al leer la cotización, en una sola consulta a `consumo.productos`, y se guarda en la línea sin subir la versión ni `updated_at`; una referencia sin fila o sin categoría queda marcada como buscada (sale `null`) y no se vuelve a buscar. Si el DWH no responde, la lectura sale igual con `null` |
 | `vat_pct` | IVA de venta en puntos (`19` = 19 %); en un producto solo para cotización, el que escribió el asesor |
 | `is_active` | `false` si está inactiva en SIESA: se muestra para reemplazarla y no se exporta |
 | `supplier_code`, `supplier_name` | proveedor comercial |

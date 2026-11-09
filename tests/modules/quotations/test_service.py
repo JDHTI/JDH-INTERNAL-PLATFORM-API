@@ -22,7 +22,7 @@ from app.modules.quotations.application.service import (
     parse_skus,
 )
 from app.modules.quotations.domain import rules
-from app.modules.quotations.domain.entities import ListPrice, ValueTaxKey
+from app.modules.quotations.domain.entities import ItemInfo, ListPrice, ValueTaxKey
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
 from tests.modules.supplier_supports.conftest import person
@@ -422,13 +422,56 @@ async def test_every_line_carries_its_category(service, advisor, warehouse, mast
     added, _ = await service.add_lines(advisor, quotation.id, 1, ["26278"])
 
     categories = {line.sku: line.category for line in added.lines}
-    assert categories == {"2537": "ASEO", "1485": None, "26278": "LICORES"}
+    # 1485 has no product row: looked up once and stored as "no category" (shown as null).
+    assert categories == {"2537": "ASEO", "1485": "", "26278": "LICORES"}
     # Revalidating a stored line keeps it; a refresh reads it again from the warehouse.
     again, _ = await service.add_lines(advisor, quotation.id, 2, ["26278"])
     assert next(line for line in again.lines if line.sku == "26278").category == "LICORES"
     warehouse.sales[NIT][0] = sale(category="LIMPIEZA")
     refreshed = await service.refresh(advisor, quotation.id, 3)
     assert {line.sku: line.category for line in refreshed.lines}["2537"] == "LIMPIEZA"
+
+
+async def test_an_old_quotation_gets_its_categories_when_read(
+    service, advisor, warehouse, repository
+) -> None:
+    warehouse.sales[NIT].append(sale("1485", "5000"))
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await add_local(service, advisor, quotation.id, 1)
+    # Stored before 0050: no category on any line.
+    stored = repository.items[quotation.id]
+    repository.items[quotation.id] = replace(
+        stored, lines=tuple(replace(line, category=None) for line in stored.lines)
+    )
+    warehouse.item_rows["2537"] = ItemInfo("2537", "Abrasivo", "UNID", category="ASEO")
+    before = repository.items[quotation.id].quotation
+
+    detail = await service.get(advisor, quotation.id)
+
+    categories = {line.sku: line.category for line in detail.lines}
+    # 1485 has no product row: stored as looked up; the local product is never looked up.
+    assert categories == {"2537": "ASEO", "1485": "", "LOC-1": None}
+    assert detail.quotation == before and detail.quotation.version == 2
+    assert repository.items[quotation.id].lines[0].category == "ASEO"
+    assert len(repository.category_writes) == 1
+    await service.get(advisor, quotation.id)
+    # Nothing left to look up: no second write.
+    assert len(repository.category_writes) == 1
+
+
+async def test_reading_survives_a_warehouse_outage_for_categories(
+    service, advisor, warehouse, repository
+) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    stored = repository.items[quotation.id]
+    repository.items[quotation.id] = replace(
+        stored, lines=tuple(replace(line, category=None) for line in stored.lines)
+    )
+    warehouse.down = True
+
+    detail = await service.get(advisor, quotation.id)
+
+    assert detail.lines[0].category is None and repository.category_writes == []
 
 
 async def add_local(service, advisor, quotation_id, version, **values):
