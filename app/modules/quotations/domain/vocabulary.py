@@ -47,6 +47,9 @@ ADDED = "agregado"
 LOCAL = "local"
 ORIGINS = (HISTORY, ADDED, LOCAL)
 ORIGIN_LABELS = {HISTORY: "Histórico", ADDED: "Agregado", LOCAL: "Solo cotización"}
+# Stored category of a SIESA line that was looked up and has none (no product row, or no
+# category): it is not looked up again. The API shows it as ``null``.
+NO_CATEGORY = ""
 # SKU of a local product: ``LOC-<n>``, numbered per quotation.
 LOCAL_SKU_PREFIX = "LOC-"
 # VAT points a local product may carry.

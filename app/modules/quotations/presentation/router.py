@@ -582,7 +582,8 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         problem_labels=[PROBLEM_LABELS.get(code, code) for code in line.problems],
         origin=line.origin,  # type: ignore[arg-type]
         origin_label=ORIGIN_LABELS.get(line.origin, line.origin),
-        category=line.category,
+        # Looked up without a category is stored as "" so it is not looked up again.
+        category=line.category or None,
         quantity=line.quantity,
         offer_price=offer.offer_price(line),
         in_offer=offer.in_offer(line, scope),
