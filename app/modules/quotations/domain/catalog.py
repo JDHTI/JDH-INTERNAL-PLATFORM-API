@@ -70,6 +70,15 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "sale en el Excel ni en el plano.",
                     WARNS,
                 ),
+                Rule(
+                    "productos_locales",
+                    "Productos solo para cotización",
+                    "Un producto que no existe en SIESA se puede cotizar con su descripción, "
+                    "proveedor, precio antes de IVA e IVA. No tiene costo, así que la regla no "
+                    "lo evalúa: no cuenta entre los precios cambiados, no impide confirmar y no "
+                    "sale en el Excel, en el plano ni en la plantilla.",
+                    INFORMS,
+                ),
             ),
         ),
         Section(

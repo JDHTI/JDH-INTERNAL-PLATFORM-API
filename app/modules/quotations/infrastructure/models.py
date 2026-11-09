@@ -98,7 +98,9 @@ class QuotationLineModel(Base):
     __table_args__ = (
         UniqueConstraint("quotation_id", "sku", name="uq_quotation_lines_sku"),
         Index("ix_quotation_lines_position", "quotation_id", "position"),
-        CheckConstraint("origin IN ('historico', 'agregado')", name="ck_quotation_lines_origin"),
+        CheckConstraint(
+            "origin IN ('historico', 'agregado', 'local')", name="ck_quotation_lines_origin"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -150,3 +152,4 @@ class QuotationLineModel(Base):
     compliance: Mapped[str | None] = mapped_column(String(20))
     problems: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="historico")
+    category: Mapped[str | None] = mapped_column(Text)

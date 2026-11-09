@@ -12,6 +12,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.modules.quotations.domain import vocabulary
+
 
 @dataclass(frozen=True)
 class QuotationPolicy:
@@ -73,6 +75,8 @@ class LastSale:
     pack_factor: Decimal | None = None
     # State of the item in SIESA today (``consumo.productos.estado``).
     is_active: bool = True
+    # ``consumo.productos.categoria``.
+    category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,7 @@ class ItemInfo:
     supplier_code: str | None = None
     pack_factor: Decimal | None = None
     is_active: bool = True
+    category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -274,7 +279,8 @@ class QuotationLine:
     variation_pct: Decimal | None = None
     compliance: str | None = None
     problems: tuple[str, ...] = ()
-    # ``historico`` (from the sales window) or ``agregado`` (added by the advisor).
+    # ``historico`` (from the sales window), ``agregado`` (added by the advisor) or ``local``
+    # (a product only for the quotation: not in SIESA, no cost, never exported).
     origin: str = "historico"
     quote_cost: Decimal | None = None
     discarded_quote_cost: Decimal | None = None
@@ -287,6 +293,14 @@ class QuotationLine:
     below_target: bool = False
     # Inactive in SIESA: shown to be replaced, never exported.
     is_active: bool = True
+    # Product category in SIESA (``consumo.productos.categoria``); ``None`` when unknown.
+    category: str | None = None
+
+    @property
+    def is_local(self) -> bool:
+        """A product only for the quotation: SIESA does not have it."""
+
+        return self.origin == vocabulary.LOCAL
 
     @property
     def support_amount(self) -> Decimal:

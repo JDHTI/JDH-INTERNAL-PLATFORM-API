@@ -143,6 +143,21 @@ class AddLinesRequest(BaseModel):
     )
 
 
+class LocalLineRequest(BaseModel):
+    """A product SIESA does not have, quoted only here.
+
+    The fields are checked by the service so a bad value comes back as one Spanish
+    ``detail``: description 1 to 120 characters, supplier up to 120, price in whole pesos
+    above zero before VAT, VAT 19, 5 or 0 (points).
+    """
+
+    version: int = Field(ge=1)
+    description: str | None = Field(default=None, max_length=2000)
+    supplier_name: str | None = Field(default=None, max_length=2000)
+    price: Decimal | str | None = Field(default=None, description="Whole pesos, before VAT")
+    vat_pct: Decimal | str | None = Field(default=None, description="Points: 19, 5 or 0")
+
+
 class ImportResultResponse(BaseModel):
     """What the pasted list did, SKU by SKU."""
 
@@ -272,8 +287,11 @@ class LineResponse(BaseModel):
     price_with_taxes: Decimal | None
     problems: list[str]
     problem_labels: list[str]
-    origin: Literal["historico", "agregado"]
+    # ``local``: a product only for the quotation (SKU ``LOC-<n>``), not in SIESA.
+    origin: Literal["historico", "agregado", "local"]
     origin_label: str
+    # Product category in SIESA; ``None`` when unknown and for a local product.
+    category: str | None
 
 
 class SummaryResponse(BaseModel):
@@ -421,6 +439,7 @@ def _line(line: QuotationLine) -> LineResponse:
         problem_labels=[PROBLEM_LABELS.get(code, code) for code in line.problems],
         origin=line.origin,  # type: ignore[arg-type]
         origin_label=ORIGIN_LABELS.get(line.origin, line.origin),
+        category=line.category,
     )
 
 
@@ -705,6 +724,37 @@ async def add_lines(
     return response
 
 
+@router.post(
+    "/{quotation_id}/local-lines",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Quote a product SIESA does not have",
+)
+@inject
+async def add_local_line(
+    quotation_id: UUID,
+    body: LocalLineRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """A product only for the quotation (``origin: local``, SKU ``LOC-<n>``): description,
+    optional supplier, price before VAT and VAT. It has no cost, the rule does not judge it
+    and it never reaches the workbook or the SIESA files. 422 on an invalid field; 409 when
+    the quotation changed since it was read or awaits validation."""
+
+    return _detail(
+        await service.add_local_line(
+            principal,
+            quotation_id,
+            body.version,
+            description=body.description,
+            supplier_name=body.supplier_name,
+            price=body.price,
+            vat_pct=body.vat_pct,
+        )
+    )
+
+
 @router.delete(
     "/{quotation_id}/lines/{sku}",
     dependencies=[_READ_GATE],
@@ -719,8 +769,8 @@ async def remove_line(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """SKUs the advisor added or inactive in SIESA; an active sales-window SKU stays (leave
-    its new price empty)."""
+    """SKUs the advisor added, local products, or SKUs inactive in SIESA; an active
+    sales-window SKU stays (leave its new price empty)."""
 
     return _detail(await service.remove_line(principal, quotation_id, version, sku))
 

@@ -21,6 +21,7 @@ from app.modules.quotations.application.service import (
     normalize_nit,
     parse_skus,
 )
+from app.modules.quotations.domain import rules
 from app.modules.quotations.domain.entities import ListPrice, ValueTaxKey
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
@@ -411,6 +412,204 @@ async def test_the_workbook_round_trip(service, advisor, warehouse, masters) -> 
         await service.upload_template(advisor, other.id, 1, XLSX, buffer.getvalue())
     with pytest.raises(InvalidInputError, match="Excel"):
         await service.upload_template(advisor, other.id, 1, "precios.csv", b"a,b")
+
+
+async def test_every_line_carries_its_category(service, advisor, warehouse, masters) -> None:
+    warehouse.sales[NIT].append(sale("1485", "5000", category=None))
+    masters.catalog["1485"] = product("1485")
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+
+    added, _ = await service.add_lines(advisor, quotation.id, 1, ["26278"])
+
+    categories = {line.sku: line.category for line in added.lines}
+    assert categories == {"2537": "ASEO", "1485": None, "26278": "LICORES"}
+    # Revalidating a stored line keeps it; a refresh reads it again from the warehouse.
+    again, _ = await service.add_lines(advisor, quotation.id, 2, ["26278"])
+    assert next(line for line in again.lines if line.sku == "26278").category == "LICORES"
+    warehouse.sales[NIT][0] = sale(category="LIMPIEZA")
+    refreshed = await service.refresh(advisor, quotation.id, 3)
+    assert {line.sku: line.category for line in refreshed.lines}["2537"] == "LIMPIEZA"
+
+
+async def add_local(service, advisor, quotation_id, version, **values):
+    fields = {
+        "description": "Queso costeño",
+        "supplier_name": None,
+        "price": "12000",
+        "vat_pct": 5,
+    }
+    return await service.add_local_line(advisor, quotation_id, version, **{**fields, **values})
+
+
+async def test_a_local_product_is_quoted_outside_the_rule(service, advisor) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+
+    detail = await add_local(
+        service,
+        advisor,
+        quotation.id,
+        1,
+        description="  Queso   costeño  ",
+        supplier_name=" Lácteos del Sur ",
+        price=Decimal(12000),
+    )
+
+    line = detail.lines[-1]
+    assert line.sku == "LOC-1" and line.origin == "local" and line.position == 2
+    assert line.description == "Queso costeño" and line.supplier_name == "Lácteos del Sur"
+    assert line.supplier_code is None and line.unit is None and line.category is None
+    assert line.vat_pct == Decimal(5) and line.new_price == Decimal(12000)
+    assert line.is_active and line.last_price is None and line.cost is None
+    assert line.compliance is None and line.variation_pct is None
+    assert line.problems == ("producto_local",) and line.support_candidates == ()
+    assert line.min_price is None and line.optimal_price is None and not line.below_target
+    assert rules.price_with_taxes(line) == Decimal(12000)
+    # It is neither a changed price nor one below the rule.
+    assert detail.quotation.version == 2 and detail.quotation.line_count == 2
+    assert detail.quotation.changed_count == 0 and detail.quotation.below_rule_count == 0
+    second = await add_local(service, advisor, quotation.id, 2, price=7000, vat_pct="19")
+    assert [item.sku for item in second.lines] == ["2537", "LOC-1", "LOC-2"]
+    removed = await service.remove_line(advisor, quotation.id, 3, "LOC-1")
+    third = await add_local(service, advisor, quotation.id, 4, vat_pct=0)
+    # Numbers are never reused, so a deleted SKU never comes back as another product.
+    assert [item.sku for item in third.lines] == ["2537", "LOC-2", "LOC-3"]
+    assert [item.sku for item in removed.lines] == ["2537", "LOC-2"]
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"description": "   "}, "descripción"),
+        ({"description": None}, "descripción"),
+        ({"description": "x" * 121}, "máximo 120"),
+        ({"supplier_name": "x" * 121}, "proveedor"),
+        ({"price": None}, "Escribe el precio"),
+        ({"price": "abc"}, "número"),
+        ({"price": 0}, "mayor que cero"),
+        ({"price": "1500.5"}, "pesos enteros"),
+        ({"vat_pct": 16}, "IVA"),
+        ({"vat_pct": None}, "IVA"),
+        ({"vat_pct": "19.5"}, "IVA"),
+    ],
+)
+async def test_a_local_product_checks_its_fields(service, advisor, values, message) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+
+    with pytest.raises(InvalidInputError, match=message):
+        await add_local(service, advisor, quotation.id, 1, **values)
+
+
+async def test_a_local_product_follows_the_version_and_the_state(service, advisor) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("4100"))])
+
+    with pytest.raises(ConflictError):
+        await add_local(service, advisor, quotation.id, 1)
+    with pytest.raises(ForbiddenError):
+        await add_local(service, person("otro@jdh.com.co"), quotation.id, 2)
+    await service.confirm(
+        advisor,
+        quotation.id,
+        2,
+        list_action=None,
+        price_list_id=None,
+        new_list_name=None,
+        activation_date=None,
+    )
+    with pytest.raises(ConflictError, match="pendiente"):
+        await add_local(service, advisor, quotation.id, 3)
+
+
+async def test_a_local_product_never_reaches_the_files(service, advisor, approver) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await add_local(service, advisor, quotation.id, 1, price=99)
+    # A local price alone is not something to confirm: SIESA gets nothing from it.
+    with pytest.raises(InvalidInputError, match="No hay precios"):
+        await service.confirm(
+            advisor,
+            quotation.id,
+            2,
+            list_action=None,
+            price_list_id=None,
+            new_list_name=None,
+            activation_date=None,
+        )
+    priced, skipped = await service.update_lines(
+        advisor,
+        quotation.id,
+        2,
+        [
+            LineChange("2537", Decimal("4100")),
+            LineChange("LOC-1", margin_pct=Decimal("0.30")),
+        ],
+    )
+    assert [(item.sku, item.reason) for item in skipped] == [
+        ("LOC-1", "Producto solo para cotización: sin costo para calcular el precio")
+    ]
+    assert priced.quotation.changed_count == 1 and priced.quotation.below_rule_count == 0
+
+    template = load_workbook(
+        io.BytesIO((await service.template_file(advisor, quotation.id)).content)
+    )
+    assert [row[0] for row in template["Cotizacion"].iter_rows(min_row=2, values_only=True)] == [
+        "2537"
+    ]
+    # Its price does not block the confirmation.
+    await service.confirm(
+        advisor,
+        quotation.id,
+        3,
+        list_action=None,
+        price_list_id=None,
+        new_list_name=None,
+        activation_date=None,
+    )
+    await service.validate(approver, quotation.id, 4)
+    flat = (await service.export(advisor, quotation.id, "txt")).content.split(b"\r\n")
+    assert [len(item) for item in flat] == [18, 254, 18, 0] and b"LOC-" not in b"".join(flat)
+    workbook = load_workbook(
+        io.BytesIO((await service.export(advisor, quotation.id, "xlsx")).content)
+    )
+    assert [row[1] for row in workbook["Precios"].iter_rows(min_row=2, values_only=True)] == [2537]
+
+
+async def test_a_local_product_is_priced_kept_and_left_alone(service, advisor, warehouse) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    created = await add_local(service, advisor, quotation.id, 1)
+    local_id = created.lines[-1].id
+
+    priced, _ = await service.update_lines(
+        advisor, quotation.id, 2, [LineChange("LOC-1", Decimal("15000"))]
+    )
+    assert priced.lines[-1].new_price == Decimal(15000) and priced.lines[-1].compliance is None
+    cleared, _ = await service.update_lines(advisor, quotation.id, 3, [LineChange("LOC-1", None)])
+    assert cleared.lines[-1].new_price is None
+    await service.update_lines(advisor, quotation.id, 4, [LineChange("LOC-1", Decimal("15000"))])
+
+    # The warehouse now has two sales: the local product goes after them, untouched.
+    warehouse.sales[NIT].append(sale("1485", "2000"))
+    refreshed = await service.refresh(advisor, quotation.id, 5)
+    local = refreshed.lines[-1]
+    assert [line.sku for line in refreshed.lines] == ["2537", "1485", "LOC-1"]
+    assert local.id == local_id and local.position == 3 and local.new_price == Decimal(15000)
+    assert local.origin == "local" and local.problems == ("producto_local",)
+
+    # Pasting its SKU never looks it up in SIESA nor reprices it.
+    pasted, result = await service.add_lines(advisor, quotation.id, 6, ["LOC-1", "2537"])
+    assert result.not_found == ("LOC-1",) and result.revalidated == ("2537",)
+    assert pasted.lines[-1] == local
+    assert all("LOC-1" not in call[1] for call in warehouse.calls if call[0] == "costs")
+    # A workbook row with its SKU is reported and skipped.
+    book = load_workbook(io.BytesIO((await service.template_file(advisor, quotation.id)).content))
+    book["Cotizacion"].append(["LOC-1"] + [None] * 11 + [1])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    uploaded, outcome = await service.upload_template(
+        advisor, quotation.id, 7, XLSX, buffer.getvalue()
+    )
+    assert [(item.sku, item.row_number) for item in outcome.skipped] == [("LOC-1", 4)]
+    assert "plantilla" in outcome.skipped[0].reason
+    assert uploaded.lines[-1].new_price == Decimal(15000)
 
 
 async def test_customer_without_sales_starts_empty(service, advisor, warehouse) -> None:

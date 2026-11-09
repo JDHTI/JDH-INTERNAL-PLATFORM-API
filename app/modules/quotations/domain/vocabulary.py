@@ -40,11 +40,17 @@ COMPLIANCE_LABELS = {
     NO_COST: "Sin costo",
 }
 
-# Where a line comes from.
+# Where a line comes from. ``local`` is a product the advisor quotes that SIESA does not
+# have: it has no cost or rule and never reaches the files.
 HISTORY = "historico"
 ADDED = "agregado"
-ORIGINS = (HISTORY, ADDED)
-ORIGIN_LABELS = {HISTORY: "Histórico", ADDED: "Agregado"}
+LOCAL = "local"
+ORIGINS = (HISTORY, ADDED, LOCAL)
+ORIGIN_LABELS = {HISTORY: "Histórico", ADDED: "Agregado", LOCAL: "Solo cotización"}
+# SKU of a local product: ``LOC-<n>``, numbered per quotation.
+LOCAL_SKU_PREFIX = "LOC-"
+# VAT points a local product may carry.
+LOCAL_VAT_POINTS = (19, 5, 0)
 
 # Which cost won: the supplier's quotation in force or the inventory average cost.
 QUOTE_COST = "cotizacion"
@@ -57,7 +63,9 @@ COAST = "costa"
 REGIONAL_LABELS = {NATIONAL: "Nacional", COAST: "Costa"}
 
 INACTIVE_ITEM = "referencia_inactiva"
+LOCAL_PRODUCT = "producto_local"
 PROBLEM_LABELS = {
+    LOCAL_PRODUCT: "Producto solo para cotización: no existe en SIESA y no sale en los archivos",
     "sin_costo": "Sin costo actual",
     "sin_margen_objetivo": "El producto no tiene margen para el canal",
     "producto_no_sincronizado": "La referencia no está en el maestro de productos",

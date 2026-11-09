@@ -9,7 +9,8 @@ y el inventario), el **margen objetivo** del [maestro de márgenes](margenes-pro
 entonces se generan el Excel `ACTUALIZACION LISTAS PRECIOS` y el plano de importación de SIESA
 (registros `0112`/`0126`/`0127`) para actualizar la lista del cliente o crear una nueva.
 
-Módulo `quotations`. Migraciones `0037_quotations` y `0038_quotation_review`. Área: Comercial
+Módulo `quotations`. Migraciones `0037_quotations`, `0038_quotation_review` y
+`0050_quotation_local_lines` (categoría de la línea y productos solo para cotización). Área: Comercial
 (`/comercial/cotizador`). Datos del DWH: [cotizador-dwh.md](cotizador-dwh.md).
 
 Las reglas de costo, bodega, redondeo e impuesto son las del área de listas de precios, escritas
@@ -83,6 +84,16 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
    (`origin: agregado`), una lista pegada o varias elegidas en la búsqueda. Se calculan igual pero
    no tienen último precio, margen actual ni variación. Se conservan al refrescar y se pueden
    quitar. Un cliente sin ventas en la ventana arranca vacío con el aviso `sin_ventas`.
+10. **Productos solo para cotización** (`origin: local`): el asesor puede cotizar un producto que
+    no existe en SIESA con su descripción, proveedor (opcional), precio antes de IVA e IVA (19, 5
+    o 0). La API le da la referencia `LOC-<n>` (1, 2, 3… por cotización; un número no se reusa
+    aunque se quite el producto). No tiene costo, objetivo, apoyo, unidad ni categoría, así que la
+    regla no lo evalúa: `compliance` vacío, no cuenta en `changed_count`, `below_rule_count` ni
+    `below_target_count`, y no impide confirmar (pero un precio local solo no basta: confirmar
+    sigue exigiendo al menos un precio nuevo de una referencia de SIESA). **No sale en el Excel,
+    en el plano ni en la plantilla.** Avisa `producto_local`. Se le cambia o quita el precio con
+    `PUT /lines` (con `margin_pct` se omite: no tiene costo), se conserva igual al refrescar
+    (después de las líneas reconstruidas) y se puede quitar.
 
 ## Fórmulas
 
@@ -122,7 +133,8 @@ por debajo del mínimo. La línea se resalta para revisarla y actualizarla; si u
 (`below_target_count`).
 
 Guardar precios nunca se bloquea: la línea queda marcada. **Confirmar** sí exige que ninguna
-referencia activa con precio nuevo esté en `bajo_minimo`, `sin_objetivo` o `sin_costo`.
+referencia activa con precio nuevo esté en `bajo_minimo`, `sin_objetivo` o `sin_costo`. Un
+producto solo para cotización no tiene `compliance` y no entra en esta cuenta.
 
 ## Estados
 
@@ -164,11 +176,14 @@ las referencias que quiera y la sube completa (`POST /quotations/{id}/template`)
 - una referencia que la cotización no tiene se **agrega** (si existe y está activa);
 - las filas ilegibles o que no se pueden calcular se informan con su número de fila
   (`template_result.skipped`); el resto se guarda;
+- los productos solo para cotización no vienen en la plantilla; una fila con una referencia
+  `LOC-<n>` se informa en `skipped` y no se toca;
 - un archivo de otra cotización se rechaza.
 
 ## Formato de actualización
 
-Solo las referencias **activas** con precio nuevo mayor que cero. Precio por **unidad de
+Solo las referencias **activas** de SIESA con precio nuevo mayor que cero (nunca un producto
+solo para cotización). Precio por **unidad de
 inventario**, antes de IVA, en pesos enteros. La unidad es el código SIESA del DWH
 (`unidad_inventario_id`, `UNID`).
 
@@ -223,10 +238,11 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `POST /quotations` | `{customer_nit, window_months: 6 \| 12}` → 201 con la cotización (borrador) |
 | `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status`, `customer_nit`, `q`, `page`, `size` |
 | `GET /quotations/{id}` | Cotización completa |
-| `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price} \| {sku, margin_pct}]}`. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
-| `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}` |
-| `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada** o **inactiva** |
-| `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos |
+| `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price} \| {sku, margin_pct}]}`. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
+| `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}`. Una referencia `LOC-<n>` no se busca en SIESA: va en `not_found` |
+| `POST /quotations/{id}/local-lines` | Producto solo para cotización: `{version, description, supplier_name?, price, vat_pct}`. `description` de 1 a 120 caracteres (se recortan los espacios), `supplier_name` opcional hasta 120, `price` (texto o número) en pesos enteros mayor que cero antes de IVA, `vat_pct` 19, 5 o 0. Devuelve la cotización con la línea `LOC-<n>` al final. Mismos permisos y estados que agregar referencias: 409 por versión o si está pendiente de validación; 422 con `detail` en español si un campo no sirve |
+| `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada**, **inactiva** o **solo para cotización** |
+| `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos; los productos solo para cotización quedan iguales, al final |
 | `GET /quotations/{id}/template.xlsx` | La plantilla con los datos de la cotización |
 | `POST /quotations/{id}/template` | `multipart/form-data`: `file` y `version`. Devuelve `template_result: {updated, cleared, added, unchanged, not_found, inactive, skipped: [{sku, reason, row_number}]}`: listas de SKU, salvo `unchanged`, que es el **número** de filas sin cambio |
 | `POST /quotations/{id}/confirm` | `{version, list_action?, price_list_id?, new_list_name?, activation_date?}` → `pendiente_validacion`. 422 si alguna no cumple, si la lista 1 se quiere actualizar, si la creación no trae código o el código existe |
@@ -252,6 +268,8 @@ updated_by` y `lines`.
 | Campo | |
 | --- | --- |
 | `sku`, `description`, `unit`, `pack_factor` | referencia, descripción, unidad de inventario y empaque |
+| `category` | categoría del producto en SIESA (`consumo.productos.categoria`); `null` si no se conoce y en un producto solo para cotización. Las cotizaciones guardadas antes de `0050` la traen al refrescar |
+| `vat_pct` | IVA de venta en puntos (`19` = 19 %); en un producto solo para cotización, el que escribió el asesor |
 | `is_active` | `false` si está inactiva en SIESA: se muestra para reemplazarla y no se exporta |
 | `supplier_code`, `supplier_name` | proveedor comercial |
 | `last_price`, `last_gross_price`, `last_discount_pct`, `last_sale_date`, `last_document`, `last_sale_unit`, `last_quantity`, `sales_in_window` | último precio y su venta |
@@ -264,10 +282,17 @@ updated_by` y `lines`.
 | `below_target` | el último precio deja el margen bajo el mínimo (alerta) |
 | `support`, `support_candidates` | apoyo aplicado y los que no se aplicaron |
 | `current_margin_pct`, `current_margin_with_support_pct` | margen del último precio sin y con apoyo |
-| `new_price`, `new_margin_pct`, `new_margin_with_support_pct`, `variation_pct`, `compliance` | el ajuste del asesor |
+| `new_price`, `new_margin_pct`, `new_margin_with_support_pct`, `variation_pct`, `compliance` | el ajuste del asesor; en un producto solo para cotización solo `new_price` (el resto `null`) |
 | `price_with_taxes` | precio nuevo (o último) más el impuesto de licores, sin IVA |
-| `problems`, `problem_labels` | `sin_costo`, `sin_margen_objetivo`, `producto_no_sincronizado`, `apoyo_condicionado`, `apoyo_en_revision`, `apoyo_fuera_bodega`, `referencia_inactiva`, `cotizacion_descartada` |
-| `origin`, `origin_label` | `historico` o `agregado` |
+| `problems`, `problem_labels` | `sin_costo`, `sin_margen_objetivo`, `producto_no_sincronizado`, `apoyo_condicionado`, `apoyo_en_revision`, `apoyo_fuera_bodega`, `referencia_inactiva`, `cotizacion_descartada`, `producto_local` |
+| `origin`, `origin_label` | `historico` (Histórico), `agregado` (Agregado) o `local` (Solo cotización) |
+
+Un producto solo para cotización trae `sku` `LOC-<n>`, `origin: local`, `description`,
+`supplier_name` y `vat_pct` como se enviaron, `new_price`, `is_active: true`,
+`problems: ["producto_local"]`, `support_candidates: []`, `sales_in_window: 0`,
+`below_target: false` y `null` en `supplier_code`, `unit`, `pack_factor`, `category`, los `last_*`,
+`list_price`, el impuesto, el costo, el objetivo, los márgenes, los precios mínimo y óptimo, el
+apoyo, `variation_pct` y `compliance`.
 
 Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_distintas`,
 `co_distintos`, `lista_compartida`, `sin_lista`, `sin_ventas`, `lista_general`.

@@ -61,6 +61,10 @@ _EXCEL_INTEGER = re.compile(r"^(\d+)\.0+$")
 _LIST_ID = re.compile(r"^[A-Z0-9]{1,3}$")
 _MARGIN_TOLERANCE = Decimal("0.00005")
 _LIST_NAME_LENGTH = 40
+# Longest description and supplier name of a local product.
+LOCAL_TEXT_LENGTH = 120
+_LOCAL_NO_MARGIN = "Producto solo para cotización: sin costo para calcular el precio"
+_LOCAL_IN_TEMPLATE = "Producto solo para cotización: no se edita con la plantilla"
 
 
 def parse_skus(values: Sequence[str]) -> tuple[list[str], int]:
@@ -156,6 +160,7 @@ def _entry_of(line: QuotationLine) -> _Entry:
             vat_pct=line.vat_pct,
             supplier_code=line.supplier_code,
             pack_factor=line.pack_factor,
+            category=line.category,
         )
         return _Entry(line.sku, line.position, line.id, sale=sale)
     item = ItemInfo(
@@ -165,6 +170,7 @@ def _entry_of(line: QuotationLine) -> _Entry:
         vat_pct=line.vat_pct,
         supplier_code=line.supplier_code,
         pack_factor=line.pack_factor,
+        category=line.category,
     )
     return _Entry(line.sku, line.position, line.id, item=item)
 
@@ -481,17 +487,24 @@ class QuotationService:
         return lines, snapshot
 
     async def _build(
-        self, context: CustomerContext, months: int, added: Sequence[str] = ()
+        self,
+        context: CustomerContext,
+        months: int,
+        added: Sequence[str] = (),
+        reserved: int = 0,
     ) -> tuple[list[QuotationLine], date | None]:
-        """Lines of the sales window plus the SKUs the advisor had added."""
+        """Lines of the sales window plus the SKUs the advisor had added.
+
+        ``reserved`` lines (the local products a refresh keeps) count toward the maximum.
+        """
 
         sales = await self.warehouse.last_sales(context.nit, months)
         sold = {sale.sku for sale in sales}
         extra = [sku for sku in added if sku not in sold]
-        if len(sales) + len(extra) > self.max_lines:
+        total = len(sales) + len(extra) + reserved
+        if total > self.max_lines:
             raise InvalidInputError(
-                f"El cliente tiene {len(sales) + len(extra)} referencias; "
-                f"el máximo es {self.max_lines}"
+                f"El cliente tiene {total} referencias; el máximo es {self.max_lines}"
             )
         items = await self.warehouse.items(extra) if extra else {}
         entries = [
@@ -682,6 +695,8 @@ class QuotationService:
 
         if change.margin_pct is not None:
             margin = change.margin_pct
+            if line.is_local:
+                return None, Skipped(line.sku, _LOCAL_NO_MARGIN)
             if not margin.is_finite() or not Decimal(0) <= margin < 1:
                 return None, Skipped(line.sku, "El margen va de 0 a menos de 100 %")
             if line.cost is None:
@@ -746,17 +761,28 @@ class QuotationService:
     async def refresh(
         self, principal: Principal, quotation_id: UUID, version: int
     ) -> QuotationDetail:
-        """Rebuild from the warehouse and the masters, keeping the advisor's prices by SKU."""
+        """Rebuild from the warehouse and the masters, keeping the advisor's prices by SKU.
+
+        Local products do not come from the warehouse: they are kept as they are, after the
+        rebuilt lines.
+        """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
         context = await self._context(detail.quotation.customer_nit)
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
-        lines, snapshot = await self._build(context, detail.quotation.window_months, added)
-        if not lines:
+        local = [line for line in detail.lines if line.is_local]
+        lines, snapshot = await self._build(
+            context, detail.quotation.window_months, added, reserved=len(local)
+        )
+        if not lines and not local:
             context = replace(context, warnings=(*context.warnings, "sin_ventas"))
         prices = {line.sku: line.new_price for line in detail.lines if line.new_price is not None}
         lines = [rules.reprice(line, prices.get(line.sku)) for line in lines]
+        lines += [
+            replace(line, position=len(lines) + offset)
+            for offset, line in enumerate(local, start=1)
+        ]
         fields = self._customer_fields(context)
         if (
             detail.quotation.price_list_id == context.price_list_id
@@ -814,10 +840,14 @@ class QuotationService:
             raise InvalidInputError("Pega o escribe las referencias a agregar")
         if len(wanted) > MAX_PASTED_SKUS:
             raise InvalidInputError(f"Se admiten máximo {MAX_PASTED_SKUS} referencias por vez")
-        present = {line.sku: line for line in detail.lines}
+        # A local product (``LOC-<n>``) is not in SIESA: it is never looked up nor repriced.
+        local = [sku for sku in wanted if rules.is_local_sku(sku)]
+        wanted = [sku for sku in wanted if not rules.is_local_sku(sku)]
+        present = {line.sku: line for line in detail.lines if not line.is_local}
         existing = [sku for sku in wanted if sku in present]
         new = [sku for sku in wanted if sku not in present]
         fresh, not_found, inactive = await self._new_skus(detail, new)
+        not_found = local + not_found
         if not existing and not fresh:
             raise InvalidInputError(
                 "Ninguna referencia se pudo agregar"
@@ -846,10 +876,75 @@ class QuotationService:
             repeated=repeated,
         )
 
+    async def add_local_line(
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        version: int,
+        *,
+        description: str | None,
+        supplier_name: str | None,
+        price: Decimal | str | None,
+        vat_pct: Decimal | str | None,
+    ) -> QuotationDetail:
+        """Quote a product SIESA does not have (``origin: local``).
+
+        It gets the next ``LOC-<n>`` of the quotation and goes at the end. It has no cost, so
+        the rule does not judge it: it is not counted as changed or below the rule, it does
+        not block the confirmation, and it never reaches the workbook or the SIESA files.
+
+        Args:
+            principal (Principal): The advisor.
+            quotation_id (UUID): Quotation.
+            version (int): Version the caller read (409 when it changed).
+            description (str | None): What the product is (1 to 120 characters).
+            supplier_name (str | None): Who supplies it, optional (up to 120).
+            price (Decimal | str | None): Price before VAT, whole pesos above zero.
+            vat_pct (Decimal | str | None): VAT in points: 19, 5 or 0.
+
+        Returns:
+            QuotationDetail: The quotation, back to draft, with the new line.
+
+        Raises:
+            InvalidInputError: A field is missing or out of range, or the quotation is full.
+        """
+
+        detail = await self._editable(principal, quotation_id)
+        self._check_version(detail.quotation, version)
+        text = " ".join((description or "").split())
+        if not text:
+            raise InvalidInputError("Escribe la descripción del producto")
+        if len(text) > LOCAL_TEXT_LENGTH:
+            raise InvalidInputError(f"La descripción admite máximo {LOCAL_TEXT_LENGTH} caracteres")
+        supplier = " ".join((supplier_name or "").split()) or None
+        if supplier is not None and len(supplier) > LOCAL_TEXT_LENGTH:
+            raise InvalidInputError(f"El proveedor admite máximo {LOCAL_TEXT_LENGTH} caracteres")
+        amount = _decimal_input(price, "El precio debe ser un número en pesos")
+        if amount is None:
+            raise InvalidInputError("Escribe el precio del producto, antes de IVA")
+        amount = _price(amount, text)
+        vat = _decimal_input(vat_pct, "El IVA es 19, 5 o 0 %")
+        if vat is None or vat not in vocabulary.LOCAL_VAT_POINTS:
+            raise InvalidInputError("El IVA es 19, 5 o 0 %")
+        if len(detail.lines) + 1 > self.max_lines:
+            raise InvalidInputError(f"La cotización admite máximo {self.max_lines} referencias")
+        line = rules.local_line(
+            max((item.position for item in detail.lines), default=0) + 1,
+            rules.local_sku(detail.lines),
+            description=text,
+            supplier_name=supplier,
+            vat_pct=Decimal(int(vat)),
+            new_price=amount,  # type: ignore[arg-type]
+            line_id=uuid4(),
+        )
+        quotation = self._touched(detail.quotation, [*detail.lines, line], principal.email)
+        return await self.repository.save(quotation, [], version, inserted=[line])
+
     async def remove_line(
         self, principal: Principal, quotation_id: UUID, version: int, sku: str
     ) -> QuotationDetail:
-        """Take out a SKU the advisor added, or one inactive in SIESA (to replace it).
+        """Take out a SKU the advisor added, a local product, or one inactive in SIESA (to
+        replace it).
 
         Active sales-window SKUs stay: leave their price empty.
         """
@@ -859,10 +954,10 @@ class QuotationService:
         line = next((item for item in detail.lines if item.sku == sku), None)
         if line is None:
             raise NotFoundError(f"La referencia {sku} no está en la cotización")
-        if line.origin != vocabulary.ADDED and line.is_active:
+        if line.origin == vocabulary.HISTORY and line.is_active:
             raise InvalidInputError(
-                "Solo se quitan referencias agregadas o inactivas; para no actualizar una del "
-                "histórico, deja vacío su precio nuevo"
+                "Solo se quitan referencias agregadas, inactivas o solo para cotización; para no "
+                "actualizar una del histórico, deja vacío su precio nuevo"
             )
         lines = [item for item in detail.lines if item.sku != sku]
         quotation = self._touched(detail.quotation, lines, principal.email)
@@ -871,14 +966,18 @@ class QuotationService:
     # ------------------------------------------------------------ template
 
     async def template_file(self, principal: Principal, quotation_id: UUID) -> ExportFile:
-        """The quotation as a workbook to edit prices or margins in bulk."""
+        """The quotation as a workbook to edit prices or margins in bulk.
+
+        Local products stay out: the workbook is about SIESA references.
+        """
 
         if self.template is None:
             raise InvalidInputError("La plantilla no está disponible")
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        siesa = replace(detail, lines=tuple(rules.siesa_lines(detail.lines)))
         return ExportFile(
-            self.template.write(detail),
+            self.template.write(siesa),
             f"cotizacion-{quotation.customer_nit}-lista{quotation.price_list_id}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
@@ -915,8 +1014,8 @@ class QuotationService:
 
         Each row sets the SKU's new price, or prices it at the new margin; both blank clears
         the price. SKUs the quotation does not have are added (if they exist and are active)
-        and priced the same way. Rows that cannot be read or priced are reported; the rest
-        is saved in one go.
+        and priced the same way. Rows that cannot be read or priced, and rows of a local
+        product (``LOC-<n>``), are reported; the rest is saved in one go.
 
         Raises:
             InvalidInputError: Empty, too big, unreadable, or from another quotation.
@@ -942,12 +1041,15 @@ class QuotationService:
         skipped: list[Skipped] = []
         by_row: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
         for row in rows:
+            if rules.is_local_sku(row.sku):
+                skipped.append(Skipped(row.sku, _LOCAL_IN_TEMPLATE, row.row_number))
+                continue
             if row.problem:
                 skipped.append(Skipped(row.sku, row.problem, row.row_number))
                 continue
             by_row[row.sku] = (row.row_number, row.new_price, row.new_margin_pct)
 
-        present = {line.sku: line for line in detail.lines}
+        present = {line.sku: line for line in detail.lines if not line.is_local}
         new = [sku for sku in by_row if sku not in present]
         if len(new) > MAX_PASTED_SKUS:
             raise InvalidInputError(f"Se agregan máximo {MAX_PASTED_SKUS} referencias por vez")
@@ -1265,6 +1367,26 @@ def _price(value: Decimal | None, sku: str) -> Decimal | None:
     if not whole:
         raise InvalidInputError(f"El precio de {sku} va en pesos enteros")
     return value
+
+
+def _decimal_input(value: Decimal | str | int | None, message: str) -> Decimal | None:
+    """A number the client sent as JSON number or text; blank is ``None``.
+
+    Raises:
+        InvalidInputError: ``message`` when it is not a finite number.
+    """
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise InvalidInputError(message)
+    try:
+        number = Decimal(str(value).strip())
+    except InvalidOperation as exc:
+        raise InvalidInputError(message) from exc
+    if not number.is_finite():
+        raise InvalidInputError(message)
+    return number
 
 
 __all__ = [

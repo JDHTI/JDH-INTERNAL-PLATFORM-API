@@ -176,6 +176,64 @@ def test_paste_adds_revalidates_and_reports(client) -> None:
     assert nothing.status_code == 422 and "404" in nothing.json()["detail"]
 
 
+def test_a_local_product_goes_in_by_its_own_endpoint(client) -> None:
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+    assert quotation["lines"][0]["category"] == "ASEO"
+    url = f"{BASE}/{quotation['id']}"
+
+    created = client.post(
+        f"{url}/local-lines",
+        json={
+            "version": 1,
+            "description": " Queso costeño ",
+            "supplier_name": "Lácteos del Sur",
+            "price": "12000",
+            "vat_pct": 19,
+        },
+    )
+
+    assert created.status_code == 200
+    body = created.json()
+    line = body["lines"][-1]
+    assert body["version"] == 2 and body["changed_count"] == 0
+    assert line["sku"] == "LOC-1" and line["origin"] == "local"
+    assert line["origin_label"] == "Solo cotización" and line["category"] is None
+    assert line["description"] == "Queso costeño" and line["supplier_code"] is None
+    assert Decimal(line["new_price"]) == Decimal(12000) and Decimal(line["vat_pct"]) == 19
+    assert Decimal(line["price_with_taxes"]) == Decimal(12000)
+    assert line["compliance"] is None and line["compliance_label"] is None
+    assert line["variation_pct"] is None and line["support_candidates"] == []
+    assert line["problems"] == ["producto_local"]
+    assert line["problem_labels"][0].startswith("Producto solo para cotización")
+
+    numeric = client.post(
+        f"{url}/local-lines",
+        json={"version": 2, "description": "Arepa", "price": 3500, "vat_pct": 0},
+    )
+    assert numeric.status_code == 200 and numeric.json()["lines"][-1]["sku"] == "LOC-2"
+    invalid = client.post(
+        f"{url}/local-lines",
+        json={"version": 3, "description": "Arepa", "price": "3500", "vat_pct": 16},
+    )
+    assert invalid.status_code == 422 and invalid.json()["detail"] == "El IVA es 19, 5 o 0 %"
+    missing = client.post(f"{url}/local-lines", json={"version": 3, "price": "1"})
+    assert missing.status_code == 422 and "descripción" in missing.json()["detail"]
+    stale = client.post(
+        f"{url}/local-lines",
+        json={"version": 1, "description": "Arepa", "price": "3500", "vat_pct": 0},
+    )
+    assert stale.status_code == 409
+
+    skipped = client.put(
+        f"{url}/lines",
+        json={"version": 3, "lines": [{"sku": "LOC-1", "margin_pct": "0.3"}]},
+    )
+    assert skipped.status_code == 422
+    removed = client.delete(f"{url}/lines/LOC-1", params={"version": 3})
+    assert removed.status_code == 200
+    assert [item["sku"] for item in removed.json()["lines"]] == ["2537", "LOC-2"]
+
+
 def test_errors_are_spanish_and_typed(client, warehouse) -> None:
     assert client.post(BASE, json={"customer_nit": NIT, "window_months": 3}).status_code == 422
     assert client.post(BASE, json={"customer_nit": "111"}).status_code == 404

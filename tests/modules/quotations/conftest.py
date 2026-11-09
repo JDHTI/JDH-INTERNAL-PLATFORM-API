@@ -68,6 +68,7 @@ def sale(sku: str = "2537", price: str = "4000", **values) -> LastSale:
         "unit": "UNID",
         "vat_pct": Decimal(19),
         "supplier_code": "359",
+        "category": "ASEO",
     }
     return LastSale(**{**base, **values})
 
@@ -112,7 +113,9 @@ class FakeWarehouse:
             MANAGER: [Seller("0051", "PEREZ ANA", MANAGER)]
         }
         self.item_rows: dict[str, ItemInfo] = {
-            "26278": ItemInfo("26278", "Ginebra Selva x700ml", "UNID", Decimal(5), "359"),
+            "26278": ItemInfo(
+                "26278", "Ginebra Selva x700ml", "UNID", Decimal(5), "359", category="LICORES"
+            ),
             "9999": ItemInfo("9999", "Inactiva", "UNID", Decimal(19), "359", None, False),
         }
         self.list_customers = 28113
