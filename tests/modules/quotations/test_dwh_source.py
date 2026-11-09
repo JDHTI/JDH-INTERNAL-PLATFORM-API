@@ -44,6 +44,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
                 "cod_proveedor": "359",
                 "factor_empaque": Decimal(45),
                 "estado": "I",
+                "categoria": "DESECHABLES ",
             }
         ]
     )
@@ -57,7 +58,40 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert connection.timeout == 30.0
     assert sales[0].net_price.quantize(Decimal("0.01")) == Decimal("3323.36")
     assert sales[0].unit == "UNID" and sales[0].sale_unit == "C45"
-    assert not sales[0].is_active
+    assert not sales[0].is_active and sales[0].category == "DESECHABLES"
+    assert 'p."categoria"' in query
+
+
+async def test_items_carry_the_category() -> None:
+    connection = FakeConnection(
+        [
+            {
+                "sku": "26278",
+                "descripcion": "Ginebra",
+                "unidad_inventario_id": "UNID",
+                "iva_venta_pct": Decimal(5),
+                "cod_proveedor": "359",
+                "factor_empaque": Decimal(12),
+                "estado": "A",
+                "categoria": "LICORES",
+            },
+            {
+                "sku": "1485",
+                "descripcion": "Sin categoría",
+                "unidad_inventario_id": "UNID",
+                "iva_venta_pct": Decimal(19),
+                "cod_proveedor": None,
+                "factor_empaque": None,
+                "estado": "A",
+                "categoria": None,
+            },
+        ]
+    )
+
+    items = await WarehouseQuotationSource(connection).items(["26278", "1485"])
+
+    assert '"categoria"' in connection.queries[0][0]
+    assert items["26278"].category == "LICORES" and items["1485"].category is None
 
 
 async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> None:
@@ -120,6 +154,19 @@ async def test_sellers_match_the_email_lower_case() -> None:
 
     assert connection.queries[0][1] == ("a@jdh.com.co",)
     assert sellers[0].code == "0051" and sellers[0].email == "a@jdh.com.co"
+
+
+async def test_seller_contact_by_code() -> None:
+    connection = FakeConnection(
+        [{"codigo": "0051 ", "nombre": "PEREZ ANA", "correo": "A@JDH.COM.CO", "celular": " 300 "}]
+    )
+
+    contact = await WarehouseQuotationSource(connection).seller_contact(" 0051")
+
+    query, args = connection.queries[0]
+    assert '"consumo"."vendedores"' in query and '"celular"' in query and args == ("0051",)
+    assert (contact.code, contact.email, contact.phone) == ("0051", "a@jdh.com.co", "300")
+    assert await WarehouseQuotationSource(FakeConnection()).seller_contact("1") is None
 
 
 async def test_outage_is_a_503_and_schema_is_checked() -> None:

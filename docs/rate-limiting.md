@@ -281,6 +281,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/quotations` | `relaxed` |  |
 | `GET` | `/v1/quotations/customers` | `read` |  |
 | `GET` | `/v1/quotations/permissions` | `read` |  |
+| `GET` | `/v1/quotations/requested-products` | `read` |  |
+| `PATCH` | `/v1/quotations/requested-products/{product_id}` | `relaxed` |  |
 | `GET` | `/v1/quotations/rules` | `read` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}` | `read` |  |
@@ -290,6 +292,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `PUT` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}/lines/{sku}` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/lines/{sku}/promote` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/local-lines` | `relaxed` |  |
+| `PATCH` | `/v1/quotations/{quotation_id}/offer` | `relaxed` |  |
+| `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/template` | `relaxed` |  |

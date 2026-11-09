@@ -25,6 +25,7 @@ from app.modules.quotations.domain.entities import (
     LastSale,
     ListPrice,
     Seller,
+    SellerContact,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.pricing import StockPlan
@@ -133,7 +134,7 @@ class WarehouseQuotationSource:
             ' AND v."fecha" >= (current_date - make_interval(months => $2::int))'
             # The product is joined to the last sale only, not to every line of the window.
             ') SELECT l.*, p."descripcion", p."unidad_inventario_id", p."iva_venta_pct",'
-            ' p."cod_proveedor", p."factor_empaque", p."estado" FROM lineas l'
+            ' p."cod_proveedor", p."factor_empaque", p."estado", p."categoria" FROM lineas l'
             f' LEFT JOIN {self._view("productos")} p ON p."producto_key" = l."producto_key"'
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
             nit,
@@ -160,6 +161,7 @@ class WarehouseQuotationSource:
                     pack_factor=_decimal(row["factor_empaque"]),
                     # Unknown item (no product row): leave it active; the cost tells.
                     is_active=row["estado"] in ("A", None),
+                    category=_strip(row["categoria"]),
                 )
             )
         return sales
@@ -309,14 +311,35 @@ class WarehouseQuotationSource:
             for row in rows
         ]
 
+    async def seller_contact(self, code: str) -> SellerContact | None:
+        """Name, e-mail (lower case) and mobile of the salesperson ``code``
+        (``consumo.vendedores``), whatever their state: the customer still has them assigned."""
+
+        rows = await self._fetch(
+            f'SELECT "codigo", "nombre", "correo", "celular" FROM {self._view("vendedores")}'
+            ' WHERE trim("codigo") = $1 ORDER BY "estado" = \'A\' DESC LIMIT 1',
+            code.strip(),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        email = _strip(row["correo"])
+        return SellerContact(
+            code=str(row["codigo"]).strip(),
+            name=_strip(row["nombre"]),
+            email=email.lower() if email else None,
+            phone=_strip(row["celular"]),
+        )
+
     async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]:
-        """Description, SIESA unit id, VAT, supplier and pack of each SKU (``productos``)."""
+        """Description, SIESA unit id, VAT, supplier, pack and category of each SKU
+        (``productos``)."""
 
         if not skus:
             return {}
         rows = await self._fetch(
             'SELECT "sku", "descripcion", "unidad_inventario_id", "iva_venta_pct",'
-            ' "cod_proveedor", "factor_empaque", "estado"'
+            ' "cod_proveedor", "factor_empaque", "estado", "categoria"'
             f' FROM {self._view("productos")} WHERE "sku" = ANY($1::text[])',
             list(skus),
         )
@@ -329,6 +352,7 @@ class WarehouseQuotationSource:
                 supplier_code=_strip(row["cod_proveedor"]),
                 pack_factor=_decimal(row["factor_empaque"]),
                 is_active=row["estado"] == "A",
+                category=_strip(row["categoria"]),
             )
             for row in rows
         }

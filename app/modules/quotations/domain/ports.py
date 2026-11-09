@@ -21,11 +21,16 @@ from app.modules.quotations.domain.entities import (
     QuotationDetail,
     QuotationLine,
     QuotationPage,
+    QuotationRef,
+    RequestedProduct,
+    RequestedProductPage,
     Seller,
+    SellerContact,
     TemplateRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.export import PriceListExport
+from app.modules.quotations.domain.offer import OfferDocument
 from app.modules.quotations.domain.pricing import StockPlan
 
 
@@ -51,6 +56,8 @@ class WarehouseSource(Protocol):
     async def sellers(self, email: str) -> list[Seller]: ...
 
     async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]: ...
+
+    async def seller_contact(self, code: str) -> SellerContact | None: ...
 
 
 class MasterSource(Protocol):
@@ -104,9 +111,22 @@ class QuotationRepository(Protocol):
         replace_lines: bool = False,
         inserted: Sequence[QuotationLine] = (),
         removed: Sequence[UUID] = (),
+        requested: Sequence[RequestedProduct] = (),
     ) -> QuotationDetail: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...
+
+    async def get_requested_product(self, product_id: UUID) -> RequestedProduct | None: ...
+
+    async def list_requested_products(
+        self, *, status: str | None, q: str | None, page: int, size: int
+    ) -> RequestedProductPage: ...
+
+    async def requested_product_quotations(
+        self, product_ids: Sequence[UUID]
+    ) -> dict[UUID, list[QuotationRef]]: ...
+
+    async def update_requested_product(self, product: RequestedProduct) -> RequestedProduct: ...
 
 
 class SalesScope(Protocol):
@@ -146,6 +166,12 @@ class ExportWriter(Protocol):
     """Turns a price list update into a file."""
 
     def write(self, export: PriceListExport) -> bytes: ...
+
+
+class OfferWriter(Protocol):
+    """Turns the customer offer into a workbook."""
+
+    def write(self, document: OfferDocument) -> bytes: ...
 
 
 class TemplateFile(Protocol):

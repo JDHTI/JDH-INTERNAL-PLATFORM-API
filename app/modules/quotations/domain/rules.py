@@ -15,6 +15,7 @@ no warehouse or quantity: a quotation has neither.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
@@ -56,6 +57,7 @@ MONEY = Decimal("0.0001")
 PESO = Decimal(1)
 RATIO = Decimal("0.000001")
 _TARGET_METHODS = ("margen_minimo", "puntos_margen")
+_LOCAL_SKU = re.compile(rf"^{re.escape(vocabulary.LOCAL_SKU_PREFIX)}([0-9]+)$", re.IGNORECASE)
 
 
 def money(value: Decimal | None) -> Decimal | None:
@@ -129,9 +131,13 @@ def price_for_margin(line: QuotationLine, target: Decimal, family: str) -> Decim
 
 
 def compliance(line: QuotationLine) -> str | None:
-    """How a new price stands against the rule; ``None`` without a new price."""
+    """How a new price stands against the rule; ``None`` without a new price.
 
-    if line.new_price is None:
+    A local product (not in SIESA) has no cost and never reaches the files: the rule does
+    not judge it, so it is ``None`` too.
+    """
+
+    if line.new_price is None or line.is_local:
         return None
     if line.cost is None:
         return vocabulary.NO_COST
@@ -491,7 +497,76 @@ def build_line(
             and current_with_support < floor
         ),
         is_active=is_active,
+        category=source.category if source else None,
     )
+
+
+def local_line(
+    position: int,
+    sku: str,
+    *,
+    description: str,
+    supplier_name: str | None,
+    vat_pct: Decimal,
+    new_price: Decimal,
+    line_id: UUID,
+) -> QuotationLine:
+    """A product the advisor quotes that SIESA does not have (``origin: local``).
+
+    It has no last sale, cost, target, support, unit or category: only what the advisor
+    wrote and its price before VAT. The rule does not judge it and it is never exported.
+    """
+
+    line = QuotationLine(
+        id=line_id,
+        position=position,
+        sku=sku,
+        description=description,
+        unit=None,
+        pack_factor=None,
+        supplier_code=None,
+        supplier_name=supplier_name,
+        last_price=None,
+        last_gross_price=None,
+        last_discount_pct=None,
+        last_sale_date=None,
+        last_document=None,
+        last_sale_unit=None,
+        last_quantity=None,
+        sales_in_window=0,
+        list_price=None,
+        vat_pct=vat_pct,
+        value_tax_key=None,
+        value_tax_name=None,
+        value_tax_amount=None,
+        cost=None,
+        target_margin_pct=None,
+        margin_basis=None,
+        min_margin_pct=None,
+        current_margin_pct=None,
+        current_margin_with_support_pct=None,
+        min_price=None,
+        problems=(vocabulary.LOCAL_PRODUCT,),
+        origin=vocabulary.LOCAL,
+    )
+    return reprice(line, new_price)
+
+
+def local_sku(lines: Sequence[QuotationLine]) -> str:
+    """The next ``LOC-<n>`` of a quotation: one more than the highest it has used."""
+
+    numbers = [
+        int(match.group(1))
+        for line in lines
+        if line.is_local and (match := _LOCAL_SKU.fullmatch(line.sku))
+    ]
+    return f"{vocabulary.LOCAL_SKU_PREFIX}{max(numbers, default=0) + 1}"
+
+
+def is_local_sku(sku: str) -> bool:
+    """Whether a SKU has the shape of a local product (``LOC-<n>``), never a SIESA code."""
+
+    return _LOCAL_SKU.fullmatch(sku.strip()) is not None
 
 
 def reprice(line: QuotationLine, new_price: Decimal | None) -> QuotationLine:
@@ -527,13 +602,26 @@ def price_with_taxes(line: QuotationLine) -> Decimal | None:
 
 
 def exported(lines: Sequence[QuotationLine]) -> list[QuotationLine]:
-    """Lines that go to the files: active in SIESA and with a new price above zero."""
+    """Lines that go to the files: in SIESA, active and with a new price above zero.
+
+    A local product never goes: SIESA does not have it. So it neither counts as changed nor
+    blocks the confirmation.
+    """
 
     return [
         line
         for line in lines
-        if line.is_active and line.new_price is not None and line.new_price > 0
+        if not line.is_local
+        and line.is_active
+        and line.new_price is not None
+        and line.new_price > 0
     ]
+
+
+def siesa_lines(lines: Sequence[QuotationLine]) -> list[QuotationLine]:
+    """Every line but the local products: what the bulk-edit workbook carries."""
+
+    return [line for line in lines if not line.is_local]
 
 
 def counts(lines: Sequence[QuotationLine]) -> tuple[int, int, int, int]:
@@ -552,6 +640,9 @@ __all__ = [
     "counts",
     "customer_context",
     "exported",
+    "is_local_sku",
+    "local_line",
+    "local_sku",
     "margin",
     "minimum_margin",
     "minimum_price",
@@ -560,5 +651,6 @@ __all__ = [
     "price_for_margin",
     "price_with_taxes",
     "reprice",
+    "siesa_lines",
     "variation",
 ]
