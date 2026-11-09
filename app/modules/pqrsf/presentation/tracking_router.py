@@ -1100,9 +1100,64 @@ async def get_case(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> CaseDetailResponse:
-    """Return the case, its timeline and the public intake record."""
+    """Return the case, its timeline and the public intake record.
+
+    The timeline leaves out who opened the case (``read``, ``viewed``): see
+    ``GET /cases/{case_id}/openings``.
+    """
 
     return _detail(await service.get_case(case_id, principal))
+
+
+class PersonOpeningsResponse(BaseModel):
+    """How one person opened the case."""
+
+    user: PersonResponse | None
+    user_id: UUID
+    first_opened_at: datetime
+    last_opened_at: datetime
+    # Visits recorded; a repeat within 30 minutes counts once.
+    visits: int
+
+
+class CaseOpeningsResponse(BaseModel):
+    """Who opened the case (newest first) and each opening; kept apart from the timeline."""
+
+    people: list[PersonOpeningsResponse]
+    entries: list[CaseEventResponse]
+
+
+@router.get(
+    "/cases/{case_id}/openings",
+    response_model=CaseOpeningsResponse,
+    summary="Who opened the case",
+)
+@inject
+async def case_openings(
+    case_id: UUID,
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> CaseOpeningsResponse:
+    """Who opened the case and when, for anyone who can see it.
+
+    Each person's first and last opening and visit count, then every opening newest first.
+    The first opening by the responsible (``read``) carries the move to «Leída».
+    """
+
+    value = await service.case_openings(case_id, principal)
+    return CaseOpeningsResponse(
+        people=[
+            PersonOpeningsResponse(
+                user=_person(person.user),
+                user_id=person.user_id,
+                first_opened_at=person.first_opened_at,
+                last_opened_at=person.last_opened_at,
+                visits=person.visits,
+            )
+            for person in value.people
+        ],
+        entries=[_event(entry) for entry in value.entries],
+    )
 
 
 @router.patch("/cases/{case_id}", response_model=CaseResponse, summary="Update case")
