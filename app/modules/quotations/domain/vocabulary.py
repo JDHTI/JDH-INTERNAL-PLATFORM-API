@@ -52,6 +52,30 @@ LOCAL_SKU_PREFIX = "LOC-"
 # VAT points a local product may carry.
 LOCAL_VAT_POINTS = (19, 5, 0)
 
+# The customer offer: how long it holds, which lines it carries, its conditions.
+DEFAULT_VALIDITY_DAYS = 30
+MAX_VALIDITY_DAYS = 365
+# ``changed``: active lines with a new price (local products too); ``all``: every active
+# line with an offer price.
+OFFER_CHANGED = "changed"
+OFFER_ALL = "all"
+OFFER_SCOPES = (OFFER_CHANGED, OFFER_ALL)
+MAX_CONDITIONS = 20
+CONDITION_LENGTH = 300
+# Quantities are in inventory units, with up to two decimals.
+MAX_QUANTITY = 10_000_000
+
+# Products advisors asked for that SIESA does not have; BI creates them or discards them.
+PRODUCT_REQUESTED = "solicitado"
+PRODUCT_CREATED = "creado"
+PRODUCT_DISCARDED = "descartado"
+REQUESTED_STATUSES = (PRODUCT_REQUESTED, PRODUCT_CREATED, PRODUCT_DISCARDED)
+REQUESTED_STATUS_LABELS = {
+    PRODUCT_REQUESTED: "Solicitado",
+    PRODUCT_CREATED: "Creado",
+    PRODUCT_DISCARDED: "Descartado",
+}
+
 # Which cost won: the supplier's quotation in force or the inventory average cost.
 QUOTE_COST = "cotizacion"
 INVENTORY_COST = "inventario"

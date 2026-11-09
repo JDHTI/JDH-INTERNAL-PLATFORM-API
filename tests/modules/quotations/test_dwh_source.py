@@ -156,6 +156,19 @@ async def test_sellers_match_the_email_lower_case() -> None:
     assert sellers[0].code == "0051" and sellers[0].email == "a@jdh.com.co"
 
 
+async def test_seller_contact_by_code() -> None:
+    connection = FakeConnection(
+        [{"codigo": "0051 ", "nombre": "PEREZ ANA", "correo": "A@JDH.COM.CO", "celular": " 300 "}]
+    )
+
+    contact = await WarehouseQuotationSource(connection).seller_contact(" 0051")
+
+    query, args = connection.queries[0]
+    assert '"consumo"."vendedores"' in query and '"celular"' in query and args == ("0051",)
+    assert (contact.code, contact.email, contact.phone) == ("0051", "a@jdh.com.co", "300")
+    assert await WarehouseQuotationSource(FakeConnection()).seller_contact("1") is None
+
+
 async def test_outage_is_a_503_and_schema_is_checked() -> None:
     with pytest.raises(DependencyUnavailableError):
         await WarehouseQuotationSource(FakeConnection(fail=True)).branches("1")

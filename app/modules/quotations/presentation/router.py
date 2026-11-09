@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 from urllib.parse import quote
@@ -23,21 +23,27 @@ from app.modules.quotations.application.service import (
     QuotationService,
     Skipped,
 )
-from app.modules.quotations.domain import pricing, rules
+from app.modules.quotations.domain import offer, pricing, rules
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
     Quotation,
     QuotationDetail,
     QuotationLine,
+    QuotationRef,
+    RequestedProduct,
+    SellerContact,
 )
 from app.modules.quotations.domain.vocabulary import (
     BASIS_LABELS,
     COMPLIANCE_LABELS,
     COST_SOURCE_LABELS,
+    DEFAULT_VALIDITY_DAYS,
     LIST_ACTION_LABELS,
+    MAX_VALIDITY_DAYS,
     ORIGIN_LABELS,
     PROBLEM_LABELS,
     REGIONAL_LABELS,
+    REQUESTED_STATUS_LABELS,
     STATUS_LABELS,
     WARNING_LABELS,
 )
@@ -50,6 +56,8 @@ _principal = Depends(get_current_principal)
 Status = Literal["borrador", "pendiente_validacion", "creada", "actualizada"]
 ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
+OfferScope = Literal["changed", "all"]
+RequestedStatus = Literal["solicitado", "creado", "descartado"]
 
 
 class SellerResponse(BaseModel):
@@ -108,22 +116,49 @@ class CustomerPageResponse(BaseModel):
 class CreateRequest(BaseModel):
     customer_nit: str = Field(min_length=1, max_length=30)
     window_months: Literal[6, 12] = 12
+    validity_days: int = Field(
+        default=DEFAULT_VALIDITY_DAYS,
+        ge=1,
+        le=MAX_VALIDITY_DAYS,
+        description="Days the offer holds",
+    )
 
 
 class LineChangeRequest(BaseModel):
-    """A new price (``null`` clears it), or ``margin_pct`` to price the SKU at a margin."""
+    """A new price (``null`` clears it), or ``margin_pct`` to price the SKU at a margin, and
+    ``quantity`` (``null`` clears it). A change with only ``quantity`` leaves the price."""
 
     sku: str = Field(min_length=1, max_length=60)
     new_price: Decimal | None = None
     margin_pct: Decimal | None = Field(
         default=None, description="Fraction (0.30 = 30 %); prices the SKU at that margin"
     )
+    quantity: Decimal | str | None = Field(
+        default=None, description="Inventory units, above zero, up to two decimals"
+    )
 
     @model_validator(mode="after")
     def _one_of(self) -> LineChangeRequest:
         if self.new_price is not None and self.margin_pct is not None:
             raise ValueError("Envía new_price o margin_pct, no los dos")
+        if self.margin_pct is not None and "quantity" in self.model_fields_set:
+            raise ValueError("Envía margin_pct o quantity, no los dos")
         return self
+
+    def change(self) -> LineChange:
+        """The service's change: a price change unless only the quantity was sent."""
+
+        sent = self.model_fields_set
+        quantity = "quantity" in sent
+        price = not quantity or bool(sent & {"new_price", "margin_pct"})
+        return LineChange(
+            self.sku,
+            self.new_price,
+            self.margin_pct,
+            quantity=self.quantity,
+            set_price=price,
+            set_quantity=quantity,
+        )
 
 
 class LinesRequest(BaseModel):
@@ -156,6 +191,30 @@ class LocalLineRequest(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=2000)
     price: Decimal | str | None = Field(default=None, description="Whole pesos, before VAT")
     vat_pct: Decimal | str | None = Field(default=None, description="Points: 19, 5 or 0")
+    requested_product_id: UUID | None = Field(
+        default=None,
+        description="A requested product still `solicitado`: its description, supplier and "
+        "VAT are used, and its estimated price when `price` is omitted",
+    )
+
+
+class OfferRequest(BaseModel):
+    """Offer settings; only the keys sent change (``null`` leaves one as it is)."""
+
+    version: int = Field(ge=1)
+    validity_days: int | None = Field(default=None, ge=1, le=MAX_VALIDITY_DAYS)
+    conditions: list[str] | None = Field(default=None, max_length=200)
+    include_seller: bool | None = None
+    quote_quantities: bool | None = None
+    offer_scope: OfferScope | None = None
+
+
+class RequestedProductUpdate(BaseModel):
+    """BI's decision on a requested product."""
+
+    status: RequestedStatus
+    siesa_sku: str | None = Field(default=None, max_length=60)
+    note: str | None = Field(default=None, max_length=4000)
 
 
 class ImportResultResponse(BaseModel):
@@ -236,6 +295,12 @@ class CandidateResponse(BaseModel):
     reason: str
 
 
+class RequestedProductRefResponse(BaseModel):
+    id: UUID
+    status: RequestedStatus
+    siesa_sku: str | None
+
+
 class LineResponse(BaseModel):
     """One SKU: what was last sold, at what cost and margin, and the advisor's price."""
 
@@ -292,6 +357,73 @@ class LineResponse(BaseModel):
     origin_label: str
     # Product category in SIESA; ``None`` when unknown and for a local product.
     category: str | None
+    # Inventory units the customer would buy.
+    quantity: Decimal | None
+    # New price, else last price (a local product: its new price).
+    offer_price: Decimal | None
+    # Whether the customer offer carries the line (``offer_scope``; never an inactive one).
+    in_offer: bool
+    # A local product's entry in the requested products registry.
+    requested_product: RequestedProductRefResponse | None
+
+
+class SellerContactResponse(BaseModel):
+    code: str
+    name: str | None
+    email: str | None
+    phone: str | None
+
+
+class VatGroupResponse(BaseModel):
+    vat_pct: Decimal
+    base: Decimal
+    vat: Decimal
+
+
+class OfferSummaryResponse(BaseModel):
+    """Totals of the offer lines with a quantity, in whole pesos."""
+
+    item_count: int
+    subtotal: Decimal
+    vat_groups: list[VatGroupResponse]
+    liquor_tax: Decimal
+    total: Decimal
+
+
+class RequestedQuotationResponse(BaseModel):
+    id: UUID
+    customer_name: str | None
+    customer_nit: str
+    status: Status
+    status_label: str
+    created_by: str
+
+
+class RequestedProductResponse(BaseModel):
+    """A product an advisor quoted that SIESA does not have."""
+
+    id: UUID
+    description: str
+    supplier_name: str | None
+    estimated_price: Decimal | None
+    vat_pct: Decimal | None
+    status: RequestedStatus
+    status_label: str
+    siesa_sku: str | None
+    note: str | None
+    created_by: str
+    created_at: datetime
+    updated_by: str
+    updated_at: datetime
+    # Only the quotations the caller can open.
+    quotations: list[RequestedQuotationResponse]
+
+
+class RequestedProductPageResponse(BaseModel):
+    items: list[RequestedProductResponse]
+    total: int
+    page: int
+    size: int
 
 
 class SummaryResponse(BaseModel):
@@ -318,6 +450,9 @@ class SummaryResponse(BaseModel):
     confirmed_at: datetime | None
     validated_at: datetime | None
     version: int
+    validity_days: int
+    valid_from: date
+    valid_until: date
 
 
 class QuotationResponse(SummaryResponse):
@@ -344,6 +479,13 @@ class QuotationResponse(SummaryResponse):
     validated_by: str | None
     review_note: str | None
     updated_by: str
+    conditions: list[str]
+    include_seller: bool
+    quote_quantities: bool
+    offer_scope: OfferScope
+    seller_contact: SellerContactResponse | None
+    # ``None`` unless ``quote_quantities``.
+    offer_summary: OfferSummaryResponse | None
     lines: list[LineResponse]
     # Only on POST /{id}/lines: what the pasted list did.
     import_result: ImportResultResponse | None = None
@@ -379,7 +521,8 @@ def _support(item: AppliedSupport | None) -> SupportResponse | None:
     )
 
 
-def _line(line: QuotationLine) -> LineResponse:
+def _line(line: QuotationLine, scope: str) -> LineResponse:
+    requested = line.requested_product
     return LineResponse(
         id=line.id,
         position=line.position,
@@ -440,11 +583,49 @@ def _line(line: QuotationLine) -> LineResponse:
         origin=line.origin,  # type: ignore[arg-type]
         origin_label=ORIGIN_LABELS.get(line.origin, line.origin),
         category=line.category,
+        quantity=line.quantity,
+        offer_price=offer.offer_price(line),
+        in_offer=offer.in_offer(line, scope),
+        requested_product=RequestedProductRefResponse(
+            id=requested.id,
+            status=requested.status,  # type: ignore[arg-type]
+            siesa_sku=requested.siesa_sku,
+        )
+        if requested
+        else None,
+    )
+
+
+def _summary(detail: QuotationDetail) -> OfferSummaryResponse | None:
+    result = offer.offer_summary(detail)
+    if result is None:
+        return None
+    return OfferSummaryResponse(
+        item_count=result.item_count,
+        subtotal=result.subtotal,
+        vat_groups=[
+            VatGroupResponse(vat_pct=group.vat_pct, base=group.base, vat=group.vat)
+            for group in result.vat_groups
+        ],
+        liquor_tax=result.liquor_tax,
+        total=result.total,
+    )
+
+
+def _seller(contact: SellerContact | None) -> SellerContactResponse | None:
+    if contact is None:
+        return None
+    return SellerContactResponse(
+        code=contact.code, name=contact.name, email=contact.email, phone=contact.phone
     )
 
 
 def _summary_values(quotation: Quotation) -> dict[str, object]:
+    valid_from = quotation.valid_from or quotation.created_at.date()
     return {
+        "validity_days": quotation.validity_days,
+        "valid_from": valid_from,
+        "valid_until": valid_from + timedelta(days=quotation.validity_days),
         "id": quotation.id,
         "customer_nit": quotation.customer_nit,
         "customer_name": quotation.customer_name,
@@ -499,7 +680,13 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         validated_by=quotation.validated_by,
         review_note=quotation.review_note,
         updated_by=quotation.updated_by,
-        lines=[_line(line) for line in detail.lines],
+        conditions=list(quotation.conditions),
+        include_seller=quotation.include_seller,
+        quote_quantities=quotation.quote_quantities,
+        offer_scope=quotation.offer_scope,  # type: ignore[arg-type]
+        seller_contact=_seller(quotation.seller_contact),
+        offer_summary=_summary(detail),
+        lines=[_line(line, quotation.offer_scope) for line in detail.lines],
     )
 
 
@@ -613,7 +800,9 @@ async def create_quotation(
     """Every SKU sold to the customer in the window, at its last price, with current cost,
     target margin and supports."""
 
-    return _detail(await service.create(principal, body.customer_nit, body.window_months))
+    return _detail(
+        await service.create(principal, body.customer_nit, body.window_months, body.validity_days)
+    )
 
 
 @router.get(
@@ -649,6 +838,92 @@ async def list_quotations(
     )
 
 
+def _requested(item: RequestedProduct, refs: list[QuotationRef]) -> RequestedProductResponse:
+    return RequestedProductResponse(
+        id=item.id,
+        description=item.description,
+        supplier_name=item.supplier_name,
+        estimated_price=item.estimated_price,
+        vat_pct=item.vat_pct,
+        status=item.status,  # type: ignore[arg-type]
+        status_label=REQUESTED_STATUS_LABELS.get(item.status, item.status),
+        siesa_sku=item.siesa_sku,
+        note=item.note,
+        created_by=item.created_by,
+        created_at=item.created_at,
+        updated_by=item.updated_by,
+        updated_at=item.updated_at,
+        quotations=[
+            RequestedQuotationResponse(
+                id=ref.id,
+                customer_name=ref.customer_name,
+                customer_nit=ref.customer_nit,
+                status=ref.status,  # type: ignore[arg-type]
+                status_label=STATUS_LABELS.get(ref.status, ref.status),
+                created_by=ref.created_by,
+            )
+            for ref in refs
+        ],
+    )
+
+
+# Declared before ``/{quotation_id}`` so the path is not taken for an id.
+@router.get(
+    "/requested-products",
+    dependencies=[_READ_GATE],
+    response_model=RequestedProductPageResponse,
+    summary="Products advisors asked for that SIESA does not have",
+)
+@inject
+async def list_requested_products(
+    status_filter: RequestedStatus | None = Query(default=None, alias="status"),  # noqa: B008
+    q: str | None = Query(default=None, max_length=100),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> RequestedProductPageResponse:
+    """``solicitado`` first, then the newest. ``q`` matches the description or the supplier;
+    each item lists only the quotations the caller can open. Quoters and validators."""
+
+    result, refs = await service.requested_products(
+        principal, status=status_filter, q=q, page=page, size=size
+    )
+    return RequestedProductPageResponse(
+        items=[_requested(item, refs.get(item.id, [])) for item in result.items],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+    )
+
+
+@router.patch(
+    "/requested-products/{product_id}",
+    dependencies=[_READ_GATE],
+    response_model=RequestedProductResponse,
+    summary="Mark a requested product created, discarded or requested",
+)
+@inject
+async def update_requested_product(
+    product_id: UUID,
+    body: RequestedProductUpdate,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> RequestedProductResponse:
+    """Validators only. ``creado`` needs a SIESA reference that exists and is active; back to
+    ``solicitado`` clears it. ``note`` changes only when sent."""
+
+    product, refs = await service.update_requested_product(
+        principal,
+        product_id,
+        status=body.status,
+        siesa_sku=body.siesa_sku,
+        note=body.note,
+        set_note="note" in body.model_fields_set,
+    )
+    return _requested(product, refs)
+
+
 @router.get(
     "/{quotation_id}",
     dependencies=[_READ_GATE],
@@ -682,7 +957,7 @@ async def update_lines(
     marked; SKUs a margin cannot price come back in ``skipped``. 409 when the quotation
     changed since it was read or awaits validation."""
 
-    changes = [LineChange(item.sku, item.new_price, item.margin_pct) for item in body.lines]
+    changes = [item.change() for item in body.lines]
     detail, skipped = await service.update_lines(principal, quotation_id, body.version, changes)
     response = _detail(detail)
     response.skipped = [_skipped(item) for item in skipped]
@@ -751,8 +1026,81 @@ async def add_local_line(
             supplier_name=body.supplier_name,
             price=body.price,
             vat_pct=body.vat_pct,
+            requested_product_id=body.requested_product_id,
         )
     )
+
+
+@router.post(
+    "/{quotation_id}/lines/{sku}/promote",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Swap a local product for its new SIESA reference",
+)
+@inject
+async def promote_line(
+    quotation_id: UUID,
+    sku: str,
+    body: VersionRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Only when BI marked its requested product ``creado``: the SIESA reference takes the
+    local line's place (``agregado``) with its new price and quantity. 422 otherwise."""
+
+    return _detail(await service.promote_line(principal, quotation_id, body.version, sku))
+
+
+@router.patch(
+    "/{quotation_id}/offer",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Offer settings",
+)
+@inject
+async def update_offer(
+    quotation_id: UUID,
+    body: OfferRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Validity, conditions, seller, quantities and which lines the offer carries. Only the
+    keys sent change. Any status; never changes it. 409 on a stale version."""
+
+    return _detail(
+        await service.update_offer(
+            principal,
+            quotation_id,
+            body.version,
+            validity_days=body.validity_days,
+            conditions=body.conditions,
+            include_seller=body.include_seller,
+            quote_quantities=body.quote_quantities,
+            offer_scope=body.offer_scope,
+        )
+    )
+
+
+@router.get(
+    "/{quotation_id}/offer.xlsx",
+    dependencies=[_READ_GATE],
+    response_class=Response,
+    responses={
+        200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
+    },
+    summary="Download the customer offer",
+)
+@inject
+async def download_offer(
+    quotation_id: UUID,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> Response:
+    """The offer for the customer, in any status: items, totals and conditions. Never cost,
+    margins, supports or rule data."""
+
+    result = await service.offer_file(principal, quotation_id)
+    return _file(result.content, result.filename, result.media_type)
 
 
 @router.delete(

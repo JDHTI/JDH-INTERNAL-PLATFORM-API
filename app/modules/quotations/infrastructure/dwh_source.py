@@ -25,6 +25,7 @@ from app.modules.quotations.domain.entities import (
     LastSale,
     ListPrice,
     Seller,
+    SellerContact,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.pricing import StockPlan
@@ -309,6 +310,26 @@ class WarehouseQuotationSource:
             Seller(str(row["codigo"]).strip(), row["nombre"], (row["correo"] or "").lower())
             for row in rows
         ]
+
+    async def seller_contact(self, code: str) -> SellerContact | None:
+        """Name, e-mail (lower case) and mobile of the salesperson ``code``
+        (``consumo.vendedores``), whatever their state: the customer still has them assigned."""
+
+        rows = await self._fetch(
+            f'SELECT "codigo", "nombre", "correo", "celular" FROM {self._view("vendedores")}'
+            ' WHERE trim("codigo") = $1 ORDER BY "estado" = \'A\' DESC LIMIT 1',
+            code.strip(),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        email = _strip(row["correo"])
+        return SellerContact(
+            code=str(row["codigo"]).strip(),
+            name=_strip(row["nombre"]),
+            email=email.lower() if email else None,
+            phone=_strip(row["celular"]),
+        )
 
     async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]:
         """Description, SIESA unit id, VAT, supplier, pack and category of each SKU

@@ -7,7 +7,7 @@ are fractions (0.18 = 18 %); ``vat_pct`` is in points (19 = 19 %), as the master
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -156,6 +156,86 @@ class Seller:
 
 
 @dataclass(frozen=True)
+class SellerContact:
+    """The customer's salesperson as the offer shows them (``consumo.vendedores``)."""
+
+    code: str
+    name: str | None
+    email: str | None
+    phone: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe form, for storage."""
+
+        return {"code": self.code, "name": self.name, "email": self.email, "phone": self.phone}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SellerContact:
+        """Inverse of :meth:`as_dict`."""
+
+        return cls(
+            code=data["code"],
+            name=data.get("name"),
+            email=data.get("email"),
+            phone=data.get("phone"),
+        )
+
+
+@dataclass(frozen=True)
+class RequestedProductRef:
+    """What a local line shows of the product it asked for."""
+
+    id: UUID
+    status: str
+    siesa_sku: str | None
+
+
+@dataclass(frozen=True)
+class RequestedProduct:
+    """A product an advisor quoted that SIESA does not have, for BI to create or discard.
+
+    Lines point to it; deleting a line or a quotation never deletes it.
+    """
+
+    id: UUID
+    description: str
+    supplier_name: str | None
+    estimated_price: Decimal | None
+    vat_pct: Decimal | None
+    status: str
+    siesa_sku: str | None
+    note: str | None
+    created_by: str
+    created_at: datetime
+    updated_by: str
+    updated_at: datetime
+
+    @property
+    def ref(self) -> RequestedProductRef:
+        return RequestedProductRef(self.id, self.status, self.siesa_sku)
+
+
+@dataclass(frozen=True)
+class QuotationRef:
+    """A quotation that quotes a requested product."""
+
+    id: UUID
+    customer_name: str | None
+    customer_nit: str
+    status: str
+    created_by: str
+    created_by_id: UUID
+
+
+@dataclass(frozen=True)
+class RequestedProductPage:
+    items: tuple[RequestedProduct, ...]
+    total: int
+    page: int
+    size: int
+
+
+@dataclass(frozen=True)
 class AppliedSupport:
     """The support a line is priced with."""
 
@@ -295,6 +375,12 @@ class QuotationLine:
     is_active: bool = True
     # Product category in SIESA (``consumo.productos.categoria``); ``None`` when unknown.
     category: str | None = None
+    # Inventory units the customer would buy (up to two decimals), for the offer's totals.
+    quantity: Decimal | None = None
+    # A local line's entry in the requested products registry.
+    requested_product_id: UUID | None = None
+    # Read with the line, never stored on it: the registry entry as it is now.
+    requested_product: RequestedProductRef | None = None
 
     @property
     def is_local(self) -> bool:
@@ -357,6 +443,25 @@ class Quotation:
     validated_by: str | None = None
     # Why the approver sent it back, or the advisor withdrew it.
     review_note: str | None = None
+    # The offer holds ``validity_days`` from ``valid_from`` (the day it was set, Bogotá).
+    validity_days: int = vocabulary.DEFAULT_VALIDITY_DAYS
+    valid_from: date | None = None
+    # Conditions printed on the customer offer, in order.
+    conditions: tuple[str, ...] = ()
+    include_seller: bool = True
+    quote_quantities: bool = False
+    # ``changed`` or ``all``: which lines the offer carries.
+    offer_scope: str = vocabulary.OFFER_CHANGED
+    # The customer's salesperson when the quotation was built or refreshed.
+    seller_contact: SellerContact | None = None
+
+    @property
+    def valid_until(self) -> date | None:
+        """Last day the offer holds: ``valid_from + validity_days``."""
+
+        if self.valid_from is None:
+            return None
+        return self.valid_from + timedelta(days=self.validity_days)
 
 
 @dataclass(frozen=True)

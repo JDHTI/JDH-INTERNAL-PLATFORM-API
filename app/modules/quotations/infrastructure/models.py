@@ -45,6 +45,8 @@ class QuotationModel(Base):
             "list_action IN ('actualizacion', 'creacion')", name="ck_quotations_list_action"
         ),
         CheckConstraint("regional IN ('nacional', 'costa')", name="ck_quotations_regional"),
+        CheckConstraint("validity_days BETWEEN 1 AND 365", name="ck_quotations_validity_days"),
+        CheckConstraint("offer_scope IN ('changed', 'all')", name="ck_quotations_offer_scope"),
         Index("ix_quotations_owner_created", "created_by_id", "created_at"),
         Index("ix_quotations_customer", "customer_nit"),
         Index("ix_quotations_status", "status"),
@@ -89,6 +91,39 @@ class QuotationModel(Base):
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     validated_by: Mapped[str | None] = mapped_column(String(320))
     review_note: Mapped[str | None] = mapped_column(Text)
+    validity_days: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=30)
+    valid_from: Mapped[date] = mapped_column(Date, nullable=False)
+    conditions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    include_seller: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    quote_quantities: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    offer_scope: Mapped[str] = mapped_column(String(10), nullable=False, default="changed")
+    seller_contact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class RequestedProductModel(Base):
+    """A product advisors quoted that SIESA does not have, for BI to create or discard."""
+
+    __tablename__ = "quotation_requested_products"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('solicitado', 'creado', 'descartado')",
+            name="ck_quotation_requested_products_status",
+        ),
+        Index("ix_quotation_requested_products_status", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier_name: Mapped[str | None] = mapped_column(Text)
+    estimated_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    vat_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="solicitado")
+    siesa_sku: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class QuotationLineModel(Base):
@@ -101,6 +136,8 @@ class QuotationLineModel(Base):
         CheckConstraint(
             "origin IN ('historico', 'agregado', 'local')", name="ck_quotation_lines_origin"
         ),
+        CheckConstraint("quantity IS NULL OR quantity > 0", name="ck_quotation_lines_quantity"),
+        Index("ix_quotation_lines_requested_product", "requested_product_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -153,3 +190,8 @@ class QuotationLineModel(Base):
     problems: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="historico")
     category: Mapped[str | None] = mapped_column(Text)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    requested_product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quotation_requested_products.id", ondelete="SET NULL"),
+    )

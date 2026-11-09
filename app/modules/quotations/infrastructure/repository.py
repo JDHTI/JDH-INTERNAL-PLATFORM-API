@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Any
 from uuid import UUID
 
@@ -11,34 +11,57 @@ from sqlalchemy import bindparam, delete, func, or_, select, update
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
+from app.modules.quotations.domain import vocabulary
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
     Quotation,
     QuotationDetail,
     QuotationLine,
     QuotationPage,
+    QuotationRef,
+    RequestedProduct,
+    RequestedProductPage,
+    SellerContact,
     SupportCandidate,
 )
-from app.modules.quotations.infrastructure.models import QuotationLineModel, QuotationModel
+from app.modules.quotations.infrastructure.models import (
+    QuotationLineModel,
+    QuotationModel,
+    RequestedProductModel,
+)
 
 Q = QuotationModel
 L = QuotationLineModel
+R = RequestedProductModel
 _HEADER_FIELDS = tuple(item.name for item in fields(Quotation))
-_LINE_SPECIAL = {"support", "support_candidates", "problems"}
+_LINE_SPECIAL = {"support", "support_candidates", "problems", "requested_product"}
 _LINE_FIELDS = tuple(item.name for item in fields(QuotationLine) if item.name not in _LINE_SPECIAL)
+_PRODUCT_FIELDS = tuple(item.name for item in fields(RequestedProduct))
 _CHANGED = "La cotización cambió desde que la abriste; recárgala"
 
 
 def _header_values(quotation: Quotation) -> dict[str, Any]:
     values = {name: getattr(quotation, name) for name in _HEADER_FIELDS}
     values["warnings"] = list(quotation.warnings)
+    values["conditions"] = list(quotation.conditions)
+    values["seller_contact"] = (
+        quotation.seller_contact.as_dict() if quotation.seller_contact else None
+    )
     return values
 
 
 def _quotation(model: QuotationModel) -> Quotation:
     values = {name: getattr(model, name) for name in _HEADER_FIELDS}
     values["warnings"] = tuple(model.warnings or ())
+    values["conditions"] = tuple(model.conditions or ())
+    values["seller_contact"] = (
+        SellerContact.from_dict(model.seller_contact) if model.seller_contact else None
+    )
     return Quotation(**values)
+
+
+def _product(model: RequestedProductModel) -> RequestedProduct:
+    return RequestedProduct(**{name: getattr(model, name) for name in _PRODUCT_FIELDS})
 
 
 def _line_values(quotation_id: UUID, line: QuotationLine) -> dict[str, Any]:
@@ -112,7 +135,21 @@ class SqlAlchemyQuotationRepository:
                     select(L).where(L.quotation_id == quotation_id).order_by(L.position)
                 )
             ).all()
-        return QuotationDetail(_quotation(model), tuple(_line(row) for row in rows))
+            lines = [_line(row) for row in rows]
+            ids = {line.requested_product_id for line in lines if line.requested_product_id}
+            products = {}
+            if ids:
+                products = {
+                    item.id: _product(item).ref
+                    for item in (await session.scalars(select(R).where(R.id.in_(list(ids))))).all()
+                }
+        lines = [
+            replace(line, requested_product=products.get(line.requested_product_id))
+            if line.requested_product_id
+            else line
+            for line in lines
+        ]
+        return QuotationDetail(_quotation(model), tuple(lines))
 
     async def list(
         self,
@@ -186,8 +223,12 @@ class SqlAlchemyQuotationRepository:
         replace_lines: bool = False,
         inserted: Sequence[QuotationLine] = (),
         removed: Sequence[UUID] = (),
+        requested: Sequence[RequestedProduct] = (),
     ) -> QuotationDetail:
         """Write the header and lines if nobody changed the quotation meanwhile.
+
+        ``requested`` registry entries are inserted first, in the same transaction, so the
+        local lines that point to them can go in.
 
         Args:
             quotation (Quotation): The new header; its ``version`` is stored as given.
@@ -219,6 +260,11 @@ class SqlAlchemyQuotationRepository:
                 if exists is None:
                     raise NotFoundError("Cotización no encontrada")
                 raise ConflictError(_CHANGED)
+            if requested:
+                await session.execute(
+                    R.__table__.insert(),
+                    [{name: getattr(item, name) for name in _PRODUCT_FIELDS} for item in requested],
+                )
             if replace_lines:
                 await session.execute(delete(L).where(L.quotation_id == quotation.id))
                 if lines:
@@ -267,6 +313,105 @@ class SqlAlchemyQuotationRepository:
         async with self.database.session_factory() as session, session.begin():
             result = await session.execute(delete(Q).where(Q.id == quotation_id))
         return bool(result.rowcount)
+
+    # ------------------------------------------------------------ requested products
+
+    async def get_requested_product(self, product_id: UUID) -> RequestedProduct | None:
+        """A registry entry, or ``None``."""
+
+        async with self.database.session_factory() as session:
+            model = await session.get(R, product_id)
+        return _product(model) if model else None
+
+    async def list_requested_products(
+        self, *, status: str | None, q: str | None, page: int, size: int
+    ) -> RequestedProductPage:
+        """Registry entries: requested first, then the newest.
+
+        Args:
+            status (str | None): Only this status.
+            q (str | None): Part of the description or the supplier.
+            page (int): 1-based page.
+            size (int): Page size.
+
+        Returns:
+            RequestedProductPage: The page.
+        """
+
+        conditions = []
+        if status:
+            conditions.append(R.status == status)
+        if q:
+            term = q.strip()
+            conditions.append(
+                or_(
+                    R.description.icontains(term, autoescape=True),
+                    R.supplier_name.icontains(term, autoescape=True),
+                )
+            )
+        async with self.database.session_factory() as session:
+            total = (
+                await session.execute(select(func.count()).select_from(R).where(*conditions))
+            ).scalar_one()
+            rows = (
+                await session.scalars(
+                    select(R)
+                    .where(*conditions)
+                    .order_by(
+                        (R.status == vocabulary.PRODUCT_REQUESTED).desc(),
+                        R.created_at.desc(),
+                        R.id,
+                    )
+                    .offset((page - 1) * size)
+                    .limit(size)
+                )
+            ).all()
+        return RequestedProductPage(tuple(_product(row) for row in rows), int(total), page, size)
+
+    async def requested_product_quotations(
+        self, product_ids: Sequence[UUID]
+    ) -> dict[UUID, list[QuotationRef]]:
+        """The quotations whose lines point to each registry entry, once each."""
+
+        if not product_ids:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        L.requested_product_id,
+                        Q.id,
+                        Q.customer_name,
+                        Q.customer_nit,
+                        Q.status,
+                        Q.created_by,
+                        Q.created_by_id,
+                    )
+                    .join(Q, Q.id == L.quotation_id)
+                    .where(L.requested_product_id.in_(list(product_ids)))
+                    .distinct()
+                    .order_by(L.requested_product_id, Q.created_by, Q.id)
+                )
+            ).all()
+        result: dict[UUID, list[QuotationRef]] = {}
+        for product_id, *values in rows:
+            result.setdefault(product_id, []).append(QuotationRef(*values))
+        return result
+
+    async def update_requested_product(self, product: RequestedProduct) -> RequestedProduct:
+        """Store the entry's status, SIESA code and note.
+
+        Raises:
+            NotFoundError: It does not exist.
+        """
+
+        async with self.database.session_factory() as session, session.begin():
+            values = {name: getattr(product, name) for name in _PRODUCT_FIELDS}
+            values.pop("id")
+            result = await session.execute(update(R).where(R.id == product.id).values(**values))
+            if result.rowcount == 0:
+                raise NotFoundError("Producto solicitado no encontrado")
+        return product
 
 
 __all__ = ["SqlAlchemyQuotationRepository"]
