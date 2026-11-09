@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -55,6 +56,7 @@ from app.modules.quotations.domain.ports import (
     WarehouseSource,
 )
 
+logger = logging.getLogger(__name__)
 MAX_PAGE_SIZE = 100
 MAX_PRICE = Decimal(10) ** 15
 # SKUs one paste may carry.
@@ -654,7 +656,40 @@ class QuotationService:
         if detail is None:
             raise NotFoundError("Cotización no encontrada")
         await self._check_visible(principal, detail.quotation)
-        return detail
+        return await self._with_categories(detail)
+
+    async def _with_categories(self, detail: QuotationDetail) -> QuotationDetail:
+        """Fill the category of SIESA lines that never had it looked up (stored before
+        ``0050``, or built while the product had no row), in one warehouse read.
+
+        The categories are stored on the lines without touching the header (no new version,
+        no status change): it is not an edit. A SKU without a product row or a category is
+        stored as :data:`vocabulary.NO_CATEGORY`, so it is not looked up again. When the
+        warehouse fails the detail comes back as it was: reading never fails for this.
+        """
+
+        missing = [line for line in detail.lines if not line.is_local and line.category is None]
+        if not missing:
+            return detail
+        try:
+            items = await self.warehouse.items(sorted({line.sku for line in missing}))
+        except Exception as exc:  # noqa: BLE001 - the category is a convenience
+            logger.warning("quotations: categories of %s not read: %s", detail.quotation.id, exc)
+            return detail
+        found = {
+            line.id: (items[line.sku].category if line.sku in items else None)
+            or vocabulary.NO_CATEGORY
+            for line in missing
+        }
+        try:
+            await self.repository.set_categories(detail.quotation.id, found)
+        except Exception as exc:  # noqa: BLE001 - shown now, stored on a later read
+            logger.warning("quotations: categories of %s not stored: %s", detail.quotation.id, exc)
+        lines = tuple(
+            replace(line, category=found[line.id]) if line.id in found else line
+            for line in detail.lines
+        )
+        return replace(detail, lines=lines)
 
     async def _editable(
         self, principal: Principal, quotation_id: UUID, *, any_status: bool = False
