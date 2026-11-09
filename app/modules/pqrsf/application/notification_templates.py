@@ -12,6 +12,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.modules.mail.layout import BrandedEmail
+from app.modules.pqrsf.domain.email import FORWARD_SUBJECT
 from app.modules.pqrsf.domain.entities import ClaimedProduct
 from app.modules.pqrsf.domain.tracking import TrackingCase
 
@@ -225,8 +226,7 @@ def client_reply(case: TrackingCase, text: str) -> tuple[str, BrandedEmail]:
 
 
 AUTOMATIC_NOTICE = (
-    "Este es un correo automático: no lo respondas. Las respuestas a esta dirección no se "
-    "leen ni se procesan."
+    "Este es un correo automático: no lo respondas. Las respuestas a este correo no se procesan."
 )
 
 
@@ -235,8 +235,9 @@ def customer_forward(
 ) -> tuple[str, BrandedEmail]:
     """A supplier's answer passed on to the customer by whoever works the case.
 
-    It leaves from a mailbox nobody reads, so it says so at the top and tells where to
-    write instead. The subject is fixed: «Novedad caso {radicado}».
+    Answers to it are not followed, so it says so at the top and tells where to write
+    instead. The subject is fixed, «Novedad caso {radicado}»: the intake recognizes
+    answers to it by that subject and leaves them out.
     """
 
     kind = case.request_type.name.strip().lower() or "solicitud"
@@ -255,9 +256,9 @@ def customer_forward(
             f"Si necesitas agregar información, escríbenos a {mailbox} con el radicado "
             f"{case.code} en el asunto.",
         ),
-        footnote="Correo automático enviado desde una cuenta que no recibe respuestas.",
+        footnote="Correo automático: las respuestas a este mensaje no se procesan.",
     )
-    return f"Novedad caso {case.code}", content
+    return f"{FORWARD_SUBJECT} {case.code}", content
 
 
 def supplier_message(

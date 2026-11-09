@@ -323,6 +323,23 @@ async def test_a_reply_is_matched_by_the_code_in_the_subject_when_the_thread_cha
 
 
 @pytest.mark.asyncio
+async def test_an_answer_to_a_supplier_reply_sent_to_the_customer_stays_out() -> None:
+    t = Intake()
+    t.mail.add(t.message(TEMPLATE))
+    await t.service.sync()
+    (case,) = t.cases()
+    # The subject carries the radicado, but «Novedad caso» said answers are not followed.
+    t.mail.add(t.message("Gracias, ¿y ahora?", subject=f"RE: Novedad caso {case.code}"))
+
+    report = await t.service.sync()
+
+    assert report.ignored == 1 and t.events() == []
+    stored = t.emails.messages["<m2@x>"]
+    assert stored.status == "ignored" and stored.case_id is None
+    assert "novedad enviada al cliente" in stored.detail["reason"]
+
+
+@pytest.mark.asyncio
 async def test_a_reply_to_a_closed_case_opens_a_new_one_that_points_back() -> None:
     t = Intake()
     t.mail.add(t.message(TEMPLATE, conversation_id="thread"))

@@ -71,6 +71,11 @@ _QUOTE_START = re.compile(
 )
 _CASE_CODE = re.compile(r"\b[A-Z]\d{2}[A-Z]{2,4}\d{4}\b")
 _SUBJECT_TAGS = re.compile(r"^\s*(?:(?:re|rv|fw|fwd)\s*:\s*|\[[^\]]{1,20}\]\s*)+", re.IGNORECASE)
+# Subject of a supplier's answer sent on to the customer; answers to it are not followed.
+FORWARD_SUBJECT = "Novedad caso"
+_FORWARD_SUBJECT = re.compile(
+    r"^\s*(?:(?:re|rv|fw|fwd)\s*:\s*|\[[^\]]*\]\s*)*novedad caso\b", re.IGNORECASE
+)
 _AUTOMATIC_SENDERS = re.compile(
     r"^(?:mailer-daemon|postmaster|no-?reply|do-?not-?reply|bounce[s]?|notifications?)@", re.I
 )
@@ -161,6 +166,17 @@ def clean_subject(subject: str) -> str:
     """Drop reply/forward prefixes and ``[tags]`` from an email subject."""
 
     return _SUBJECT_TAGS.sub("", subject).strip()
+
+
+def is_forward_reply(subject: str) -> bool:
+    """Whether a subject answers a supplier's reply sent on to the customer.
+
+    Those emails («Novedad caso {code}») say they are not answered: whatever comes back
+    stays out of the platform. Any ``RE:``/``RV:`` and ``[tag]`` before it is skipped (the
+    testing redirect adds a long ``[PRUEBA para …]``).
+    """
+
+    return bool(_FORWARD_SUBJECT.match(subject))
 
 
 def find_case_code(subject: str) -> str | None:

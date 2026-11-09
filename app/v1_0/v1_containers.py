@@ -487,7 +487,6 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         notifier=pqrsf_notification_service,
         sales=pqrsf_sales_lookup,
-        customer_forwarding=providers.Callable(bool, config.mail.noreply_sender),
     )
     # --- Commercial masters (DWH mirror) and supplier supports ---
     commercial_master_repository = providers.Factory(
