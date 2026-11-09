@@ -157,7 +157,6 @@ class CaseTrackingService:
         calendar: BusinessCalendar,
         notifier: AssignmentNotifier | None = None,
         sales: SalesLookup | None = None,
-        customer_forwarding: bool = False,
     ) -> None:
         """Create the service.
 
@@ -171,11 +170,8 @@ class CaseTrackingService:
             notifier (AssignmentNotifier | None): Emails the new responsible of a case.
             sales (SalesLookup | None): Sales data, to take the sales executive of a
                 complaint or claim from its invoice; without it the field stays empty.
-            customer_forwarding (bool): Whether a supplier's answer can be passed on to the
-                customer (a no-reply mailbox is configured).
         """
 
-        self.customer_forwarding = customer_forwarding
         self.sales = sales
         self.notifier = notifier
         self.repository = repository
@@ -1131,12 +1127,7 @@ class CaseTrackingService:
             supplier_addresses=supplier_addresses(events),
         )
         forwards = forwards_by_source(events)
-        can_forward = (
-            self.customer_forwarding
-            and access.can_work
-            and not case.is_closed
-            and "@" in (case.requester_email or "")
-        )
+        can_forward = access.can_work and not case.is_closed and "@" in (case.requester_email or "")
         views = []
         for event in events:
             view = self._event_view(event, actors, context)

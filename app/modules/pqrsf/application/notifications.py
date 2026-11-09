@@ -110,7 +110,8 @@ class NotificationService:
             requests (PqrsfRepository | None): Public requests, to attach the client's
                 evidence to supplier messages.
             bell (Bell | None): The intranet bell, for news on a case.
-            noreply_sender (str): Mailbox nobody reads, for forwards to the customer.
+            noreply_sender (str): Mailbox nobody reads, for forwards to the customer;
+                empty sends them from ``mailbox``.
         """
 
         self.requests = requests
@@ -378,13 +379,17 @@ class NotificationService:
             await self.mail.send(self.mailbox, to, subject, body, files)
             return
         if item.kind == CUSTOMER_FORWARD:
-            # From the mailbox nobody reads: the customer's answers must not reach a case.
-            if not self.noreply_sender:
-                raise DependencyUnavailableError("No hay cuenta no-reply configurada")
+            # A new email, never inside a thread. From the no-reply mailbox when there is one;
+            # from the PQRSF mailbox the intake still leaves answers to it alone.
             content = BrandedEmail.from_payload(item.payload.get("email") or {})
             files = [*await self._reply_files(item), logo_file()]
             await self.mail.send(
-                self.noreply_sender, to, subject, render_html(content), files, html=True
+                self.noreply_sender or self.mailbox,
+                to,
+                subject,
+                render_html(content),
+                files,
+                html=True,
             )
             return
         # People of the organization copied on the email. With a testing redirect nobody
