@@ -126,10 +126,11 @@ def test_the_openings_answer_people_and_entries(client) -> None:
 
 def test_the_preview_takes_an_optional_note(client, forwards) -> None:
     empty = client.post(f"{FORWARD}/preview")
+    null = client.post(f"{FORWARD}/preview", json={"note": None})
     with_note = client.post(f"{FORWARD}/preview", json={"note": "Te cuento"})
 
-    assert empty.status_code == 200 and with_note.status_code == 200
-    assert forwards.notes == [None, "Te cuento"]
+    assert empty.status_code == null.status_code == with_note.status_code == 200
+    assert forwards.notes == [None, None, "Te cuento"]
     body = with_note.json()
     assert set(body) == {"to", "sender", "subject", "html", "text", "attachments"}
     assert body["html"].startswith("<!DOCTYPE html>") and "Aviso" in body["html"]
@@ -143,6 +144,10 @@ def test_forwarding_answers_the_event_and_its_delivery(client, forwards) -> None
     body = response.json()
     assert body["event_type"] == "forwarded_to_customer" and body["note"] == "Nota"
     assert body["delivery"]["to"] == "cliente@x.co" and body["delivery"]["status"] == "pending"
+
+    # What the UI sends when nobody wrote a note.
+    assert client.post(FORWARD, json={"note": None}).status_code == 201
+    assert forwards.notes[-1] is None
 
     forwards.fail = True
     assert client.post(FORWARD).status_code == 409
