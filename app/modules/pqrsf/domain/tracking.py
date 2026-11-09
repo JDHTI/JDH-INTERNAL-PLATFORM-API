@@ -48,11 +48,14 @@ class EventType:
     INBOX_OPENED = "inbox_opened"
 
 
-# Access records say who looked, not what changed: they are the only history
-# that is purged, and a repeat within the window is not recorded again.
+# Access records say who looked, not what changed; a repeat within the window is not
+# recorded again. Only inbox visits are purged after the retention: openings of a case
+# are kept for analytics.
 ACCESS_EVENT_TYPES = frozenset({EventType.VIEWED, EventType.INBOX_OPENED})
 ACCESS_RETENTION = timedelta(days=90)
 ACCESS_REPEAT_WINDOW = timedelta(minutes=30)
+# Openings of a case: kept and shown apart («Aperturas»), never in the case timeline.
+CASE_OPENING_TYPES = frozenset({EventType.READ, EventType.VIEWED})
 
 
 @dataclass
