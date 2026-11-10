@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -222,8 +222,32 @@ class OfferRequest(BaseModel):
 
 
 class BillingCenterRequest(BaseModel):
+    """The operation centers to cost from: ``national`` alone, or one or more centers.
+
+    ``billing_center_code`` is the single center of earlier clients.
+    """
+
     version: int = Field(ge=1)
-    billing_center_code: str = Field(min_length=1, max_length=10)
+    national: bool = False
+    cost_centers: list[Annotated[str, Field(min_length=1, max_length=10)]] = Field(
+        default_factory=list, max_length=30
+    )
+    billing_center_code: str | None = Field(default=None, min_length=1, max_length=10)
+
+    @property
+    def codes(self) -> list[str]:
+        """The chosen centers; none is Nacional."""
+
+        single = [self.billing_center_code] if self.billing_center_code else []
+        return [*self.cost_centers, *single]
+
+    @model_validator(mode="after")
+    def _one_choice(self) -> BillingCenterRequest:
+        if self.national and self.codes:
+            raise ValueError("Nacional va sola: no se combina con otros centros de operación")
+        if not self.national and not self.codes:
+            raise ValueError("Elige Nacional o al menos un centro de operación")
+        return self
 
 
 class ValidateRequest(BaseModel):
@@ -329,6 +353,9 @@ class LineResponse(BaseModel):
     inventory_cost: Decimal | None
     cost_source: Literal["cotizacion", "inventario"] | None
     cost_source_label: str | None
+    # The operation center whose warehouses set ``cost``; ``None`` for Nacional or a list
+    # with its own warehouses.
+    cost_center: str | None
     target_margin_pct: Decimal | None
     margin_basis: str | None
     margin_basis_label: str | None
@@ -444,7 +471,13 @@ class QuotationResponse(SummaryResponse):
     price_list_customers: int | None
     billing_center_code: str | None
     billing_center_name: str | None
-    # ``auto`` (from the customer's branches) or ``manual`` (chosen; a refresh keeps it).
+    # Operation centers the lines are costed from; empty is Nacional (every warehouse).
+    cost_centers: list[str]
+    # False when the list has its own warehouses (list 1 and the skill's): the centers
+    # then change only the liquor tax regional, not the cost.
+    centers_set_cost: bool
+    # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
+    # (chosen; a refresh keeps it).
     billing_center_source: Literal["auto", "manual"]
     regional: Literal["nacional", "costa"]
     regional_label: str
@@ -533,6 +566,7 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         inventory_cost=line.inventory_cost,
         cost_source=line.cost_source,  # type: ignore[arg-type]
         cost_source_label=COST_SOURCE_LABELS.get(line.cost_source or ""),
+        cost_center=line.cost_center,
         target_margin_pct=line.target_margin_pct,
         margin_basis=line.margin_basis,
         margin_basis_label=BASIS_LABELS.get(line.margin_basis or ""),
@@ -641,6 +675,8 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         price_list_customers=quotation.price_list_customers,
         billing_center_code=quotation.billing_center_code,
         billing_center_name=quotation.billing_center_name,
+        cost_centers=list(quotation.cost_centers),
+        centers_set_cost=pricing.centers_set_cost(quotation.price_list_id),
         billing_center_source=quotation.billing_center_source,  # type: ignore[arg-type]
         regional=quotation.regional,  # type: ignore[arg-type]
         regional_label=REGIONAL_LABELS.get(quotation.regional, quotation.regional),
@@ -1165,7 +1201,7 @@ async def mark_uploaded(
     "/{quotation_id}/billing-center",
     dependencies=[_READ_GATE],
     response_model=QuotationResponse,
-    summary="Price from another operation center",
+    summary="Cost from Nacional or other operation centers",
 )
 @inject
 async def set_billing_center(
@@ -1174,14 +1210,14 @@ async def set_billing_center(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Every line is priced again from the center (stock plan, regional, liquor tax, target,
-    margins), keeping new prices, quantities and local products; back to draft. Same rules
-    as ``/refresh``. 422 on an unknown center."""
+    """Nacional (``national``) takes, SKU by SKU, the highest cost of every warehouse; one
+    center its warehouses; several the costliest of them per SKU (``cost_center`` on each
+    line). Every line is priced again (stock plans, regional, liquor tax, target, margins),
+    keeping new prices, quantities and local products; back to draft. Same rules as
+    ``/refresh``. 422 on an unknown center or on Nacional with centers."""
 
     return _detail(
-        await service.set_billing_center(
-            principal, quotation_id, body.version, body.billing_center_code
-        )
+        await service.set_billing_center(principal, quotation_id, body.version, body.codes)
     )
 
 
@@ -1214,6 +1250,28 @@ async def export_workbook(
     """``ACTUALIZACION LISTAS PRECIOS`` with sheets ``Precios`` and ``Impuestos en valor``."""
 
     result = await service.export(principal, quotation_id, "xlsx")
+    return _file(result.content, result.filename, result.media_type)
+
+
+@router.get(
+    "/{quotation_id}/lines.xlsx",
+    dependencies=[_READ_GATE],
+    response_class=Response,
+    responses={
+        200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
+    },
+    summary="Download BI's template of lines and costs",
+)
+@inject
+async def lines_workbook(
+    quotation_id: UUID,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> Response:
+    """Every line with the table's data and its costs (supplier's quotation, inventory, the
+    center that set it), in any status. Validators only (403 otherwise): it carries costs."""
+
+    result = await service.lines_file(principal, quotation_id)
     return _file(result.content, result.filename, result.media_type)
 
 

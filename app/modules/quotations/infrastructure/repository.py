@@ -35,6 +35,7 @@ def _header_values(quotation: Quotation) -> dict[str, Any]:
     values = {name: getattr(quotation, name) for name in _HEADER_FIELDS}
     values["warnings"] = list(quotation.warnings)
     values["conditions"] = list(quotation.conditions)
+    values["cost_centers"] = list(quotation.cost_centers)
     values["seller_contact"] = (
         quotation.seller_contact.as_dict() if quotation.seller_contact else None
     )
@@ -48,6 +49,7 @@ def _quotation(model: QuotationModel) -> Quotation:
     values = {name: getattr(model, name) for name in _HEADER_FIELDS}
     values["warnings"] = tuple(model.warnings or ())
     values["conditions"] = tuple(model.conditions or ())
+    values["cost_centers"] = tuple(model.cost_centers or ())
     values["seller_contact"] = (
         SellerContact.from_dict(model.seller_contact) if model.seller_contact else None
     )

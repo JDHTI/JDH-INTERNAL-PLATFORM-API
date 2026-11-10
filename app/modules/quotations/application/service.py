@@ -22,6 +22,7 @@ from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
     BillingCenter,
+    CostInfo,
     CustomerContext,
     CustomerPage,
     ItemInfo,
@@ -45,6 +46,7 @@ from app.modules.quotations.domain.export import (
 from app.modules.quotations.domain.ports import (
     Calendar,
     ExportWriter,
+    LinesWriter,
     ManagerPolicy,
     MasterSource,
     OfferWriter,
@@ -72,6 +74,7 @@ _LOCAL_NO_MARGIN = "Producto solo para cotización: sin costo para calcular el p
 _QUANTITY_STEP = Decimal("0.01")
 # Characters a file name may not carry on Windows, macOS or Linux.
 _FILE_UNSAFE = re.compile(r'[\\/:*?"<>|]+')
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def parse_skus(values: Sequence[str]) -> tuple[list[str], int]:
@@ -207,8 +210,13 @@ class _Setup:
     """How a customer's quotation is costed and priced."""
 
     family: str
-    plan: pricing.StockPlan
+    # The stock plans compared, by the center each one stands for (see pricing.stock_plans).
+    plans: dict[str | None, pricing.StockPlan]
     regional: str
+
+    @property
+    def stock_label(self) -> str:
+        return pricing.stock_label(self.plans)
 
 
 def normalize_nit(value: str) -> str:
@@ -221,12 +229,12 @@ def normalize_nit(value: str) -> str:
     return nit
 
 
-def _setup(price_list_id: str | None, billing_center: str | None, channel: str | None) -> _Setup:
-    basis = BASIS.get(channel_field(channel), "lista")
+def _setup(context: CustomerContext) -> _Setup:
+    basis = BASIS.get(channel_field(context.channel), "lista")
     return _Setup(
-        family=pricing.family(price_list_id, basis),
-        plan=pricing.stock_plan(price_list_id, billing_center),
-        regional=pricing.regional(billing_center),
+        family=pricing.family(context.price_list_id, basis),
+        plans=pricing.stock_plans(context.price_list_id, context.cost_centers),
+        regional=pricing.regional_of(context.cost_centers, context.billing_center_code),
     )
 
 
@@ -248,6 +256,7 @@ class QuotationService:
         approvers: ManagerPolicy | None = None,
         sales: SalesScopeResolver | None = None,
         offer_writer: OfferWriter | None = None,
+        lines_writer: LinesWriter | None = None,
     ) -> None:
         """Create the service.
 
@@ -267,10 +276,12 @@ class QuotationService:
             sales (SalesScopeResolver | None): Each person's customers (salespeople module).
                 Without one every reader sees every customer and quotation.
             offer_writer (OfferWriter | None): Writes the offer the customer receives.
+            lines_writer (LinesWriter | None): Writes BI's workbook of lines and costs.
         """
 
         self.repository = repository
         self.offer_writer = offer_writer
+        self.lines_writer = lines_writer
         self.warehouse = warehouse
         self.masters = masters
         self.supports = supports
@@ -428,7 +439,7 @@ class QuotationService:
 
         if not entries:
             return [], None
-        setup = _setup(context.price_list_id, context.billing_center_code, context.channel)
+        setup = _setup(context)
         skus = [entry.sku for entry in entries]
         sources = {entry.sku: entry.sale or entry.item for entry in entries}
         products = await self.masters.products(skus)
@@ -448,8 +459,15 @@ class QuotationService:
                 return {}
             return await self.warehouse.list_prices(context.price_list_id, skus)
 
+        async def costs_by_center() -> dict[str, CostInfo]:
+            # One read per center, at the same time; each SKU keeps the costliest.
+            rows = await asyncio.gather(
+                *(self.warehouse.costs(skus, plan) for plan in setup.plans.values())
+            )
+            return pricing.highest_cost(dict(zip(setup.plans, rows, strict=True)))
+
         costs, prices, taxes, agreements, scopes, names = await asyncio.gather(
-            self.warehouse.costs(skus, setup.plan),
+            costs_by_center(),
             list_prices(),
             self.warehouse.value_tax_keys(skus),
             self.supports.agreements(codes, skus, [context.nit]),
@@ -539,13 +557,14 @@ class QuotationService:
             salesperson_code=quotation.salesperson_code,
             salesperson_name=quotation.salesperson_name,
             warnings=quotation.warnings,
+            cost_centers=quotation.cost_centers,
         )
 
     @staticmethod
     def _customer_fields(context: CustomerContext) -> dict[str, object]:
         """Header fields that come from the customer and how it is priced."""
 
-        setup = _setup(context.price_list_id, context.billing_center_code, context.channel)
+        setup = _setup(context)
         general = context.price_list_id == vocabulary.GENERAL_PRICE_LIST
         return {
             "customer_name": context.name,
@@ -558,9 +577,10 @@ class QuotationService:
             "salesperson_code": context.salesperson_code,
             "salesperson_name": context.salesperson_name,
             "warnings": context.warnings,
+            "cost_centers": context.cost_centers,
             "regional": setup.regional,
             "price_family": setup.family,
-            "stock_source": setup.plan.label,
+            "stock_source": setup.stock_label,
             # List 1 is never updated from a quotation: its customer gets a new list.
             "list_action": vocabulary.CREATE_LIST if general else vocabulary.UPDATE_LIST,
         }
@@ -665,13 +685,16 @@ class QuotationService:
                 billing_center_code=center.code,  # type: ignore[union-attr]
                 salesperson_code=None,
                 salesperson_name=None,
+                cost_centers=(center.code,),  # type: ignore[union-attr]
             )
             lines, snapshot, seller = [], None, None
         else:
             nit = normalize_nit(customer_nit or "")
             context = await self._context(nit, await self._scope(principal))
             if center is not None:
-                context = replace(context, billing_center_code=center.code)
+                context = replace(
+                    context, billing_center_code=center.code, cost_centers=(center.code,)
+                )
             lines, snapshot = await self._build(context, window_months)
             seller = await self._seller_contact(context)
             if not lines:
@@ -962,13 +985,15 @@ class QuotationService:
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
         if detail.quotation.is_temporary_customer:
-            return await self._repriced(
-                principal, detail, version, detail.quotation.billing_center_code
-            )
+            return await self._repriced(principal, detail, version, detail.quotation.cost_centers)
         context = await self._context(detail.quotation.customer_nit)
         manual = detail.quotation.billing_center_source == vocabulary.CENTER_MANUAL
         if manual:
-            context = replace(context, billing_center_code=detail.quotation.billing_center_code)
+            context = replace(
+                context,
+                billing_center_code=detail.quotation.billing_center_code,
+                cost_centers=detail.quotation.cost_centers,
+            )
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
         local = [line for line in detail.lines if line.is_local]
         lines, snapshot = await self._build(
@@ -1006,37 +1031,35 @@ class QuotationService:
         principal: Principal,
         detail: QuotationDetail,
         version: int,
-        center_code: str | None,
-        center_name: str | None = None,
+        centers: tuple[str, ...],
         source: str | None = None,
     ) -> QuotationDetail:
-        """Price every SIESA line again as it is stored, billed from ``center_code``.
+        """Price every SIESA line again as it is stored, costed from ``centers`` (none is
+        *Nacional*).
 
-        Cost (the stock plan of the center), liquor tax (its regional), target, minimum,
+        Cost (the stock plans of the centers), liquor tax (their regional), target, minimum,
         optimal price, margins and compliance are recomputed; new prices, quantities and
         local products stay. The quotation goes back to draft.
         """
 
         quotation = detail.quotation
-        context = replace(self._stored_context(quotation), billing_center_code=center_code)
+        context = replace(self._stored_context(quotation), cost_centers=centers)
         siesa = [line for line in detail.lines if not line.is_local]
         priced, snapshot = await self._price(context, [_entry_of(line) for line in siesa])
         stored = {line.id: line for line in siesa}
         by_id = {line.id: _kept(line, stored.get(line.id)) for line in priced}
         lines = [by_id.get(line.id, line) for line in detail.lines]
-        setup = _setup(context.price_list_id, center_code, context.channel)
+        setup = _setup(context)
         values: dict[str, object] = {
-            "billing_center_code": center_code,
+            "cost_centers": centers,
             "regional": setup.regional,
             "price_family": setup.family,
-            "stock_source": setup.plan.label,
+            "stock_source": setup.stock_label,
             "built_at": datetime.now(UTC),
             "max_points_below_target": self.policy.max_points_below_target,
         }
         if snapshot is not None:
             values["cost_cut_date"] = snapshot
-        if center_name is not None:
-            values["billing_center_name"] = center_name
         if source is not None:
             values["billing_center_source"] = source
         changed = replace(
@@ -1046,26 +1069,43 @@ class QuotationService:
         return await self.repository.save(changed, list(by_id.values()), version)
 
     async def set_billing_center(
-        self, principal: Principal, quotation_id: UUID, version: int, code: str
+        self, principal: Principal, quotation_id: UUID, version: int, codes: Sequence[str]
     ) -> QuotationDetail:
-        """Bill and price the quotation from another operation center (``manual``).
+        """Cost the quotation from other operation centers (``manual``); none is *Nacional*.
 
-        Same state and permission rules as :meth:`refresh`; the quotation goes back to draft.
-        Lines are priced again with the center's stock plan and regional, keeping new prices,
-        quantities and local products. A refresh keeps the chosen center.
+        *Nacional* takes, SKU by SKU, the highest cost among every warehouse. One center
+        takes its warehouses; several take, SKU by SKU, the costliest of them, and each line
+        says which one it was. Same state and permission rules as :meth:`refresh`; the
+        quotation goes back to draft. Lines are priced again (stock plans and regional),
+        keeping new prices, quantities and local products. A refresh keeps the choice.
 
         Raises:
-            InvalidInputError: ``code`` is not an active operation center.
+            InvalidInputError: A code is not an active operation center.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
-        center = await self._center(code)
-        if center is None:
-            raise InvalidInputError("Elige el centro de operación")
         return await self._repriced(
-            principal, detail, version, center.code, center.name, vocabulary.CENTER_MANUAL
+            principal, detail, version, await self._centers(codes), vocabulary.CENTER_MANUAL
         )
+
+    async def _centers(self, codes: Sequence[str]) -> tuple[str, ...]:
+        """Distinct active operation centers, by code; none is *Nacional*.
+
+        Raises:
+            InvalidInputError: A code is not an active operation center.
+        """
+
+        wanted = sorted({code.strip() for code in codes if code.strip()})
+        if not wanted:
+            return ()
+        active = {item.code for item in await self.warehouse.billing_centers()}
+        unknown = [code for code in wanted if code not in active]
+        if unknown:
+            raise InvalidInputError(
+                f"El centro de operación {', '.join(unknown)} no existe o está inactivo"
+            )
+        return tuple(wanted)
 
     async def _new_skus(
         self, detail: QuotationDetail, skus: Sequence[str]
@@ -1299,9 +1339,37 @@ class QuotationService:
         quotation = detail.quotation
         name = _file_name(quotation.customer_name or quotation.customer_nit)
         return ExportFile(
-            self.offer_writer.write(document),
+            await asyncio.to_thread(self.offer_writer.write, document),
             f"Cotizacion {name} {today.isoformat()}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _XLSX,
+        )
+
+    async def lines_file(self, principal: Principal, quotation_id: UUID) -> ExportFile:
+        """Every line with what the platform knows and its costs, for BI to cross-check.
+
+        Only validators get it: it carries the costs (the supplier's quotation, the
+        inventory cost and the center that set each one), which the advisors do not see.
+        The workbook is written in a worker thread, so a large quotation never holds up the
+        API while it is written.
+        """
+
+        if not await self.can_validate(principal):
+            raise ForbiddenError("Solo quien valida las cotizaciones descarga la plantilla")
+        if self.lines_writer is None:
+            raise InvalidInputError("La plantilla en Excel no está disponible")
+        detail = await self.get(principal, quotation_id)
+        quotation = detail.quotation
+        names = {}
+        try:
+            names = {item.code: item.name for item in await self.warehouse.billing_centers()}
+        except Exception as exc:  # noqa: BLE001 - the names only label the codes
+            logger.warning("quotations: centers for the template not read: %s", exc)
+        name = _file_name(quotation.customer_name or quotation.customer_nit)
+        today = self.calendar.today()
+        return ExportFile(
+            await asyncio.to_thread(self.lines_writer.write, detail, names),
+            f"Plantilla {name} {today.isoformat()}.xlsx",
+            _XLSX,
         )
 
     # ------------------------------------------------------------ review
@@ -1588,12 +1656,12 @@ class QuotationService:
         list_id = quotation.export_price_list_id or quotation.price_list_id
         if fmt == "xlsx":
             return ExportFile(
-                self.workbook.write(export),
+                await asyncio.to_thread(self.workbook.write, export),
                 f"ACTUALIZACION LISTAS PRECIOS_{principal.email}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                _XLSX,
             )
         return ExportFile(
-            self.flat_file.write(export),
+            await asyncio.to_thread(self.flat_file.write, export),
             f"precios-lista{list_id}-{quotation.customer_nit}-{stamp}.txt",
             "text/plain; charset=us-ascii",
         )

@@ -43,6 +43,8 @@ def test_a_coast_center_among_the_branches_wins() -> None:
     assert rules.billing_center([branch(billing_center_code=None)]) == (None, False)
     context = rules.customer_context(NIT, coast)
     assert context.billing_center_code == "004" and "co_distintos" in context.warnings
+    # List 001 has its own warehouses: the coast center costs it, not Nacional.
+    assert context.cost_centers == ("004",)
 
 
 # ------------------------------------------------------------------ 2. selectable center
@@ -79,18 +81,20 @@ async def test_choosing_a_center_reprices_and_survives_a_refresh(
     await local(service, advisor, quotation.id, 2)
     await confirm(service, advisor, quotation.id, 3)
     with pytest.raises(ConflictError, match="pendiente"):
-        await service.set_billing_center(advisor, quotation.id, 4, "004")
+        await service.set_billing_center(advisor, quotation.id, 4, ["004"])
     await service.validate(approver, quotation.id, 4)
     with pytest.raises(InvalidInputError, match="no existe"):
-        await service.set_billing_center(advisor, quotation.id, 5, "999")
+        await service.set_billing_center(advisor, quotation.id, 5, ["999"])
     with pytest.raises(ConflictError):
-        await service.set_billing_center(advisor, quotation.id, 4, "004")
+        await service.set_billing_center(advisor, quotation.id, 4, ["004"])
 
-    changed = await service.set_billing_center(advisor, quotation.id, 5, " 004 ")
+    changed = await service.set_billing_center(advisor, quotation.id, 5, [" 004 "])
 
     result = changed.quotation
     assert result.status == "borrador" and result.version == 6
-    assert result.billing_center_code == "004" and result.billing_center_name == "COSTA"
+    assert result.cost_centers == ("004",)
+    # The customer still bills from its own center; only the cost moves.
+    assert result.billing_center_code == "001" and result.billing_center_name == "ANTIOQUIA"
     assert result.billing_center_source == "manual" and result.regional == "costa"
     assert result.uploaded_at is None and result.validated_at is None
     line, kept = changed.lines
@@ -100,7 +104,7 @@ async def test_choosing_a_center_reprices_and_survives_a_refresh(
     assert kept.sku == "LOC-1" and kept.new_price == Decimal(12000)
 
     refreshed = await service.refresh(advisor, quotation.id, 6)
-    assert refreshed.quotation.billing_center_code == "004"
+    assert refreshed.quotation.cost_centers == ("004",)
     assert refreshed.quotation.billing_center_source == "manual"
     assert refreshed.lines[0].value_tax_amount == Decimal(1500)
 
@@ -109,6 +113,7 @@ async def test_a_center_can_be_chosen_when_quoting(service, advisor) -> None:
     detail = await service.create(advisor, NIT, 12, billing_center_code="003")
 
     assert detail.quotation.billing_center_code == "003"
+    assert detail.quotation.cost_centers == ("003",)
     assert detail.quotation.billing_center_source == "manual"
     assert detail.quotation.billing_center_name == "CENTRO"
     with pytest.raises(InvalidInputError, match="no existe"):

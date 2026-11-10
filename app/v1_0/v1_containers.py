@@ -125,6 +125,7 @@ from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepo
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import QuotationPolicy
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
+from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
 from app.modules.quotations.infrastructure.masters import SqlAlchemyQuotationMasterSource
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
@@ -604,6 +605,7 @@ class V1Container(containers.DeclarativeContainer):
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
     )
     quotation_offer_writer = providers.Singleton(CustomerOfferWorkbook)
+    quotation_lines_writer = providers.Singleton(QuotationLinesWorkbook)
     quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
     quotation_warehouse_source = providers.Factory(
         WarehouseQuotationSource,
@@ -650,6 +652,7 @@ class V1Container(containers.DeclarativeContainer):
         max_lines=config.quotations.max_lines,
         approvers=quotation_approver_policy,
         offer_writer=quotation_offer_writer,
+        lines_writer=quotation_lines_writer,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.

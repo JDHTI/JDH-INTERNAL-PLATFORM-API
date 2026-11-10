@@ -15,6 +15,7 @@ from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.quotations.domain.entities import ItemInfo
 from tests.modules.quotations.conftest import APPROVER, MANAGER, NIT
+from tests.modules.quotations.test_cost_centers import national_customer
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/quotations"
@@ -367,6 +368,37 @@ def test_centers_and_temporary_customers_contract(client) -> None:
     assert moved.json()["billing_center_source"] == "manual" and moved.json()["version"] == 2
     varied = client.patch(f"{url}/offer", json={"version": 2, "include_variation": True})
     assert varied.json()["include_variation"] is True
+
+
+def test_cost_centers_and_the_lines_workbook_contract(client, warehouse, masters) -> None:
+    national_customer(warehouse, masters)
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+    url = f"{BASE}/{quotation['id']}"
+    assert quotation["cost_centers"] == [] and quotation["centers_set_cost"] is True
+    assert all(line["cost_center"] is None for line in quotation["lines"])
+
+    both = client.patch(
+        f"{url}/billing-center", json={"version": 1, "national": True, "cost_centers": ["001"]}
+    )
+    assert both.status_code == 422
+    assert client.patch(f"{url}/billing-center", json={"version": 1}).status_code == 422
+
+    several = client.patch(
+        f"{url}/billing-center", json={"version": 1, "cost_centers": ["001", "003"]}
+    )
+    assert several.status_code == 200 and several.json()["cost_centers"] == ["001", "003"]
+    assert {line["sku"]: line["cost_center"] for line in several.json()["lines"]} == {
+        "2537": "001",
+        "26278": "003",
+    }
+    national = client.patch(f"{url}/billing-center", json={"version": 2, "national": True})
+    assert national.status_code == 200 and national.json()["cost_centers"] == []
+
+    assert client.get(f"{url}/lines.xlsx").status_code == 403
+    client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)
+    download = client.get(f"{url}/lines.xlsx")
+    assert download.status_code == 200
+    assert "Plantilla" in download.headers["content-disposition"]
 
 
 def test_categories_are_filled_on_read_and_never_break_it(client, warehouse, repository) -> None:

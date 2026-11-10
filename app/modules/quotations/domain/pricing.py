@@ -8,7 +8,9 @@ the lists; the quoter applies the same rules so a quoted price matches the list 
   wholesale lists).
 - **Warehouse** of a list: fixed by the area (sheet "Faltantes en Lista"); warehouse 2 for
   frozen and refrigerated lines. List 1 takes the highest cost among its 17 warehouses.
-  A list outside the skill uses the warehouses of the customer's billing operation center.
+  A list outside the skill uses the warehouses of the operation centers the quotation is
+  costed from: *Nacional* (the highest among those 17 warehouses, SKU by SKU), one center,
+  or several (each SKU takes the costliest of them).
 - **Lactalis** quotes by branch: branch 003 for the Centro lists, 001 for the rest.
 - **Price** = cost / (1 - margin), rounded to whole pesos (up for the salsamentarias lists).
 - **Liquor tax**: the Coast (billing operation center 004) pays its own value.
@@ -18,10 +20,12 @@ Validated against the warehouse in ``docs/cotizador-dwh.md`` (second round).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from app.modules.quotations.domain import vocabulary
+from app.modules.quotations.domain.entities import CostInfo
 
 ONE = Decimal(1)
 PESO = Decimal(1)
@@ -116,6 +120,8 @@ CENTRAL_LISTS = ("003", "10U", "10S")
 CENTRAL_CENTER = "003"
 
 COAST_CENTERS = ("004",)
+# Source of the plan of a quotation costed *Nacional*: no center, every warehouse.
+NATIONAL_SOURCE = "nacional"
 
 # A quotation above this many times the median last cost is a capture error in SIESA (a
 # case price keyed as a unit): it is not used and is shown to review.
@@ -139,6 +145,8 @@ class StockPlan:
 
     @property
     def label(self) -> str:
+        if self.source == NATIONAL_SOURCE:
+            return "Nacional: mayor costo entre todas las bodegas"
         if self.highest:
             return "Mayor costo entre las bodegas de la lista 1"
         primary, cold = self.warehouses or ("", "")
@@ -173,8 +181,75 @@ def stock_plan(price_list_id: str | None, billing_center: str | None) -> StockPl
     return StockPlan(None, True, "general", branch)
 
 
+def centers_set_cost(price_list_id: str | None) -> bool:
+    """Whether the operation centers decide the warehouses: a list outside the skill.
+
+    List 1 and the skill's lists have their own warehouses, whatever the center.
+    """
+
+    return price_list_id != vocabulary.GENERAL_PRICE_LIST and price_list_id not in LIST_WAREHOUSES
+
+
+def stock_plans(price_list_id: str | None, centers: Sequence[str]) -> dict[str | None, StockPlan]:
+    """The plans whose costs a quotation compares, by the center each one stands for.
+
+    - A list with its own warehouses: one plan, whatever the centers (key ``None``).
+    - No centers (*Nacional*): one plan, the highest among every warehouse (key ``None``).
+    - One or more centers: one plan per center; each SKU takes the costliest of them.
+    """
+
+    if not centers_set_cost(price_list_id):
+        return {None: stock_plan(price_list_id, centers[0] if centers else None)}
+    if not centers:
+        return {None: StockPlan(None, True, NATIONAL_SOURCE, "001")}
+    return {code: stock_plan(price_list_id, code) for code in centers}
+
+
+def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
+    """Where the inventory cost comes from, in words, for the header."""
+
+    if len(plans) == 1:
+        return next(iter(plans.values())).label
+    return "Mayor costo entre los C.O. " + ", ".join(code for code in plans if code)
+
+
 def regional(billing_center: str | None) -> str:
     return vocabulary.COAST if billing_center in COAST_CENTERS else vocabulary.NATIONAL
+
+
+def regional_of(centers: Sequence[str], billing_center: str | None) -> str:
+    """The liquor tax regional: the Coast when any chosen center is a Coast one (it pays
+    more). *Nacional* (no centers) keeps the regional of the customer's billing center."""
+
+    if not centers:
+        return regional(billing_center)
+    return (
+        vocabulary.COAST if any(code in COAST_CENTERS for code in centers) else vocabulary.NATIONAL
+    )
+
+
+def highest_cost(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> dict[str, CostInfo]:
+    """Per SKU, the costs of the center whose cost is highest, marked with that center.
+
+    The cost compared is the one the rule uses (:func:`effective_cost`; the list factor is
+    the same for every center, so it does not change the order). A tie goes to the first
+    center in ``costs``. A SKU without a cost anywhere keeps the first center's row,
+    unmarked: no center set its cost.
+    """
+
+    result: dict[str, CostInfo] = {}
+    best: dict[str, Decimal] = {}
+    for code, rows in costs.items():
+        for sku, info in rows.items():
+            value, _ = effective_cost(info.quote_cost, info.inventory_cost, ONE)
+            if sku not in result:
+                result[sku] = replace(info, center_code=code if value is not None else None)
+                if value is not None:
+                    best[sku] = value
+            elif value is not None and (sku not in best or value > best[sku]):
+                result[sku] = replace(info, center_code=code)
+                best[sku] = value
+    return result
 
 
 def effective_cost(
@@ -211,10 +286,16 @@ def round_price(value: Decimal, family_name: str) -> Decimal:
 __all__ = [
     "COST_FACTOR",
     "FAMILY_LABELS",
+    "NATIONAL_SOURCE",
     "StockPlan",
+    "centers_set_cost",
     "effective_cost",
     "family",
+    "highest_cost",
     "regional",
+    "regional_of",
     "round_price",
+    "stock_label",
     "stock_plan",
+    "stock_plans",
 ]
