@@ -18,10 +18,14 @@ from app.modules.supplier_supports.domain.entities import (
     Conflict,
     ImportOutcome,
     Issue,
+    LoadPlan,
+    LoadResult,
+    Support,
     SupportData,
     SupportPage,
     SupportRow,
     SupportView,
+    Trace,
 )
 from app.modules.supplier_supports.domain.ports import (
     Calendar,
@@ -67,6 +71,34 @@ _TEXT_FIELDS = (
     "source_key",
 )
 _ARRAY_FIELDS = ("regionals", "business_units", "channels")
+# Decimal places of each numeric column of ``supplier_supports``.
+_SCALES = {
+    **dict.fromkeys(
+        (
+            "supplier_value",
+            "jdh_pct",
+            "jdh_net_cost",
+            "target_margin_pct",
+            "min_margin_pct",
+            "list_margin_pct",
+        ),
+        Decimal("0.000001"),
+    ),
+    **dict.fromkeys(
+        (
+            "pack_factor",
+            "reference_cost",
+            "reference_list_price",
+            "min_quantity",
+            "committed_volume",
+            "budget_units",
+            "units_used",
+            "stock_quantity",
+        ),
+        Decimal("0.0001"),
+    ),
+    "budget_amount": Decimal("0.01"),
+}
 # Fields a PATCH may change; identity and audit columns are not among them.
 EDITABLE_FIELDS = frozenset(
     {
@@ -142,6 +174,53 @@ def _with_base_filters(
                 raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
             base.append(filters.Condition(field_name, "in", values))
     return filters.Group("all", (*base, group)) if base else group
+
+
+class PrefetchedMasters:
+    """The masters of a whole file read once, so checking N rows is 3 queries, not 3N.
+
+    A key that was not prefetched falls through to the real lookup.
+    """
+
+    def __init__(self, masters: MasterLookup) -> None:
+        self.masters = masters
+        # Keys asked so far and what was found (a key asked and absent is unknown).
+        self._asked: dict[str, set[str]] = {"suppliers": set(), "products": set(), "nits": set()}
+        self._suppliers: dict[str, UUID] = {}
+        self._products: dict[str, ProductRef] = {}
+        self._customers: dict[str, str] = {}
+
+    async def load(self, codes: set[str], skus: set[str], nits: set[str]) -> None:
+        await self.commercial_suppliers_by_code(sorted(codes))
+        await self.products_by_sku(sorted(skus))
+        await self.customer_names(sorted(nits))
+
+    async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
+        missing = [code for code in codes if code not in self._asked["suppliers"]]
+        if missing:
+            self._suppliers.update(await self.masters.commercial_suppliers_by_code(missing))
+            self._asked["suppliers"].update(missing)
+        return {code: self._suppliers[code] for code in codes if code in self._suppliers}
+
+    async def products_by_sku(self, skus: Sequence[str]) -> dict[str, ProductRef]:
+        missing = [sku for sku in skus if sku not in self._asked["products"]]
+        if missing:
+            self._products.update(await self.masters.products_by_sku(missing))
+            self._asked["products"].update(missing)
+        return {sku: self._products[sku] for sku in skus if sku in self._products}
+
+    async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
+        missing = [nit for nit in nits if nit not in self._asked["nits"]]
+        if missing:
+            self._customers.update(await self.masters.customer_names(missing))
+            self._asked["nits"].update(missing)
+        return {nit: self._customers[nit] for nit in nits if nit in self._customers}
+
+    async def commercial_supplier_names(self, ids: Sequence[UUID]) -> dict[UUID, tuple[str, str]]:
+        return await self.masters.commercial_supplier_names(ids)
+
+    async def commercial_suppliers_by_name(self, query: str) -> Any:
+        return await self.masters.commercial_suppliers_by_name(query)
 
 
 class SupplierSupportService:
@@ -241,6 +320,12 @@ class SupplierSupportService:
             "customer_nit": clean_nit(data.customer_nit),
             "product_sku": _clean(data.product_sku),
         }
+        # Rounded to the column's scale, so what is compared is what is stored (an Excel
+        # float like 74625.73866666666 is 74625.7387 once saved).
+        for name, places in _SCALES.items():
+            value = getattr(data, name)
+            if isinstance(value, Decimal):
+                changes[name] = value.quantize(places)
         for name in _TEXT_FIELDS:
             changes[name] = _clean(getattr(data, name))
         for name in _ARRAY_FIELDS:
@@ -254,6 +339,7 @@ class SupplierSupportService:
         supplier_code: str | None,
         strict: bool,
         previous: SupportData | None = None,
+        masters: MasterLookup | None = None,
     ) -> SupportData:
         """Bind the support to real supplier, product and customer rows.
 
@@ -263,10 +349,11 @@ class SupplierSupportService:
         so editing a note of a support with a pending SKU does not fail.
         """
 
+        lookup = masters or self.masters
         issues = list(data.issues)
         supplier_id = data.commercial_supplier_id
         if supplier_code is not None:
-            found = await self.masters.commercial_suppliers_by_code([supplier_code.strip()])
+            found = await lookup.commercial_suppliers_by_code([supplier_code.strip()])
             supplier_id = found.get(supplier_code.strip())
             if supplier_id is None:
                 if strict:
@@ -277,7 +364,7 @@ class SupplierSupportService:
         elif supplier_id is not None and (
             previous is None or previous.commercial_supplier_id != supplier_id
         ):
-            if supplier_id not in await self.masters.commercial_supplier_names([supplier_id]):
+            if supplier_id not in await lookup.commercial_supplier_names([supplier_id]):
                 raise InvalidInputError("El proveedor comercial no existe")
 
         product_id, brand = data.product_id, data.brand
@@ -285,7 +372,7 @@ class SupplierSupportService:
         if previous is not None and previous.product_sku == data.product_sku:
             product_id = previous.product_id
         elif data.product_sku:
-            product = (await self.masters.products_by_sku([data.product_sku])).get(data.product_sku)
+            product = (await lookup.products_by_sku([data.product_sku])).get(data.product_sku)
             if product is None:
                 if strict:
                     raise FieldError(
@@ -301,7 +388,7 @@ class SupplierSupportService:
             product_id = None
 
         if data.customer_nit and (previous is None or previous.customer_nit != data.customer_nit):
-            known = await self.masters.customer_names([data.customer_nit])
+            known = await lookup.customer_names([data.customer_nit])
             if data.customer_nit not in known:
                 if strict:
                     raise FieldError(
@@ -350,9 +437,14 @@ class SupplierSupportService:
         supplier_code: str | None,
         strict: bool,
         previous: SupportData | None = None,
+        masters: MasterLookup | None = None,
     ) -> SupportData:
         prepared = await self._resolve(
-            self._normalize(data), supplier_code=supplier_code, strict=strict, previous=previous
+            self._normalize(data),
+            supplier_code=supplier_code,
+            strict=strict,
+            previous=previous,
+            masters=masters,
         )
         self._check(prepared)
         if prepared.kind != "excepcion_margen" and prepared.commercial_supplier_id is None:
@@ -381,9 +473,10 @@ class SupplierSupportService:
             state="anulado" if voided else ("inactivo" if not data.is_enabled else validity),
             needs_review=data.status == "pendiente_revision",
             has_conflicts=bool(row.conflicts),
-            derived=derive(data),
+            derived=derive(data, row.dwh_cost.unit_cost if row.dwh_cost else None),
             conflicts=row.conflicts,
             attachment_count=row.attachment_count,
+            dwh_cost=row.dwh_cost,
         )
 
     async def get(self, support_id: UUID) -> SupportView:
@@ -650,15 +743,34 @@ class SupplierSupportService:
         """
 
         await self._require_manager(principal)
+        masters = PrefetchedMasters(self.masters)
+        await masters.load(
+            {code.strip() for _, code in items if code and code.strip()},
+            {sku for data, _ in items if (sku := _clean(data.product_sku))},
+            {nit for data, _ in items if (nit := clean_nit(data.customer_nit))},
+        )
         checked: list[Checked] = []
         for data, code in items:
             try:
                 checked.append(
-                    Checked(data=await self._prepare(data, supplier_code=code, strict=True))
+                    Checked(
+                        data=await self._prepare(
+                            data, supplier_code=code, strict=True, masters=masters
+                        )
+                    )
                 )
             except InvalidInputError as exc:
                 checked.append(Checked(error=exc.detail, field=getattr(exc, "field", None)))
         return checked
+
+    def validate(self, data: SupportData) -> None:
+        """The rules that need no lookup, on an already resolved support (a merged version).
+
+        Raises:
+            FieldError: If a rule fails; ``field`` names the field.
+        """
+
+        self._check(data)
 
     async def create_checked(
         self, principal: Principal, items: Sequence[SupportData]
@@ -667,6 +779,20 @@ class SupplierSupportService:
 
         await self._require_manager(principal)
         return await self._save_all(principal, items)
+
+    async def live_for_suppliers(
+        self, principal: Principal, supplier_ids: Sequence[UUID]
+    ) -> list[Support]:
+        """Supports of these suppliers that are not voided (a bulk load matches against them)."""
+
+        await self._require_manager(principal)
+        return await self.repository.live_for_suppliers(supplier_ids)
+
+    async def apply_load(self, principal: Principal, plan: LoadPlan) -> LoadResult:
+        """Write a bulk load planned by the bulk service, all or nothing."""
+
+        await self._require_manager(principal)
+        return await self.repository.apply_load(plan, principal.email, datetime.now(UTC))
 
     async def update(
         self,
@@ -790,13 +916,20 @@ class SupplierSupportService:
                     created=False, support_id=existing.id, issues=issues, updated=True
                 )
             saved = await self.repository.update(
-                existing.id, prepared, existing.version, IMPORT_ACTOR, datetime.now(UTC)
+                existing.id,
+                prepared,
+                existing.version,
+                IMPORT_ACTOR,
+                datetime.now(UTC),
+                Trace("importacion"),
             )
             return ImportOutcome(created=False, support_id=saved.id, issues=issues, updated=True)
         if dry_run:
             return ImportOutcome(created=True, support_id=None, issues=issues)
-        saved = await self.repository.create(uuid4(), prepared, IMPORT_ACTOR, datetime.now(UTC))
+        saved = await self.repository.create(
+            uuid4(), prepared, IMPORT_ACTOR, datetime.now(UTC), Trace("importacion")
+        )
         return ImportOutcome(created=True, support_id=saved.id, issues=issues)
 
 
-__all__ = ["EDITABLE_FIELDS", "SupplierSupportService"]
+__all__ = ["EDITABLE_FIELDS", "FieldError", "SupplierSupportService"]

@@ -8,12 +8,18 @@ support created by hand, and the load is all or nothing.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import hashlib
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.identity.domain.principal import Principal
+from app.modules.jobs.application.schedule import next_run_at
 from app.modules.supplier_supports.application import cells
 from app.modules.supplier_supports.application import normalize as n
 from app.modules.supplier_supports.application.profiles import (
@@ -22,9 +28,20 @@ from app.modules.supplier_supports.application.profiles import (
     normalize_defaults,
 )
 from app.modules.supplier_supports.application.service import SupplierSupportService
-from app.modules.supplier_supports.domain import fields
-from app.modules.supplier_supports.domain.bulk import BulkReport, PreviewRow, RowIssue
-from app.modules.supplier_supports.domain.entities import SupportData
+from app.modules.supplier_supports.domain import fields, vocabulary
+from app.modules.supplier_supports.domain.bulk import (
+    CREATE,
+    UNCHANGED,
+    UPDATE,
+    BulkReport,
+    MissingSupport,
+    PreviewRow,
+    RowIssue,
+    merge,
+    same_support,
+    support_key,
+)
+from app.modules.supplier_supports.domain.entities import LoadPlan, Support, SupportData
 from app.modules.supplier_supports.domain.ports import SupportFileReader
 from app.modules.supplier_supports.domain.profiles import Profile
 
@@ -34,6 +51,8 @@ MAX_REPORTED_ERRORS = 500
 PREVIEW_ROWS = 50
 # Read first: later fields need to know the calc method (how ``supplier_value`` is typed).
 _CHOICE_FIELDS = tuple(spec.name for spec in fields.FIELD_SPECS if spec.type == fields.CHOICE)
+# "Tipo de apoyo" written as its label ("% sobre costo") instead of its code.
+_CALC_LABELS = {n.fold(label): code for code, label in vocabulary.CALC_METHOD_LABELS.items()}
 
 
 class _BadCell(ValueError):
@@ -98,8 +117,13 @@ def _convert(name: str, raw: Any, calc: str | None, values: dict[str, Any]) -> A
     spec = fields.FIELDS[name]
     if spec.type == fields.CHOICE:
         chosen = cells.choice(raw, spec.choices)
+        if chosen is None and name == "calc_method":
+            chosen = _CALC_LABELS.get(n.fold(raw))
         if chosen is None:
-            raise _BadCell(f"valor no válido: {raw!r} (válidos: {', '.join(spec.choices)})")
+            shown = (
+                vocabulary.CALC_METHOD_LABELS.values() if name == "calc_method" else spec.choices
+            )
+            raise _BadCell(f"valor no válido: {raw!r} (válidos: {', '.join(shown)})")
         return chosen
     if spec.type == fields.TEXT:
         text = n.clean_text(raw)
@@ -157,6 +181,8 @@ class SupportBulkService:
         reader: SupportFileReader,
         max_upload_bytes: int = 10 * 1024 * 1024,
         max_rows: int = 2000,
+        quiet_hours: QuietHours | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         """Create the service.
 
@@ -166,6 +192,8 @@ class SupportBulkService:
             reader (SupportFileReader): Reads the uploaded file.
             max_upload_bytes (int): Largest file accepted.
             max_rows (int): Most rows a file may hold.
+            quiet_hours (QuietHours | None): When a big load may reach the DWH.
+            clock (Callable[[], datetime] | None): Current instant, for tests.
         """
 
         self.supports = supports
@@ -173,6 +201,8 @@ class SupportBulkService:
         self.reader = reader
         self.max_upload_bytes = max_upload_bytes
         self.max_rows = max_rows
+        self.quiet_hours = quiet_hours
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def template_profile(self, supplier_code: str | None) -> Profile | None:
         """The profile whose layout the template should follow, if the supplier has one."""
@@ -190,8 +220,15 @@ class SupportBulkService:
         sheet: str | None = None,
         defaults: Mapping[str, Any] | None = None,
         column_map: Mapping[str, Any] | None = None,
+        expire_missing: bool = False,
     ) -> BulkReport:
-        """Check every row of the file and, with ``apply`` and no errors, create them all.
+        """Check every row of the file and, with ``apply`` and no errors, write them all.
+
+        Each row is matched to the stored support with its key
+        (:func:`~app.modules.supplier_supports.domain.bulk.support_key`): a new key creates a
+        support, a known one updates it (only the fields the file brings) or leaves it as it
+        is. Stored supports of the same suppliers and classes that the file no longer brings
+        are reported as missing and, with ``expire_missing``, closed the day before the load.
 
         Args:
             principal (Principal): The caller; must be a manager.
@@ -204,6 +241,7 @@ class SupportBulkService:
             defaults (Mapping[str, Any] | None): Defaults for this load, over the profile's.
             column_map (Mapping[str, Any] | None): Field -> headers for this load, over the
                 profile's.
+            expire_missing (bool): Close the supports in force that the file no longer brings.
 
         Returns:
             BulkReport: The simulation or the result.
@@ -243,13 +281,15 @@ class SupportBulkService:
 
         issues: list[RowIssue] = []
         data: dict[int, tuple[SupportData, str | None]] = {}
+        provided: dict[int, frozenset[str]] = {}
         for number, row_cells in built:
-            support, row_supplier, problems = self._support(
+            support, row_supplier, problems, given = self._support(
                 number, row_cells, effective_defaults, code, filename
             )
             issues.extend(problems)
             if support is not None and not problems:
                 data[number] = (support, row_supplier)
+                provided[number] = given
 
         ordered = list(data)
         checked = await self.supports.check_many(principal, [data[number] for number in ordered])
@@ -260,20 +300,110 @@ class SupportBulkService:
             else:
                 accepted[number] = result.data
         issues.extend(self._repeated(accepted))
+
+        stored = await self.supports.live_for_suppliers(
+            principal,
+            sorted(
+                {item.commercial_supplier_id for item in accepted.values()} - {None},
+                key=str,
+            ),
+        )
+        by_key: dict[tuple[Any, ...], Support] = {}
+        for support in sorted(stored, key=lambda item: (item.version, item.updated_at)):
+            by_key[support_key(support.data)] = support
+        actions: dict[int, tuple[str, Support | None, SupportData]] = {}
+        for number, item in accepted.items():
+            match = by_key.get(support_key(item))
+            if match is None:
+                actions[number] = (CREATE, None, item)
+                continue
+            merged = merge(match.data, item, provided[number])
+            if same_support(merged, match.data):
+                actions[number] = (UNCHANGED, match, match.data)
+                continue
+            try:
+                self.supports.validate(merged)
+            except InvalidInputError as exc:
+                issues.append(RowIssue(number, getattr(exc, "field", None), exc.detail))
+                continue
+            actions[number] = (UPDATE, match, merged)
+
         bad_rows = {issue.row_number for issue in issues}
-        valid = {number: item for number, item in accepted.items() if number not in bad_rows}
+        valid = {number: item for number, item in actions.items() if number not in bad_rows}
         issues.sort(key=lambda issue: issue.row_number)
 
+        today = self.supports.calendar.today()
+        matched = {support.id for _, support, _ in valid.values() if support is not None}
+        classes = {(item.commercial_supplier_id, item.kind) for item in accepted.values()}
+        missing = [
+            support
+            for support in stored
+            if support.id not in matched
+            and (support.data.commercial_supplier_id, support.data.kind) in classes
+            and (support.data.valid_to is None or support.data.valid_to >= today)
+        ]
+        last_day = today - timedelta(days=1)
+        expirations = (
+            [
+                support
+                for support in missing
+                if (support.data.valid_from is None or support.data.valid_from <= last_day)
+            ]
+            if expire_missing
+            else []
+        )
+        expiring = {support.id for support in expirations}
+
+        creates = [(uuid4(), item) for action, _, item in valid.values() if action == CREATE]
+        updates = [
+            (support.id, support.version, item)
+            for action, support, item in valid.values()
+            if action == UPDATE and support is not None
+        ]
+        unchanged = sum(1 for action, _, _ in valid.values() if action == UNCHANGED)
+        writes = len(creates) + len(updates) + len(expirations)
+
         blocked = bool(issues)
-        created = []
+        created: list[UUID] = []
+        updated: list[UUID] = []
+        expired: list[UUID] = []
+        load_id = None
+        not_before = (
+            self.quiet_hours.not_before(writes, self._clock()) if self.quiet_hours else None
+        )
+        if apply and not blocked and (writes or unchanged):
+            result = await self.supports.apply_load(
+                principal,
+                LoadPlan(
+                    load_id=uuid4(),
+                    file_name=filename.strip(),
+                    file_sha256=hashlib.sha256(content).hexdigest(),
+                    supplier_code=code,
+                    sheet=title,
+                    rows_read=len(built),
+                    creates=tuple(creates),
+                    updates=tuple(updates),
+                    expirations=tuple(
+                        (support.id, support.version, last_day) for support in expirations
+                    ),
+                    unchanged=unchanged,
+                    missing=len(missing),
+                    publish_not_before=not_before,
+                ),
+            )
+            load_id = result.load_id
+            created, updated, expired = (
+                list(result.created),
+                list(result.updated),
+                list(result.expired),
+            )
         with_conflicts = 0
-        if apply and not blocked:
-            views = await self.supports.create_checked(principal, list(valid.values()))
-            created = [view.support.id for view in views]
-            with_conflicts = sum(1 for view in views if view.has_conflicts)
+        for support_id in created[:PREVIEW_ROWS]:
+            if (await self.supports.get(support_id)).has_conflicts:
+                with_conflicts += 1
 
         return BulkReport(
-            applied=bool(created),
+            applied=load_id is not None,
             blocked=blocked,
             sheet=title,
             header_row=header_row + 1,
@@ -283,9 +413,29 @@ class SupportBulkService:
             errors=issues[:MAX_REPORTED_ERRORS],
             errors_truncated=len(issues) > MAX_REPORTED_ERRORS,
             preview=[
-                self._preview(number, item, data[number][1])
-                for number, item in list(valid.items())[:PREVIEW_ROWS]
+                self._preview(number, item, data[number][1], action, support)
+                for number, (action, support, item) in list(valid.items())[:PREVIEW_ROWS]
             ],
+            to_create=len(creates),
+            to_update=len(updates),
+            unchanged=unchanged,
+            missing=len(missing),
+            to_expire=len(expirations),
+            missing_preview=[
+                MissingSupport(
+                    support_id=support.id,
+                    customer_nit=support.data.customer_nit,
+                    product_sku=support.data.product_sku,
+                    valid_from=support.data.valid_from,
+                    valid_to=support.data.valid_to,
+                    expires=support.id in expiring,
+                )
+                for support in missing[:PREVIEW_ROWS]
+            ],
+            updated=updated,
+            expired=expired,
+            load_id=load_id,
+            publish_not_before=not_before,
             mapped_columns={
                 name: [str(rows[header_row][column]).strip() for column in columns]
                 for name, columns in positions.items()
@@ -307,11 +457,21 @@ class SupportBulkService:
     ) -> tuple[str, list[list[Any]], int, dict[str, list[int]]]:
         sheets = self.reader.read(filename.strip(), content, sheet)
         first_row: list[Any] = []
+        best: dict[bool, tuple[str, list[list[Any]], int, dict[str, list[int]]]] = {}
+        # The Excel table whose header names the most fields (the supports table, not the
+        # product lookup beside it); whole sheets only when no table matches. A sheet title
+        # cannot hold "/", so "sheet / table" marks a table.
         for title, rows in sheets:
             if not first_row and rows:
                 first_row = rows[0]
-            if (found := _find_header(rows, lookup)) is not None:
-                return title, rows, found[0], found[1]
+            is_table = " / " in title
+            current = best.get(is_table)
+            if (found := _find_header(rows, lookup)) is not None and (
+                current is None or len(found[1]) > len(current[3])
+            ):
+                best[is_table] = (title, rows, found[0], found[1])
+        if best:
+            return best.get(True) or best[False]
         seen = ", ".join(str(cell).strip() for cell in first_row if not _blank(cell))
         raise InvalidInputError(
             "No se reconocieron las columnas del archivo"
@@ -347,7 +507,13 @@ class SupportBulkService:
         defaults: Mapping[str, Any],
         supplier_code: str | None,
         filename: str,
-    ) -> tuple[SupportData | None, str | None, list[RowIssue]]:
+    ) -> tuple[SupportData | None, str | None, list[RowIssue], frozenset[str]]:
+        """The support of one row, its supplier, its problems and the fields it gives.
+
+        A cell that reads as "nothing" (``INDEFINIDO`` in the end date) still counts as given:
+        it clears that field when the row updates a stored support.
+        """
+
         values: dict[str, Any] = {}
         problems: list[RowIssue] = []
 
@@ -378,52 +544,54 @@ class SupportBulkService:
                     "Falta el proveedor: elígelo en la carga o agrega la columna Cod. Proveedor",
                 )
             )
-        for name, label in (("kind", "el tipo de apoyo"), ("calc_method", "el método de cálculo")):
-            if not values.get(name) and name not in row_cells:
-                problems.append(
-                    RowIssue(
-                        number,
-                        name,
-                        f"Falta {label}: agrégalo como columna o como valor por defecto del perfil",
-                    )
+        if not values.get("calc_method") and "calc_method" not in row_cells:
+            problems.append(
+                RowIssue(
+                    number,
+                    "calc_method",
+                    "Falta el tipo de apoyo: agrégalo como columna o como valor por defecto "
+                    "del perfil",
                 )
+            )
+        if not values.get("kind") and "kind" not in row_cells and values.get("calc_method"):
+            values["kind"] = _default_kind(values)
+        given = frozenset(name for name in values if name != "supplier_code")
         if problems:
-            return None, row_supplier, problems
+            return None, row_supplier, problems, given
         values = {name: value for name, value in values.items() if value is not None}
         values["source"] = f"carga masiva: {filename.strip()}"[:300]
-        return SupportData(**values), row_supplier, problems
+        return SupportData(**values), row_supplier, problems, given
 
     @staticmethod
     def _repeated(accepted: Mapping[int, SupportData]) -> list[RowIssue]:
-        """Rows equal to an earlier one of the same file."""
+        """Rows with the same key as an earlier one of the same file (they would fight over
+        the same support)."""
 
         seen: dict[tuple[Any, ...], int] = {}
         issues: list[RowIssue] = []
         for number, item in accepted.items():
-            key = (
-                item.commercial_supplier_id,
-                item.kind,
-                item.calc_method,
-                item.program,
-                item.customer_nit,
-                item.product_sku,
-                item.supplier_sku,
-                item.warehouse,
-                item.regionals,
-                item.business_units,
-                item.channels,
-                item.valid_from,
-                item.valid_to,
-                item.supplier_value,
-            )
+            key = support_key(item)
             if key in seen:
-                issues.append(RowIssue(number, None, f"Fila repetida: igual a la fila {seen[key]}"))
+                issues.append(
+                    RowIssue(
+                        number,
+                        None,
+                        f"Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha "
+                        f"inicio) que la fila {seen[key]}",
+                    )
+                )
             else:
                 seen[key] = number
         return issues
 
     @staticmethod
-    def _preview(number: int, item: SupportData, supplier_code: str | None) -> PreviewRow:
+    def _preview(
+        number: int,
+        item: SupportData,
+        supplier_code: str | None,
+        action: str,
+        support: Support | None,
+    ) -> PreviewRow:
         return PreviewRow(
             row_number=number,
             supplier_code=supplier_code,
@@ -435,7 +603,45 @@ class SupportBulkService:
             supplier_value=item.supplier_value,
             valid_from=item.valid_from,
             valid_to=item.valid_to,
+            action=action,
+            support_id=support.id if support is not None else None,
         )
 
 
-__all__ = ["SupportBulkService"]
+def _default_kind(values: Mapping[str, Any]) -> str:
+    """The class of a row that does not say it: a minimum margin is a margin exception; with a
+    client it is a client tactical support; otherwise an activity for everyone."""
+
+    if values.get("calc_method") == "margen_minimo":
+        return "excepcion_margen"
+    return "tactico_cliente" if values.get("customer_nit") else "actividad_temporal"
+
+
+@dataclass(frozen=True)
+class QuietHours:
+    """When the warehouse is quiet (no ETL): big loads are published to it then."""
+
+    start: time
+    end: time
+    zone: ZoneInfo
+    # Loads writing more supports than this wait for the quiet hours.
+    defer_over: int
+
+    def not_before(self, writes: int, now: datetime) -> datetime | None:
+        """``None`` (publish now) for a small load or inside the window; else its next start."""
+
+        if writes <= self.defer_over:
+            return None
+        local = now.astimezone(self.zone)
+        clock = local.time()
+        inside = (
+            self.start <= clock < self.end
+            if self.start < self.end
+            else clock >= self.start or clock < self.end
+        )
+        if inside:
+            return None
+        return next_run_at(now, self.start, self.zone)
+
+
+__all__ = ["QuietHours", "SupportBulkService"]

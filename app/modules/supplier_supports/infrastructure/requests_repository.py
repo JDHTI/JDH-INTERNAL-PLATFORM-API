@@ -24,6 +24,7 @@ from app.modules.supplier_supports.infrastructure.models import (
 from app.modules.supplier_supports.infrastructure.models import (
     SupportRequestModel as R,
 )
+from app.modules.supplier_supports.infrastructure.publication import queue_supports
 
 
 def snapshot(model: S) -> dict[str, Any]:
@@ -289,6 +290,8 @@ class SqlAlchemySupportRequestRepository:
                 support.updated_by = actor
                 support.updated_at = datetime.now(UTC)
                 support.version += 1
+                support.last_origin = "aprobacion_jdh"
+                support.last_load_id = None
             model.status = "aprobada" if approved else "rechazada"
             model.version += 1
             model.decided_by = actor
@@ -305,6 +308,9 @@ class SqlAlchemySupportRequestRepository:
                 snapshot(support),
             )
             await session.flush()
+            if approved:
+                # The approved contribution reaches the DWH with the support's new version.
+                await queue_supports(session, [support])
             return serialize(model)
 
     async def cancel(self, support_id: UUID, version: int, actor: str, reason: str) -> None:
@@ -319,9 +325,13 @@ class SqlAlchemySupportRequestRepository:
             support.updated_by = actor
             support.updated_at = datetime.now(UTC)
             support.version += 1
+            support.last_origin = "cancelacion_jdh"
+            support.last_load_id = None
             self._event(
                 session, support_id, None, "cancelada", actor, reason, before, snapshot(support)
             )
+            await session.flush()
+            await queue_supports(session, [support])
 
     async def history(self, support_id: UUID) -> list[dict[str, Any]]:
         async with self.database.session_factory() as session:

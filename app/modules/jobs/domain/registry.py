@@ -99,6 +99,13 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
+    JobDefinition(
+        "supplier-supports-costs",
+        "Apoyos: costo del DWH",
+        "Costo de cada apoyo con la regla del cotizador (el mayor entre cotización e inventario)",
+        "abastecimiento",
+        MONDAY_TO_FRIDAY,
+    ),
 )
 JOBS_BY_KEY = {job.key: job for job in JOBS}
 

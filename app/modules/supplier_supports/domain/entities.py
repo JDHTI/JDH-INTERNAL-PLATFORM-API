@@ -93,6 +93,45 @@ class SupportData:
 
 
 @dataclass(frozen=True)
+class Trace:
+    """What wrote a version of a support (``vocabulary.ORIGINS``) and the load, if any."""
+
+    origin: str
+    load_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class LoadPlan:
+    """What a bulk load will write, decided before any write (all or nothing)."""
+
+    load_id: UUID
+    file_name: str
+    file_sha256: str
+    supplier_code: str | None
+    sheet: str | None
+    rows_read: int
+    creates: tuple[tuple[UUID, SupportData], ...] = ()
+    # (support id, version it was read at, new data)
+    updates: tuple[tuple[UUID, int, SupportData], ...] = ()
+    # (support id, version it was read at, last day in force)
+    expirations: tuple[tuple[UUID, int, date], ...] = ()
+    unchanged: int = 0
+    missing: int = 0
+    # Do not send it to the DWH before this moment (a big load waits for quiet hours).
+    publish_not_before: datetime | None = None
+
+
+@dataclass(frozen=True)
+class LoadResult:
+    """What a bulk load wrote."""
+
+    load_id: UUID
+    created: tuple[UUID, ...] = ()
+    updated: tuple[UUID, ...] = ()
+    expired: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True)
 class Support:
     """A stored support."""
 
@@ -105,6 +144,9 @@ class Support:
     version: int
     created_at: datetime
     updated_at: datetime
+    # What wrote this version (``vocabulary.ORIGINS``) and its bulk load, if any.
+    last_origin: str | None = None
+    last_load_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +177,31 @@ class Derived:
     supplier_amount_per: MoneyPair = field(default_factory=MoneyPair)
     net_cost_per: MoneyPair = field(default_factory=MoneyPair)
     suggested_price_per: MoneyPair = field(default_factory=MoneyPair)
+    # Which cost the figures use: ``dwh`` (the quoter's rule) or ``referencia`` (the one
+    # stored with the support); ``None`` when there is none.
+    cost_basis: str | None = None
+
+
+@dataclass(frozen=True)
+class SupportCost:
+    """The cost of a support's SKU in the DWH with the quoter's rule.
+
+    The highest of the supplier's quotation in force and the inventory average cost, per
+    inventory unit, rounded up, without the price lists' factor; for a client with several
+    branches, the highest of their lists' warehouses; without a client, the highest among the
+    list 1 warehouses.
+    """
+
+    support_id: UUID
+    product_sku: str
+    plan_key: str
+    plan_label: str
+    unit_cost: Decimal | None
+    source: str | None
+    quote_cost: Decimal | None
+    inventory_cost: Decimal | None
+    snapshot_date: date | None
+    computed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +215,7 @@ class SupportRow:
     product_brand: str | None = None
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
+    dwh_cost: SupportCost | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +234,7 @@ class SupportView:
     derived: Derived
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
+    dwh_cost: SupportCost | None = None
 
 
 @dataclass(frozen=True)

@@ -104,7 +104,11 @@ async def test_rows_repeated_in_the_file_are_flagged(bulk, manager) -> None:
     report = await load(bulk, manager, header + line + line)
 
     assert [(issue.row_number, issue.message) for issue in report.errors] == [
-        (3, "Fila repetida: igual a la fila 2")
+        (
+            3,
+            "Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha inicio) "
+            "que la fila 2",
+        )
     ]
 
 
@@ -277,7 +281,12 @@ async def test_profile_defaults_are_validated_and_versioned(profiles, manager) -
 
 async def test_template_follows_the_profile_layout(profiles, manager) -> None:
     general = [header for _, header in template_headers(None)]
-    assert "Método de cálculo" in general and "Valor Proveedor" in general
+    # The short general template: the key, the type and value; never costs or prices.
+    assert "Tipo de apoyo" in general and "Valor apoyo" in general
+    assert "NIT Cliente" in general and "SKU JDH" in general and "Fecha Inicio" in general
+    assert "Costo Referencia" not in general and "Precio Lista Referencia" not in general
+    full = [header for _, header in template_headers(None, full=True)]
+    assert "Costo Referencia" in full and "Clase de apoyo" in full
 
     profile = await profiles.save(
         manager,

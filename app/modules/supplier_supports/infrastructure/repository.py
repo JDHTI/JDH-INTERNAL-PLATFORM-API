@@ -33,10 +33,14 @@ from app.modules.commercial_masters.infrastructure.models import (
 from app.modules.supplier_supports.domain.entities import (
     Conflict,
     Issue,
+    LoadPlan,
+    LoadResult,
     Support,
+    SupportCost,
     SupportData,
     SupportRow,
     Tier,
+    Trace,
 )
 from app.modules.supplier_supports.domain.filters import (
     FIELDS,
@@ -47,9 +51,12 @@ from app.modules.supplier_supports.domain.filters import (
 )
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportAttachmentModel,
+    SupplierSupportCostModel,
+    SupplierSupportLoadModel,
     SupplierSupportModel,
     SupplierSupportTierModel,
 )
+from app.modules.supplier_supports.infrastructure.publication import queue_load, queue_supports
 
 S = SupplierSupportModel
 A = SupplierSupportAttachmentModel
@@ -113,6 +120,8 @@ def _support(model: SupplierSupportModel, tiers: Sequence[SupplierSupportTierMod
         version=model.version,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        last_origin=model.last_origin,
+        last_load_id=model.last_load_id,
     )
 
 
@@ -122,6 +131,33 @@ def _apply(model: SupplierSupportModel, data: SupportData) -> None:
     for name in _ARRAY_FIELDS:
         setattr(model, name, list(getattr(data, name)))
     model.issues = [issue.as_dict() for issue in data.issues]
+
+
+def _new_model(
+    support_id: UUID, data: SupportData, actor: str, now: datetime, trace: Trace
+) -> SupplierSupportModel:
+    model = SupplierSupportModel(
+        id=support_id,
+        created_by=actor,
+        updated_by=actor,
+        version=1,
+        created_at=now,
+        updated_at=now,
+        last_origin=trace.origin,
+        last_load_id=trace.load_id,
+    )
+    _apply(model, data)
+    return model
+
+
+def _stamp(model: SupplierSupportModel, actor: str, now: datetime, trace: Trace) -> None:
+    """Next version of a support: who, when and what wrote it."""
+
+    model.version += 1
+    model.updated_by = actor
+    model.updated_at = now
+    model.last_origin = trace.origin
+    model.last_load_id = trace.load_id
 
 
 def _tier_models(support_id: UUID, tiers: Sequence[Tier]) -> list[SupplierSupportTierModel]:
@@ -137,6 +173,31 @@ def _tier_models(support_id: UUID, tiers: Sequence[Tier]) -> list[SupplierSuppor
         )
         for index, tier in enumerate(tiers)
     ]
+
+
+async def _costs(session: Any, ids: Sequence[UUID]) -> dict[UUID, SupportCost]:
+    """The DWH cost of these supports, as the daily job left it."""
+
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(SupplierSupportCostModel).where(SupplierSupportCostModel.support_id.in_(ids))
+    )
+    return {
+        cost.support_id: SupportCost(
+            support_id=cost.support_id,
+            product_sku=cost.product_sku,
+            plan_key=cost.plan_key,
+            plan_label=cost.plan_label,
+            unit_cost=cost.unit_cost,
+            source=cost.source,
+            quote_cost=cost.quote_cost,
+            inventory_cost=cost.inventory_cost,
+            snapshot_date=cost.snapshot_date,
+            computed_at=cost.computed_at,
+        )
+        for cost in rows.scalars()
+    }
 
 
 def _in_force(table: Any, day: date) -> ColumnElement[bool]:
@@ -332,19 +393,16 @@ class SqlAlchemySupportRepository:
         return grouped
 
     async def create(
-        self, support_id: UUID, data: SupportData, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        data: SupportData,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support:
-        """Insert a support and its tiers."""
+        """Insert a support and its tiers, and queue its first version for the DWH."""
 
-        model = SupplierSupportModel(
-            id=support_id,
-            created_by=actor,
-            updated_by=actor,
-            version=1,
-            created_at=now,
-            updated_at=now,
-        )
-        _apply(model, data)
+        model = _new_model(support_id, data, actor, now, trace or Trace("manual"))
         if data.status == "anulado":
             model.voided_at = now
         tiers = _tier_models(support_id, data.tiers)
@@ -353,6 +411,8 @@ class SqlAlchemySupportRepository:
             try:
                 await session.flush()
                 session.add_all(tiers)
+                await session.flush()
+                await queue_supports(session, [model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -360,27 +420,29 @@ class SqlAlchemySupportRepository:
             return _support(model, tiers)
 
     async def create_many(
-        self, items: Sequence[tuple[UUID, SupportData]], actor: str, now: datetime
+        self,
+        items: Sequence[tuple[UUID, SupportData]],
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> list[Support]:
         """Insert several supports and their tiers in one transaction: all or none."""
 
-        models = []
-        for support_id, data in items:
-            model = SupplierSupportModel(
-                id=support_id,
-                created_by=actor,
-                updated_by=actor,
-                version=1,
-                created_at=now,
-                updated_at=now,
+        origin = trace or Trace("lote")
+        models = [
+            (
+                _new_model(support_id, data, actor, now, origin),
+                _tier_models(support_id, data.tiers),
             )
-            _apply(model, data)
-            models.append((model, _tier_models(support_id, data.tiers)))
+            for support_id, data in items
+        ]
         async with self.database.session_factory() as session:
             session.add_all([model for model, _ in models])
             try:
                 await session.flush()
                 session.add_all([tier for _, tiers in models for tier in tiers])
+                await session.flush()
+                await queue_supports(session, [model for model, _ in models])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -408,6 +470,7 @@ class SqlAlchemySupportRepository:
             tiers = (await self._tiers(session, [support_id])).get(support_id, [])
             conflicts = await self._conflict_ids(session, [support_id])
             attachments = await self._attachment_counts(session, [support_id])
+            costs = await _costs(session, [support_id])
             return SupportRow(
                 support=_support(model, tiers),
                 supplier_code=code,
@@ -416,10 +479,17 @@ class SqlAlchemySupportRepository:
                 product_brand=brand,
                 conflicts=tuple(conflicts.get(support_id, ())),
                 attachment_count=attachments.get(support_id, 0),
+                dwh_cost=costs.get(support_id),
             )
 
     async def update(
-        self, support_id: UUID, data: SupportData, expected_version: int, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        data: SupportData,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support:
         """Replace a support's data when its version still matches."""
 
@@ -433,25 +503,45 @@ class SqlAlchemySupportRepository:
                 raise NotFoundError("Apoyo no encontrado")
             if model.version != expected_version:
                 raise ConflictError("El apoyo cambió desde que lo abriste; recárgalo")
-            _apply(model, data)
-            model.version += 1
-            model.updated_by = actor
-            model.updated_at = now
-            old = await self._tiers(session, [support_id])
-            for tier in old.get(support_id, []):
-                await session.delete(tier)
-            await session.flush()
-            tiers = _tier_models(support_id, data.tiers)
-            session.add_all(tiers)
+            tiers = await self._replace(session, model, data, actor, now, trace or Trace("edicion"))
             try:
+                await queue_supports(session, [model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
                 raise ConflictError("No se pudo guardar el apoyo (referencia duplicada)") from exc
             return _support(model, tiers)
 
+    async def _replace(
+        self,
+        session: Any,
+        model: SupplierSupportModel,
+        data: SupportData,
+        actor: str,
+        now: datetime,
+        trace: Trace,
+    ) -> list[SupplierSupportTierModel]:
+        """Write new data on a locked support: next version, new tiers (flushed)."""
+
+        _apply(model, data)
+        _stamp(model, actor, now, trace)
+        old = await self._tiers(session, [model.id])
+        for tier in old.get(model.id, []):
+            await session.delete(tier)
+        await session.flush()
+        tiers = _tier_models(model.id, data.tiers)
+        session.add_all(tiers)
+        await session.flush()
+        return tiers
+
     async def void(
-        self, support_id: UUID, reason: str, expected_version: int, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        reason: str,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support:
         """Mark a support as voided when its version still matches."""
 
@@ -468,12 +558,115 @@ class SqlAlchemySupportRepository:
             model.status = "anulado"
             model.void_reason = reason
             model.voided_at = now
-            model.version += 1
-            model.updated_by = actor
-            model.updated_at = now
+            _stamp(model, actor, now, trace or Trace("anulacion"))
+            await session.flush()
+            await queue_supports(session, [model])
             await session.commit()
             tiers = (await self._tiers(session, [support_id])).get(support_id, [])
             return _support(model, tiers)
+
+    async def live_for_suppliers(self, supplier_ids: Sequence[UUID]) -> list[Support]:
+        """Supports of these suppliers that are not voided, with their tiers."""
+
+        if not supplier_ids:
+            return []
+        async with self.database.session_factory() as session:
+            models = list(
+                (
+                    await session.execute(
+                        select(S).where(
+                            S.commercial_supplier_id.in_(list(supplier_ids)),
+                            S.status != "anulado",
+                        )
+                    )
+                ).scalars()
+            )
+            tiers = await self._tiers(session, [model.id for model in models])
+            return [_support(model, tiers.get(model.id, [])) for model in models]
+
+    async def apply_load(self, plan: LoadPlan, actor: str, now: datetime) -> LoadResult:
+        """Write a bulk load in one transaction; a support changed meanwhile aborts it."""
+
+        trace = Trace("carga", plan.load_id)
+        load = SupplierSupportLoadModel(
+            id=plan.load_id,
+            file_name=plan.file_name[:300],
+            file_sha256=plan.file_sha256,
+            supplier_code=plan.supplier_code,
+            sheet=plan.sheet,
+            actor=actor,
+            created_at=now,
+            rows_read=plan.rows_read,
+            created=len(plan.creates),
+            updated=len(plan.updates),
+            unchanged=plan.unchanged,
+            missing=plan.missing,
+            expired=len(plan.expirations),
+        )
+        async with self.database.session_factory() as session:
+            try:
+                session.add(load)
+                await session.flush()
+                written: list[SupplierSupportModel] = []
+                for support_id, data in plan.creates:
+                    model = _new_model(support_id, data, actor, now, trace)
+                    session.add(model)
+                    written.append(model)
+                await session.flush()
+                session.add_all(
+                    [
+                        tier
+                        for support_id, data in plan.creates
+                        for tier in _tier_models(support_id, data.tiers)
+                    ]
+                )
+                locked = await self._lock(
+                    session,
+                    [support_id for support_id, _, _ in plan.updates]
+                    + [support_id for support_id, _, _ in plan.expirations],
+                )
+                for support_id, version, data in plan.updates:
+                    model = self._expect(locked, support_id, version)
+                    await self._replace(session, model, data, actor, now, trace)
+                    written.append(model)
+                for support_id, version, last_day in plan.expirations:
+                    model = self._expect(locked, support_id, version)
+                    model.valid_to = last_day
+                    _stamp(model, actor, now, Trace("vencimiento", plan.load_id))
+                    written.append(model)
+                await session.flush()
+                await queue_supports(session, written, not_before=plan.publish_not_before)
+                await queue_load(session, load)
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ConflictError("No se pudo guardar la carga (referencia duplicada)") from exc
+        return LoadResult(
+            load_id=plan.load_id,
+            created=tuple(support_id for support_id, _ in plan.creates),
+            updated=tuple(support_id for support_id, _, _ in plan.updates),
+            expired=tuple(support_id for support_id, _, _ in plan.expirations),
+        )
+
+    @staticmethod
+    async def _lock(session: Any, ids: Sequence[UUID]) -> dict[UUID, SupplierSupportModel]:
+        if not ids:
+            return {}
+        rows = await session.execute(
+            select(S).where(S.id.in_(list(ids))).order_by(S.id).with_for_update()
+        )
+        return {model.id: model for model in rows.scalars()}
+
+    @staticmethod
+    def _expect(
+        locked: dict[UUID, SupplierSupportModel], support_id: UUID, version: int
+    ) -> SupplierSupportModel:
+        model = locked.get(support_id)
+        if model is None or model.version != version or model.status == "anulado":
+            raise ConflictError(
+                "Un apoyo de la carga cambió mientras se procesaba; vuelve a simular la carga"
+            )
+        return model
 
     @staticmethod
     def _conditions(spec: SearchSpec) -> list[ColumnElement[bool]]:
@@ -582,6 +775,7 @@ class SqlAlchemySupportRepository:
             tiers = await self._tiers(session, ids)
             conflicts = await self._conflict_ids(session, ids)
             attachments = await self._attachment_counts(session, ids)
+            costs = await _costs(session, ids)
         return (
             [
                 SupportRow(
@@ -592,6 +786,7 @@ class SqlAlchemySupportRepository:
                     product_brand=brand,
                     conflicts=tuple(conflicts.get(model.id, ())),
                     attachment_count=attachments.get(model.id, 0),
+                    dwh_cost=costs.get(model.id),
                 )
                 for model, code, name, description, brand in rows
             ],

@@ -17,22 +17,38 @@ from app.modules.supplier_supports.domain.attachments import (
 )
 from app.modules.supplier_supports.domain.entities import (
     Conflict,
+    LoadPlan,
+    LoadResult,
     Support,
     SupportData,
     SupportRow,
+    Trace,
 )
 from app.modules.supplier_supports.domain.filters import SearchSpec
 
 
 class SupportRepository(Protocol):
-    """Persistence of supports and their tiers."""
+    """Persistence of supports and their tiers.
+
+    Every write queues the support's new version for the DWH in the same transaction;
+    ``trace`` says what wrote it (``vocabulary.ORIGINS``) and the bulk load, if any.
+    """
 
     async def create(
-        self, support_id: UUID, data: SupportData, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        data: SupportData,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support: ...
 
     async def create_many(
-        self, items: Sequence[tuple[UUID, SupportData]], actor: str, now: datetime
+        self,
+        items: Sequence[tuple[UUID, SupportData]],
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> list[Support]: ...
 
     async def get(self, support_id: UUID) -> Support | None: ...
@@ -40,12 +56,33 @@ class SupportRepository(Protocol):
     async def get_row(self, support_id: UUID) -> SupportRow | None: ...
 
     async def update(
-        self, support_id: UUID, data: SupportData, expected_version: int, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        data: SupportData,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support: ...
 
     async def void(
-        self, support_id: UUID, reason: str, expected_version: int, actor: str, now: datetime
+        self,
+        support_id: UUID,
+        reason: str,
+        expected_version: int,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
     ) -> Support: ...
+
+    async def live_for_suppliers(self, supplier_ids: Sequence[UUID]) -> list[Support]:
+        """Supports of these suppliers that are not voided (the bulk load matches against them)."""
+        ...
+
+    async def apply_load(self, plan: LoadPlan, actor: str, now: datetime) -> LoadResult:
+        """Write a whole bulk load in one transaction: its record, creations, updates and
+        expirations, each queued for the DWH. Any version mismatch aborts everything."""
+        ...
 
     async def search(self, spec: SearchSpec) -> tuple[list[SupportRow], int]: ...
 

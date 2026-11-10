@@ -241,21 +241,66 @@ distingue, sin programar:
 
 Los porcentajes se guardan como fracción en texto (`"0.05"`). Escritura: gestores.
 
+## Plantilla general (centralización de proveedores)
+
+Un solo formato para todos los proveedores, basado en la propuesta TI v0.3
+(`Plantilla_Apoyos_Proveedor_v0_3.xlsx`). **El proveedor solo escribe lo que se negocia**; lo que
+ya existe en el DWH no se pide y lo calculado no se diligencia:
+
+| Se diligencia | Columna | |
+| --- | --- | --- |
+| Llave | `Fecha Inicio` (o `Vigencia inicial`), `NIT Cliente`, `SKU JDH` (o `SKU Proveedor`), `Referencia externa` (n.º de acuerdo, si lo hay) | El proveedor se elige en la Suite al subir (o columna `Cod. Proveedor`) |
+| Apoyo | `Tipo de apoyo` + `Valor apoyo` | Un único valor y cómo leerlo: `% sobre costo`, `% sobre precio lista`, `Costo apoyado`, `Precio apoyado sin IVA`, `$ por unidad`, `Margen mínimo` (o el código) |
+| Opcional | `Fecha Fin` (`INDEFINIDO`), `Unidad del valor` (caja/unidad), `% Apoyo JDH`, `Margen garantizado`, `Regional`, `Unidad de Negocio`, `Canal`, `Grupo Cliente`, `Volumen Comprometido`, `Forma de liquidación`, `Autorizado por`, `Observaciones` | |
+
+| Del DWH (no se pide) | Calculado (no se diligencia) |
+| --- | --- |
+| Razón social, descripción, equivalencia de SKU, factor U.E., **costo** (regla del cotizador, ver [apoyos en el DWH](apoyos-dwh.md)), margen lista por canal | % de apoyo sobre costo y sobre lista, $ apoyo por unidad y por caja, costo neto, precio apoyado sugerido, margen real y recompuesto, margen mínimo de pedido, estado de vigencia |
+
+`Tipo de apoyo` es el método de cálculo (`calc_method`); la clase (`kind`, columna opcional
+`Clase de apoyo`) se deduce si no viene: `excepcion_margen` con margen mínimo, `tactico_cliente` con
+NIT y `actividad_temporal` sin NIT. `GET /supplier-supports/bulk/template` baja la plantilla corta;
+`full=true`, todas las columnas. `form-schema` trae `calc_method_labels`.
+
 ## Carga masiva por archivo
 
 `POST /supplier-supports/bulk` (`multipart/form-data`, campo `file` `.xlsx`/`.csv`). Cada fila
 pasa por las mismas validaciones que un apoyo creado a mano (proveedor, referencia JDH y NIT
 deben existir en los maestros) y la carga es **todo o nada**: si una sola fila falla no se guarda
 ninguna, aunque se pida `apply=true` (`blocked`). El reporte dice todos los errores de una vez
-(fila, campo y motivo) para corregir y volver a subir.
+(fila, campo y motivo) para corregir y volver a subir. Los maestros de todo el archivo se
+consultan una sola vez (3 consultas, no 3 por fila).
+
+**Actualiza por llave.** Llave = proveedor + clase + NIT cliente + SKU JDH (o SKU proveedor sin
+SKU JDH) + referencia externa + fecha inicio. Cada fila:
+
+- **crea** el apoyo si la llave no existe;
+- **actualiza** el existente si algo cambió, **solo con las columnas que trae el archivo**: una
+  columna ausente conserva lo guardado (subir sin `% Apoyo JDH` no borra un aporte aprobado);
+- lo deja **sin cambio** si dice lo mismo.
+
+Una renovación con otra fecha inicio es un apoyo nuevo. Los apoyos vigentes o programados de los
+mismos proveedores y clases que el archivo ya no trae se reportan como **ausentes**
+(`missing`, `missing_preview`); con `expire_missing=true` los que ya empezaron se cierran el día
+anterior a la carga (`origen = vencimiento`). Nada se borra.
+
+Cada carga aplicada queda en `supplier_support_loads` (archivo, SHA-256, hoja, proveedor, usuario,
+fecha y conteos) y cada apoyo que tocó apunta a ella (`last_load_id`, `last_origin = carga`). Todo
+se publica en el DWH ([apoyos en el DWH](apoyos-dwh.md)); una carga de más de 5.000 apoyos se
+publica en el horario tranquilo del DWH (`publish_not_before`).
 
 | Parámetro | |
 | --- | --- |
-| `file` | `.xlsx`, `.xlsm` o `.csv` (máximo `SUPPLIER_SUPPORTS_MAX_UPLOAD_MB`, 10 MB, y `SUPPLIER_SUPPORTS_MAX_BULK_ROWS`, 2000 filas) |
+| `file` | `.xlsx`, `.xlsm` o `.csv` (máximo `SUPPLIER_SUPPORTS_MAX_UPLOAD_MB`, 10 MB, y `SUPPLIER_SUPPORTS_MAX_BULK_ROWS`, 10.000 filas) |
 | `apply` | `false` (defecto) simula; `true` guarda si no hay errores |
 | `supplier_code` | Proveedor de las filas sin columna propia; además elige su perfil |
 | `sheet` | Hoja; si falta, la del perfil y luego la primera con encabezados |
+| `expire_missing` | `true` cierra los ausentes ya empezados |
 | `defaults`, `column_map` | Objetos JSON (campos del formulario) que prevalecen sobre el perfil en esta carga |
+
+El reporte suma `to_create`, `to_update`, `unchanged`, `missing`, `to_expire`, y por fila de
+`preview` su `action` (`crear`, `actualizar`, `sin_cambio`) y `support_id`. Aplicada: `load_id`,
+`created`, `updated`, `expired` y `publish_not_before`.
 
 Cómo se lee el archivo:
 
@@ -271,16 +316,16 @@ Cómo se lee el archivo:
 4. **Fechas**: `dd/mm/aaaa`, `aaaa-mm-dd` o fecha de Excel; vacío, `INDEFINIDO` o `UFN` = sin
    fecha final. Alcance (`regionals`, `business_units`, `channels`) con varios valores
    separados por coma, barra o punto y coma; `TODOS` = sin restricción.
-5. Dos filas iguales en el mismo archivo son error (`Fila repetida`). Las escalas (`tiers`)
-   no van en el archivo: se agregan luego por `PATCH`.
+5. Dos filas con la misma llave en el mismo archivo son error (`Fila repetida`). Las escalas
+   (`tiers`) no van en el archivo: se agregan luego por `PATCH`.
 
 La respuesta trae `preview` (las 50 primeras filas válidas), `created` (ids, al aplicar) y
 `with_conflicts` (cuántos de los creados se solapan con apoyos existentes; se permiten y se
 advierten, como siempre). `source` queda como `carga masiva: <archivo>`.
 
-`GET /supplier-supports/bulk/template` baja la plantilla (`.xlsx`: hoja `Apoyos` con las
-columnas, `Instrucciones` y `Valores`); con `supplier_code` sigue el formato del perfil: sus
-encabezados y sin las columnas de valor fijo. `POST /supplier-supports/batch` (JSON) ahora
+`GET /supplier-supports/bulk/template` baja la plantilla corta (`.xlsx`: hoja `Apoyos` con las
+columnas, `Instrucciones` y `Valores`; `full=true` para todas); con `supplier_code` sigue el
+formato del perfil: sus encabezados, las columnas que mapea y sin las de valor fijo. `POST /supplier-supports/batch` (JSON) ahora
 también guarda en una sola transacción.
 
 ## Soportes de los apoyos (documentos)
@@ -356,6 +401,37 @@ fila (`source_key`). Cada tabla del libro tiene su adaptador en
 `app/modules/supplier_supports/infrastructure/workbook.py`; los apoyos por proveedor
 sin código en el Excel (Aderezos, Azteca, Red Bull) se cruzan por nombre y se imprime
 el resultado para revisarlo (`--supplier NOMBRE=CODIGO` lo fuerza).
+
+### Recarga desde los archivos por proveedor
+
+Desde noviembre de 2026 los proveedores envían sus tablas por separado
+(`Apoyos Proveedor - X.xlsx`, las mismas tablas de Excel del libro). Se recargan **por llave**, sin
+duplicar:
+
+```bash
+poetry run python scripts/reload-supplier-supports.py "Apoyos proveedores" --report recarga.csv
+poetry run python scripts/reload-supplier-supports.py "Apoyos proveedores" --apply
+poetry run python scripts/reload-supplier-supports.py "Apoyos proveedores" --expire-missing --apply
+```
+
+Lee cada tabla con su adaptador (las tablas se buscan por nombre: algunas hojas cambiaron de
+nombre, y Team y Familia cambiaron encabezados) y empareja cada fila con el apoyo guardado por su
+llave: crea las nuevas, actualiza lo que cambió y deja igual el resto. Como el importador, no
+descarta nada: un NIT o SKU sin cruce queda `pendiente_revision`. Reglas propias de la recarga:
+
+- **Costo y precio lista del archivo** son búsquedas en su propia hoja de productos: solo se usan
+  como referencia al crear, nunca actualizan (el costo sale del DWH).
+- **El aporte JDH aprobado** en el panel no se reemplaza.
+- **Ausentes**: los apoyos de la misma tabla (`source`) que el archivo ya no trae; se cierran el
+  día anterior solo con `--expire-missing`.
+- Cada archivo es una carga (`supplier_support_loads`) en una sola transacción; lo que toca se
+  publica en el DWH. Repetir la recarga sin cambios no escribe nada.
+
+Simulación del 10-nov-2026 contra la importación del 13-oct (base de desarrollo): 14.962 filas,
+2.219 nuevas, 3.116 con cambios, 9.571 sin cambio y 146 ausentes. Los cambios son sobre todo
+de Familia (la unidad de negocio ahora viene casi en todas las filas) y Team (regional, vendedor,
+grupo y vigencias de la hoja que antes estaba «desactualizada»). Kimberly trae 1.091 acuerdos
+nuevos.
 
 Nada se descarta por tener datos malos: la fila se importa como `pendiente_revision`
 con sus `issues` y el CSV las lista. Pasar un apoyo a `activo` (`PATCH`) limpia sus

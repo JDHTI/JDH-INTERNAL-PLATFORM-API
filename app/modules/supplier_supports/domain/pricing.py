@@ -14,6 +14,8 @@ functions never mix units.
 
 from __future__ import annotations
 
+import math
+from dataclasses import replace
 from decimal import Decimal
 
 from app.modules.supplier_supports.domain.entities import Derived, MoneyPair, SupportData
@@ -65,16 +67,56 @@ def supplier_amount(data: SupportData) -> Decimal | None:
     return None
 
 
-def derive(data: SupportData) -> Derived:
+def dwh_cost_in_unit(
+    unit_cost: Decimal | None,
+    value_unit: str | None,
+    pack_factor: Decimal | None,
+    reference_cost: Decimal | None = None,
+) -> Decimal | None:
+    """The DWH cost (per inventory unit) in the unit the support's values are written in.
+
+    A support "per box" is the DWH cost times the pack factor, except when the SKU itself is
+    the box (Ohra: the SKU is a case of 18 bottles and its inventory unit is the case, while
+    the sheet's U.E says 18). When the support has a reference cost, the reading closest to
+    it wins, the same check the unit inference uses (``inferido_dwh``).
+
+    ``None`` when it cannot be placed (the support's unit is unknown, or a box with no pack
+    factor and no reference): then the support keeps its reference cost.
+    """
+
+    if unit_cost is None:
+        return None
+    if value_unit in ("unidad", "kg"):
+        return unit_cost
+    if value_unit != "caja":
+        return None
+    boxed = unit_cost * pack_factor if pack_factor else None
+    if reference_cost is None or reference_cost <= 0:
+        return boxed
+    candidates = [value for value in (boxed, unit_cost) if value is not None and value > 0]
+    return min(candidates, key=lambda value: abs(math.log(value / reference_cost)))
+
+
+def derive(data: SupportData, dwh_unit_cost: Decimal | None = None) -> Derived:
     """Compute the derived amounts and margins of a support.
+
+    The cost is the DWH's (the quoter's rule, refreshed daily) whenever it is known and can
+    be put in the support's unit; otherwise the reference cost stored with the support.
+    ``cost_basis`` says which one was used.
 
     Args:
         data (SupportData): The support inputs.
+        dwh_unit_cost (Decimal | None): The DWH cost per inventory unit of its SKU.
 
     Returns:
         Derived: Whatever can be computed with the references available.
     """
 
+    basis = "referencia" if data.reference_cost is not None else None
+    live = dwh_cost_in_unit(dwh_unit_cost, data.value_unit, data.pack_factor, data.reference_cost)
+    if live is not None:
+        data = replace(data, reference_cost=live)
+        basis = "dwh"
     cost, listed = data.reference_cost, data.reference_list_price
     amount = supplier_amount(data)
     net_cost = cost - amount if cost is not None and amount is not None else None
@@ -118,6 +160,7 @@ def derive(data: SupportData) -> Derived:
         supplier_amount_per=per(amount),
         net_cost_per=per(net_cost),
         suggested_price_per=per(price),
+        cost_basis=basis,
     )
 
 

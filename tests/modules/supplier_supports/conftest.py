@@ -25,9 +25,12 @@ from app.modules.supplier_supports.domain.attachments import (
 )
 from app.modules.supplier_supports.domain.entities import (
     Conflict,
+    LoadPlan,
+    LoadResult,
     Support,
     SupportData,
     SupportRow,
+    Trace,
 )
 from app.modules.supplier_supports.domain.filters import Group, SearchSpec
 from app.modules.supplier_supports.domain.profiles import Profile
@@ -101,8 +104,18 @@ class FakeSupportRepository:
     def __init__(self) -> None:
         self.items: dict[UUID, Support] = {}
         self.last_search: SearchSpec | None = None
+        # What wrote the last version of each support (the real one queues it for the DWH).
+        self.traces: dict[UUID, Trace] = {}
+        self.loads: list[LoadPlan] = []
 
-    async def create(self, support_id: UUID, data: SupportData, actor: str, now: datetime):
+    async def create(
+        self,
+        support_id: UUID,
+        data: SupportData,
+        actor: str,
+        now: datetime,
+        trace: Trace | None = None,
+    ):
         if data.source_key and any(
             item.data.source_key == data.source_key for item in self.items.values()
         ):
@@ -119,14 +132,54 @@ class FakeSupportRepository:
             updated_at=now,
         )
         self.items[support_id] = support
+        self.traces[support_id] = trace or Trace("manual")
         return support
 
-    async def create_many(self, items, actor: str, now: datetime):
+    async def create_many(self, items, actor: str, now: datetime, trace: Trace | None = None):
         keys = [data.source_key for _, data in items if data.source_key]
         if len(keys) != len(set(keys)):
             raise ConflictError("duplicado")
         # All or none, like the real transaction.
-        return [await self.create(support_id, data, actor, now) for support_id, data in items]
+        return [
+            await self.create(support_id, data, actor, now, trace or Trace("lote"))
+            for support_id, data in items
+        ]
+
+    async def live_for_suppliers(self, supplier_ids) -> list[Support]:
+        return [
+            item
+            for item in self.items.values()
+            if item.data.commercial_supplier_id in set(supplier_ids)
+            and item.data.status != "anulado"
+        ]
+
+    async def apply_load(self, plan: LoadPlan, actor: str, now: datetime) -> LoadResult:
+        for support_id, version, _ in (*plan.updates, *plan.expirations):
+            current = self.items.get(support_id)
+            if current is None or current.version != version:
+                raise ConflictError("versión")
+        self.loads.append(plan)
+        trace = Trace("carga", plan.load_id)
+        for support_id, data in plan.creates:
+            await self.create(support_id, data, actor, now, trace)
+        for support_id, version, data in plan.updates:
+            await self.update(support_id, data, version, actor, now, trace)
+        for support_id, version, last_day in plan.expirations:
+            current = self.items[support_id]
+            await self.update(
+                support_id,
+                replace(current.data, valid_to=last_day),
+                version,
+                actor,
+                now,
+                Trace("vencimiento", plan.load_id),
+            )
+        return LoadResult(
+            load_id=plan.load_id,
+            created=tuple(support_id for support_id, _ in plan.creates),
+            updated=tuple(support_id for support_id, _, _ in plan.updates),
+            expired=tuple(support_id for support_id, _, _ in plan.expirations),
+        )
 
     async def get(self, support_id: UUID) -> Support | None:
         return self.items.get(support_id)
@@ -135,7 +188,7 @@ class FakeSupportRepository:
         support = self.items.get(support_id)
         return None if support is None else SupportRow(support=support, supplier_code="233")
 
-    async def update(self, support_id, data, expected_version, actor, now):
+    async def update(self, support_id, data, expected_version, actor, now, trace=None):
         current = self.items.get(support_id)
         if current is None:
             raise NotFoundError("Apoyo no encontrado")
@@ -145,9 +198,11 @@ class FakeSupportRepository:
             current, data=data, version=current.version + 1, updated_by=actor, updated_at=now
         )
         self.items[support_id] = saved
+        self.traces[support_id] = trace or Trace("edicion")
         return saved
 
-    async def void(self, support_id, reason, expected_version, actor, now):
+    async def void(self, support_id, reason, expected_version, actor, now, trace=None):
+        self.traces[support_id] = trace or Trace("anulacion")
         current = self.items[support_id]
         saved = replace(
             current,

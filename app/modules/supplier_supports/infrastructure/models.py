@@ -183,6 +183,12 @@ class SupplierSupportModel(Base):
     issues: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # The bulk load and the action (``carga``, ``manual``, ``aprobacion_jdh``…) that last
+    # wrote the support; every version is kept in ``dwh_outbox``.
+    last_load_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_support_loads.id", ondelete="SET NULL")
+    )
+    last_origin: Mapped[str | None] = mapped_column(String(20))
 
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
     updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
@@ -193,6 +199,48 @@ class SupplierSupportModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class SupplierSupportLoadModel(Base):
+    """One bulk load of supports: the file, who uploaded it and what it did."""
+
+    __tablename__ = "supplier_support_loads"
+    __table_args__ = (Index("ix_supplier_support_loads_created", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    supplier_code: Mapped[str | None] = mapped_column(Text)
+    sheet: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    rows_read: Mapped[int] = mapped_column(Integer, nullable=False)
+    created: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated: Mapped[int] = mapped_column(Integer, nullable=False)
+    unchanged: Mapped[int] = mapped_column(Integer, nullable=False)
+    missing: Mapped[int] = mapped_column(Integer, nullable=False)
+    expired: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SupplierSupportCostModel(Base):
+    """The cost of a support's SKU from the DWH, with the quoter's rule (refreshed daily)."""
+
+    __tablename__ = "supplier_support_costs"
+
+    support_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="CASCADE"), primary_key=True
+    )
+    product_sku: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_key: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_label: Mapped[str] = mapped_column(Text, nullable=False)
+    unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    source: Mapped[str | None] = mapped_column(String(12))
+    quote_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    inventory_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    snapshot_date: Mapped[date | None] = mapped_column(Date)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class SupplierSpecialCaseModel(Base):

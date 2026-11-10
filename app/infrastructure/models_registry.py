@@ -11,6 +11,7 @@ from app.modules.commercial_masters.infrastructure import models as commercial_m
 from app.modules.directory.infrastructure import models as directory_models
 from app.modules.documents.infrastructure import models as documents_models
 from app.modules.dwh_monitoring.infrastructure import models as dwh_monitoring_models
+from app.modules.dwh_publish.infrastructure import models as dwh_publish_models
 from app.modules.identity.infrastructure import models as identity_models
 from app.modules.jobs.infrastructure import models as jobs_models
 from app.modules.masters.infrastructure import models as masters_models
@@ -31,6 +32,7 @@ __all__ = [
     "directory_models",
     "documents_models",
     "dwh_monitoring_models",
+    "dwh_publish_models",
     "identity_models",
     "jobs_models",
     "masters_models",

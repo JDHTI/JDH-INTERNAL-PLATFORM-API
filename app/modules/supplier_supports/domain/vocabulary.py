@@ -32,6 +32,19 @@ CALC_METHODS = (
     "margen_minimo",  # only a minimum order margin, no supplier money
 )
 
+# How each calc method is written in the general template ("Tipo de apoyo" column). The file
+# may carry the label or the code.
+CALC_METHOD_LABELS = {
+    "pct_costo": "% sobre costo",
+    "pct_precio_lista": "% sobre precio lista",
+    "costo_neto": "Costo apoyado",
+    "precio_neto": "Precio apoyado sin IVA",
+    "valor_unidad": "$ por unidad",
+    "margen_minimo": "Margen mínimo",
+    "puntos_margen": "Puntos de margen",
+    "pct_ventas": "% sobre ventas",
+}
+
 VALUE_UNITS = ("unidad", "caja", "kg")
 
 STATUSES = ("activo", "pendiente_revision", "anulado")
@@ -48,6 +61,19 @@ STATES = (*VALIDITIES, "inactivo", "anulado")
 
 # Where the unit of a cost (``value_unit``: per box or per unit) comes from.
 UNIT_BASIS_SOURCES = ("hoja", "inferido_dwh", "manual", "desconocido")
+
+# What wrote a version of a support (traceability, published to the DWH with each version).
+ORIGINS = (
+    "importacion",  # the workbook importer script
+    "manual",  # created by hand
+    "lote",  # created by the JSON batch endpoint
+    "carga",  # bulk load by file (with its load id)
+    "edicion",  # edited by hand
+    "anulacion",  # voided
+    "vencimiento",  # closed by a bulk load that no longer brings it
+    "aprobacion_jdh",  # a JDH contribution request was approved
+    "cancelacion_jdh",  # the JDH contribution was cancelled
+)
 
 SPECIAL_CASE_STATUSES = ("pendiente", "en_analisis", "programado", "implementado", "descartado")
 SPECIAL_CASE_PRIORITIES = ("baja", "media", "alta")

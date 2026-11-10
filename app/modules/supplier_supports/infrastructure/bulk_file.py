@@ -10,10 +10,11 @@ import csv
 import io
 import zipfile
 from typing import Any
+from xml.etree import ElementTree
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
 
 from app.core.errors import InvalidInputError
@@ -48,25 +49,113 @@ def _csv_rows(content: bytes) -> list[list[Any]]:
     return [list(row) for row in csv.reader(io.StringIO(text), dialect)]
 
 
+_NS = {
+    "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
+}
+_R_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+
+
+def _resolve(base: str, target: str) -> str:
+    """A relationship target as a path inside the package."""
+
+    if target.startswith("/"):
+        return target.lstrip("/")
+    parts = base.rsplit("/", 1)[0].split("/") if "/" in base else []
+    for piece in target.split("/"):
+        if piece == "..":
+            parts = parts[:-1]
+        elif piece and piece != ".":
+            parts.append(piece)
+    return "/".join(parts)
+
+
+def _relations(package: zipfile.ZipFile, part: str) -> dict[str, str]:
+    folder, name = part.rsplit("/", 1)
+    rels = f"{folder}/_rels/{name}.rels"
+    if rels not in package.namelist():
+        return {}
+    root = ElementTree.fromstring(package.read(rels))
+    return {
+        item.get("Id", ""): _resolve(part, item.get("Target", ""))
+        for item in root.findall("rel:Relationship", _NS)
+    }
+
+
+def _tables(content: bytes) -> dict[str, list[tuple[str, str]]]:
+    """Sheet title -> ``(table name, A1 range)`` of its Excel tables (ListObjects).
+
+    Read from the package XML: ``read_only`` workbooks do not expose them, and loading the
+    whole workbook again just for this would double the time of a big file.
+    """
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            workbook = ElementTree.fromstring(package.read("xl/workbook.xml"))
+            targets = _relations(package, "xl/workbook.xml")
+            found: dict[str, list[tuple[str, str]]] = {}
+            for item in workbook.findall("main:sheets/main:sheet", _NS):
+                part = targets.get(item.get(_R_ID, ""))
+                if not part:
+                    continue
+                sheet_xml = ElementTree.fromstring(package.read(part))
+                rels = _relations(package, part)
+                for table_part in sheet_xml.findall("main:tableParts/main:tablePart", _NS):
+                    table_path = rels.get(table_part.get(_R_ID, ""))
+                    if not table_path or table_path not in package.namelist():
+                        continue
+                    table = ElementTree.fromstring(package.read(table_path))
+                    name = table.get("displayName") or table.get("name") or ""
+                    if name and table.get("ref"):
+                        found.setdefault(item.get("name", ""), []).append((name, table.get("ref")))
+            return found
+    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError):
+        return {}
+
+
+def _slice(rows: list[list[Any]], ref: str) -> list[list[Any]]:
+    """The cells of an A1 range (an Excel table) out of a sheet's rows."""
+
+    min_col, min_row, max_col, max_row = range_boundaries(ref)
+    return [
+        list(row[min_col - 1 : max_col]) + [None] * max(0, max_col - len(row))
+        for row in rows[min_row - 1 : max_row]
+    ]
+
+
 def _xlsx_sheets(content: bytes, sheet: str | None) -> list[Sheet]:
+    """Every Excel table of the book (``sheet / table``) and then every whole sheet.
+
+    Suppliers keep their supports in a table with a lookup table beside it on the same sheet
+    (``Maestro_Sku_*``); reading the table alone keeps those rows out. ``sheet`` names a sheet
+    or a table.
+    """
+
     try:
         book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except (InvalidFileException, zipfile.BadZipFile, OSError, KeyError, ValueError) as exc:
         raise InvalidInputError("El archivo no es un libro de Excel válido") from exc
+    tables = _tables(content)
     try:
-        worksheets = book.worksheets
+        candidates: list[Sheet] = []
+        whole: list[Sheet] = []
+        # The template's own sheet first, then the others in book order.
+        for item in sorted(book.worksheets, key=lambda value: value.title != TEMPLATE_SHEET):
+            rows = [list(row) for row in item.iter_rows(values_only=True)]
+            for name, ref in tables.get(item.title, []):
+                candidates.append((f"{item.title} / {name}", _slice(rows, ref)))
+            whole.append((item.title, rows))
+        found = candidates + whole
         if sheet:
             wanted = n.fold(sheet)
-            worksheets = [item for item in worksheets if n.fold(item.title) == wanted]
-            if not worksheets:
-                raise InvalidInputError(f"El libro no tiene la hoja «{sheet}»")
-        else:
-            # The template's own sheet first, then the others in book order.
-            worksheets = sorted(worksheets, key=lambda item: item.title != TEMPLATE_SHEET)
-        return [
-            (item.title, [list(row) for row in item.iter_rows(values_only=True)])
-            for item in worksheets
-        ]
+            found = [
+                (title, rows)
+                for title, rows in found
+                if wanted in (n.fold(title), n.fold(title.split(" / ")[-1]))
+            ]
+            if not found:
+                raise InvalidInputError(f"El libro no tiene la hoja o tabla «{sheet}»")
+        return found
     finally:
         book.close()
 
@@ -91,16 +180,20 @@ class SpreadsheetSupportReader:
         return _xlsx_sheets(content, sheet)
 
 
-def template_headers(profile: Profile | None) -> list[tuple[str, str]]:
+def template_headers(profile: Profile | None, full: bool = False) -> list[tuple[str, str]]:
     """``(field, header)`` of every column of the template.
 
-    With a profile the columns follow the supplier's own layout: fields it fixes with a
-    default are left out, and the first header it maps to a field replaces the general one.
+    By default the short general template: the key (NIT, SKU, dates), the type and value of
+    the support and the optional fields suppliers send; costs, prices and names come from
+    the DWH and are never asked. ``full`` adds every field. With a profile the columns
+    follow the supplier's own layout: fields it fixes with a default are left out, the
+    fields it maps are added, and its first header replaces the general one.
     """
 
     columns: list[tuple[str, str]] = []
+    mapped = set(profile.data.column_map) if profile is not None else set()
     for spec in fields.FIELD_SPECS:
-        if not spec.in_template:
+        if not spec.in_template or not (full or spec.core or spec.name in mapped):
             continue
         if profile is not None and spec.name in profile.data.defaults:
             continue
@@ -111,15 +204,15 @@ def template_headers(profile: Profile | None) -> list[tuple[str, str]]:
     return columns
 
 
-def template_workbook(profile: Profile | None = None) -> bytes:
+def template_workbook(profile: Profile | None = None, full: bool = False) -> bytes:
     """The bulk template as an ``.xlsx``: the sheet to fill, the instructions and the values."""
 
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = TEMPLATE_SHEET
-    columns = template_headers(profile)
+    columns = template_headers(profile, full)
     defaults = profile.data.defaults if profile else {}
-    required = {"kind", "calc_method", "supplier_code"} - set(defaults)
+    required = {"calc_method", "supplier_code"} - set(defaults)
     if profile is not None:
         required.discard("supplier_code")
     for index, (name, header) in enumerate(columns, start=1):
@@ -134,12 +227,19 @@ def template_workbook(profile: Profile | None = None) -> bytes:
     guide["A1"].font = Font(bold=True, size=14)
     intro = [
         "Una fila por apoyo. Las columnas en rojo son obligatorias; el resto es opcional.",
+        "Llave del apoyo: proveedor + NIT cliente + SKU JDH (o SKU proveedor) + fecha inicio "
+        "(+ número de acuerdo si lo hay). Si la llave ya existe, la fila actualiza ese apoyo; "
+        "si no, lo crea. Una columna que no venga en el archivo conserva el valor guardado.",
+        "Solo se escribe lo que se negocia: el costo, el precio lista, el margen y los nombres "
+        "salen del DWH y se calculan en la plataforma.",
+        "Tipo de apoyo: " + "; ".join(vocabulary.CALC_METHOD_LABELS.values()) + ".",
         "Antes de guardar se simula: si una sola fila tiene un error no se guarda ninguna, "
-        "y el reporte dice qué corregir y en qué fila.",
+        "y el reporte dice qué corregir y en qué fila, y qué apoyos se crean, cambian, "
+        "quedan igual o ya no vienen.",
         "Los porcentajes pueden escribirse como 5 %, 5 o 0,05. Los campos de alcance vacíos "
         "significan «todos».",
-        "Fechas: dd/mm/aaaa o aaaa-mm-dd. Fecha final vacía, INDEFINIDO o UFN = sin fecha final.",
-        "Referencia JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla.",
+        "Fechas: dd/mm/aaaa o aaaa-mm-dd. Fecha final INDEFINIDO o UFN = sin fecha final.",
+        "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla.",
     ]
     if profile is not None:
         intro.insert(
@@ -171,8 +271,8 @@ def template_workbook(profile: Profile | None = None) -> bytes:
 
     values = book.create_sheet("Valores")
     lists = (
-        ("Tipo", vocabulary.KINDS),
-        ("Método de cálculo", vocabulary.CALC_METHODS),
+        ("Tipo de apoyo", tuple(vocabulary.CALC_METHOD_LABELS.values())),
+        ("Clase de apoyo", vocabulary.KINDS),
         ("Quién financia", vocabulary.FUNDINGS),
         ("Unidad del costo", vocabulary.VALUE_UNITS),
         ("Forma de liquidación", vocabulary.SETTLEMENTS),
