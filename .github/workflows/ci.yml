@@ -57,10 +57,10 @@ jobs:
       - name: Run tests
         run: poetry run pytest -q
 
-  # The runner lives on intranet.jdh.local and connects out to GitHub, so the server opens no
+  # The runner lives on the intranet server and connects out to GitHub, so the server opens no
   # port for this. Setup: docs/deploy.md.
   deploy:
-    name: Desplegar en intranet.jdh.local
+    name: Desplegar en intranet.jdh.com.co
     needs: [quality]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: [self-hosted, internal-platform-api]
