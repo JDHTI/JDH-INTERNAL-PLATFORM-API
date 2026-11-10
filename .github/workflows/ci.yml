@@ -11,8 +11,11 @@ on:
 permissions:
   contents: read
 
+# A PR's run is grouped by its number, never by github.ref: a pull_request event that arrives
+# after the PR is merged carries refs/heads/master, and would cancel the master run (and its
+# deploy, possibly between the migrations and the restart).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.ref }}
   # A push to master must not cancel a deploy halfway.
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/master' }}
 
