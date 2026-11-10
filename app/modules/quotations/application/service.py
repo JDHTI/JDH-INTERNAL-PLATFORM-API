@@ -32,9 +32,6 @@ from app.modules.quotations.domain.entities import (
     QuotationLine,
     QuotationPage,
     QuotationPolicy,
-    QuotationRef,
-    RequestedProduct,
-    RequestedProductPage,
     Seller,
     SellerContact,
     TemporaryCustomer,
@@ -72,8 +69,6 @@ _LIST_NAME_LENGTH = 40
 # Longest description and supplier name of a local product.
 LOCAL_TEXT_LENGTH = 120
 _LOCAL_NO_MARGIN = "Producto solo para cotización: sin costo para calcular el precio"
-# Longest note BI writes on a requested product.
-NOTE_LENGTH = 1000
 _QUANTITY_STEP = Decimal("0.01")
 # Characters a file name may not carry on Windows, macOS or Linux.
 _FILE_UNSAFE = re.compile(r'[\\/:*?"<>|]+')
@@ -253,7 +248,6 @@ class QuotationService:
         approvers: ManagerPolicy | None = None,
         sales: SalesScopeResolver | None = None,
         offer_writer: OfferWriter | None = None,
-        registry_readers: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
@@ -273,8 +267,6 @@ class QuotationService:
             sales (SalesScopeResolver | None): Each person's customers (salespeople module).
                 Without one every reader sees every customer and quotation.
             offer_writer (OfferWriter | None): Writes the offer the customer receives.
-            registry_readers (ManagerPolicy | None): Who holds the ``productos-solicitados``
-                module; quoters and validators read the registry anyway.
         """
 
         self.repository = repository
@@ -290,7 +282,6 @@ class QuotationService:
         self.max_lines = max_lines
         self.approvers = approvers
         self.sales = sales
-        self.registry_readers = registry_readers
 
     # ------------------------------------------------------------ access
 
@@ -1162,18 +1153,13 @@ class QuotationService:
         supplier_name: str | None,
         price: Decimal | str | None,
         vat_pct: Decimal | str | None,
-        requested_product_id: UUID | None = None,
     ) -> QuotationDetail:
         """Quote a product SIESA does not have (``origin: local``).
 
         It gets the next ``LOC-<n>`` of the quotation and goes at the end. It has no cost, so
         the rule does not judge it: it is not counted as changed or below the rule, it does
-        not block the confirmation, and it never reaches the workbook or the SIESA files.
-
-        A new product is entered in the requested products registry (``solicitado``) and the
-        line points to it. With ``requested_product_id`` (an entry still ``solicitado``) the
-        description, supplier and VAT come from that entry, and the price from ``price`` or,
-        without one, the entry's estimated price.
+        not block the confirmation, and it never reaches the workbook or the SIESA files. It
+        lives only in this quotation.
 
         Args:
             principal (Principal): The advisor.
@@ -1183,71 +1169,33 @@ class QuotationService:
             supplier_name (str | None): Who supplies it, optional (up to 120).
             price (Decimal | str | None): Price before VAT, whole pesos above zero.
             vat_pct (Decimal | str | None): VAT in points: 19, 5 or 0.
-            requested_product_id (UUID | None): A registry entry to quote again.
 
         Returns:
             QuotationDetail: The quotation, back to draft, with the new line.
 
         Raises:
-            InvalidInputError: A field is missing or out of range, the registry entry does not
-                exist or is not ``solicitado``, or the quotation is full.
+            InvalidInputError: A field is missing or out of range, or the quotation is full.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
         amount = _decimal_input(price, "El precio debe ser un número en pesos")
-        created: list[RequestedProduct] = []
-        if requested_product_id is not None:
-            product = await self.repository.get_requested_product(requested_product_id)
-            if product is None:
-                raise InvalidInputError("El producto solicitado no existe")
-            if product.status != vocabulary.PRODUCT_REQUESTED:
-                label = vocabulary.REQUESTED_STATUS_LABELS.get(product.status, product.status)
-                raise InvalidInputError(
-                    f"El producto solicitado está {label.lower()}: solo se cotiza uno solicitado"
-                )
-            text, supplier = product.description, product.supplier_name
-            vat = product.vat_pct if product.vat_pct is not None else Decimal(0)
-            if amount is None:
-                amount = product.estimated_price
-        else:
-            text = " ".join((description or "").split())
-            if not text:
-                raise InvalidInputError("Escribe la descripción del producto")
-            if len(text) > LOCAL_TEXT_LENGTH:
-                raise InvalidInputError(
-                    f"La descripción admite máximo {LOCAL_TEXT_LENGTH} caracteres"
-                )
-            supplier = " ".join((supplier_name or "").split()) or None
-            if supplier is not None and len(supplier) > LOCAL_TEXT_LENGTH:
-                raise InvalidInputError(
-                    f"El proveedor admite máximo {LOCAL_TEXT_LENGTH} caracteres"
-                )
-            vat = _decimal_input(vat_pct, "El IVA es 19, 5 o 0 %")
-            if vat is None or vat not in vocabulary.LOCAL_VAT_POINTS:
-                raise InvalidInputError("El IVA es 19, 5 o 0 %")
+        text = " ".join((description or "").split())
+        if not text:
+            raise InvalidInputError("Escribe la descripción del producto")
+        if len(text) > LOCAL_TEXT_LENGTH:
+            raise InvalidInputError(f"La descripción admite máximo {LOCAL_TEXT_LENGTH} caracteres")
+        supplier = " ".join((supplier_name or "").split()) or None
+        if supplier is not None and len(supplier) > LOCAL_TEXT_LENGTH:
+            raise InvalidInputError(f"El proveedor admite máximo {LOCAL_TEXT_LENGTH} caracteres")
+        vat = _decimal_input(vat_pct, "El IVA es 19, 5 o 0 %")
+        if vat is None or vat not in vocabulary.LOCAL_VAT_POINTS:
+            raise InvalidInputError("El IVA es 19, 5 o 0 %")
         if amount is None:
             raise InvalidInputError("Escribe el precio del producto, antes de IVA")
         amount = _price(amount, text)
         if len(detail.lines) + 1 > self.max_lines:
             raise InvalidInputError(f"La cotización admite máximo {self.max_lines} referencias")
-        if requested_product_id is None:
-            now = datetime.now(UTC)
-            product = RequestedProduct(
-                id=uuid4(),
-                description=text,
-                supplier_name=supplier,
-                estimated_price=amount,
-                vat_pct=Decimal(int(vat)),
-                status=vocabulary.PRODUCT_REQUESTED,
-                siesa_sku=None,
-                note=None,
-                created_by=principal.email,
-                created_at=now,
-                updated_by=principal.email,
-                updated_at=now,
-            )
-            created.append(product)
         line = rules.local_line(
             max((item.position for item in detail.lines), default=0) + 1,
             rules.local_sku(detail.lines),
@@ -1257,11 +1205,8 @@ class QuotationService:
             new_price=amount,  # type: ignore[arg-type]
             line_id=uuid4(),
         )
-        line = replace(line, requested_product_id=product.id)
         quotation = self._touched(detail.quotation, [*detail.lines, line], principal.email)
-        return await self.repository.save(
-            quotation, [], version, inserted=[line], requested=created
-        )
+        return await self.repository.save(quotation, [], version, inserted=[line])
 
     async def remove_line(
         self, principal: Principal, quotation_id: UUID, version: int, sku: str
@@ -1285,62 +1230,6 @@ class QuotationService:
         lines = [item for item in detail.lines if item.sku != sku]
         quotation = self._touched(detail.quotation, lines, principal.email)
         return await self.repository.save(quotation, [], version, removed=[line.id])
-
-    async def promote_line(
-        self, principal: Principal, quotation_id: UUID, version: int, sku: str
-    ) -> QuotationDetail:
-        """Swap a local product for the SIESA reference BI created for it.
-
-        The local line's registry entry must be ``creado``. The SIESA reference is priced like
-        an added one (``agregado``) in the local line's place, keeping its new price and
-        quantity. If the quotation already has that reference, the local line just goes and
-        its quantity passes to the reference when that one has none.
-
-        Raises:
-            InvalidInputError: The line is not a local product, its entry is not ``creado``,
-                or the reference is no longer active in SIESA.
-        """
-
-        detail = await self._editable(principal, quotation_id)
-        self._check_version(detail.quotation, version)
-        line = next((item for item in detail.lines if item.sku == sku), None)
-        if line is None:
-            raise NotFoundError(f"La referencia {sku} no está en la cotización")
-        if not line.is_local:
-            raise InvalidInputError(f"La referencia {sku} no es un producto solo para cotización")
-        product = (
-            await self.repository.get_requested_product(line.requested_product_id)
-            if line.requested_product_id
-            else None
-        )
-        if product is None or product.status != vocabulary.PRODUCT_CREATED or not product.siesa_sku:
-            raise InvalidInputError(
-                "El producto todavía no está creado en SIESA: BI debe marcarlo como creado"
-            )
-        target = product.siesa_sku
-        existing = next((item for item in detail.lines if item.sku == target), None)
-        if existing is not None:
-            changed: list[QuotationLine] = []
-            if existing.quantity is None and line.quantity is not None:
-                changed.append(replace(existing, quantity=line.quantity))
-            by_id = {item.id: item for item in changed}
-            lines = [by_id.get(item.id, item) for item in detail.lines if item.id != line.id]
-            quotation = self._touched(detail.quotation, lines, principal.email)
-            return await self.repository.save(quotation, changed, version, removed=[line.id])
-        items = await self.warehouse.items([target])
-        item = items.get(target)
-        if item is None or not item.is_active:
-            raise InvalidInputError(f"La referencia {target} no existe o está inactiva en SIESA")
-        priced, _ = await self._price(
-            self._stored_context(detail.quotation),
-            [_Entry(target, line.position, uuid4(), item=item)],
-        )
-        promoted = replace(rules.reprice(priced[0], line.new_price), quantity=line.quantity)
-        lines = [promoted if item.id == line.id else item for item in detail.lines]
-        quotation = self._touched(detail.quotation, lines, principal.email)
-        return await self.repository.save(
-            quotation, [], version, inserted=[promoted], removed=[line.id]
-        )
 
     # ------------------------------------------------------------ offer
 
@@ -1414,110 +1303,6 @@ class QuotationService:
             f"Cotizacion {name} {today.isoformat()}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-
-    # ------------------------------------------------------------ requested products
-
-    async def can_read_registry(self, principal: Principal) -> bool:
-        """The ``productos-solicitados`` module, or quoting or validating quotations."""
-
-        if self.registry_readers is not None and await self.registry_readers.can_read(principal):
-            return True
-        return await self.can_manage(principal) or await self.can_validate(principal)
-
-    async def registry_permissions(self, principal: Principal) -> tuple[bool, bool]:
-        """``(can_read, can_resolve)`` on the requested products registry."""
-
-        return await self.can_read_registry(principal), await self.can_validate(principal)
-
-    async def _require_registry_reader(self, principal: Principal) -> None:
-        if not await self.can_read_registry(principal):
-            raise ForbiddenError("No tienes permiso para ver los productos solicitados")
-
-    async def _visible_refs(
-        self, principal: Principal, product_ids: Sequence[UUID]
-    ) -> dict[UUID, list[QuotationRef]]:
-        """The quotations of each entry that the caller can open."""
-
-        refs = await self.repository.requested_product_quotations(product_ids)
-        if await self._sees_all(principal):
-            return refs
-        # Someone with the registry module but not the quoter opens no quotation.
-        reader = await self.can_read(principal)
-        return {
-            key: [item for item in values if reader and item.created_by_id == principal.user_id]
-            for key, values in refs.items()
-        }
-
-    async def requested_products(
-        self, principal: Principal, *, status: str | None, q: str | None, page: int, size: int
-    ) -> tuple[RequestedProductPage, dict[UUID, list[QuotationRef]]]:
-        """The registry, requested first, with the quotations of each the caller can open."""
-
-        await self._require_registry_reader(principal)
-        _page(page, size)
-        if status is not None and status not in vocabulary.REQUESTED_STATUSES:
-            raise InvalidInputError("Estado desconocido")
-        result = await self.repository.list_requested_products(
-            status=status, q=q.strip() if q and q.strip() else None, page=page, size=size
-        )
-        refs = await self._visible_refs(principal, [item.id for item in result.items])
-        return result, refs
-
-    async def update_requested_product(
-        self,
-        principal: Principal,
-        product_id: UUID,
-        *,
-        status: str,
-        siesa_sku: str | None = None,
-        note: str | None = None,
-        set_note: bool = False,
-    ) -> tuple[RequestedProduct, list[QuotationRef]]:
-        """BI marks a requested product as created (with its SIESA reference), discarded, or
-        requested again.
-
-        ``creado`` needs a SIESA reference that exists and is active. Only ``creado`` keeps a
-        reference: going back to ``solicitado`` (or to ``descartado``) clears it. The note
-        changes only when ``set_note``.
-
-        Raises:
-            ForbiddenError: The caller does not validate.
-            NotFoundError: The entry does not exist.
-            InvalidInputError: Unknown status, or a missing, unknown or inactive reference.
-        """
-
-        if not await self.can_validate(principal):
-            raise ForbiddenError("Solo quien valida gestiona los productos solicitados")
-        product = await self.repository.get_requested_product(product_id)
-        if product is None:
-            raise NotFoundError("Producto solicitado no encontrado")
-        if status not in vocabulary.REQUESTED_STATUSES:
-            raise InvalidInputError("El estado es solicitado, creado o descartado")
-        code: str | None = None
-        if status == vocabulary.PRODUCT_CREATED:
-            code = (siesa_sku or "").strip() or None
-            if code is None:
-                raise InvalidInputError("Escribe la referencia SIESA del producto creado")
-            item = (await self.warehouse.items([code])).get(code)
-            if item is None:
-                raise InvalidInputError(f"La referencia {code} no existe en SIESA")
-            if not item.is_active:
-                raise InvalidInputError(f"La referencia {code} está inactiva en SIESA")
-        values: dict[str, object] = {"status": status, "siesa_sku": code}
-        if set_note:
-            text = (note or "").strip() or None
-            if text is not None and len(text) > NOTE_LENGTH:
-                raise InvalidInputError(f"La nota admite máximo {NOTE_LENGTH} caracteres")
-            values["note"] = text
-        updated = replace(
-            product,
-            updated_by=principal.email,
-            updated_at=datetime.now(UTC),
-            **values,  # type: ignore[arg-type]
-        )
-        saved = await self.repository.update_requested_product(updated)
-        refs = await self._visible_refs(principal, [saved.id])
-        return saved, refs.get(saved.id, [])
 
     # ------------------------------------------------------------ review
 

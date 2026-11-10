@@ -13,10 +13,14 @@ está en SIESA).
 
 Módulo `quotations`. Migraciones `0037_quotations`, `0038_quotation_review`,
 `0050_quotation_local_lines` (categoría de la línea y productos solo para cotización),
-`0051_quotation_offer` (oferta al cliente, cantidades y registro de productos solicitados) y
+`0051_quotation_offer` (oferta al cliente y cantidades) y
 `0052_quotation_upload_flow` (estados de carga, CO elegido, cliente temporal, variación en la
 oferta). Área: Comercial (`/comercial/cotizador`). Datos del DWH: [cotizador-dwh.md](cotizador-dwh.md).
-El registro de productos solicitados es su propio módulo: [productos-solicitados.md](productos-solicitados.md).
+
+`0051` también creó la tabla `quotation_requested_products` y la columna
+`quotation_lines.requested_product_id` para un registro de productos solicitados que se retiró
+antes de salir a producción. Quedan en la base sin uso: nada las lee ni las escribe, y las líneas
+nuevas guardan `NULL` en la columna.
 
 Las reglas de costo, bodega, redondeo e impuesto son las del área de listas de precios, escritas
 en la skill del proyecto [`lista-precios`](../.claude/skills/lista-precios/SKILL.md). El cotizador
@@ -110,7 +114,9 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
     `below_target_count`. Su precio sí basta para confirmar. **No sale en el Excel ni en el
     plano.** Avisa `producto_local`. Se le cambia o quita el precio con `PUT /lines` (con
     `margin_pct` se omite: no tiene costo), se conserva igual al refrescar (después de las líneas
-    reconstruidas) y se puede quitar.
+    reconstruidas) y se puede quitar. Vive solo dentro de su cotización: no pasa a otra cotización
+    ni se convierte en una referencia SIESA. Si el producto se crea después en SIESA, se agrega como
+    cualquier referencia y se quita el `LOC-<n>`.
 11. **Cliente temporal**: un cliente que aún no está en SIESA se cotiza con
     `temporary_customer: {name, legal_name, trade_name?, nit?}` (nombre y razón social
     obligatorios, hasta 120 caracteres) y el CO desde donde se cotiza (`billing_center_code`,
@@ -144,7 +150,7 @@ dicen cosas distintas. **Nunca lleva costo, márgenes, apoyos ni datos de la reg
 - **Cantidades** (`quantity`): unidades de inventario, mayor que cero, hasta dos decimales y
   10.000.000. Se escriben con `PUT /lines`; un lote que solo trae cantidades se acepta en
   cualquier estado (también pendiente de validación), no cambia el estado pero sí sube la versión.
-  Se conservan al refrescar, al revalidar, al cambiar de CO y al promover.
+  Se conservan al refrescar, al revalidar y al cambiar de CO.
 - **Totales** (`offer_summary`, solo con `quote_quantities`), sobre las líneas de la oferta con
   cantidad, redondeando al peso (mitad hacia arriba):
 
@@ -166,21 +172,6 @@ dicen cosas distintas. **Nunca lleva costo, márgenes, apoyos ni datos de la reg
   `Variación` = `variation_pct`) y, con cantidades, `Cantidad`, `Subtotal`, `IVA` y `Total` más
   los totales por grupo de IVA, subtotal, IVA, impuesto al consumo y total; al final «Condiciones
   de la oferta»: primero «Precios válidos hasta el <fecha larga>» y luego las del asesor.
-
-## Productos solicitados
-
-Cada producto solo para cotización queda en el registro de productos solicitados, que es su propio
-módulo (`productos-solicitados`, rutas `/requested-products`): ver
-[productos-solicitados.md](productos-solicitados.md). Quitar la línea o borrar la cotización no
-borra el registro.
-
-- `POST /local-lines` crea el registro (precio estimado = el precio de la línea) y lo enlaza. Con
-  `requested_product_id` (un registro `solicitado`) cotiza otra vez ese producto: toma su
-  descripción, proveedor e IVA, y el precio del cuerpo o, si no viene, el estimado.
-- Con el registro `creado`, `POST /{id}/lines/{sku}/promote` cambia la línea local por la
-  referencia SIESA, calculada como una agregada (`agregado`) en su lugar, con su precio nuevo y su
-  cantidad. Si la cotización ya tiene esa referencia, la línea local se quita y su cantidad pasa a
-  la referencia cuando esta no tiene.
 
 ## Fórmulas
 
@@ -321,9 +312,8 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/{id}` | Cotización completa |
 | `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price?, margin_pct?, quantity?}]}`. `quantity` (texto o número; `null` la quita) va sola o con `new_price`, nunca con `margin_pct`. Un lote con **solo** cantidades se acepta en cualquier estado, no cambia el estado y sube la versión; uno que toca precios sigue las reglas de siempre. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
 | `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}`. Una referencia `LOC-<n>` no se busca en SIESA: va en `not_found` |
-| `POST /quotations/{id}/local-lines` | Producto solo para cotización: `{version, description, supplier_name?, price, vat_pct}` o `{version, requested_product_id, price?}` (un registro `solicitado`; 422 si no existe o no está solicitado). Crea o enlaza su registro de productos solicitados. `description` de 1 a 120 caracteres (se recortan los espacios), `supplier_name` opcional hasta 120, `price` (texto o número) en pesos enteros mayor que cero antes de IVA, `vat_pct` 19, 5 o 0. Devuelve la cotización con la línea `LOC-<n>` al final. Mismos permisos y estados que agregar referencias: 409 por versión o si está pendiente de validación; 422 con `detail` en español si un campo no sirve |
-| `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada**, **inactiva** o **solo para cotización** (su registro de productos solicitados queda) |
-| `POST /quotations/{id}/lines/{sku}/promote` | `{version}`: cambia el producto `LOC-<n>` por su referencia SIESA cuando su registro está `creado` (si no, 422). Mismos permisos y estados que agregar referencias |
+| `POST /quotations/{id}/local-lines` | Producto solo para cotización: `{version, description, supplier_name?, price, vat_pct}`. `description` de 1 a 120 caracteres (se recortan los espacios), `supplier_name` opcional hasta 120, `price` (texto o número) en pesos enteros mayor que cero antes de IVA, `vat_pct` 19, 5 o 0. Devuelve la cotización con la línea `LOC-<n>` al final. Mismos permisos y estados que agregar referencias: 409 por versión o si está pendiente de validación; 422 con `detail` en español si un campo no sirve |
+| `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada**, **inactiva** o **solo para cotización** |
 | `PATCH /quotations/{id}/offer` | `{version, validity_days?, conditions?, include_seller?, quote_quantities?, offer_scope?: changed \| all, include_variation?}`: solo cambian las llaves enviadas (`null` deja el valor). En cualquier estado y sin cambiarlo; sube la versión; 409 por versión. Una vigencia nueva empieza hoy |
 | `GET /quotations/{id}/offer.xlsx` | La oferta para el cliente, en cualquier estado, para quien puede leer la cotización |
 | `PATCH /quotations/{id}/billing-center` | `{version, billing_center_code}`: cotiza desde ese CO (`manual`) y recalcula regional, plan de bodegas, costo, impuesto de licores, objetivo, mínimo, óptimo, márgenes y cumplimiento de cada línea; conserva precios nuevos, cantidades y productos locales. Mismas reglas que `/refresh` (vuelve a borrador; 409 por versión o pendiente de validación). 422 si el CO no existe o está inactivo |
@@ -377,7 +367,6 @@ vat_groups: [{vat_pct, base, vat}], liquor_tax, total} | null` y `lines`.
 | `origin`, `origin_label` | `historico` (Histórico), `agregado` (Agregado) o `local` (Solo cotización) |
 | `quantity` | unidades de inventario que llevaría el cliente, o `null` |
 | `offer_price`, `in_offer` | precio de oferta y si la línea va en la oferta (según `offer_scope`) |
-| `requested_product` | en un producto solo para cotización, `{id, status, siesa_sku}` de su registro; si no, `null` |
 
 Un producto solo para cotización trae `sku` `LOC-<n>`, `origin: local`, `description`,
 `supplier_name` y `vat_pct` como se enviaron, `new_price`, `is_active: true`,

@@ -75,17 +75,6 @@ CONDITION_LENGTH = 300
 # Quantities are in inventory units, with up to two decimals.
 MAX_QUANTITY = 10_000_000
 
-# Products advisors asked for that SIESA does not have; BI creates them or discards them.
-PRODUCT_REQUESTED = "solicitado"
-PRODUCT_CREATED = "creado"
-PRODUCT_DISCARDED = "descartado"
-REQUESTED_STATUSES = (PRODUCT_REQUESTED, PRODUCT_CREATED, PRODUCT_DISCARDED)
-REQUESTED_STATUS_LABELS = {
-    PRODUCT_REQUESTED: "Solicitado",
-    PRODUCT_CREATED: "Creado",
-    PRODUCT_DISCARDED: "Descartado",
-}
-
 # Which cost won: the supplier's quotation in force or the inventory average cost.
 QUOTE_COST = "cotizacion"
 INVENTORY_COST = "inventario"

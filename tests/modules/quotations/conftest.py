@@ -24,9 +24,6 @@ from app.modules.quotations.domain.entities import (
     QuotationDetail,
     QuotationPage,
     QuotationPolicy,
-    QuotationRef,
-    RequestedProduct,
-    RequestedProductPage,
     Seller,
     SellerContact,
     ValueTaxKey,
@@ -39,8 +36,6 @@ from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar
 
 MANAGER = "asesor@jdh.com.co"
 APPROVER = "bi@jdh.com.co"
-# Holds only the ``productos-solicitados`` module.
-REGISTRY = "compras@jdh.com.co"
 NIT = "900315138"
 
 
@@ -219,24 +214,7 @@ class FakeMasters:
 class FakeRepository:
     def __init__(self) -> None:
         self.items: dict[UUID, QuotationDetail] = {}
-        self.products: dict[UUID, RequestedProduct] = {}
         self.category_writes: list[dict[UUID, str]] = []
-
-    def _attach(self, detail: QuotationDetail | None) -> QuotationDetail | None:
-        """Lines read with their registry entry as it is now, like the real repository."""
-
-        if detail is None:
-            return None
-        lines = tuple(
-            replace(
-                line,
-                requested_product=self.products[line.requested_product_id].ref
-                if line.requested_product_id in self.products
-                else None,
-            )
-            for line in detail.lines
-        )
-        return QuotationDetail(detail.quotation, lines)
 
     async def create(self, quotation, lines):
         detail = QuotationDetail(quotation, tuple(sorted(lines, key=lambda item: item.position)))
@@ -244,7 +222,7 @@ class FakeRepository:
         return detail
 
     async def get(self, quotation_id):
-        return self._attach(self.items.get(quotation_id))
+        return self.items.get(quotation_id)
 
     async def set_categories(self, quotation_id, categories):
         self.category_writes.append(dict(categories))
@@ -254,50 +232,6 @@ class FakeRepository:
             for line in detail.lines
         )
         self.items[quotation_id] = QuotationDetail(detail.quotation, lines)
-
-    async def get_requested_product(self, product_id):
-        return self.products.get(product_id)
-
-    async def list_requested_products(self, *, status, q, page, size):
-        items = [
-            item
-            for item in self.products.values()
-            if (status is None or item.status == status)
-            and (
-                not q
-                or q.lower() in item.description.lower()
-                or q.lower() in (item.supplier_name or "").lower()
-            )
-        ]
-        items.sort(key=lambda item: item.created_at, reverse=True)
-        items.sort(key=lambda item: item.status != "solicitado")
-        return RequestedProductPage(
-            tuple(items[(page - 1) * size : page * size]), len(items), page, size
-        )
-
-    async def requested_product_quotations(self, product_ids):
-        result: dict[UUID, list[QuotationRef]] = {}
-        for detail in self.items.values():
-            quotation = detail.quotation
-            for product_id in {line.requested_product_id for line in detail.lines}:
-                if product_id in product_ids:
-                    result.setdefault(product_id, []).append(
-                        QuotationRef(
-                            quotation.id,
-                            quotation.customer_name,
-                            quotation.customer_nit,
-                            quotation.status,
-                            quotation.created_by,
-                            quotation.created_by_id,
-                        )
-                    )
-        return result
-
-    async def update_requested_product(self, product):
-        if product.id not in self.products:
-            raise NotFoundError("Producto solicitado no encontrado")
-        self.products[product.id] = product
-        return product
 
     async def list(self, *, created_by_id, status, customer_nit, q, page, size, visible_to=None):
         items = [
@@ -322,15 +256,12 @@ class FakeRepository:
         replace_lines=False,
         inserted=(),
         removed=(),
-        requested=(),
     ):
         current = self.items.get(quotation.id)
         if current is None:
             raise NotFoundError("Cotización no encontrada")
         if current.quotation.version != expected_version:
             raise ConflictError("La cotización cambió")
-        for product in requested:
-            self.products[product.id] = product
         if replace_lines:
             stored = tuple(lines)
         else:
@@ -339,10 +270,8 @@ class FakeRepository:
                 by_id.get(line.id, line) for line in current.lines if line.id not in removed
             )
         stored = tuple(sorted((*stored, *inserted), key=lambda line: line.position))
-        # Like the database, the registry entry is never stored on the line.
-        stored = tuple(replace(line, requested_product=None) for line in stored)
         self.items[quotation.id] = QuotationDetail(quotation, stored)
-        return self._attach(self.items[quotation.id])
+        return self.items[quotation.id]
 
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
@@ -383,7 +312,6 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         policy=QuotationPolicy(Decimal("0.01")),
         max_lines=100,
         offer_writer=CustomerOfferWorkbook(),
-        registry_readers=FakeManagers([REGISTRY]),
     )
 
 

@@ -220,60 +220,6 @@ class SellerContact:
 
 
 @dataclass(frozen=True)
-class RequestedProductRef:
-    """What a local line shows of the product it asked for."""
-
-    id: UUID
-    status: str
-    siesa_sku: str | None
-
-
-@dataclass(frozen=True)
-class RequestedProduct:
-    """A product an advisor quoted that SIESA does not have, for BI to create or discard.
-
-    Lines point to it; deleting a line or a quotation never deletes it.
-    """
-
-    id: UUID
-    description: str
-    supplier_name: str | None
-    estimated_price: Decimal | None
-    vat_pct: Decimal | None
-    status: str
-    siesa_sku: str | None
-    note: str | None
-    created_by: str
-    created_at: datetime
-    updated_by: str
-    updated_at: datetime
-
-    @property
-    def ref(self) -> RequestedProductRef:
-        return RequestedProductRef(self.id, self.status, self.siesa_sku)
-
-
-@dataclass(frozen=True)
-class QuotationRef:
-    """A quotation that quotes a requested product."""
-
-    id: UUID
-    customer_name: str | None
-    customer_nit: str
-    status: str
-    created_by: str
-    created_by_id: UUID
-
-
-@dataclass(frozen=True)
-class RequestedProductPage:
-    items: tuple[RequestedProduct, ...]
-    total: int
-    page: int
-    size: int
-
-
-@dataclass(frozen=True)
 class AppliedSupport:
     """The support a line is priced with."""
 
@@ -415,10 +361,6 @@ class QuotationLine:
     category: str | None = None
     # Inventory units the customer would buy (up to two decimals), for the offer's totals.
     quantity: Decimal | None = None
-    # A local line's entry in the requested products registry.
-    requested_product_id: UUID | None = None
-    # Read with the line, never stored on it: the registry entry as it is now.
-    requested_product: RequestedProductRef | None = None
 
     @property
     def is_local(self) -> bool:

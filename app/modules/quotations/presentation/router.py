@@ -55,7 +55,6 @@ Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada
 ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
 OfferScope = Literal["changed", "all"]
-RequestedStatus = Literal["solicitado", "creado", "descartado"]
 
 
 class SellerResponse(BaseModel):
@@ -208,11 +207,6 @@ class LocalLineRequest(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=2000)
     price: Decimal | str | None = Field(default=None, description="Whole pesos, before VAT")
     vat_pct: Decimal | str | None = Field(default=None, description="Points: 19, 5 or 0")
-    requested_product_id: UUID | None = Field(
-        default=None,
-        description="A requested product still `solicitado`: its description, supplier and "
-        "VAT are used, and its estimated price when `price` is omitted",
-    )
 
 
 class OfferRequest(BaseModel):
@@ -305,12 +299,6 @@ class CandidateResponse(BaseModel):
     reason: str
 
 
-class RequestedProductRefResponse(BaseModel):
-    id: UUID
-    status: RequestedStatus
-    siesa_sku: str | None
-
-
 class LineResponse(BaseModel):
     """One SKU: what was last sold, at what cost and margin, and the advisor's price."""
 
@@ -373,8 +361,6 @@ class LineResponse(BaseModel):
     offer_price: Decimal | None
     # Whether the customer offer carries the line (``offer_scope``; never an inactive one).
     in_offer: bool
-    # A local product's entry in the requested products registry.
-    requested_product: RequestedProductRefResponse | None
 
 
 class SellerContactResponse(BaseModel):
@@ -519,7 +505,6 @@ def _support(item: AppliedSupport | None) -> SupportResponse | None:
 
 
 def _line(line: QuotationLine, scope: str) -> LineResponse:
-    requested = line.requested_product
     return LineResponse(
         id=line.id,
         position=line.position,
@@ -584,13 +569,6 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         quantity=line.quantity,
         offer_price=offer.offer_price(line),
         in_offer=offer.in_offer(line, scope),
-        requested_product=RequestedProductRefResponse(
-            id=requested.id,
-            status=requested.status,  # type: ignore[arg-type]
-            siesa_sku=requested.siesa_sku,
-        )
-        if requested
-        else None,
     )
 
 
@@ -992,29 +970,8 @@ async def add_local_line(
             supplier_name=body.supplier_name,
             price=body.price,
             vat_pct=body.vat_pct,
-            requested_product_id=body.requested_product_id,
         )
     )
-
-
-@router.post(
-    "/{quotation_id}/lines/{sku}/promote",
-    dependencies=[_READ_GATE],
-    response_model=QuotationResponse,
-    summary="Swap a local product for its new SIESA reference",
-)
-@inject
-async def promote_line(
-    quotation_id: UUID,
-    sku: str,
-    body: VersionRequest,
-    principal: Principal = _principal,
-    service: QuotationService = _service,
-) -> QuotationResponse:
-    """Only when BI marked its requested product ``creado``: the SIESA reference takes the
-    local line's place (``agregado``) with its new price and quantity. 422 otherwise."""
-
-    return _detail(await service.promote_line(principal, quotation_id, body.version, sku))
 
 
 @router.patch(
