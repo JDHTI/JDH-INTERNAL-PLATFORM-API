@@ -19,9 +19,11 @@ export PLATFORM_API_ENV=${PLATFORM_API_ENV:-$HOME/apps/platform/api.env}
 }
 # Compose interpolates the passwords of the dependencies from the shell.
 set -a; . "$PLATFORM_API_ENV"; set +a
-export PUBLIC_HOST=${PUBLIC_HOST:-intranet.jdh.local}
+export PUBLIC_HOST=${PUBLIC_HOST:-intranet.jdh.com.co}
 export EDGE_NETWORK=${EDGE_NETWORK:-intranet-jdh_default}
-EDGE_CA=${EDGE_CA:-$HOME/apps/INTRANET-JDH-API/deploy/caddy/ca/root.crt}
+# TLS for *.jdh.com.co ends at the infrastructure proxy, which forwards plain HTTP to this
+# server's Caddy: the check takes that same hop.
+EDGE_HTTP=${EDGE_HTTP:-http://127.0.0.1}
 export GIT_SHA=${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 
 COMPOSE=(docker compose -f deploy/compose.prod.yaml)
@@ -33,7 +35,6 @@ flock 9
 
 docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 \
   || { echo "Missing network $EDGE_NETWORK: start the edge stack first" >&2; exit 1; }
-[[ -f $EDGE_CA ]] || { echo "Missing the Caddy root CA at $EDGE_CA" >&2; exit 1; }
 
 # The rate limiter trusts X-Forwarded-For only from the edge network (Caddy, and the UI
 # when it renders pages on the server): without it every person would share one bucket.
@@ -60,8 +61,8 @@ echo "> Check through Caddy"
 # /api/v1/* is the only API path Caddy routes; without a session /users/me answers 401,
 # which proves Caddy reaches the API (a missing API answers 502).
 for _ in $(seq 1 40); do
-  status=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$EDGE_CA" \
-    --resolve "$PUBLIC_HOST:443:127.0.0.1" "https://$PUBLIC_HOST/api/v1/users/me" || true)
+  status=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $PUBLIC_HOST" \
+    "$EDGE_HTTP/api/v1/users/me" || true)
   if [[ $status == 401 ]]; then
     docker image prune -f >/dev/null
     echo "> Deployed $GIT_SHA"
@@ -70,7 +71,7 @@ for _ in $(seq 1 40); do
   sleep 3
 done
 
-echo "The API did not answer through Caddy at https://$PUBLIC_HOST/api/v1/users/me (last: $status)" >&2
+echo "The API did not answer through Caddy at $EDGE_HTTP/api/v1/users/me (Host: $PUBLIC_HOST, last: $status)" >&2
 "${COMPOSE[@]}" ps
 "${COMPOSE[@]}" logs --tail 80 api
 exit 1

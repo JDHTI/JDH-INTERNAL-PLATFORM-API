@@ -1,14 +1,18 @@
-# Despliegue en intranet.jdh.local
+# Despliegue en intranet.jdh.com.co
 
-La plataforma reemplazó a la intranet en el mismo servidor y el mismo dominio. La UI está en
-JDH-INTERNAL-PLATFORM (`docs/deploy.md` de ese repo); este documento cubre el API.
+La plataforma reemplazó a la intranet en el mismo servidor. La UI está en JDH-INTERNAL-PLATFORM
+(`docs/deploy.md` de ese repo); este documento cubre el API.
 
 ## Cómo encaja
 
+Desde el 2026-11-10 el dominio es `*.jdh.com.co`; `*.jdh.local` y su CA interna ya no se usan.
+`intranet.jdh.com.co` es un CNAME de `host.jdh.com.co`, un proxy de infraestructura con el
+certificado `*.jdh.com.co` que termina el TLS y reenvía por **http** al Caddy del servidor:
+
 ```
-https://intranet.jdh.local  → intranet-caddy → /api/v1/*      → platform-api:8000  (este repo)
-                                               /cms/uploads/* → intranet-cms:1337
-                                               /*             → platform-ui:3000
+https://intranet.jdh.com.co → proxy de infra (TLS) → http → intranet-caddy → /api/v1/*      → platform-api:8000  (este repo)
+                                                                             /cms/uploads/* → intranet-cms:1337
+                                                                             /*             → platform-ui:3000
 ```
 
 | Proyecto de compose | Servicios | Red |
@@ -29,13 +33,15 @@ La plantilla es `deploy/api.env.example`. Lo mínimo es:
 
 - **Dependencias.** Contraseñas de Postgres, Redis y MinIO.
 - **SSO.** El registro de la intranet (`404211b8-…`) en `ENTRA_*`, el mismo del directorio. Ya
-  tiene registrado como **Web** el redirect URI `https://intranet.jdh.local/api/v1/auth/callback`.
+  debe tener registrado como **Web** el redirect URI
+  `https://intranet.jdh.com.co/api/v1/auth/callback` (`ENTRA_REDIRECT_URI`).
   - No expone un API propio. Por eso `ENTRA_API_SCOPE` va vacío: la sesión es el ID token, cuya
     audiencia es el client id, y el inicio de sesión pide `User.Read` para leer `/me`, como hacía
     Better Auth.
   - Si algún día el registro expone `access_as_user`, se ponen `ENTRA_API_AUDIENCE` y
     `ENTRA_API_SCOPE` y la sesión pasa a ser el token del API.
-- **Origen y cookies.** `AUTH_COOKIE_SECURE=true` y `CORS_ORIGINS=https://intranet.jdh.local`.
+- **Origen y cookies.** `AUTH_COOKIE_SECURE=true` y `CORS_ORIGINS=https://intranet.jdh.com.co`;
+  `AUTH_FRONTEND_REDIRECT_URI` y `PQRSF_UI_BASE_URL` sobre el mismo origen.
 - **Directorio.** El registro de la intranet en `DIRECTORY_GRAPH_*`, que tiene `User.Read.All`.
 - **DWH.** `DWH_*` para maestros, cotizador y validador.
 
@@ -52,7 +58,9 @@ la red del borde.
 4. Corre `alembic upgrade head`.
 5. Levanta `platform-api`.
 6. Verifica a través de Caddy que `GET /api/v1/users/me` responda 401. Un 502 significa que el API
-   no está.
+   no está. Va por el mismo salto que usa el proxy de infraestructura: http al Caddy local
+   (`EDGE_HTTP`, por defecto `http://127.0.0.1`) con `Host: $PUBLIC_HOST` (por defecto
+   `intranet.jdh.com.co`).
 
 ```bash
 bash deploy/deploy.sh            # desde una copia del repo en el servidor

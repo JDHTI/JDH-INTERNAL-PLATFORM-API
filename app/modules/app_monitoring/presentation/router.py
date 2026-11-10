@@ -75,7 +75,7 @@ class AplicativoCambios(BaseModel):
 
 
 class AplicativoNuevo(AplicativoCambios):
-    """A platform to monitor: ``url_base`` is the server, e.g. ``https://intranet.jdh.local``."""
+    """A platform to monitor: ``url_base`` is the server, e.g. ``https://intranet.jdh.com.co``."""
 
     nombre: str = Field(max_length=120)
     url_base: str = Field(max_length=500)

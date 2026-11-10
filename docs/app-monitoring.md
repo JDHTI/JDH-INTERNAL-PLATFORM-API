@@ -9,13 +9,14 @@ los aplicativos y el datawarehouse.
 
 La tabla `app_mon_aplicativos` (migración `0024_app_monitoring`) se edita desde las
 pantallas: se agregan, cambian o apagan aplicativos sin desplegar. La migración
-registra tres:
+registra tres, y `0053_app_monitoring_jdh_com_co` los pasó de `*.jdh.local` al
+dominio `*.jdh.com.co` (solo los que seguían con la URL sembrada):
 
 | Slug | Aplicativo | API | UI |
 |---|---|---|---|
-| `app-proveedores` | App Proveedores | `https://app-proveedores.jdh.local/api/health` | `https://app-proveedores.jdh.local/` |
-| `catalogo` | Catálogo (Tienda) | `https://tienda.jdh.local/api/health` | `https://tienda.jdh.local/` |
-| `intranet` | Intranet | `https://intranet.jdh.local/api/health` | `https://intranet.jdh.local/` |
+| `app-proveedores` | App Proveedores | `https://app-proveedores.jdh.com.co/api/health` | `https://app-proveedores.jdh.com.co/` |
+| `catalogo` | Catálogo (Tienda) | `https://tienda.jdh.com.co/api/health` | `https://tienda.jdh.com.co/` |
+| `intranet` | Intranet | `https://intranet.jdh.com.co/api/health` | `https://intranet.jdh.com.co/` |
 
 Cada aplicativo tiene `url_base` (solo el servidor), `ruta_health`, `ruta_ui`,
 `verificar_ui`, `habilitado`, `verificar_tls`, `timeout_s` (10) y
@@ -38,11 +39,12 @@ También borra los chequeos más viejos que la retención.
 ### Red y certificados
 
 Los chequeos salen del contenedor de la API, así que ese contenedor tiene que
-resolver los `*.jdh.local`, ya sea por el DNS interno o con `extra_hosts` en
-`compose.yaml`. Si el certificado lo firma una CA interna que el contenedor no
-conoce, hay dos salidas: instalar la CA en la imagen, o poner `verificar_tls=false`
-en ese aplicativo. Mientras tanto el error queda en `error`, por ejemplo
-`ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED]`.
+resolver los `*.jdh.com.co` (CNAME de `host.jdh.com.co`, el proxy de infraestructura)
+y llegar a él. El certificado `*.jdh.com.co` es público (SSL.com), así que
+`verificar_tls=true` sirve sin instalar nada. Si un aplicativo usa un certificado de
+una CA interna que el contenedor no conoce, hay dos salidas: instalar la CA en la
+imagen, o poner `verificar_tls=false` en ese aplicativo. Mientras tanto el error queda
+en `error`, por ejemplo `ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED]`.
 
 ## Configuración
 

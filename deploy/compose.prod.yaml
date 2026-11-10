@@ -1,8 +1,8 @@
-# Production API on intranet.jdh.local. Run it through deploy/deploy.sh.
+# Production API on intranet.jdh.com.co. Run it through deploy/deploy.sh.
 #
 # Caddy is not here: it lives in the edge stack (compose project `intranet-jdh`, owned by
 # INTRANET-JDH-API deploy/) together with Strapi and the intranet's Postgres. The API joins
-# that stack's network so Caddy reaches it as `platform-api:8000` (https://intranet.jdh.local/
+# that stack's network so Caddy reaches it as `platform-api:8000` (https://intranet.jdh.com.co/
 # api/v1/*). Its own dependencies (Postgres, Redis, MinIO, ClamAV) stay in this project's
 # private network and publish no port.
 #

@@ -37,7 +37,7 @@ def worst(statuses: list[CheckStatus | None]) -> CheckStatus | None:
 
 @dataclass
 class Application:
-    """A platform registered for monitoring, e.g. ``https://intranet.jdh.local``.
+    """A platform registered for monitoring, e.g. ``https://intranet.jdh.com.co``.
 
     The API check reads ``base_url + health_path``; the UI check reads
     ``base_url + ui_path`` when ``check_ui`` is on.

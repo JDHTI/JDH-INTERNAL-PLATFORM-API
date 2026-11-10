@@ -711,7 +711,7 @@ class Settings(BaseSettings):
     def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
         """The trusted proxies as networks: an address is a /32 (or /128), a CIDR a network.
 
-        On intranet.jdh.local it is the subnet of the edge Docker network, so Caddy and the
+        On the intranet server it is the subnet of the edge Docker network, so Caddy and the
         UI's server rendering both forward the browser's address.
         """
 
