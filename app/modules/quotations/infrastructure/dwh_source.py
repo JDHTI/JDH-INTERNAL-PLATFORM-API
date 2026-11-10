@@ -19,6 +19,7 @@ from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderConnection, DataProviderUnavailable
 from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import (
+    BillingCenter,
     Branch,
     CostInfo,
     ItemInfo,
@@ -111,30 +112,39 @@ class WarehouseQuotationSource:
         return int(rows[0]["clientes_activos_asignados"])
 
     async def last_sales(self, nit: str, months: int) -> list[LastSale]:
-        """The last sale of every SKU sold to the customer (all branches) in the window.
+        """The last price of every SKU sold to the customer (all branches) in the window.
 
-        Only sales (no returns) with quantity and amount above zero. Ties on the date go to
-        the higher document number, then the higher price, then the line key. Prices are per
-        inventory unit, net of discounts and before VAT.
+        For each SKU, the last sale of **each** billing operation center (``ventas.co``) is
+        taken, and among those the one with the highest net unit price wins: its date,
+        document and unit become the last sale. ``sales_in_window`` counts every sale line.
+        Only sales (no returns) with quantity and amount above zero. Within a center, ties on
+        the date go to the higher document number, then the higher price, then the line key;
+        across centers, a tie on the price goes to the later sale. Prices are per inventory
+        unit, net of discounts and before VAT.
         """
 
         rows = await self._fetch(
             "WITH lineas AS ("
-            ' SELECT v."sku", v."fecha", v."nro_transaccion", v."unidad_medida_id",'
-            ' v."cantidad", v."valor_bruto", v."subtotal", v."dscto",'
+            ' SELECT v."sku", v."co", v."fecha", v."nro_transaccion", v."unidad_medida_id",'
+            ' v."cantidad", v."valor_bruto", v."subtotal", v."dscto", v."venta_linea_key",'
+            ' v."subtotal" / v."cantidad" AS precio_neto,'
             ' count(*) OVER (PARTITION BY v."sku") AS n_lineas,'
-            ' row_number() OVER (PARTITION BY v."sku" ORDER BY v."fecha" DESC,'
+            ' row_number() OVER (PARTITION BY v."sku", v."co" ORDER BY v."fecha" DESC,'
             " nullif(regexp_replace(v.\"nro_transaccion\", '\\D', '', 'g'), '')::bigint"
-            ' DESC NULLS LAST, v."subtotal" / v."cantidad" DESC, v."venta_linea_key" DESC) AS rn,'
-            ' v."producto_key"'
+            ' DESC NULLS LAST, v."subtotal" / v."cantidad" DESC, v."venta_linea_key" DESC)'
+            ' AS rn_co, v."producto_key"'
             f" FROM {self._view('ventas')} v"
             f' WHERE v."cliente_key" IN (SELECT c."cliente_key" FROM {self._view("clientes")} c'
             ' WHERE c."nit" = $1)'
             ' AND v."naturaleza_codigo" = 2 AND v."cantidad" > 0 AND v."subtotal" > 0'
             ' AND v."fecha" >= (current_date - make_interval(months => $2::int))'
-            # The product is joined to the last sale only, not to every line of the window.
+            # The last sale of each center, then the highest price among them.
+            "), por_co AS ("
+            ' SELECT l.*, row_number() OVER (PARTITION BY l."sku" ORDER BY l.precio_neto DESC,'
+            ' l."fecha" DESC, l."venta_linea_key" DESC) AS rn FROM lineas l WHERE l.rn_co = 1'
+            # The product is joined to the chosen sale only, not to every line of the window.
             ') SELECT l.*, p."descripcion", p."unidad_inventario_id", p."iva_venta_pct",'
-            ' p."cod_proveedor", p."factor_empaque", p."estado", p."categoria" FROM lineas l'
+            ' p."cod_proveedor", p."factor_empaque", p."estado", p."categoria" FROM por_co l'
             f' LEFT JOIN {self._view("productos")} p ON p."producto_key" = l."producto_key"'
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
             nit,
@@ -162,9 +172,25 @@ class WarehouseQuotationSource:
                     # Unknown item (no product row): leave it active; the cost tells.
                     is_active=row["estado"] in ("A", None),
                     category=_strip(row["categoria"]),
+                    center_code=_strip(row["co"]),
                 )
             )
         return sales
+
+    async def billing_centers(self) -> list[BillingCenter]:
+        """Active operation centers (``consumo.centros_operacion``, the ``centros-operacion``
+        master), one per code, by code."""
+
+        rows = await self._fetch(
+            'SELECT DISTINCT ON (trim("codigo")) trim("codigo") AS codigo, "descripcion"'
+            f" FROM {self._view('centros_operacion')} WHERE \"estado\" = 'A'"
+            ' ORDER BY trim("codigo"), "descripcion"'
+        )
+        return [
+            BillingCenter(str(row["codigo"]).strip(), _strip(row["descripcion"]))
+            for row in rows
+            if _strip(row["codigo"])
+        ]
 
     async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]:
         """The supplier quotation and the inventory cost of each SKU (skill ``lista-precios``).

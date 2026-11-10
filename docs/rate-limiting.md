@@ -279,13 +279,13 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/public/pqrsf/requests` | `strict` | Abierto a cualquiera: además tamaño, tope global y CAPTCHA (public_guard) |
 | `GET` | `/v1/quotations` | `read` |  |
 | `POST` | `/v1/quotations` | `relaxed` |  |
+| `GET` | `/v1/quotations/billing-centers` | `read` |  |
 | `GET` | `/v1/quotations/customers` | `read` |  |
 | `GET` | `/v1/quotations/permissions` | `read` |  |
-| `GET` | `/v1/quotations/requested-products` | `read` |  |
-| `PATCH` | `/v1/quotations/requested-products/{product_id}` | `relaxed` |  |
 | `GET` | `/v1/quotations/rules` | `read` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}` | `read` |  |
+| `PATCH` | `/v1/quotations/{quotation_id}/billing-center` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/confirm` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}/export.txt` | `read` |  |
 | `GET` | `/v1/quotations/{quotation_id}/export.xlsx` | `read` |  |
@@ -298,9 +298,11 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
-| `POST` | `/v1/quotations/{quotation_id}/template` | `relaxed` |  |
-| `GET` | `/v1/quotations/{quotation_id}/template.xlsx` | `read` |  |
+| `POST` | `/v1/quotations/{quotation_id}/uploaded` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |
+| `GET` | `/v1/requested-products` | `read` |  |
+| `GET` | `/v1/requested-products/permissions` | `read` |  |
+| `PATCH` | `/v1/requested-products/{product_id}` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |
 | `GET` | `/v1/salespeople/links` | `read` |  |
 | `POST` | `/v1/salespeople/links` | `relaxed` |  |

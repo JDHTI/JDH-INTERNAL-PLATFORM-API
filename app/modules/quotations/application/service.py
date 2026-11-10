@@ -21,10 +21,12 @@ from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
+    BillingCenter,
     CustomerContext,
     CustomerPage,
     ItemInfo,
     LastSale,
+    ListPrice,
     Quotation,
     QuotationDetail,
     QuotationLine,
@@ -35,6 +37,7 @@ from app.modules.quotations.domain.entities import (
     RequestedProductPage,
     Seller,
     SellerContact,
+    TemporaryCustomer,
 )
 from app.modules.quotations.domain.export import (
     ExportRow,
@@ -52,7 +55,6 @@ from app.modules.quotations.domain.ports import (
     SalesScope,
     SalesScopeResolver,
     SupportSource,
-    TemplateFile,
     WarehouseSource,
 )
 
@@ -66,12 +68,10 @@ _SEPARATORS = re.compile(r"[\s,;|]+")
 # A number cell copied from Excel may come as ``26278.0``.
 _EXCEL_INTEGER = re.compile(r"^(\d+)\.0+$")
 _LIST_ID = re.compile(r"^[A-Z0-9]{1,3}$")
-_MARGIN_TOLERANCE = Decimal("0.00005")
 _LIST_NAME_LENGTH = 40
 # Longest description and supplier name of a local product.
 LOCAL_TEXT_LENGTH = 120
 _LOCAL_NO_MARGIN = "Producto solo para cotización: sin costo para calcular el precio"
-_LOCAL_IN_TEMPLATE = "Producto solo para cotización: no se edita con la plantilla"
 # Longest note BI writes on a requested product.
 NOTE_LENGTH = 1000
 _QUANTITY_STEP = Decimal("0.01")
@@ -127,19 +127,6 @@ class Skipped:
     sku: str
     reason: str
     row_number: int | None = None
-
-
-@dataclass(frozen=True)
-class TemplateResult:
-    """What an uploaded workbook did."""
-
-    updated: tuple[str, ...]
-    cleared: tuple[str, ...]
-    added: tuple[str, ...]
-    unchanged: int
-    not_found: tuple[str, ...]
-    inactive: tuple[str, ...]
-    skipped: tuple[Skipped, ...]
 
 
 @dataclass(frozen=True)
@@ -239,7 +226,7 @@ def normalize_nit(value: str) -> str:
     return nit
 
 
-def _setup(price_list_id: str, billing_center: str | None, channel: str | None) -> _Setup:
+def _setup(price_list_id: str | None, billing_center: str | None, channel: str | None) -> _Setup:
     basis = BASIS.get(channel_field(channel), "lista")
     return _Setup(
         family=pricing.family(price_list_id, basis),
@@ -264,10 +251,9 @@ class QuotationService:
         policy: QuotationPolicy | None = None,
         max_lines: int = 3000,
         approvers: ManagerPolicy | None = None,
-        template: TemplateFile | None = None,
-        max_upload_bytes: int = 10 * 1024 * 1024,
         sales: SalesScopeResolver | None = None,
         offer_writer: OfferWriter | None = None,
+        registry_readers: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
@@ -284,11 +270,11 @@ class QuotationService:
             max_lines (int): Most SKUs per quotation.
             approvers (ManagerPolicy | None): Who validates a confirmed quotation; without
                 one only administrators do.
-            template (TemplateFile | None): The workbook advisors edit in bulk.
-            max_upload_bytes (int): Largest workbook accepted.
             sales (SalesScopeResolver | None): Each person's customers (salespeople module).
                 Without one every reader sees every customer and quotation.
             offer_writer (OfferWriter | None): Writes the offer the customer receives.
+            registry_readers (ManagerPolicy | None): Who holds the ``productos-solicitados``
+                module; quoters and validators read the registry anyway.
         """
 
         self.repository = repository
@@ -303,9 +289,8 @@ class QuotationService:
         self.policy = policy or QuotationPolicy()
         self.max_lines = max_lines
         self.approvers = approvers
-        self.template = template
-        self.max_upload_bytes = max_upload_bytes
         self.sales = sales
+        self.registry_readers = registry_readers
 
     # ------------------------------------------------------------ access
 
@@ -465,9 +450,16 @@ class QuotationService:
             )
 
         codes = sorted({code for code in map(supplier_of, skus) if code})
+
+        async def list_prices() -> dict[str, ListPrice]:
+            # A temporary customer has no list in SIESA.
+            if not context.price_list_id:
+                return {}
+            return await self.warehouse.list_prices(context.price_list_id, skus)
+
         costs, prices, taxes, agreements, scopes, names = await asyncio.gather(
             self.warehouse.costs(skus, setup.plan),
-            self.warehouse.list_prices(context.price_list_id, skus),
+            list_prices(),
             self.warehouse.value_tax_keys(skus),
             self.supports.agreements(codes, skus, [context.nit]),
             self.supports.customers([context.nit]),
@@ -589,20 +581,68 @@ class QuotationService:
             return None
         return await self.warehouse.seller_contact(context.salesperson_code)
 
+    # ------------------------------------------------------------ billing centers
+
+    async def billing_centers(self, principal: Principal) -> list[BillingCenter]:
+        """Active operation centers a quotation can be billed and priced from, by code."""
+
+        await self._require_reader(principal)
+        return sorted(await self.warehouse.billing_centers(), key=lambda item: item.code)
+
+    async def _center(self, code: str | None) -> BillingCenter | None:
+        """The active operation center ``code``, or ``None`` without one.
+
+        Raises:
+            InvalidInputError: ``code`` is not an active operation center.
+        """
+
+        value = (code or "").strip()
+        if not value:
+            return None
+        center = next(
+            (item for item in await self.warehouse.billing_centers() if item.code == value), None
+        )
+        if center is None:
+            raise InvalidInputError(f"El centro de operación {value} no existe o está inactivo")
+        return center
+
+    async def _center_name(self, code: str | None) -> str | None:
+        """Name of a center, for the header; ``None`` when unknown."""
+
+        if not code:
+            return None
+        try:
+            centers = await self.warehouse.billing_centers()
+        except Exception as exc:  # noqa: BLE001 - the name is only shown
+            logger.warning("quotations: operation center %s not read: %s", code, exc)
+            return None
+        return next((item.name for item in centers if item.code == code), None)
+
     async def create(
         self,
         principal: Principal,
-        customer_nit: str,
+        customer_nit: str | None,
         window_months: int,
         validity_days: int = vocabulary.DEFAULT_VALIDITY_DAYS,
+        *,
+        temporary_customer: TemporaryCustomer | None = None,
+        billing_center_code: str | None = None,
     ) -> QuotationDetail:
-        """Build a quotation of a customer from its last sales in the window.
+        """Build a quotation of a customer from its last sales in the window, or an empty one
+        for a temporary customer.
+
+        A temporary customer (not in SIESA) needs ``billing_center_code``: it has no sales and
+        no list, and its lines are priced from that center. For a SIESA customer the center
+        is optional: given, it replaces the one of the branches (``manual``).
 
         Args:
             principal (Principal): The advisor.
-            customer_nit (str): NIT (punctuation and a separated check digit are accepted).
+            customer_nit (str | None): NIT (punctuation and a separated check digit are
+                accepted); none for a temporary customer.
             window_months (int): 6 or 12.
             validity_days (int): Days the offer holds from today (1 to 365).
+            temporary_customer (TemporaryCustomer | None): A customer not in SIESA yet.
+            billing_center_code (str | None): Operation center to price from.
 
         Returns:
             QuotationDetail: The new draft with every SKU priced as it was last sold.
@@ -612,13 +652,45 @@ class QuotationService:
         if window_months not in vocabulary.WINDOWS:
             raise InvalidInputError("La ventana debe ser de 6 o 12 meses")
         _check_validity(validity_days)
-        nit = normalize_nit(customer_nit)
-        context = await self._context(nit, await self._scope(principal))
-        lines, snapshot = await self._build(context, window_months)
-        seller = await self._seller_contact(context)
-        if not lines:
-            # A customer without sales in the window is quoted with the SKUs the advisor adds.
-            context = replace(context, warnings=(*context.warnings, "sin_ventas"))
+        has_nit = bool((customer_nit or "").strip())
+        if temporary_customer is not None and has_nit:
+            raise InvalidInputError("Envía el NIT de un cliente o un cliente temporal, no los dos")
+        if temporary_customer is None and not has_nit:
+            raise InvalidInputError("Escribe el NIT del cliente o los datos del cliente temporal")
+        if temporary_customer is not None and not (billing_center_code or "").strip():
+            raise InvalidInputError("Elige el centro de operación del cliente temporal")
+        temporary = _temporary(temporary_customer) if temporary_customer else None
+        center = await self._center(billing_center_code)
+        if temporary is not None:
+            nit = temporary.nit or ""
+            context = CustomerContext(
+                nit=nit,
+                name=temporary.name,
+                channel_code=None,
+                channel=None,
+                price_list_id=None,
+                price_list_name=None,
+                price_list_customers=None,
+                billing_center_code=center.code,  # type: ignore[union-attr]
+                salesperson_code=None,
+                salesperson_name=None,
+            )
+            lines, snapshot, seller = [], None, None
+        else:
+            nit = normalize_nit(customer_nit or "")
+            context = await self._context(nit, await self._scope(principal))
+            if center is not None:
+                context = replace(context, billing_center_code=center.code)
+            lines, snapshot = await self._build(context, window_months)
+            seller = await self._seller_contact(context)
+            if not lines:
+                # A customer without sales in the window is quoted with the SKUs the advisor
+                # adds.
+                context = replace(context, warnings=(*context.warnings, "sin_ventas"))
+        fields = self._customer_fields(context)
+        if temporary is not None:
+            fields["list_action"] = vocabulary.CREATE_LIST
+        name = center.name if center else await self._center_name(context.billing_center_code)
         now = datetime.now(UTC)
         total, changed, below, below_target = rules.counts(lines)
         quotation = Quotation(
@@ -644,7 +716,10 @@ class QuotationService:
             validity_days=validity_days,
             valid_from=self.calendar.today(),
             seller_contact=seller,
-            **self._customer_fields(context),  # type: ignore[arg-type]
+            billing_center_source=vocabulary.CENTER_MANUAL if center else vocabulary.CENTER_AUTO,
+            billing_center_name=name,
+            temporary_customer=temporary,
+            **fields,  # type: ignore[arg-type]
         )
         return await self.repository.create(quotation, lines)
 
@@ -757,6 +832,8 @@ class QuotationService:
             confirmed_by=None,
             validated_at=None,
             validated_by=None,
+            uploaded_at=None,
+            uploaded_by=None,
         )
 
     @staticmethod
@@ -887,12 +964,20 @@ class QuotationService:
         """Rebuild from the warehouse and the masters, keeping the advisor's prices by SKU.
 
         Local products do not come from the warehouse: they are kept as they are, after the
-        rebuilt lines.
+        rebuilt lines. A center the advisor chose (``manual``) stays. A temporary customer
+        has no sales to read: its lines are priced again as they are.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
+        if detail.quotation.is_temporary_customer:
+            return await self._repriced(
+                principal, detail, version, detail.quotation.billing_center_code
+            )
         context = await self._context(detail.quotation.customer_nit)
+        manual = detail.quotation.billing_center_source == vocabulary.CENTER_MANUAL
+        if manual:
+            context = replace(context, billing_center_code=detail.quotation.billing_center_code)
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
         local = [line for line in detail.lines if line.is_local]
         lines, snapshot = await self._build(
@@ -908,6 +993,8 @@ class QuotationService:
         ]
         fields = self._customer_fields(context)
         fields["seller_contact"] = await self._seller_contact(context)
+        if not manual:
+            fields["billing_center_name"] = await self._center_name(context.billing_center_code)
         if (
             detail.quotation.price_list_id == context.price_list_id
             and context.price_list_id != vocabulary.GENERAL_PRICE_LIST
@@ -922,6 +1009,72 @@ class QuotationService:
             **fields,  # type: ignore[arg-type]
         )
         return await self.repository.save(quotation, lines, version, replace_lines=True)
+
+    async def _repriced(
+        self,
+        principal: Principal,
+        detail: QuotationDetail,
+        version: int,
+        center_code: str | None,
+        center_name: str | None = None,
+        source: str | None = None,
+    ) -> QuotationDetail:
+        """Price every SIESA line again as it is stored, billed from ``center_code``.
+
+        Cost (the stock plan of the center), liquor tax (its regional), target, minimum,
+        optimal price, margins and compliance are recomputed; new prices, quantities and
+        local products stay. The quotation goes back to draft.
+        """
+
+        quotation = detail.quotation
+        context = replace(self._stored_context(quotation), billing_center_code=center_code)
+        siesa = [line for line in detail.lines if not line.is_local]
+        priced, snapshot = await self._price(context, [_entry_of(line) for line in siesa])
+        stored = {line.id: line for line in siesa}
+        by_id = {line.id: _kept(line, stored.get(line.id)) for line in priced}
+        lines = [by_id.get(line.id, line) for line in detail.lines]
+        setup = _setup(context.price_list_id, center_code, context.channel)
+        values: dict[str, object] = {
+            "billing_center_code": center_code,
+            "regional": setup.regional,
+            "price_family": setup.family,
+            "stock_source": setup.plan.label,
+            "built_at": datetime.now(UTC),
+            "max_points_below_target": self.policy.max_points_below_target,
+        }
+        if snapshot is not None:
+            values["cost_cut_date"] = snapshot
+        if center_name is not None:
+            values["billing_center_name"] = center_name
+        if source is not None:
+            values["billing_center_source"] = source
+        changed = replace(
+            self._touched(quotation, lines, principal.email),
+            **values,  # type: ignore[arg-type]
+        )
+        return await self.repository.save(changed, list(by_id.values()), version)
+
+    async def set_billing_center(
+        self, principal: Principal, quotation_id: UUID, version: int, code: str
+    ) -> QuotationDetail:
+        """Bill and price the quotation from another operation center (``manual``).
+
+        Same state and permission rules as :meth:`refresh`; the quotation goes back to draft.
+        Lines are priced again with the center's stock plan and regional, keeping new prices,
+        quantities and local products. A refresh keeps the chosen center.
+
+        Raises:
+            InvalidInputError: ``code`` is not an active operation center.
+        """
+
+        detail = await self._editable(principal, quotation_id)
+        self._check_version(detail.quotation, version)
+        center = await self._center(code)
+        if center is None:
+            raise InvalidInputError("Elige el centro de operación")
+        return await self._repriced(
+            principal, detail, version, center.code, center.name, vocabulary.CENTER_MANUAL
+        )
 
     async def _new_skus(
         self, detail: QuotationDetail, skus: Sequence[str]
@@ -1202,6 +1355,7 @@ class QuotationService:
         include_seller: bool | None = None,
         quote_quantities: bool | None = None,
         offer_scope: str | None = None,
+        include_variation: bool | None = None,
     ) -> QuotationDetail:
         """Change how the customer offer reads; ``None`` leaves a setting as it is.
 
@@ -1236,6 +1390,8 @@ class QuotationService:
             values["include_seller"] = include_seller
         if quote_quantities is not None:
             values["quote_quantities"] = quote_quantities
+        if include_variation is not None:
+            values["include_variation"] = include_variation
         if offer_scope is not None:
             if offer_scope not in vocabulary.OFFER_SCOPES:
                 raise InvalidInputError("Las líneas de la oferta son changed o all")
@@ -1261,8 +1417,20 @@ class QuotationService:
 
     # ------------------------------------------------------------ requested products
 
+    async def can_read_registry(self, principal: Principal) -> bool:
+        """The ``productos-solicitados`` module, or quoting or validating quotations."""
+
+        if self.registry_readers is not None and await self.registry_readers.can_read(principal):
+            return True
+        return await self.can_manage(principal) or await self.can_validate(principal)
+
+    async def registry_permissions(self, principal: Principal) -> tuple[bool, bool]:
+        """``(can_read, can_resolve)`` on the requested products registry."""
+
+        return await self.can_read_registry(principal), await self.can_validate(principal)
+
     async def _require_registry_reader(self, principal: Principal) -> None:
-        if not (await self.can_manage(principal) or await self.can_validate(principal)):
+        if not await self.can_read_registry(principal):
             raise ForbiddenError("No tienes permiso para ver los productos solicitados")
 
     async def _visible_refs(
@@ -1273,8 +1441,10 @@ class QuotationService:
         refs = await self.repository.requested_product_quotations(product_ids)
         if await self._sees_all(principal):
             return refs
+        # Someone with the registry module but not the quoter opens no quotation.
+        reader = await self.can_read(principal)
         return {
-            key: [item for item in values if item.created_by_id == principal.user_id]
+            key: [item for item in values if reader and item.created_by_id == principal.user_id]
             for key, values in refs.items()
         }
 
@@ -1349,166 +1519,25 @@ class QuotationService:
         refs = await self._visible_refs(principal, [saved.id])
         return saved, refs.get(saved.id, [])
 
-    # ------------------------------------------------------------ template
-
-    async def template_file(self, principal: Principal, quotation_id: UUID) -> ExportFile:
-        """The quotation as a workbook to edit prices or margins in bulk.
-
-        Local products stay out: the workbook is about SIESA references.
-        """
-
-        if self.template is None:
-            raise InvalidInputError("La plantilla no está disponible")
-        detail = await self.get(principal, quotation_id)
-        quotation = detail.quotation
-        siesa = replace(detail, lines=tuple(rules.siesa_lines(detail.lines)))
-        return ExportFile(
-            self.template.write(siesa),
-            f"cotizacion-{quotation.customer_nit}-lista{quotation.price_list_id}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-    def _template_change(
-        self, line: QuotationLine, new_price: Decimal | None, new_margin: Decimal | None
-    ) -> LineChange | None:
-        """What a workbook row asks for a line: the cell the advisor changed wins.
-
-        The file comes back with both columns filled; a price that differs from the stored
-        one wins, else a margin that differs, else two blank cells clear the price.
-        """
-
-        if new_price is not None and new_price != line.new_price:
-            return LineChange(line.sku, new_price=new_price)
-        stored = line.new_margin_with_support_pct
-        if new_margin is not None and (
-            stored is None or abs(new_margin - stored) > _MARGIN_TOLERANCE
-        ):
-            return LineChange(line.sku, margin_pct=new_margin)
-        if new_price is None and new_margin is None and line.new_price is not None:
-            return LineChange(line.sku, new_price=None)
-        return None
-
-    async def upload_template(
-        self,
-        principal: Principal,
-        quotation_id: UUID,
-        version: int,
-        filename: str | None,
-        content: bytes,
-    ) -> tuple[QuotationDetail, TemplateResult]:
-        """Apply a workbook downloaded with :meth:`template_file` and edited by the advisor.
-
-        Each row sets the SKU's new price, or prices it at the new margin; both blank clears
-        the price. SKUs the quotation does not have are added (if they exist and are active)
-        and priced the same way. Rows that cannot be read or priced, and rows of a local
-        product (``LOC-<n>``), are reported; the rest is saved in one go.
-
-        Raises:
-            InvalidInputError: Empty, too big, unreadable, or from another quotation.
-        """
-
-        if self.template is None:
-            raise InvalidInputError("La plantilla no está disponible")
-        if not filename or not content:
-            raise InvalidInputError("Sube la plantilla de la cotización")
-        if len(content) > self.max_upload_bytes:
-            raise InvalidInputError(
-                f"El archivo supera el máximo de {self.max_upload_bytes // (1024 * 1024)} MB"
-            )
-        detail = await self._editable(principal, quotation_id)
-        self._check_version(detail.quotation, version)
-        owner = self.template.quotation_id(content)
-        if owner is not None and owner != quotation_id:
-            raise InvalidInputError("La plantilla es de otra cotización")
-        rows = self.template.read(filename, content)
-        if not rows:
-            raise InvalidInputError("La plantilla no tiene referencias")
-        family = detail.quotation.price_family
-        skipped: list[Skipped] = []
-        by_row: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
-        for row in rows:
-            if rules.is_local_sku(row.sku):
-                skipped.append(Skipped(row.sku, _LOCAL_IN_TEMPLATE, row.row_number))
-                continue
-            if row.problem:
-                skipped.append(Skipped(row.sku, row.problem, row.row_number))
-                continue
-            by_row[row.sku] = (row.row_number, row.new_price, row.new_margin_pct)
-
-        present = {line.sku: line for line in detail.lines if not line.is_local}
-        new = [sku for sku in by_row if sku not in present]
-        if len(new) > MAX_PASTED_SKUS:
-            raise InvalidInputError(f"Se agregan máximo {MAX_PASTED_SKUS} referencias por vez")
-        fresh, not_found, inactive = await self._new_skus(detail, new)
-        added_lines: dict[str, QuotationLine] = {}
-        if fresh:
-            priced, _ = await self._price(self._stored_context(detail.quotation), fresh)
-            added_lines = {line.sku: line for line in priced}
-
-        updated: dict[str, QuotationLine] = {}
-        cleared: list[str] = []
-        unchanged = 0
-        for sku, (number, price, margin) in by_row.items():
-            line = present.get(sku) or added_lines.get(sku)
-            if line is None:
-                continue
-            change = self._template_change(line, price, margin)
-            if change is None:
-                unchanged += 1
-                if sku in added_lines:
-                    updated[sku] = line
-                continue
-            try:
-                priced_line, reason = self._apply(line, change, family)
-            except InvalidInputError as exc:
-                priced_line, reason = None, Skipped(sku, exc.detail)
-            if priced_line is None:
-                skipped.append(replace(reason, row_number=number))  # type: ignore[arg-type]
-                if sku in added_lines:
-                    updated[sku] = line
-                continue
-            if change.new_price is None and change.margin_pct is None:
-                cleared.append(sku)
-            updated[sku] = priced_line
-
-        changed = [sku for sku in updated if sku in present]
-        inserted = [updated[sku] for sku in added_lines if sku in updated]
-        if not changed and not inserted:
-            result = TemplateResult(
-                (), (), (), unchanged, tuple(not_found), tuple(inactive), tuple(skipped)
-            )
-            return detail, result
-        lines = [updated.get(line.sku, line) for line in detail.lines] + inserted
-        quotation = self._touched(detail.quotation, lines, principal.email)
-        saved = await self.repository.save(
-            quotation, [updated[sku] for sku in changed], version, inserted=inserted
-        )
-        return saved, TemplateResult(
-            updated=tuple(sku for sku in changed if sku not in cleared),
-            cleared=tuple(cleared),
-            added=tuple(line.sku for line in inserted),
-            unchanged=unchanged,
-            not_found=tuple(not_found),
-            inactive=tuple(inactive),
-            skipped=tuple(skipped),
-        )
-
     # ------------------------------------------------------------ review
 
     def _check_rule(self, lines: Sequence[QuotationLine]) -> list[QuotationLine]:
-        """Lines that go to the files; every one must meet the rule and have a unit."""
+        """Lines that go to the files, checked for a unit and whole pesos.
+
+        The rule no longer blocks: a price under the minimum, without target or without cost
+        goes to the validator marked (``below_rule_count``). There must be at least one
+        priced active line, from SIESA or a local product (a temporary customer may only
+        have local products).
+        """
 
         changed = rules.exported(lines)
-        if not changed:
-            raise InvalidInputError("No hay precios nuevos de referencias activas para generar")
-        blocked = [line for line in changed if line.compliance != vocabulary.MEETS]
-        if blocked:
-            listed = ", ".join(
-                f"{line.sku} ({vocabulary.COMPLIANCE_LABELS.get(line.compliance or '', '')})"
-                for line in blocked[:10]
-            )
-            more = f" y {len(blocked) - 10} más" if len(blocked) > 10 else ""
-            raise InvalidInputError(f"Hay precios que no cumplen la regla: {listed}{more}")
+        priced = [
+            line
+            for line in lines
+            if line.is_active and line.new_price is not None and line.new_price > 0
+        ]
+        if not priced:
+            raise InvalidInputError("No hay referencias activas con precio nuevo para confirmar")
         for line in changed:
             if not line.unit:
                 raise InvalidInputError(f"La referencia {line.sku} no tiene unidad de medida")
@@ -1523,16 +1552,16 @@ class QuotationService:
         version: int,
         *,
         list_action: str | None,
-        price_list_id: str | None,
         new_list_name: str | None,
         activation_date: date | None,
     ) -> QuotationDetail:
         """The advisor closes the draft and sends it to validation.
 
-        - Every new price of an active SKU must meet the rule (inactive SKUs never go out).
-        - ``actualizacion`` writes to the customer's own list; ``creacion`` creates the list
-          ``price_list_id`` (1 to 3 letters or digits, free in SIESA). A customer on list 1
-          always gets a new list: list 1 is not updated from here.
+        - It needs at least one priced active line; the rule does not block (the validator
+          sees the lines that break it).
+        - ``actualizacion`` writes to the customer's own list; ``creacion`` creates a list
+          whose code the validator gives. A customer on list 1 always gets a new list (list 1
+          is not updated from here), and so does a temporary customer (no list in SIESA).
 
         Args:
             principal (Principal): The advisor.
@@ -1540,8 +1569,8 @@ class QuotationService:
             version (int): Version the caller read.
             list_action (str | None): ``actualizacion`` or ``creacion`` (default: what the
                 quotation says).
-            price_list_id (str | None): Code of the new list (creation only).
-            new_list_name (str | None): Its description (default ``COTIZADOR <customer>``).
+            new_list_name (str | None): Description of a new list (optional; the validator
+                may change it).
             activation_date (date | None): When SIESA activates the prices (default
                 tomorrow); never in the past.
 
@@ -1556,8 +1585,11 @@ class QuotationService:
         action = list_action or quotation.list_action
         if action not in vocabulary.LIST_ACTIONS:
             raise InvalidInputError("La acción de lista es actualizacion o creacion")
-        code = (price_list_id or "").strip().upper() or None
         name: str | None = None
+        if action == vocabulary.UPDATE_LIST and quotation.is_temporary_customer:
+            raise InvalidInputError(
+                "Un cliente temporal no tiene lista en SIESA: solo se crea una lista nueva"
+            )
         if quotation.price_list_id == vocabulary.GENERAL_PRICE_LIST and (
             action == vocabulary.UPDATE_LIST
         ):
@@ -1565,22 +1597,8 @@ class QuotationService:
                 "El cliente está en la lista 1, que no se actualiza por este medio: "
                 "crea una lista nueva"
             )
-        if action == vocabulary.UPDATE_LIST:
-            if code is not None and code != quotation.price_list_id:
-                raise InvalidInputError(
-                    f"La actualización escribe en la lista del cliente ({quotation.price_list_id})"
-                )
-            code = quotation.price_list_id
-        else:
-            if code is None:
-                raise InvalidInputError("Escribe el código de la lista nueva")
-            if not _LIST_ID.fullmatch(code):
-                raise InvalidInputError("El código de la lista es de 1 a 3 letras o números")
-            if code == vocabulary.GENERAL_PRICE_LIST or code == quotation.price_list_id:
-                raise InvalidInputError("La lista nueva debe tener un código distinto")
-            if await self.warehouse.price_list_exists(code):
-                raise InvalidInputError(f"La lista {code} ya existe en SIESA; usa otro código")
-            name = list_name(new_list_name or f"COTIZADOR {quotation.customer_name or ''}")
+        if action == vocabulary.CREATE_LIST and (new_list_name or "").strip():
+            name = list_name(new_list_name or "")
             if not name:
                 raise InvalidInputError("Escribe la descripción de la lista nueva")
         today = self.calendar.today()
@@ -1592,7 +1610,7 @@ class QuotationService:
             quotation,
             status=vocabulary.PENDING,
             list_action=action,
-            export_price_list_id=code,
+            export_price_list_id=None,
             new_list_name=name,
             activation_date=activation,
             confirmed_at=now,
@@ -1637,10 +1655,27 @@ class QuotationService:
         return await self.repository.save(returned, [], version)
 
     async def validate(
-        self, principal: Principal, quotation_id: UUID, version: int
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        version: int,
+        *,
+        price_list_id: str | None = None,
+        new_list_name: str | None = None,
     ) -> QuotationDetail:
-        """The approver validates a pending quotation: the files are released and the list
-        counts as ``creada`` or ``actualizada``."""
+        """The approver validates a pending quotation: the files are released and it waits
+        to be loaded in SIESA (``pendiente_carga``).
+
+        For ``creacion`` the approver gives the code of the new list (1 to 3 letters or
+        digits, free in SIESA) and may change its description (default the one the advisor
+        wrote, else ``COTIZADOR <customer>``). For ``actualizacion`` the files write to the
+        customer's list.
+
+        Raises:
+            ForbiddenError: The caller does not validate.
+            ConflictError: Stale version, or not pending validation.
+            InvalidInputError: A missing, malformed or existing list code.
+        """
 
         if not await self.can_validate(principal):
             raise ForbiddenError("No tienes permiso para validar cotizaciones")
@@ -1650,16 +1685,34 @@ class QuotationService:
         if quotation.status != vocabulary.PENDING:
             raise ConflictError("La cotización no está pendiente de validación")
         self._check_rule(detail.lines)
-        if quotation.list_action == vocabulary.CREATE_LIST and quotation.export_price_list_id:
-            if await self.warehouse.price_list_exists(quotation.export_price_list_id):
+        code = (price_list_id or "").strip().upper() or None
+        name = quotation.new_list_name
+        if quotation.list_action == vocabulary.CREATE_LIST:
+            if code is None:
+                raise InvalidInputError("Escribe el código de la lista nueva")
+            if not _LIST_ID.fullmatch(code):
+                raise InvalidInputError("El código de la lista es de 1 a 3 letras o números")
+            if code == vocabulary.GENERAL_PRICE_LIST or code == quotation.price_list_id:
+                raise InvalidInputError("La lista nueva debe tener un código distinto")
+            if await self.warehouse.price_list_exists(code):
+                raise InvalidInputError(f"La lista {code} ya existe en SIESA; usa otro código")
+            if (new_list_name or "").strip():
+                name = list_name(new_list_name or "")
+            name = name or list_name(f"COTIZADOR {quotation.customer_name or ''}")
+            if not name:
+                raise InvalidInputError("Escribe la descripción de la lista nueva")
+        else:
+            if code is not None and code != quotation.price_list_id:
                 raise InvalidInputError(
-                    f"La lista {quotation.export_price_list_id} ya existe en SIESA; devuelve la "
-                    "cotización para cambiar el código"
+                    f"La actualización escribe en la lista del cliente ({quotation.price_list_id})"
                 )
+            code, name = quotation.price_list_id, None
         now = datetime.now(UTC)
         validated = replace(
             quotation,
-            status=vocabulary.CLOSED_BY_ACTION[quotation.list_action],
+            status=vocabulary.UPLOAD_PENDING,
+            export_price_list_id=code,
+            new_list_name=name,
             validated_at=now,
             validated_by=principal.email,
             version=quotation.version + 1,
@@ -1667,6 +1720,35 @@ class QuotationService:
             updated_at=now,
         )
         return await self.repository.save(validated, [], version)
+
+    async def mark_uploaded(
+        self, principal: Principal, quotation_id: UUID, version: int
+    ) -> QuotationDetail:
+        """The approver says the files were loaded in SIESA: ``pendiente_carga`` → ``cargada``.
+
+        Raises:
+            ForbiddenError: The caller does not validate.
+            ConflictError: Stale version, or not pending upload.
+        """
+
+        if not await self.can_validate(principal):
+            raise ForbiddenError("Solo quien valida marca la cotización como cargada")
+        detail = await self.get(principal, quotation_id)
+        quotation = detail.quotation
+        self._check_version(quotation, version)
+        if quotation.status != vocabulary.UPLOAD_PENDING:
+            raise ConflictError("Solo se marca como cargada una cotización pendiente de carga")
+        now = datetime.now(UTC)
+        uploaded = replace(
+            quotation,
+            status=vocabulary.UPLOADED,
+            uploaded_at=now,
+            uploaded_by=principal.email,
+            version=quotation.version + 1,
+            updated_by=principal.email,
+            updated_at=now,
+        )
+        return await self.repository.save(uploaded, [], version)
 
     async def delete(self, principal: Principal, quotation_id: UUID) -> None:
         """Delete a quotation: its creator, or BI and admins."""
@@ -1755,6 +1837,33 @@ def _price(value: Decimal | None, sku: str) -> Decimal | None:
     return value
 
 
+def _temporary(value: TemporaryCustomer) -> TemporaryCustomer:
+    """A temporary customer with its texts trimmed and checked, and its NIT cleaned.
+
+    Raises:
+        InvalidInputError: A required text is missing, a text is too long, or the NIT has no
+            digits.
+    """
+
+    limit = vocabulary.TEMPORARY_TEXT_LENGTH
+
+    def text(raw: str | None, label: str, required: bool) -> str | None:
+        cleaned = " ".join((raw or "").split()) or None
+        if cleaned is None and required:
+            raise InvalidInputError(f"Escribe {label} del cliente temporal")
+        if cleaned is not None and len(cleaned) > limit:
+            raise InvalidInputError(f"{label.capitalize()} admite máximo {limit} caracteres")
+        return cleaned
+
+    nit = (value.nit or "").strip()
+    return TemporaryCustomer(
+        name=text(value.name, "el nombre", True),  # type: ignore[arg-type]
+        legal_name=text(value.legal_name, "la razón social", True),  # type: ignore[arg-type]
+        trade_name=text(value.trade_name, "el nombre comercial", False),
+        nit=normalize_nit(nit) if nit else None,
+    )
+
+
 def _kept(line: QuotationLine, stored: QuotationLine | None) -> QuotationLine:
     """A repriced line with the advisor's price and quantity it had stored."""
 
@@ -1826,7 +1935,6 @@ __all__ = [
     "Permissions",
     "QuotationService",
     "Skipped",
-    "TemplateResult",
     "list_name",
     "normalize_nit",
     "parse_skus",

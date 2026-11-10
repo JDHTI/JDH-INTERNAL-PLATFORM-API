@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.modules.order_validation.domain.catalog import HOLDS, INFORMS, WARNS, Rule, Section
+from app.modules.order_validation.domain.catalog import INFORMS, WARNS, Rule, Section
 from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import QuotationPolicy
 
@@ -26,11 +26,13 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                 Rule(
                     "ultimo_precio",
                     "Último precio",
-                    "La última venta de cada referencia al cliente (todas sus sucursales) en la "
-                    "ventana elegida, 6 o 12 meses. Es el precio neto de descuentos, antes de IVA "
-                    "y por unidad de inventario: una caja de 45 vendida a 149.551 es 3.323,36 por "
-                    "unidad. No cuentan devoluciones ni obsequios. Las referencias son las que el "
-                    "cliente compró y quedan en la lista que tiene asignada.",
+                    "De cada referencia vendida al cliente (todas sus sucursales) en la ventana "
+                    "elegida, 6 o 12 meses, se toma la última venta de cada centro de operación "
+                    "que facturó y, entre ellas, la de mayor precio. Es el precio neto de "
+                    "descuentos, antes de IVA y por unidad de inventario: una caja de 45 vendida "
+                    "a 149.551 es 3.323,36 por unidad. No cuentan devoluciones ni obsequios. Las "
+                    "referencias son las que el cliente compró y quedan en la lista que tiene "
+                    "asignada.",
                     INFORMS,
                 ),
                 Rule(
@@ -76,7 +78,7 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "Un producto que no existe en SIESA se puede cotizar con su descripción, "
                     "proveedor, precio antes de IVA e IVA. No tiene costo, así que la regla no "
                     "lo evalúa: no cuenta entre los precios cambiados, no impide confirmar y no "
-                    "sale en el Excel, en el plano ni en la plantilla.",
+                    "sale en el Excel ni en el plano.",
                     INFORMS,
                 ),
             ),
@@ -146,12 +148,13 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                 Rule(
                     "confirmar",
                     "Confirmar y validar",
-                    "El asesor confirma la lista (queda pendiente de validación) solo si todas "
-                    "las referencias activas con precio nuevo cumplen la regla y tienen costo, "
-                    "margen objetivo y precio en pesos enteros. Mientras está pendiente no se "
-                    "edita. Quien valida la aprueba (queda creada o actualizada y se liberan los "
-                    "archivos) o la devuelve a borrador con una nota.",
-                    HOLDS,
+                    "El asesor confirma la lista (queda pendiente de validación) con al menos "
+                    "una referencia activa con precio nuevo. La regla no bloquea: quien valida "
+                    "ve los precios bajo el mínimo, sin objetivo o sin costo. Mientras está "
+                    "pendiente no se edita. Quien valida la aprueba (se liberan los archivos y "
+                    "queda pendiente de carga) o la devuelve a borrador con una nota; cuando "
+                    "carga los archivos en SIESA la marca como cargada.",
+                    WARNS,
                 ),
             ),
         ),
@@ -164,9 +167,10 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "Actualización o creación de lista",
                     "Actualización: los precios se escriben en la lista SIESA que el cliente "
                     "tiene asignada; si es compartida, el cambio llega a todos sus clientes. "
-                    "Creación: se crea una lista nueva con su código y descripción. Un cliente en "
-                    "la lista 1 siempre va por creación: la lista 1 no se actualiza por este "
-                    "medio. Asignar la lista nueva al cliente se hace en SIESA.",
+                    "Creación: se crea una lista nueva; quien valida le da el código. Un cliente "
+                    "en la lista 1 o un cliente temporal siempre va por creación: la lista 1 no "
+                    "se actualiza por este medio. Asignar la lista nueva al cliente se hace en "
+                    "SIESA.",
                     WARNS,
                 ),
                 Rule(
@@ -176,14 +180,6 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "el plano de importación de SIESA, con las referencias activas con precio "
                     "nuevo, por unidad de inventario, antes de IVA y en pesos enteros. Para una "
                     "lista nueva, el plano trae primero su cabecera.",
-                    INFORMS,
-                ),
-                Rule(
-                    "plantilla",
-                    "Plantilla para cambios masivos",
-                    "La cotización se descarga en Excel con sus datos; se cambia el precio nuevo o "
-                    "el margen nuevo de las referencias que se quiera y se sube completa. Manda la "
-                    "celda que se cambió; las dos vacías quitan el precio nuevo.",
                     INFORMS,
                 ),
             ),

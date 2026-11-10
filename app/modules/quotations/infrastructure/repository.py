@@ -23,6 +23,7 @@ from app.modules.quotations.domain.entities import (
     RequestedProductPage,
     SellerContact,
     SupportCandidate,
+    TemporaryCustomer,
 )
 from app.modules.quotations.infrastructure.models import (
     QuotationLineModel,
@@ -47,6 +48,9 @@ def _header_values(quotation: Quotation) -> dict[str, Any]:
     values["seller_contact"] = (
         quotation.seller_contact.as_dict() if quotation.seller_contact else None
     )
+    values["temporary_customer"] = (
+        quotation.temporary_customer.as_dict() if quotation.temporary_customer else None
+    )
     return values
 
 
@@ -56,6 +60,9 @@ def _quotation(model: QuotationModel) -> Quotation:
     values["conditions"] = tuple(model.conditions or ())
     values["seller_contact"] = (
         SellerContact.from_dict(model.seller_contact) if model.seller_contact else None
+    )
+    values["temporary_customer"] = (
+        TemporaryCustomer.from_dict(model.temporary_customer) if model.temporary_customer else None
     )
     return Quotation(**values)
 

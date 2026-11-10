@@ -129,7 +129,6 @@ from app.modules.quotations.infrastructure.masters import SqlAlchemyQuotationMas
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
-from app.modules.quotations.infrastructure.template import QuotationTemplateFile
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
 from app.modules.salespeople.application.service import SalesScopeService
 from app.modules.salespeople.infrastructure.dwh_roster import WarehouseSalesRoster
@@ -604,7 +603,10 @@ class V1Container(containers.DeclarativeContainer):
     quotation_policy = providers.Singleton(
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
     )
-    quotation_template_file = providers.Singleton(QuotationTemplateFile)
+    # The requested products registry is its own module, granted in any area.
+    requested_products_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug=None, module="productos-solicitados"
+    )
     quotation_offer_writer = providers.Singleton(CustomerOfferWorkbook)
     quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
     quotation_warehouse_source = providers.Factory(
@@ -651,9 +653,8 @@ class V1Container(containers.DeclarativeContainer):
         policy=quotation_policy,
         max_lines=config.quotations.max_lines,
         approvers=quotation_approver_policy,
-        template=quotation_template_file,
-        max_upload_bytes=config.quotations.max_upload_bytes,
         offer_writer=quotation_offer_writer,
+        registry_readers=requested_products_policy,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.

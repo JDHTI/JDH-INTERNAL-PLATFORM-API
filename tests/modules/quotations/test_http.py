@@ -18,6 +18,7 @@ from tests.modules.quotations.conftest import APPROVER, MANAGER, NIT
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/quotations"
+REGISTRY = "/api/v1/requested-products"
 
 
 class AllowAll:
@@ -91,8 +92,6 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
         json={"version": 2, "lines": [{"sku": "2537", "new_price": "1", "margin_pct": "0.3"}]},
     )
     assert both.status_code == 422
-    refused = client.post(f"{url}/confirm", json={"version": 2})
-    assert refused.status_code == 422 and "no cumplen" in refused.json()["detail"]
     assert client.get(f"{url}/export.txt").status_code == 409
 
     at_margin = client.put(
@@ -102,13 +101,16 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
     confirmed = client.post(f"{url}/confirm", json={"version": 3, "activation_date": "2026-10-15"})
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "pendiente_validacion"
-    assert confirmed.json()["export_price_list_id"] == "001"
+    assert confirmed.json()["export_price_list_id"] is None
     assert client.post(f"{url}/validate", json={"version": 4}).status_code == 403
+    assert client.post(f"{url}/uploaded", json={"version": 4}).status_code == 403
 
     client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)
     validated = client.post(f"{url}/validate", json={"version": 4})
-    assert validated.status_code == 200 and validated.json()["status"] == "actualizada"
-    assert validated.json()["status_label"] == "Actualizada"
+    assert validated.status_code == 200 and validated.json()["status"] == "pendiente_carga"
+    assert validated.json()["status_label"] == "Pendiente de carga"
+    assert validated.json()["export_price_list_id"] == "001"
+    assert validated.json()["list_action_label"] == "Actualización de lista"
 
     flat = client.get(f"{url}/export.txt")
     assert flat.status_code == 200 and flat.headers["cache-control"] == "no-store"
@@ -119,39 +121,22 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
     assert list(sheet.iter_rows(min_row=2, values_only=True)) == [
         ("001", 2537, 20261015, "UNID", 4303)
     ]
-    template = client.get(f"{url}/template.xlsx")
-    assert template.status_code == 200
-    assert "cotizacion-900315138-lista001.xlsx" in template.headers["content-disposition"]
+    # The bulk template is gone.
+    assert client.get(f"{url}/template.xlsx").status_code in (404, 405)
+    uploaded = client.post(f"{url}/uploaded", json={"version": 5})
+    assert uploaded.status_code == 200 and uploaded.json()["status"] == "cargada"
+    assert uploaded.json()["status_label"] == "Cargada" and uploaded.json()["uploaded_by"]
+    assert client.post(f"{url}/uploaded", json={"version": 6}).status_code == 409
+    assert client.get(f"{url}/export.txt").status_code == 200
 
-    listing = client.get(BASE, params={"mine": "false"}).json()
+    listing = client.get(BASE, params={"mine": "false", "status": "cargada"}).json()
     assert listing["total"] == 1 and listing["items"][0]["changed_count"] == 1
     assert listing["items"][0]["validated_at"] is not None
+    assert listing["items"][0]["uploaded_at"] is not None
+    assert listing["items"][0]["is_temporary_customer"] is False
     client.app.dependency_overrides[get_current_principal] = lambda: person(MANAGER, admin=True)
     assert client.delete(url).status_code == 204
     assert client.get(url).status_code == 404
-
-
-def test_the_workbook_goes_up_as_multipart(client) -> None:
-    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
-    url = f"{BASE}/{quotation['id']}"
-    book = load_workbook(io.BytesIO(client.get(f"{url}/template.xlsx").content))
-    sheet = book["Cotizacion"]
-    header = [cell.value for cell in sheet[1]]
-    sheet.cell(2, header.index("Precio nuevo") + 1).value = 4100
-    buffer = io.BytesIO()
-    book.save(buffer)
-
-    uploaded = client.post(
-        f"{url}/template",
-        data={"version": "1"},
-        files={"file": ("cotizacion.xlsx", buffer.getvalue(), "application/octet-stream")},
-    )
-
-    assert uploaded.status_code == 200
-    body = uploaded.json()
-    assert body["template_result"]["updated"] == ["2537"]
-    assert Decimal(body["lines"][0]["new_price"]) == Decimal("4100")
-    assert body["version"] == 2
 
 
 def test_paste_adds_revalidates_and_reports(client) -> None:
@@ -322,7 +307,11 @@ def test_the_requested_products_contract(client) -> None:
     reference = created["lines"][-1]["requested_product"]
     assert reference["status"] == "solicitado" and reference["siesa_sku"] is None
 
-    listing = client.get(f"{BASE}/requested-products", params={"status": "solicitado"})
+    # The registry left the quoter's prefix.
+    assert client.get(f"{BASE}/requested-products").status_code != 200
+    permissions = client.get(f"{REGISTRY}/permissions").json()
+    assert permissions == {"can_read": True, "can_resolve": False}
+    listing = client.get(REGISTRY, params={"status": "solicitado"})
     assert listing.status_code == 200
     page = listing.json()
     assert page["total"] == 1 and page["page"] == 1 and page["size"] == 20
@@ -339,12 +328,13 @@ def test_the_requested_products_contract(client) -> None:
             "created_by": MANAGER,
         }
     ]
-    target = f"{BASE}/requested-products/{reference['id']}"
+    target = f"{REGISTRY}/{reference['id']}"
     assert client.patch(target, json={"status": "creado", "siesa_sku": "26278"}).status_code == 403
     refused = client.post(f"{url}/lines/LOC-1/promote", json={"version": 2})
     assert refused.status_code == 422
 
     client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)
+    assert client.get(f"{REGISTRY}/permissions").json() == {"can_read": True, "can_resolve": True}
     missing = client.patch(target, json={"status": "creado", "siesa_sku": "404"})
     assert missing.status_code == 422 and "404" in missing.json()["detail"]
     done = client.patch(target, json={"status": "creado", "siesa_sku": "26278", "note": "Listo"})
@@ -356,6 +346,55 @@ def test_the_requested_products_contract(client) -> None:
     assert promoted.status_code == 200
     assert [line["sku"] for line in promoted.json()["lines"]] == ["2537", "26278"]
     assert promoted.json()["lines"][-1]["origin"] == "agregado"
+
+
+def test_centers_and_temporary_customers_contract(client) -> None:
+    centers = client.get(f"{BASE}/billing-centers")
+    assert centers.status_code == 200
+    assert centers.json()[-1] == {
+        "code": "004",
+        "name": "COSTA",
+        "regional": "costa",
+        "regional_label": "Costa",
+    }
+    assert [item["code"] for item in centers.json()] == ["001", "003", "004"]
+
+    missing = client.post(BASE, json={"temporary_customer": {"name": "Espiga", "legal_name": "E"}})
+    assert missing.status_code == 422 and "centro de operación" in missing.json()["detail"]
+    created = client.post(
+        BASE,
+        json={
+            "temporary_customer": {
+                "name": "Panadería La Espiga",
+                "legal_name": "La Espiga SAS",
+                "trade_name": "Espiga",
+            },
+            "billing_center_code": "004",
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["is_temporary_customer"] is True and body["price_list_id"] is None
+    assert body["temporary_customer"] == {
+        "name": "Panadería La Espiga",
+        "legal_name": "La Espiga SAS",
+        "trade_name": "Espiga",
+        "nit": None,
+    }
+    assert body["customer_nit"] == "" and body["lines"] == []
+    assert body["billing_center_name"] == "COSTA" and body["billing_center_source"] == "manual"
+    assert body["include_variation"] is False and body["uploaded_at"] is None
+
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+    url = f"{BASE}/{quotation['id']}"
+    assert quotation["billing_center_source"] == "auto"
+    unknown = client.patch(f"{url}/billing-center", json={"version": 1, "billing_center_code": "9"})
+    assert unknown.status_code == 422
+    moved = client.patch(f"{url}/billing-center", json={"version": 1, "billing_center_code": "004"})
+    assert moved.status_code == 200 and moved.json()["regional"] == "costa"
+    assert moved.json()["billing_center_source"] == "manual" and moved.json()["version"] == 2
+    varied = client.patch(f"{url}/offer", json={"version": 2, "include_variation": True})
+    assert varied.json()["include_variation"] is True
 
 
 def test_categories_are_filled_on_read_and_never_break_it(client, warehouse, repository) -> None:

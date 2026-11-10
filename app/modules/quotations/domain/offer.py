@@ -176,6 +176,8 @@ class OfferRow:
     subtotal: Decimal | None = None
     vat: Decimal | None = None
     total: Decimal | None = None
+    # New price against the last one (fraction), shown only with ``include_variation``.
+    variation_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,7 @@ class OfferDocument:
     quote_quantities: bool
     summary: OfferSummary | None
     conditions: tuple[str, ...]
+    include_variation: bool = False
 
 
 def _row(line: QuotationLine, quantities: bool) -> OfferRow:
@@ -209,6 +212,7 @@ def _row(line: QuotationLine, quantities: bool) -> OfferRow:
         vat_pct=rate,
         liquor_tax=liquor,
         price_with_vat=with_vat,
+        variation_pct=line.variation_pct,
     )
     if not quantities:
         return row
@@ -247,6 +251,7 @@ def offer_document(detail: QuotationDetail, issued: date) -> OfferDocument:
         quote_quantities=quantities,
         summary=offer_summary(detail),
         conditions=tuple(conditions),
+        include_variation=quotation.include_variation,
     )
 
 

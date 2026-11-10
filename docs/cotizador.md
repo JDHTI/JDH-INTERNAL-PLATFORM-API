@@ -7,12 +7,16 @@ y el inventario), el **margen objetivo** del [maestro de márgenes](margenes-pro
 **apoyos vigentes** del [maestro de apoyos](apoyos-proveedores.md) (igual que el
 [validador de pedidos](validador-pedidos.md)). El asesor confirma la lista, BI la valida y
 entonces se generan el Excel `ACTUALIZACION LISTAS PRECIOS` y el plano de importación de SIESA
-(registros `0112`/`0126`/`0127`) para actualizar la lista del cliente o crear una nueva.
+(registros `0112`/`0126`/`0127`) para actualizar la lista del cliente o crear una nueva; cuando BI
+los carga en SIESA, la marca como cargada. También se cotiza a un **cliente temporal** (que aún no
+está en SIESA).
 
 Módulo `quotations`. Migraciones `0037_quotations`, `0038_quotation_review`,
-`0050_quotation_local_lines` (categoría de la línea y productos solo para cotización) y
-`0051_quotation_offer` (oferta al cliente, cantidades y registro de productos solicitados). Área: Comercial
-(`/comercial/cotizador`). Datos del DWH: [cotizador-dwh.md](cotizador-dwh.md).
+`0050_quotation_local_lines` (categoría de la línea y productos solo para cotización),
+`0051_quotation_offer` (oferta al cliente, cantidades y registro de productos solicitados) y
+`0052_quotation_upload_flow` (estados de carga, CO elegido, cliente temporal, variación en la
+oferta). Área: Comercial (`/comercial/cotizador`). Datos del DWH: [cotizador-dwh.md](cotizador-dwh.md).
+El registro de productos solicitados es su propio módulo: [productos-solicitados.md](productos-solicitados.md).
 
 Las reglas de costo, bodega, redondeo e impuesto son las del área de listas de precios, escritas
 en la skill del proyecto [`lista-precios`](../.claude/skills/lista-precios/SKILL.md). El cotizador
@@ -22,13 +26,26 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
 
 1. **Cliente**: un NIT, con todas sus sucursales. Del DWH (`consumo.clientes`) se toman, por
    mayoría entre las sucursales activas, el canal (`cod_canal`), la lista de precios SIESA
-   (`lista_precio_id`), el centro de operación que factura (`cod_co_factura`) y el vendedor.
-   Si las sucursales no coinciden, la cotización lo advierte (`listas_distintas`, `co_distintos`).
-   Las referencias del histórico quedan atadas a la lista que el cliente tiene asignada.
-2. **Último precio** (`consumo.ventas`): por referencia, la última venta de la ventana (fecha,
-   número de documento, precio, llave de línea). Solo ventas (no devoluciones) con cantidad y
-   subtotal mayores que cero. El precio es `subtotal / cantidad`: neto de descuentos, **antes de
-   IVA** y **por unidad de inventario** (una caja C45 vendida a 149.551 es 3.323,36 por unidad).
+   (`lista_precio_id`) y el vendedor. Si las sucursales no coinciden, la cotización lo advierte
+   (`listas_distintas`, `co_distintos`). Las referencias del histórico quedan atadas a la lista que
+   el cliente tiene asignada.
+   - **CO inicial** (`cod_co_factura`): si alguna sucursal activa factura desde un CO de la Costa
+     (`004`), se toma el CO de la Costa más frecuente entre ellas (paga el impuesto de licores de la
+     Costa); si no, el más frecuente. `co_distintos` sigue avisando que facturan desde varios.
+   - **CO elegido**: el asesor puede cotizar desde otro CO activo (al crear con
+     `billing_center_code` o con `PATCH /billing-center`). `billing_center_source` dice `auto` o
+     `manual`; un refresco conserva el elegido. Cambiarlo recalcula cada línea con la regional
+     (impuesto de licores) y el plan de bodegas del CO, y vuelve a borrador. El plan de bodegas
+     sigue la regla de la skill: una lista con bodega fija (tabla del paso 4) la conserva aunque
+     cambie el CO; el CO decide las bodegas de las listas fuera de la tabla y de un cliente temporal.
+2. **Último precio** (`consumo.ventas`): por referencia se toma la **última venta de cada CO que
+   facturó** (`ventas.co`) en la ventana y, entre ellas, la de **mayor precio neto**; su fecha,
+   documento y unidad son los `last_*`. Dentro de un CO, un empate de fecha va al documento mayor,
+   luego al precio mayor y a la llave de línea; entre CO, un empate de precio va a la más reciente.
+   `sales_in_window` cuenta todas las ventas de la referencia. Solo ventas (no devoluciones) con
+   cantidad y subtotal mayores que cero. El precio es `subtotal / cantidad`: neto de descuentos,
+   **antes de IVA** y **por unidad de inventario** (una caja C45 vendida a 149.551 es 3.323,36 por
+   unidad).
 3. **Costo**: el **mayor** entre:
    - la **cotización vigente del proveedor** (`consumo.cotizaciones_proveedores`: vigente, ítem
      activo, unidad `UNID` o `KL`): `redondear(costo_bruto) × (1 + ICUI/100) + IBUA`, la mayor por
@@ -90,11 +107,18 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
     o 0). La API le da la referencia `LOC-<n>` (1, 2, 3… por cotización; un número no se reusa
     aunque se quite el producto). No tiene costo, objetivo, apoyo, unidad ni categoría, así que la
     regla no lo evalúa: `compliance` vacío, no cuenta en `changed_count`, `below_rule_count` ni
-    `below_target_count`, y no impide confirmar (pero un precio local solo no basta: confirmar
-    sigue exigiendo al menos un precio nuevo de una referencia de SIESA). **No sale en el Excel,
-    en el plano ni en la plantilla.** Avisa `producto_local`. Se le cambia o quita el precio con
-    `PUT /lines` (con `margin_pct` se omite: no tiene costo), se conserva igual al refrescar
-    (después de las líneas reconstruidas) y se puede quitar.
+    `below_target_count`. Su precio sí basta para confirmar. **No sale en el Excel ni en el
+    plano.** Avisa `producto_local`. Se le cambia o quita el precio con `PUT /lines` (con
+    `margin_pct` se omite: no tiene costo), se conserva igual al refrescar (después de las líneas
+    reconstruidas) y se puede quitar.
+11. **Cliente temporal**: un cliente que aún no está en SIESA se cotiza con
+    `temporary_customer: {name, legal_name, trade_name?, nit?}` (nombre y razón social
+    obligatorios, hasta 120 caracteres) y el CO desde donde se cotiza (`billing_center_code`,
+    obligatorio). La cotización arranca **vacía**: sin ventas, sin lista (`price_list_id: null`),
+    sin canal y sin vendedor; las referencias que se agregan se cotizan con las bodegas y la
+    regional del CO elegido. `customer_name` es el nombre y `customer_nit` el NIT (o `""`). Se
+    guarda en la misma cotización. La cartera de ventas no aplica: lo puede crear quien cotiza.
+    Solo va por **creación** de lista; un refresco recalcula sus líneas sin leer ventas.
 
 ## Oferta al cliente
 
@@ -108,9 +132,10 @@ dicen cosas distintas. **Nunca lleva costo, márgenes, apoyos ni datos de la reg
   en que se crearon.
 - **Ajustes** (`PATCH /offer`, en cualquier estado y sin cambiarlo): `conditions` (hasta 20
   textos de 1 a 300 caracteres; se recortan los espacios y se quitan los vacíos),
-  `include_seller` (sí por defecto), `quote_quantities` (no por defecto) y `offer_scope`:
-  `changed` (por defecto: las líneas activas con precio nuevo, también los productos solo para
-  cotización) o `all` (toda línea activa con precio de oferta). Una línea inactiva nunca va.
+  `include_seller` (sí por defecto), `quote_quantities` (no por defecto), `include_variation`
+  (no por defecto) y `offer_scope`: `changed` (por defecto: las líneas activas con precio nuevo,
+  también los productos solo para cotización) o `all` (toda línea activa con precio de oferta).
+  Una línea inactiva nunca va.
 - **Asesor** (`seller_contact`): el vendedor asignado al cliente (`salesperson_code`) en
   `consumo.vendedores` (`nombre`, `correo` en minúscula, `celular`). Se guarda al crear y al
   refrescar; `null` sin código o sin fila. Las guardadas antes lo traen al refrescar.
@@ -119,7 +144,7 @@ dicen cosas distintas. **Nunca lleva costo, márgenes, apoyos ni datos de la reg
 - **Cantidades** (`quantity`): unidades de inventario, mayor que cero, hasta dos decimales y
   10.000.000. Se escriben con `PUT /lines`; un lote que solo trae cantidades se acepta en
   cualquier estado (también pendiente de validación), no cambia el estado pero sí sube la versión.
-  La plantilla masiva no las lee. Se conservan al refrescar, al revalidar y al promover.
+  Se conservan al refrescar, al revalidar, al cambiar de CO y al promover.
 - **Totales** (`offer_summary`, solo con `quote_quantities`), sobre las líneas de la oferta con
   cantidad, redondeando al peso (mitad hacia arriba):
 
@@ -135,25 +160,23 @@ dicen cosas distintas. **Nunca lleva costo, márgenes, apoyos ni datos de la reg
   quien pueda leer la cotización y en cualquier estado: título «Cotización»; cliente, NIT, canal,
   fecha de emisión y «Válida hasta»; el asesor (nombre, correo, teléfono) si `include_seller` y
   hay `seller_contact`; los ítems de la oferta (`Referencia` —«Por crear» en un producto solo para
-  cotización—, `Descripción`, `Unidad`, `Precio sin IVA`, `IVA %`, `Imp. licores`, `Precio con
-  IVA` = precio × (1 + IVA) + licores, redondeado al peso) y, con cantidades, `Cantidad`,
-  `Subtotal`, `IVA` y `Total` más los totales por grupo de IVA, subtotal, IVA, impuesto de licores
-  y total; al final «Condiciones de la oferta»: primero «Precios válidos hasta el <fecha larga>»
-  y luego las del asesor.
+  cotización—, `Descripción`, `Unidad`, `Precio sin IVA`, `IVA %`, `Imp. consumo` —el impuesto
+  al consumo de licores por unidad, `value_tax_amount`; vacío si no tiene—, `Precio con IVA` =
+  precio × (1 + IVA) + impuesto al consumo, redondeado al peso; con `include_variation`,
+  `Variación` = `variation_pct`) y, con cantidades, `Cantidad`, `Subtotal`, `IVA` y `Total` más
+  los totales por grupo de IVA, subtotal, IVA, impuesto al consumo y total; al final «Condiciones
+  de la oferta»: primero «Precios válidos hasta el <fecha larga>» y luego las del asesor.
 
 ## Productos solicitados
 
-Cada producto solo para cotización queda en el registro `quotation_requested_products`
-(`solicitado`, `creado` o `descartado`) para que BI lo cree en SIESA. Quitar la línea o borrar la
-cotización no borra el registro. Una línea local guardada antes de `0051` recibió su propio
-registro.
+Cada producto solo para cotización queda en el registro de productos solicitados, que es su propio
+módulo (`productos-solicitados`, rutas `/requested-products`): ver
+[productos-solicitados.md](productos-solicitados.md). Quitar la línea o borrar la cotización no
+borra el registro.
 
 - `POST /local-lines` crea el registro (precio estimado = el precio de la línea) y lo enlaza. Con
   `requested_product_id` (un registro `solicitado`) cotiza otra vez ese producto: toma su
   descripción, proveedor e IVA, y el precio del cuerpo o, si no viene, el estimado.
-- BI (quien valida) lo marca con `PATCH /requested-products/{id}`: `creado` exige una referencia
-  SIESA que exista y esté activa; volver a `solicitado` (o pasar a `descartado`) la borra. `note`
-  cambia solo si se envía.
 - Con el registro `creado`, `POST /{id}/lines/{sku}/promote` cambia la línea local por la
   referencia SIESA, calculada como una agregada (`agregado`) en su lugar, con su precio nuevo y su
   cantidad. Si la cotización ya tiene esa referencia, la línea local se quita y su cantidad pasa a
@@ -196,17 +219,23 @@ por debajo del mínimo. La línea se resalta para revisarla y actualizarla; si u
 (el margen con apoyo alcanza el mínimo), no se resalta. La cabecera cuenta cuántas hay
 (`below_target_count`).
 
-Guardar precios nunca se bloquea: la línea queda marcada. **Confirmar** sí exige que ninguna
-referencia activa con precio nuevo esté en `bajo_minimo`, `sin_objetivo` o `sin_costo`. Un
-producto solo para cotización no tiene `compliance` y no entra en esta cuenta.
+Guardar precios nunca se bloquea: la línea queda marcada. **Confirmar tampoco**: una referencia
+en `bajo_minimo`, `sin_objetivo` o `sin_costo` se confirma y llega a quien valida contada en
+`below_rule_count`. Confirmar solo exige al menos una línea activa con precio nuevo, de SIESA o
+solo para cotización (un cliente temporal puede tener solo productos locales).
 
 ## Estados
 
-| Estado | Quién | Qué pasa |
-| --- | --- | --- |
-| `borrador` | asesor | edita precios, márgenes, referencias; cualquier cambio vuelve aquí |
-| `pendiente_validacion` | asesor confirma (`/confirm`) | queda bloqueada para editar; elige actualización o creación, la lista y la fecha de activación |
-| `actualizada` / `creada` | BI valida (`/validate`) | se liberan el Excel y el plano; `actualizada` si actualizó la lista del cliente, `creada` si creó una nueva |
+| Estado | Etiqueta | Quién | Qué pasa |
+| --- | --- | --- | --- |
+| `borrador` | Borrador | asesor | edita precios, márgenes, referencias; cualquier cambio vuelve aquí |
+| `pendiente_validacion` | Pendiente de validación | asesor confirma (`/confirm`) | queda bloqueada para editar precios; elige actualización o creación y la fecha de activación |
+| `pendiente_carga` | Pendiente de carga | BI valida (`/validate`) | da el código de una lista nueva; se liberan el Excel y el plano |
+| `cargada` | Cargada | BI marca (`/uploaded`) | los archivos se cargaron en SIESA; guarda `uploaded_by` y `uploaded_at` |
+
+`list_action` / `list_action_label` siguen diciendo si es actualización o creación. Editar una
+cotización `pendiente_carga` o `cargada` la vuelve a borrador (y borra las marcas de validación y
+carga). La migración `0052` pasó las `creada` y `actualizada` a `pendiente_carga`.
 
 Quien valida también puede **devolverla** a borrador con una nota (`/return`, `review_note`).
 El asesor puede retirarla de la validación por el mismo camino. Validan los miembros del área
@@ -218,31 +247,18 @@ administradores; ellos leen todas las cotizaciones aunque no sean del área come
 - **Actualización** (`actualizacion`): los precios se escriben en la **lista que el cliente tiene
   asignada** en SIESA; no se puede escoger otra. Si la lista es compartida, el cambio llega a todos
   sus clientes (`price_list_customers` y el aviso `lista_compartida`).
-- **Creación** (`creacion`): se crea una lista nueva con el código que da el asesor (1 a 3 letras o
-  números, libre en SIESA: se consulta `consumo.listas_precios`) y su descripción (por defecto
-  `COTIZADOR <cliente>`, en ASCII y mayúsculas, máximo 40).
+- **Creación** (`creacion`): se crea una lista nueva. **El código lo da quien valida**, al validar
+  (1 a 3 letras o números, libre en SIESA: se consulta `consumo.listas_precios`); el asesor solo
+  puede proponer la descripción al confirmar, y quien valida puede cambiarla (por defecto
+  `COTIZADOR <cliente>`, en ASCII y mayúsculas, máximo 40). `export_price_list_id` se fija al
+  validar.
 - **Lista 1**: un cliente en la lista `1` (GENERAL, unos 28.000 clientes) **siempre va por
-  creación**: la lista 1 no se actualiza por este medio (aviso `lista_general`).
+  creación**: la lista 1 no se actualiza por este medio (aviso `lista_general`). Igual un
+  **cliente temporal**, que no tiene lista en SIESA.
 - Asignar la lista nueva al cliente se hace **a mano en SIESA**: el registro `0201` de clientes
   reescribe la sucursal completa (vendedor, cupo, dirección…) y no se automatiza.
 
-## Plantilla para cambios masivos
-
-`GET /quotations/{id}/template.xlsx` descarga la cotización con todos sus datos (hoja
-`Cotizacion`: referencia, descripción, unidad, estado, proveedor, último precio, costo, apoyo,
-margen actual, objetivo, precio mínimo, precio óptimo, **Precio nuevo**, **Margen nuevo** y la
-alerta) y una hoja `Control` con el id de la cotización. El asesor cambia el precio o el margen de
-las referencias que quiera y la sube completa (`POST /quotations/{id}/template`):
-
-- por fila, **manda la celda que cambió**: un precio distinto al guardado; si no, un margen
-  distinto (fracción `0,30` o `30 %`), que se convierte en precio con la fórmula de arriba;
-- las dos celdas vacías **quitan** el precio nuevo;
-- una referencia que la cotización no tiene se **agrega** (si existe y está activa);
-- las filas ilegibles o que no se pueden calcular se informan con su número de fila
-  (`template_result.skipped`); el resto se guarda;
-- los productos solo para cotización no vienen en la plantilla; una fila con una referencia
-  `LOC-<n>` se informa en `skipped` y no se toca;
-- un archivo de otra cotización se rechaza.
+La plantilla para cambios masivos (`template.xlsx`) se retiró: todo se gestiona en la plataforma.
 
 ## Formato de actualización
 
@@ -284,8 +300,8 @@ uno en el ambiente de pruebas de SIESA.
 Leer exige ser administrador, miembro del área comercial (`QUOTATIONS_MANAGER_AREA_SLUG`) o del
 área que valida (`QUOTATIONS_APPROVER_AREA_SLUG`). Cotizan las dos áreas: quien gestiona el
 cotizador en Comercial o en BI. BI y los administradores tienen el módulo completo: editan
-(refrescar, precios, agregar referencias, plantilla masiva, confirmar) y borran cualquier
-cotización. Comercial, solo las que creó. Validar, solo quien valida.
+(refrescar, precios, agregar referencias, CO, confirmar) y borran cualquier cotización.
+Comercial, solo las que creó. Validar y marcar como cargada, solo quien valida.
 
 Qué cotizaciones ve cada uno: quien valida (BI y administradores) y los moderadores ven todas; el
 resto, también supervisores y líderes de Comercial, solo las que creó. `GET /quotations` les
@@ -299,41 +315,42 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/permissions` | `{can_manage, can_validate, seller_linked, seller}` |
 | `GET /quotations/rules` | Reglas vigentes por secciones (`precio`, `margen`, `regla`, `formato`) |
 | `GET /quotations/customers` | Clientes para cotizar: `scope=mine` (defecto) o `all`, `q`, `page`, `size` (≤ 100) |
-| `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30)}` → 201 con la cotización (borrador) |
-| `GET /quotations/requested-products` | Registro de productos solicitados: `status`, `q` (descripción o proveedor), `page`, `size`. Primero los `solicitado`, luego los más nuevos. `{items, total, page, size}`; cada ítem `{id, description, supplier_name, estimated_price, vat_pct, status, status_label, siesa_sku, note, created_by, created_at, updated_by, updated_at, quotations: [{id, customer_name, customer_nit, status, status_label, created_by}]}` con solo las cotizaciones que quien consulta puede abrir. Para quien cotiza o valida |
-| `PATCH /quotations/requested-products/{id}` | `{status, siesa_sku?, note?}` → el ítem. Solo quien valida (403). `creado` exige una referencia SIESA existente y activa (422) |
-| `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status`, `customer_nit`, `q`, `page`, `size` |
+| `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30), billing_center_code?}` o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
+| `GET /quotations/billing-centers` | `[{code, name, regional, regional_label}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`) |
+| `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
 | `GET /quotations/{id}` | Cotización completa |
 | `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price?, margin_pct?, quantity?}]}`. `quantity` (texto o número; `null` la quita) va sola o con `new_price`, nunca con `margin_pct`. Un lote con **solo** cantidades se acepta en cualquier estado, no cambia el estado y sube la versión; uno que toca precios sigue las reglas de siempre. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
 | `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}`. Una referencia `LOC-<n>` no se busca en SIESA: va en `not_found` |
 | `POST /quotations/{id}/local-lines` | Producto solo para cotización: `{version, description, supplier_name?, price, vat_pct}` o `{version, requested_product_id, price?}` (un registro `solicitado`; 422 si no existe o no está solicitado). Crea o enlaza su registro de productos solicitados. `description` de 1 a 120 caracteres (se recortan los espacios), `supplier_name` opcional hasta 120, `price` (texto o número) en pesos enteros mayor que cero antes de IVA, `vat_pct` 19, 5 o 0. Devuelve la cotización con la línea `LOC-<n>` al final. Mismos permisos y estados que agregar referencias: 409 por versión o si está pendiente de validación; 422 con `detail` en español si un campo no sirve |
 | `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada**, **inactiva** o **solo para cotización** (su registro de productos solicitados queda) |
 | `POST /quotations/{id}/lines/{sku}/promote` | `{version}`: cambia el producto `LOC-<n>` por su referencia SIESA cuando su registro está `creado` (si no, 422). Mismos permisos y estados que agregar referencias |
-| `PATCH /quotations/{id}/offer` | `{version, validity_days?, conditions?, include_seller?, quote_quantities?, offer_scope?: changed \| all}`: solo cambian las llaves enviadas (`null` deja el valor). En cualquier estado y sin cambiarlo; sube la versión; 409 por versión. Una vigencia nueva empieza hoy |
+| `PATCH /quotations/{id}/offer` | `{version, validity_days?, conditions?, include_seller?, quote_quantities?, offer_scope?: changed \| all, include_variation?}`: solo cambian las llaves enviadas (`null` deja el valor). En cualquier estado y sin cambiarlo; sube la versión; 409 por versión. Una vigencia nueva empieza hoy |
 | `GET /quotations/{id}/offer.xlsx` | La oferta para el cliente, en cualquier estado, para quien puede leer la cotización |
-| `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos; los productos solo para cotización quedan iguales, al final |
-| `GET /quotations/{id}/template.xlsx` | La plantilla con los datos de la cotización |
-| `POST /quotations/{id}/template` | `multipart/form-data`: `file` y `version`. Devuelve `template_result: {updated, cleared, added, unchanged, not_found, inactive, skipped: [{sku, reason, row_number}]}`: listas de SKU, salvo `unchanged`, que es el **número** de filas sin cambio |
-| `POST /quotations/{id}/confirm` | `{version, list_action?, price_list_id?, new_list_name?, activation_date?}` → `pendiente_validacion`. 422 si alguna no cumple, si la lista 1 se quiere actualizar, si la creación no trae código o el código existe |
+| `PATCH /quotations/{id}/billing-center` | `{version, billing_center_code}`: cotiza desde ese CO (`manual`) y recalcula regional, plan de bodegas, costo, impuesto de licores, objetivo, mínimo, óptimo, márgenes y cumplimiento de cada línea; conserva precios nuevos, cantidades y productos locales. Mismas reglas que `/refresh` (vuelve a borrador; 409 por versión o pendiente de validación). 422 si el CO no existe o está inactivo |
+| `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos y el CO elegido; los productos solo para cotización quedan iguales, al final. Un cliente temporal no tiene ventas: se recalculan sus líneas |
+| `POST /quotations/{id}/confirm` | `{version, list_action?, new_list_name?, activation_date?}` → `pendiente_validacion`. La regla no bloquea; 422 si no hay ninguna línea activa con precio nuevo, si la lista 1 o un cliente temporal se quiere actualizar, o la fecha es anterior a hoy. Ya no recibe `price_list_id` |
 | `POST /quotations/{id}/return` | `{version, note}` → `borrador`. Quien valida debe escribir la nota |
-| `POST /quotations/{id}/validate` | `{version}` → `actualizada` o `creada`. Solo quien valida |
-| `GET /quotations/{id}/export.xlsx` | El Excel (solo `actualizada`/`creada`; si no, 409) |
-| `GET /quotations/{id}/export.txt` | El plano SIESA (solo `actualizada`/`creada`; si no, 409) |
+| `POST /quotations/{id}/validate` | `{version, price_list_id?, new_list_name?}` → `pendiente_carga`. Solo quien valida. Para `creacion`, `price_list_id` es obligatorio (1 a 3 letras o números, que no exista en SIESA); fija `export_price_list_id` |
+| `POST /quotations/{id}/uploaded` | `{version}`: de `pendiente_carga` a `cargada`, con `uploaded_by` y `uploaded_at`. Solo quien valida (403); 409 desde otro estado |
+| `GET /quotations/{id}/export.xlsx` | El Excel (solo `pendiente_carga`/`cargada`; si no, 409) |
+| `GET /quotations/{id}/export.txt` | El plano SIESA (solo `pendiente_carga`/`cargada`; si no, 409) |
 | `DELETE /quotations/{id}` | 204. Quien la creó o un administrador |
 
 **Resumen** (lista): `id, customer_nit, customer_name, channel, price_list_id, window_months,
 status, status_label, list_action, list_action_label, export_price_list_id, line_count,
 changed_count, below_rule_count, below_target_count, created_by, created_at, updated_at,
-confirmed_at, validated_at, version, validity_days, valid_from, valid_until` (fechas
-`AAAA-MM-DD`).
+confirmed_at, validated_at, uploaded_at, uploaded_by, version, validity_days, valid_from,
+valid_until, is_temporary_customer, temporary_customer: {name, legal_name, trade_name, nit} | null`
+(fechas `AAAA-MM-DD`). `price_list_id` es `null` en un cliente temporal.
 
 **Cotización completa**: el resumen más `channel_code, price_list_name, price_list_customers,
-billing_center_code, regional, regional_label, price_family, price_family_label, stock_source,
-salesperson_code, salesperson_name, built_at, cost_cut_date, activation_date, new_list_name,
+billing_center_code, billing_center_name, billing_center_source: auto | manual, regional,
+regional_label, price_family, price_family_label, stock_source, salesperson_code,
+salesperson_name, built_at, cost_cut_date, activation_date, new_list_name,
 max_points_below_target, warnings: [{code, label}], confirmed_by, validated_by, review_note,
-updated_by, conditions, include_seller, quote_quantities, offer_scope, seller_contact: {code,
-name, email, phone} | null, offer_summary: {item_count, subtotal, vat_groups: [{vat_pct, base,
-vat}], liquor_tax, total} | null` y `lines`.
+updated_by, conditions, include_seller, quote_quantities, offer_scope, include_variation,
+seller_contact: {code, name, email, phone} | null, offer_summary: {item_count, subtotal,
+vat_groups: [{vat_pct, base, vat}], liquor_tax, total} | null` y `lines`.
 
 **Línea**:
 
@@ -380,13 +397,13 @@ Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_
 | `QUOTATIONS_APPROVER_AREA_SLUG` | `bi` | quién valida; también cotiza |
 | `QUOTATIONS_MAX_POINTS_BELOW_TARGET` | `1` | puntos bajo el objetivo que se toleran |
 | `QUOTATIONS_MAX_LINES` | `3000` | referencias máximas por cotización |
-| `QUOTATIONS_MAX_UPLOAD_MB` | `10` | tamaño máximo de la plantilla que se sube |
 | `QUOTATIONS_SIESA_COMPANY` | `001` | compañía del plano |
 | `QUOTATIONS_DWH_TIMEOUT_SECONDS` | `30` | segundos por consulta al DWH del cotizador |
 
 El usuario del DWH debe leer en `consumo`: `ventas`, `clientes`, `productos`,
 `producto_impuestos`, `inventario_fecha`, `cotizaciones_proveedores`, `precios_lista_vigentes`,
-`listas_precios` y `vendedores` (`svc_bi` sí; el rol `dir_comercial` no alcanza).
+`listas_precios`, `vendedores` y `centros_operacion` (`svc_bi` sí; el rol `dir_comercial` no
+alcanza).
 
 El histórico de un cliente con cientos de sucursales tarda de 1 a 6 segundos y, con el DWH
 ocupado, hasta 27. Por eso el cotizador tiene su propio tiempo límite; `DataProviderConnection.fetch`
@@ -403,20 +420,20 @@ Contra el DWH real y una copia de la base local migrada a `0038_quotation_review
 | Colegio, 678 referencias | `87Q` / 002 (mayoría de sucursales) | Bodega OCC1/OCC16 por el CO; 12779 Kit Kat con la cotización de 80.552 descartada y el costo del inventario (2.780) |
 | Restaurante en la Costa, 244 referencias | `27X` / 004 | Regional Costa: 18973 con 4.144 y 21700 con 49.728 (Nacional: 4.036 y 48.432) |
 | Mayorista en la lista 1, 104 referencias | `1` / 009 | Creación obligatoria (actualizar la lista 1 da 422; el código `1M` existe y da 422). Margen 25 % a toda la selección en 135 ms; confirmada como `C97`, validada → `creada`; plano 18/101/254… con el `0112` primero |
-| Plantilla (lista 10U) | | 5 precios óptimos y 5 márgenes de 30 % aplicados, 1081 agregada a 20 %, una referencia inexistente y una celda `abc` informadas con su fila; 225 ms |
 
 ## Pendiente de definir con el negocio
 
 1. Si el objetivo de un apoyo debe mandar sobre el margen del producto (hoy sí, como en el
    validador).
-2. Qué hacer con referencias sin margen para el canal (hoy no se pueden confirmar con precio nuevo).
+2. Qué hacer con referencias sin margen para el canal (hoy se confirman marcadas y decide quien
+   valida).
 3. Apoyos con cantidad mínima: la cotización no tiene cantidades; hoy se aplican y se advierte.
 4. Vínculo asesor ↔ vendedor: solo por correo. La cartera es una sugerencia, no un bloqueo.
 5. **CO sin bodega definida** (006 Yumbo, 007 Urabá, 008 Valledupar, 010 Quindío, 100, 200, 201):
    hoy toman el mayor de las bodegas de la lista 1. ¿Valledupar (008, 201) paga el impuesto de
    licores de la Costa? Hoy solo el CO 004.
-6. **Código de las listas nuevas**: hoy lo escribe el asesor. El agente del DWH propone reservar
-   `C01`–`C99` (sin uso hoy) para las que crea el cotizador.
+6. **Código de las listas nuevas**: hoy lo escribe quien valida. El agente del DWH propone
+   reservar `C01`–`C99` (sin uso hoy) para las que crea el cotizador.
 7. **Estado Bloqueado**: SIESA tiene Activo/Inactivo/Bloqueado, pero `consumo.productos.estado`
    reduce el bloqueado a `I` (hoy 11 ítems). Si se quiere distinguir, pedir `estado_siesa` en el DWH.
 8. **Alzas de precio** (Acumulado de alzas en Drive, el «Costo Final» de la skill): no está en el

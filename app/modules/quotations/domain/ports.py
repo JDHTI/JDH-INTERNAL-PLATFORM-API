@@ -10,6 +10,7 @@ from uuid import UUID
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope
 from app.modules.quotations.domain.entities import (
+    BillingCenter,
     Branch,
     CostInfo,
     CustomerPage,
@@ -26,7 +27,6 @@ from app.modules.quotations.domain.entities import (
     RequestedProductPage,
     Seller,
     SellerContact,
-    TemplateRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.export import PriceListExport
@@ -58,6 +58,8 @@ class WarehouseSource(Protocol):
     async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]: ...
 
     async def seller_contact(self, code: str) -> SellerContact | None: ...
+
+    async def billing_centers(self) -> list[BillingCenter]: ...
 
 
 class MasterSource(Protocol):
@@ -174,13 +176,3 @@ class OfferWriter(Protocol):
     """Turns the customer offer into a workbook."""
 
     def write(self, document: OfferDocument) -> bytes: ...
-
-
-class TemplateFile(Protocol):
-    """The quotation as a workbook the advisor edits in bulk, and its reading back."""
-
-    def write(self, detail: QuotationDetail) -> bytes: ...
-
-    def read(self, filename: str, content: bytes) -> list[TemplateRow]: ...
-
-    def quotation_id(self, content: bytes) -> UUID | None: ...

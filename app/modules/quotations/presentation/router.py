@@ -9,7 +9,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
@@ -29,9 +29,8 @@ from app.modules.quotations.domain.entities import (
     Quotation,
     QuotationDetail,
     QuotationLine,
-    QuotationRef,
-    RequestedProduct,
     SellerContact,
+    TemporaryCustomer,
 )
 from app.modules.quotations.domain.vocabulary import (
     BASIS_LABELS,
@@ -43,7 +42,6 @@ from app.modules.quotations.domain.vocabulary import (
     ORIGIN_LABELS,
     PROBLEM_LABELS,
     REGIONAL_LABELS,
-    REQUESTED_STATUS_LABELS,
     STATUS_LABELS,
     WARNING_LABELS,
 )
@@ -53,7 +51,7 @@ _READ_GATE = Depends(require_permission("cotizador"))
 _service = Depends(Provide[ApplicationContainer.v1_container.quotation_service])
 _principal = Depends(get_current_principal)
 
-Status = Literal["borrador", "pendiente_validacion", "creada", "actualizada"]
+Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada"]
 ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
 OfferScope = Literal["changed", "all"]
@@ -113,8 +111,27 @@ class CustomerPageResponse(BaseModel):
     seller_linked: bool
 
 
+class TemporaryCustomerRequest(BaseModel):
+    """A customer not in SIESA yet (texts checked by the service: 1 to 120 characters)."""
+
+    name: str | None = Field(default=None, max_length=1000)
+    legal_name: str | None = Field(default=None, max_length=1000)
+    trade_name: str | None = Field(default=None, max_length=1000)
+    nit: str | None = Field(default=None, max_length=30)
+
+
 class CreateRequest(BaseModel):
-    customer_nit: str = Field(min_length=1, max_length=30)
+    """A SIESA customer by ``customer_nit``, or a ``temporary_customer`` with the
+    ``billing_center_code`` its prices come from."""
+
+    customer_nit: str | None = Field(default=None, max_length=30)
+    temporary_customer: TemporaryCustomerRequest | None = None
+    billing_center_code: str | None = Field(
+        default=None,
+        max_length=10,
+        description="Required for a temporary customer; for a SIESA customer it replaces "
+        "the center of its branches",
+    )
     window_months: Literal[6, 12] = 12
     validity_days: int = Field(
         default=DEFAULT_VALIDITY_DAYS,
@@ -207,14 +224,22 @@ class OfferRequest(BaseModel):
     include_seller: bool | None = None
     quote_quantities: bool | None = None
     offer_scope: OfferScope | None = None
+    include_variation: bool | None = None
 
 
-class RequestedProductUpdate(BaseModel):
-    """BI's decision on a requested product."""
+class BillingCenterRequest(BaseModel):
+    version: int = Field(ge=1)
+    billing_center_code: str = Field(min_length=1, max_length=10)
 
-    status: RequestedStatus
-    siesa_sku: str | None = Field(default=None, max_length=60)
-    note: str | None = Field(default=None, max_length=4000)
+
+class ValidateRequest(BaseModel):
+    """Validate: for ``creacion`` the code of the new list is required."""
+
+    version: int = Field(ge=1)
+    price_list_id: str | None = Field(
+        default=None, max_length=3, description="Code of the new list (creation only)"
+    )
+    new_list_name: str | None = Field(default=None, max_length=40)
 
 
 class ImportResultResponse(BaseModel):
@@ -235,30 +260,15 @@ class SkippedResponse(BaseModel):
     row_number: int | None = None
 
 
-class TemplateResultResponse(BaseModel):
-    """What an uploaded workbook did."""
-
-    updated: list[str]
-    cleared: list[str]
-    added: list[str]
-    unchanged: int
-    not_found: list[str]
-    inactive: list[str]
-    skipped: list[SkippedResponse]
-
-
 class VersionRequest(BaseModel):
     version: int = Field(ge=1)
 
 
 class ConfirmRequest(BaseModel):
-    """Close the draft and send it to validation."""
+    """Close the draft and send it to validation (the validator gives a new list's code)."""
 
     version: int = Field(ge=1)
     list_action: ListAction | None = None
-    price_list_id: str | None = Field(
-        default=None, max_length=3, description="Code of the new list (creation only)"
-    )
     new_list_name: str | None = Field(default=None, max_length=40)
     activation_date: date | None = None
 
@@ -390,40 +400,20 @@ class OfferSummaryResponse(BaseModel):
     total: Decimal
 
 
-class RequestedQuotationResponse(BaseModel):
-    id: UUID
-    customer_name: str | None
-    customer_nit: str
-    status: Status
-    status_label: str
-    created_by: str
+class TemporaryCustomerResponse(BaseModel):
+    name: str
+    legal_name: str
+    trade_name: str | None
+    nit: str | None
 
 
-class RequestedProductResponse(BaseModel):
-    """A product an advisor quoted that SIESA does not have."""
+class BillingCenterResponse(BaseModel):
+    """An operation center a quotation can be billed and priced from."""
 
-    id: UUID
-    description: str
-    supplier_name: str | None
-    estimated_price: Decimal | None
-    vat_pct: Decimal | None
-    status: RequestedStatus
-    status_label: str
-    siesa_sku: str | None
-    note: str | None
-    created_by: str
-    created_at: datetime
-    updated_by: str
-    updated_at: datetime
-    # Only the quotations the caller can open.
-    quotations: list[RequestedQuotationResponse]
-
-
-class RequestedProductPageResponse(BaseModel):
-    items: list[RequestedProductResponse]
-    total: int
-    page: int
-    size: int
+    code: str
+    name: str | None
+    regional: Literal["nacional", "costa"]
+    regional_label: str
 
 
 class SummaryResponse(BaseModel):
@@ -433,7 +423,8 @@ class SummaryResponse(BaseModel):
     customer_nit: str
     customer_name: str | None
     channel: str | None
-    price_list_id: str
+    # ``None`` for a temporary customer.
+    price_list_id: str | None
     window_months: int
     status: Status
     status_label: str
@@ -449,10 +440,14 @@ class SummaryResponse(BaseModel):
     updated_at: datetime
     confirmed_at: datetime | None
     validated_at: datetime | None
+    uploaded_at: datetime | None
+    uploaded_by: str | None
     version: int
     validity_days: int
     valid_from: date
     valid_until: date
+    is_temporary_customer: bool
+    temporary_customer: TemporaryCustomerResponse | None
 
 
 class QuotationResponse(SummaryResponse):
@@ -462,6 +457,9 @@ class QuotationResponse(SummaryResponse):
     price_list_name: str | None
     price_list_customers: int | None
     billing_center_code: str | None
+    billing_center_name: str | None
+    # ``auto`` (from the customer's branches) or ``manual`` (chosen; a refresh keeps it).
+    billing_center_source: Literal["auto", "manual"]
     regional: Literal["nacional", "costa"]
     regional_label: str
     price_family: str
@@ -483,6 +481,7 @@ class QuotationResponse(SummaryResponse):
     include_seller: bool
     quote_quantities: bool
     offer_scope: OfferScope
+    include_variation: bool
     seller_contact: SellerContactResponse | None
     # ``None`` unless ``quote_quantities``.
     offer_summary: OfferSummaryResponse | None
@@ -491,8 +490,6 @@ class QuotationResponse(SummaryResponse):
     import_result: ImportResultResponse | None = None
     # Only on PUT /{id}/lines: SKUs a margin could not price.
     skipped: list[SkippedResponse] | None = None
-    # Only on POST /{id}/template: what the workbook did.
-    template_result: TemplateResultResponse | None = None
 
 
 class QuotationPageResponse(BaseModel):
@@ -647,7 +644,13 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "updated_at": quotation.updated_at,
         "confirmed_at": quotation.confirmed_at,
         "validated_at": quotation.validated_at,
+        "uploaded_at": quotation.uploaded_at,
+        "uploaded_by": quotation.uploaded_by,
         "version": quotation.version,
+        "is_temporary_customer": quotation.is_temporary_customer,
+        "temporary_customer": TemporaryCustomerResponse(**quotation.temporary_customer.as_dict())
+        if quotation.temporary_customer
+        else None,
     }
 
 
@@ -659,6 +662,8 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         price_list_name=quotation.price_list_name,
         price_list_customers=quotation.price_list_customers,
         billing_center_code=quotation.billing_center_code,
+        billing_center_name=quotation.billing_center_name,
+        billing_center_source=quotation.billing_center_source,  # type: ignore[arg-type]
         regional=quotation.regional,  # type: ignore[arg-type]
         regional_label=REGIONAL_LABELS.get(quotation.regional, quotation.regional),
         price_family=quotation.price_family,
@@ -685,6 +690,7 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         include_seller=quotation.include_seller,
         quote_quantities=quotation.quote_quantities,
         offer_scope=quotation.offer_scope,  # type: ignore[arg-type]
+        include_variation=quotation.include_variation,
         seller_contact=_seller(quotation.seller_contact),
         offer_summary=_summary(detail),
         lines=[_line(line, quotation.offer_scope) for line in detail.lines],
@@ -799,10 +805,26 @@ async def create_quotation(
     service: QuotationService = _service,
 ) -> QuotationResponse:
     """Every SKU sold to the customer in the window, at its last price, with current cost,
-    target margin and supports."""
+    target margin and supports. A temporary customer starts empty, priced from the chosen
+    center; the sales scope does not apply to it."""
 
+    temporary = body.temporary_customer
     return _detail(
-        await service.create(principal, body.customer_nit, body.window_months, body.validity_days)
+        await service.create(
+            principal,
+            body.customer_nit,
+            body.window_months,
+            body.validity_days,
+            temporary_customer=TemporaryCustomer(
+                name=temporary.name or "",
+                legal_name=temporary.legal_name or "",
+                trade_name=temporary.trade_name,
+                nit=temporary.nit,
+            )
+            if temporary
+            else None,
+            billing_center_code=body.billing_center_code,
+        )
     )
 
 
@@ -839,90 +861,33 @@ async def list_quotations(
     )
 
 
-def _requested(item: RequestedProduct, refs: list[QuotationRef]) -> RequestedProductResponse:
-    return RequestedProductResponse(
-        id=item.id,
-        description=item.description,
-        supplier_name=item.supplier_name,
-        estimated_price=item.estimated_price,
-        vat_pct=item.vat_pct,
-        status=item.status,  # type: ignore[arg-type]
-        status_label=REQUESTED_STATUS_LABELS.get(item.status, item.status),
-        siesa_sku=item.siesa_sku,
-        note=item.note,
-        created_by=item.created_by,
-        created_at=item.created_at,
-        updated_by=item.updated_by,
-        updated_at=item.updated_at,
-        quotations=[
-            RequestedQuotationResponse(
-                id=ref.id,
-                customer_name=ref.customer_name,
-                customer_nit=ref.customer_nit,
-                status=ref.status,  # type: ignore[arg-type]
-                status_label=STATUS_LABELS.get(ref.status, ref.status),
-                created_by=ref.created_by,
-            )
-            for ref in refs
-        ],
-    )
-
-
 # Declared before ``/{quotation_id}`` so the path is not taken for an id.
 @router.get(
-    "/requested-products",
+    "/billing-centers",
     dependencies=[_READ_GATE],
-    response_model=RequestedProductPageResponse,
-    summary="Products advisors asked for that SIESA does not have",
+    response_model=list[BillingCenterResponse],
+    summary="Operation centers a quotation can be priced from",
 )
 @inject
-async def list_requested_products(
-    status_filter: RequestedStatus | None = Query(default=None, alias="status"),  # noqa: B008
-    q: str | None = Query(default=None, max_length=100),
-    page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+async def billing_centers(
     principal: Principal = _principal,
     service: QuotationService = _service,
-) -> RequestedProductPageResponse:
-    """``solicitado`` first, then the newest. ``q`` matches the description or the supplier;
-    each item lists only the quotations the caller can open. Quoters and validators."""
+) -> list[BillingCenterResponse]:
+    """Active operation centers of the ``centros-operacion`` master, by code, with the
+    liquor tax regional each one bills with (``costa`` for 004)."""
 
-    result, refs = await service.requested_products(
-        principal, status=status_filter, q=q, page=page, size=size
-    )
-    return RequestedProductPageResponse(
-        items=[_requested(item, refs.get(item.id, [])) for item in result.items],
-        total=result.total,
-        page=result.page,
-        size=result.size,
-    )
-
-
-@router.patch(
-    "/requested-products/{product_id}",
-    dependencies=[_READ_GATE],
-    response_model=RequestedProductResponse,
-    summary="Mark a requested product created, discarded or requested",
-)
-@inject
-async def update_requested_product(
-    product_id: UUID,
-    body: RequestedProductUpdate,
-    principal: Principal = _principal,
-    service: QuotationService = _service,
-) -> RequestedProductResponse:
-    """Validators only. ``creado`` needs a SIESA reference that exists and is active; back to
-    ``solicitado`` clears it. ``note`` changes only when sent."""
-
-    product, refs = await service.update_requested_product(
-        principal,
-        product_id,
-        status=body.status,
-        siesa_sku=body.siesa_sku,
-        note=body.note,
-        set_note="note" in body.model_fields_set,
-    )
-    return _requested(product, refs)
+    result = []
+    for item in await service.billing_centers(principal):
+        regional = pricing.regional(item.code)
+        result.append(
+            BillingCenterResponse(
+                code=item.code,
+                name=item.name,
+                regional=regional,  # type: ignore[arg-type]
+                regional_label=REGIONAL_LABELS.get(regional, regional),
+            )
+        )
+    return result
 
 
 @router.get(
@@ -1078,6 +1043,7 @@ async def update_offer(
             include_seller=body.include_seller,
             quote_quantities=body.quote_quantities,
             offer_scope=body.offer_scope,
+            include_variation=body.include_variation,
         )
     )
 
@@ -1155,9 +1121,10 @@ async def confirm_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """The advisor closes the draft: every new price of an active SKU must meet the rule.
-    ``actualizacion`` writes to the customer's list; ``creacion`` creates ``price_list_id``
-    (list 1 customers always go by creation). The quotation is ``pendiente_validacion``."""
+    """The advisor closes the draft: it needs one priced active line (the rule no longer
+    blocks; the validator sees what breaks it). ``actualizacion`` writes to the customer's
+    list; ``creacion`` creates a list whose code the validator gives (list 1 and temporary
+    customers always go by creation). The quotation is ``pendiente_validacion``."""
 
     return _detail(
         await service.confirm(
@@ -1165,7 +1132,6 @@ async def confirm_quotation(
             quotation_id,
             body.version,
             list_action=body.list_action,
-            price_list_id=body.price_list_id,
             new_list_name=body.new_list_name,
             activation_date=body.activation_date,
         )
@@ -1200,71 +1166,66 @@ async def return_quotation(
 @inject
 async def validate_quotation(
     quotation_id: UUID,
+    body: ValidateRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Approvers only: the files are released and the quotation is ``pendiente_carga``. For
+    ``creacion`` the code of the new list is required (1 to 3 letters or digits, free in
+    SIESA); ``new_list_name`` may change its description."""
+
+    return _detail(
+        await service.validate(
+            principal,
+            quotation_id,
+            body.version,
+            price_list_id=body.price_list_id,
+            new_list_name=body.new_list_name,
+        )
+    )
+
+
+@router.post(
+    "/{quotation_id}/uploaded",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Mark loaded in SIESA",
+)
+@inject
+async def mark_uploaded(
+    quotation_id: UUID,
     body: VersionRequest,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Approvers only: the quotation becomes ``creada`` or ``actualizada`` and its files can
-    be downloaded."""
+    """Approvers only, from ``pendiente_carga``: the quotation is ``cargada`` and records who
+    and when (``uploaded_by``, ``uploaded_at``)."""
 
-    return _detail(await service.validate(principal, quotation_id, body.version))
-
-
-@router.get(
-    "/{quotation_id}/template.xlsx",
-    dependencies=[_READ_GATE],
-    response_class=Response,
-    responses={
-        200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
-    },
-    summary="Download the quotation workbook",
-)
-@inject
-async def download_template(
-    quotation_id: UUID,
-    principal: Principal = _principal,
-    service: QuotationService = _service,
-) -> Response:
-    """Every SKU with its data; ``Precio nuevo`` and ``Margen nuevo`` are editable."""
-
-    result = await service.template_file(principal, quotation_id)
-    return _file(result.content, result.filename, result.media_type)
+    return _detail(await service.mark_uploaded(principal, quotation_id, body.version))
 
 
-@router.post(
-    "/{quotation_id}/template",
+@router.patch(
+    "/{quotation_id}/billing-center",
     dependencies=[_READ_GATE],
     response_model=QuotationResponse,
-    summary="Upload the edited quotation workbook",
-    description=(
-        "multipart/form-data with `file` (the workbook from `template.xlsx`) and `version`. "
-        "Per row the cell that changed wins: a new price, else a new margin; both blank clear "
-        "the price. Unknown SKUs are added if they exist and are active."
-    ),
+    summary="Price from another operation center",
 )
 @inject
-async def upload_template(
+async def set_billing_center(
     quotation_id: UUID,
-    file: UploadFile = File(...),  # noqa: B008
-    version: int = Form(ge=1),
+    body: BillingCenterRequest,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    content = await file.read(service.max_upload_bytes + 1)
-    detail, result = await service.upload_template(
-        principal, quotation_id, version, file.filename, content
+    """Every line is priced again from the center (stock plan, regional, liquor tax, target,
+    margins), keeping new prices, quantities and local products; back to draft. Same rules
+    as ``/refresh``. 422 on an unknown center."""
+
+    return _detail(
+        await service.set_billing_center(
+            principal, quotation_id, body.version, body.billing_center_code
+        )
     )
-    response = _detail(detail)
-    response.template_result = TemplateResultResponse(
-        updated=list(result.updated),
-        cleared=list(result.cleared),
-        added=list(result.added),
-        unchanged=result.unchanged,
-        not_found=list(result.not_found),
-        inactive=list(result.inactive),
-        skipped=[_skipped(item) for item in result.skipped],
-    )
-    return response
 
 
 def _file(content: bytes, filename: str, media_type: str) -> Response:

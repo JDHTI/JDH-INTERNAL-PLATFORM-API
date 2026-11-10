@@ -60,6 +60,8 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El cotizador del área comercial (Comercial → Cotizador) vive en `/api/v1/quotations`:
   arma la lista de precios de un cliente desde el DWH, la cruza con el maestro de márgenes y
   de apoyos y genera el Excel y el plano de SIESA; ver [`docs/cotizador.md`](docs/cotizador.md).
+  Los productos cotizados que no existen en SIESA quedan en `/api/v1/requested-products`
+  (módulo `productos-solicitados`); ver [`docs/productos-solicitados.md`](docs/productos-solicitados.md).
 - El directorio de empleados vive en `/api/v1/directory` (lectura para toda persona
   autenticada) y `/api/v1/directory/admin` (administradores): copia nocturna de Entra
   que además crea los usuarios de la plataforma; ver [`docs/directory.md`](docs/directory.md).

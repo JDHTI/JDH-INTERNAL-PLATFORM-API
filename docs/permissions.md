@@ -60,7 +60,8 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | ti | `datawarehouse` | las pantallas del monitoreo del DWH | pedir una carga |
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
-| bi | `cotizador` | igual | validar y devolver |
+| bi | `cotizador` | igual | validar, devolver y marcar como cargada |
+| bi, comercial | `productos-solicitados` | el registro de productos que no existen en SIESA (`/requested-products`). Quien cotiza o valida en el cotizador también lo lee | resolver una entrada lo hace quien valida en el cotizador o un administrador ([productos-solicitados.md](productos-solicitados.md)) |
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
