@@ -54,6 +54,8 @@ class CustomerContext:
     salesperson_code: str | None
     salesperson_name: str | None
     warnings: tuple[str, ...] = ()
+    # Operation centers the lines are costed from; none is *Nacional* (every warehouse).
+    cost_centers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,8 @@ class CostInfo:
     product_line: str | None = None
     is_active: bool = True
     snapshot_date: date | None = None
+    # The operation center whose warehouses gave this cost, when the quotation names some.
+    center_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -361,6 +365,9 @@ class QuotationLine:
     category: str | None = None
     # Inventory units the customer would buy (up to two decimals), for the offer's totals.
     quantity: Decimal | None = None
+    # The operation center whose warehouses set ``cost``; ``None`` for *Nacional* or a list
+    # with its own warehouses.
+    cost_center: str | None = None
 
     @property
     def is_local(self) -> bool:
@@ -435,7 +442,10 @@ class Quotation:
     offer_scope: str = vocabulary.OFFER_CHANGED
     # The customer's salesperson when the quotation was built or refreshed.
     seller_contact: SellerContact | None = None
-    # ``auto`` (from the customer's branches) or ``manual`` (chosen; a refresh keeps it).
+    # Operation centers the lines are costed from; none is *Nacional* (every warehouse).
+    cost_centers: tuple[str, ...] = ()
+    # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
+    # (chosen; a refresh keeps it).
     billing_center_source: str = vocabulary.CENTER_AUTO
     billing_center_name: str | None = None
     # Who marked it loaded in SIESA, and when.

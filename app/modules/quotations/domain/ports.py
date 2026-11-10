@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Protocol
 from uuid import UUID
@@ -160,3 +160,9 @@ class OfferWriter(Protocol):
     """Turns the customer offer into a workbook."""
 
     def write(self, document: OfferDocument) -> bytes: ...
+
+
+class LinesWriter(Protocol):
+    """Turns every line of a quotation, with its costs, into a workbook for BI."""
+
+    def write(self, detail: QuotationDetail, center_names: Mapping[str, str | None]) -> bytes: ...

@@ -28,6 +28,7 @@ from app.modules.quotations.domain.entities import (
     SellerContact,
     ValueTaxKey,
 )
+from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
@@ -131,6 +132,9 @@ class FakeWarehouse:
         self.list_customers = 28113
         self.down = False
         self.calls: list[tuple] = []
+        # Costs of one plan, by its main warehouse (``MDE1``) or its source (``nacional``);
+        # any other plan gets ``cost_rows``.
+        self.plan_costs: dict[str, dict[str, CostInfo]] = {}
 
     def _check(self) -> None:
         if self.down:
@@ -152,7 +156,9 @@ class FakeWarehouse:
     async def costs(self, skus, plan):
         self._check()
         self.calls.append(("costs", tuple(skus), plan))
-        return {sku: self.cost_rows[sku] for sku in skus if sku in self.cost_rows}
+        key = plan.warehouses[0] if plan.warehouses else plan.source
+        rows = self.plan_costs.get(key, self.cost_rows)
+        return {sku: rows[sku] for sku in skus if sku in rows}
 
     async def price_list_exists(self, price_list_id):
         self._check()
@@ -312,6 +318,7 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         policy=QuotationPolicy(Decimal("0.01")),
         max_lines=100,
         offer_writer=CustomerOfferWorkbook(),
+        lines_writer=QuotationLinesWorkbook(),
     )
 
 

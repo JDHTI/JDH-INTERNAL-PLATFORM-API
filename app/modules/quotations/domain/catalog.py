@@ -41,8 +41,10 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "Se toma el mayor entre la cotización vigente del proveedor (en unidad o kilo, "
                     "con ICUI e IBUA) y el costo promedio de inventario de la bodega de la lista "
                     "(bodega 2 para congelados y refrigerados; la lista 1 toma el mayor de sus 17 "
-                    "bodegas; una lista sin bodega definida usa la del centro de operación que "
-                    "factura). Se redondea hacia arriba y se multiplica por "
+                    "bodegas). Una lista sin bodega definida usa el C.O. del costo: Nacional, el "
+                    "mayor de todas las bodegas referencia por referencia (lo que arranca un "
+                    "cliente que factura desde varios C.O.); uno o varios C.O., y con varios cada "
+                    "referencia toma el más costoso. Se redondea hacia arriba y se multiplica por "
                     f"{factor} (las listas mayoristas no llevan ese factor). Lactalis cotiza por "
                     "sucursal: 003 para Centro y 001 para el resto.",
                     INFORMS,
@@ -61,8 +63,8 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "Impuesto de licores",
                     "Solo el impuesto al consumo de licores, por unidad: el de la lista del "
                     "cliente en SIESA o, si no lo tiene, el del maestro de márgenes según la "
-                    "regional de facturación (Costa para el centro de operación 004, Nacional "
-                    "para el resto). El IVA no se muestra.",
+                    "regional (Costa si el C.O. del costo incluye el 004, o si con Nacional el "
+                    "cliente factura desde el 004; Nacional para el resto). El IVA no se muestra.",
                     INFORMS,
                 ),
                 Rule(

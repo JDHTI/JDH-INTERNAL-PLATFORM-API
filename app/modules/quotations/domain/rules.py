@@ -181,6 +181,10 @@ def customer_context(
     """Merge the branches of a customer: the majority among the active ones decides, but a
     Coast billing center among them wins (see :func:`billing_center`).
 
+    The lines are costed from that center, unless the branches bill from several centers
+    and the list leaves the warehouses to the centers: such a customer is delivered in
+    several regions, so it is costed *Nacional* (the highest cost of every warehouse).
+
     Args:
         nit (str): The customer's NIT.
         branches (Sequence[Branch]): Every branch the warehouse has for the NIT.
@@ -217,6 +221,7 @@ def customer_context(
     if price_list_customers is not None and price_list_customers > 1:
         warnings.append("lista_compartida")
     name = next((item.legal_name for item in active if item.legal_name), None)
+    national = centers_differ and pricing.centers_set_cost(price_list_id)
     return CustomerContext(
         nit=nit,
         name=name,
@@ -229,6 +234,7 @@ def customer_context(
         salesperson_code=seller,
         salesperson_name=seller_name,
         warnings=tuple(warnings),
+        cost_centers=() if national or center is None else (center,),
     )
 
 
@@ -503,6 +509,7 @@ def build_line(
         discarded_quote_cost=money(cost.discarded_quote) if cost else None,
         inventory_cost=money(cost.inventory_cost) if cost else None,
         cost_source=cost_source,
+        cost_center=cost.center_code if cost is not None and cost_value is not None else None,
         optimal_price=optimal,
         # The support is already in the margin: a line it covers is not flagged.
         below_target=(
