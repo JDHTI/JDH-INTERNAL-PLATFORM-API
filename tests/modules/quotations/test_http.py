@@ -18,7 +18,6 @@ from tests.modules.quotations.conftest import APPROVER, MANAGER, NIT
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/quotations"
-REGISTRY = "/api/v1/requested-products"
 
 
 class AllowAll:
@@ -239,7 +238,7 @@ def test_the_offer_contract(client) -> None:
     }
     line = quotation["lines"][0]
     assert line["quantity"] is None and line["in_offer"] is False
-    assert Decimal(line["offer_price"]) == Decimal(4000) and line["requested_product"] is None
+    assert Decimal(line["offer_price"]) == Decimal(4000)
     assert client.post(BASE, json={"customer_nit": NIT, "validity_days": 0}).status_code == 422
     url = f"{BASE}/{quotation['id']}"
 
@@ -297,55 +296,28 @@ def test_the_offer_contract(client) -> None:
     assert sheet["A1"].value == "Cotización"
 
 
-def test_the_requested_products_contract(client) -> None:
+def test_a_local_product_lives_only_in_its_quotation(client) -> None:
     quotation = client.post(BASE, json={"customer_nit": NIT}).json()
     url = f"{BASE}/{quotation['id']}"
+    # A client that still sends ``requested_product_id`` gets a plain local line.
     created = client.post(
         f"{url}/local-lines",
-        json={"version": 1, "description": "Queso costeño", "price": 12000, "vat_pct": 5},
-    ).json()
-    reference = created["lines"][-1]["requested_product"]
-    assert reference["status"] == "solicitado" and reference["siesa_sku"] is None
+        json={
+            "version": 1,
+            "description": "Queso costeño",
+            "price": 12000,
+            "vat_pct": 5,
+            "requested_product_id": "00000000-0000-0000-0000-000000000001",
+        },
+    )
+    assert created.status_code == 200
+    line = created.json()["lines"][-1]
+    assert line["sku"] == "LOC-1" and line["origin"] == "local"
+    assert "requested_product" not in line
 
-    # The registry left the quoter's prefix.
-    assert client.get(f"{BASE}/requested-products").status_code != 200
-    permissions = client.get(f"{REGISTRY}/permissions").json()
-    assert permissions == {"can_read": True, "can_resolve": False}
-    listing = client.get(REGISTRY, params={"status": "solicitado"})
-    assert listing.status_code == 200
-    page = listing.json()
-    assert page["total"] == 1 and page["page"] == 1 and page["size"] == 20
-    item = page["items"][0]
-    assert item["id"] == reference["id"] and item["status_label"] == "Solicitado"
-    assert Decimal(item["estimated_price"]) == 12000 and item["created_by"] == MANAGER
-    assert item["quotations"] == [
-        {
-            "id": quotation["id"],
-            "customer_name": "HOTEL EL BOSQUE SAS",
-            "customer_nit": NIT,
-            "status": "borrador",
-            "status_label": "Borrador",
-            "created_by": MANAGER,
-        }
-    ]
-    target = f"{REGISTRY}/{reference['id']}"
-    assert client.patch(target, json={"status": "creado", "siesa_sku": "26278"}).status_code == 403
-    refused = client.post(f"{url}/lines/LOC-1/promote", json={"version": 2})
-    assert refused.status_code == 422
-
-    client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)
-    assert client.get(f"{REGISTRY}/permissions").json() == {"can_read": True, "can_resolve": True}
-    missing = client.patch(target, json={"status": "creado", "siesa_sku": "404"})
-    assert missing.status_code == 422 and "404" in missing.json()["detail"]
-    done = client.patch(target, json={"status": "creado", "siesa_sku": "26278", "note": "Listo"})
-    assert done.status_code == 200
-    assert done.json()["status"] == "creado" and done.json()["siesa_sku"] == "26278"
-    assert done.json()["note"] == "Listo"
-
-    promoted = client.post(f"{url}/lines/LOC-1/promote", json={"version": 2})
-    assert promoted.status_code == 200
-    assert [line["sku"] for line in promoted.json()["lines"]] == ["2537", "26278"]
-    assert promoted.json()["lines"][-1]["origin"] == "agregado"
+    # No registry and no swap for a SIESA reference.
+    assert client.get("/api/v1/requested-products").status_code == 404
+    assert client.post(f"{url}/lines/LOC-1/promote", json={"version": 2}).status_code in (404, 405)
 
 
 def test_centers_and_temporary_customers_contract(client) -> None:

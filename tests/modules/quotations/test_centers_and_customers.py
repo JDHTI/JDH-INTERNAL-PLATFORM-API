@@ -1,4 +1,4 @@
-"""Billing centers, temporary customers, the offer's variation and the registry's module."""
+"""Billing centers, temporary customers and the offer's variation."""
 
 import io
 from decimal import Decimal
@@ -7,12 +7,11 @@ import pytest
 from openpyxl import load_workbook
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
-from app.modules.areas.domain import catalog as modules
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain import rules
 from app.modules.quotations.domain.entities import TemporaryCustomer, ValueTaxKey
 from app.modules.salespeople.domain.entities import NOTHING
-from tests.modules.quotations.conftest import NIT, REGISTRY, branch, product
+from tests.modules.quotations.conftest import NIT, branch, product
 from tests.modules.supplier_supports.conftest import person
 
 
@@ -220,32 +219,3 @@ async def test_the_offer_shows_the_consumption_tax_and_the_variation(
     assert header.index("Variación") == header.index("Precio con IVA") + 1
     # 4400 / 4000 - 1.
     assert values[header.index("Variación")] == pytest.approx(0.1)
-
-
-# ------------------------------------------------------------------ 9. registry module
-
-
-async def test_the_registry_has_its_own_module(service, advisor, repository) -> None:
-    quotation = (await service.create(advisor, NIT, 12)).quotation
-    product_id = (await local(service, advisor, quotation.id, 1)).lines[-1].requested_product_id
-    holder = person(REGISTRY)
-    outsider = person("otro@jdh.com.co")
-
-    assert await service.registry_permissions(holder) == (True, False)
-    assert await service.registry_permissions(advisor) == (True, False)
-    assert await service.registry_permissions(outsider) == (False, False)
-    page, refs = await service.requested_products(holder, status=None, q=None, page=1, size=20)
-    # The module reads the registry, but opens no quotation.
-    assert [item.id for item in page.items] == [product_id] and refs[product_id] == []
-    with pytest.raises(ForbiddenError):
-        await service.update_requested_product(holder, product_id, status="descartado")
-    with pytest.raises(ForbiddenError):
-        await service.requested_products(outsider, status=None, q=None, page=1, size=20)
-    admin = person("admin@jdh.com.co", admin=True)
-    assert await service.registry_permissions(admin) == (True, True)
-    resolved, _ = await service.update_requested_product(admin, product_id, status="descartado")
-    assert resolved.status == "descartado"
-
-    module = modules.get_module("productos-solicitados")
-    assert module is not None and module.in_area("bi") and module.in_area("comercial")
-    assert not module.configurable

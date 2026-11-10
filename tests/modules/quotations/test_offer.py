@@ -1,5 +1,4 @@
-"""The customer offer: validity, settings, seller, quantities, totals, its workbook and the
-requested products registry."""
+"""The customer offer: validity, settings, seller, quantities, totals and its workbook."""
 
 import io
 from dataclasses import replace
@@ -9,10 +8,10 @@ from decimal import Decimal
 import pytest
 from openpyxl import load_workbook
 
-from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain import offer
-from app.modules.quotations.domain.entities import ItemInfo, SellerContact, ValueTaxKey
+from app.modules.quotations.domain.entities import SellerContact, ValueTaxKey
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
 from tests.modules.supplier_supports.conftest import person
 
@@ -332,143 +331,3 @@ async def test_the_customer_workbook(service, advisor, approver, warehouse, mast
     assert hidden.quotation.version == version + 2
     with pytest.raises(ForbiddenError):
         await service.offer_file(person("otro@jdh.com.co"), quotation_id)
-
-
-# ------------------------------------------------------------------ 7. requested products
-
-
-async def test_local_products_enter_the_registry(service, advisor, approver, repository) -> None:
-    first = (await service.create(advisor, NIT, 12)).quotation
-    created = await local(service, advisor, first.id, 1, supplier_name="Lácteos del Sur")
-    line = created.lines[-1]
-    product_id = line.requested_product_id
-
-    assert line.requested_product.status == "solicitado" and line.requested_product.id
-    stored = repository.products[product_id]
-    assert stored.description == "Queso costeño" and stored.estimated_price == Decimal(12000)
-    assert stored.vat_pct == Decimal(5) and stored.created_by == advisor.email
-
-    # Quoted again from the registry: its data, its estimated price unless one is sent.
-    second = (await service.create(advisor, NIT, 6)).quotation
-    again = await local(
-        service,
-        advisor,
-        second.id,
-        1,
-        description=None,
-        vat_pct=None,
-        price=None,
-        requested_product_id=product_id,
-    )
-    copy = again.lines[-1]
-    assert copy.description == "Queso costeño" and copy.supplier_name == "Lácteos del Sur"
-    assert copy.new_price == Decimal(12000) and copy.requested_product_id == product_id
-    assert len(repository.products) == 1
-    with pytest.raises(InvalidInputError, match="no existe"):
-        await local(service, advisor, second.id, 2, requested_product_id=first.id)
-
-    page, refs = await service.requested_products(
-        advisor, status=None, q="lácteos", page=1, size=20
-    )
-    assert [item.id for item in page.items] == [product_id]
-    assert {ref.id for ref in refs[product_id]} == {first.id, second.id}
-    # Another advisor sees the product but not quotations they cannot open.
-    _, others = await service.requested_products(
-        person(advisor.email), status=None, q=None, page=1, size=20
-    )
-    assert others[product_id] == []
-    _, everyone = await service.requested_products(
-        approver, status="solicitado", q=None, page=1, size=20
-    )
-    assert len(everyone[product_id]) == 2
-    with pytest.raises(ForbiddenError):
-        await service.requested_products(
-            person("otro@jdh.com.co"), status=None, q=None, page=1, size=20
-        )
-    with pytest.raises(InvalidInputError):
-        await service.requested_products(advisor, status="otro", q=None, page=1, size=20)
-
-    # Neither removing the line nor deleting the quotation removes the entry.
-    await service.remove_line(advisor, second.id, 2, "LOC-1")
-    await service.delete(advisor, first.id)
-    assert product_id in repository.products
-
-
-async def test_bi_creates_discards_or_reopens_a_requested_product(
-    service, advisor, approver, warehouse, repository
-) -> None:
-    quotation = (await service.create(advisor, NIT, 12)).quotation
-    product_id = (await local(service, advisor, quotation.id, 1)).lines[-1].requested_product_id
-
-    def mark(principal, status, **values):
-        return service.update_requested_product(principal, product_id, status=status, **values)
-
-    with pytest.raises(ForbiddenError):
-        await mark(advisor, "creado", siesa_sku="26278")
-    with pytest.raises(InvalidInputError, match="Escribe la referencia"):
-        await mark(approver, "creado")
-    with pytest.raises(InvalidInputError, match="no existe"):
-        await mark(approver, "creado", siesa_sku="404")
-    with pytest.raises(InvalidInputError, match="inactiva"):
-        await mark(approver, "creado", siesa_sku="9999")
-    with pytest.raises(NotFoundError):
-        await service.update_requested_product(approver, quotation.id, status="descartado")
-
-    done, refs = await mark(
-        approver, "creado", siesa_sku=" 26278 ", note="Creado hoy", set_note=True
-    )
-
-    assert done.status == "creado" and done.siesa_sku == "26278" and done.note == "Creado hoy"
-    assert done.updated_by == approver.email and [ref.id for ref in refs] == [quotation.id]
-    line = (await service.get(advisor, quotation.id)).lines[-1]
-    assert line.requested_product.status == "creado"
-    assert line.requested_product.siesa_sku == "26278"
-    # A quoted product that is not ``solicitado`` cannot be quoted again.
-    with pytest.raises(InvalidInputError, match="creado"):
-        await local(service, advisor, quotation.id, 2, requested_product_id=product_id)
-    reopened, _ = await mark(approver, "solicitado", siesa_sku="26278")
-    assert reopened.siesa_sku is None and reopened.note == "Creado hoy"
-    discarded, _ = await mark(approver, "descartado", note="", set_note=True)
-    assert discarded.status == "descartado" and discarded.note is None
-
-
-async def test_a_created_product_takes_the_local_line_place(
-    service, advisor, approver, warehouse, masters
-) -> None:
-    masters.catalog["26278"] = product("26278")
-    warehouse.cost_rows["26278"] = cost("26278", inventory="60000")
-    quotation = (await service.create(advisor, NIT, 12)).quotation
-    created = await local(service, advisor, quotation.id, 1, price=90000)
-    product_id = created.lines[-1].requested_product_id
-    await service.update_lines(advisor, quotation.id, 2, [quantity("LOC-1", 4)])
-
-    with pytest.raises(InvalidInputError, match="todavía no está creado"):
-        await service.promote_line(advisor, quotation.id, 3, "LOC-1")
-    with pytest.raises(InvalidInputError, match="no es un producto"):
-        await service.promote_line(advisor, quotation.id, 3, "2537")
-    await service.update_requested_product(approver, product_id, status="creado", siesa_sku="26278")
-    with pytest.raises(ConflictError):
-        await service.promote_line(advisor, quotation.id, 2, "LOC-1")
-
-    promoted = await service.promote_line(advisor, quotation.id, 3, "LOC-1")
-
-    assert [line.sku for line in promoted.lines] == ["2537", "26278"]
-    line = promoted.lines[-1]
-    assert line.origin == "agregado" and line.position == 2 and line.category == "LICORES"
-    assert line.new_price == Decimal(90000) and line.quantity == 4
-    assert line.cost == Decimal("60240.0000") and line.compliance == "cumple"
-    assert promoted.quotation.changed_count == 1 and promoted.quotation.version == 4
-
-
-async def test_promoting_to_a_reference_already_quoted_drops_the_local_line(
-    service, advisor, approver, warehouse
-) -> None:
-    warehouse.item_rows["2537"] = ItemInfo("2537", "Abrasivo", "UNID", Decimal(19), "359")
-    quotation = (await service.create(advisor, NIT, 12)).quotation
-    product_id = (await local(service, advisor, quotation.id, 1)).lines[-1].requested_product_id
-    await service.update_lines(advisor, quotation.id, 2, [quantity("LOC-1", "2.5")])
-    await service.update_requested_product(approver, product_id, status="creado", siesa_sku="2537")
-
-    promoted = await service.promote_line(advisor, quotation.id, 3, "LOC-1")
-
-    assert [(line.sku, line.quantity) for line in promoted.lines] == [("2537", Decimal("2.5"))]

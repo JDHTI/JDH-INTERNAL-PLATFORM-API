@@ -35,9 +35,6 @@ from app.modules.pqrsf.presentation.supplier_messages_router import (
 )
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
 from app.modules.projects.presentation.router import area_router as area_projects_router
-from app.modules.quotations.presentation.requested_products_router import (
-    router as requested_products_router,
-)
 from app.modules.quotations.presentation.router import router as quotations_router
 from app.modules.salespeople.presentation.router import router as salespeople_router
 from app.modules.sites.presentation.router import router as sites_router
@@ -99,9 +96,6 @@ v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
 v1_router.include_router(quotations_router, prefix="/quotations", tags=["quotations"])
-v1_router.include_router(
-    requested_products_router, prefix="/requested-products", tags=["requested-products"]
-)
 v1_router.include_router(dwh_monitoring_router, prefix="/dwh-monitoring", tags=["dwh-monitoring"])
 v1_router.include_router(app_monitoring_router, prefix="/app-monitoring", tags=["app-monitoring"])
 v1_router.include_router(monitoring_board_router, prefix="/monitoring", tags=["monitoring"])

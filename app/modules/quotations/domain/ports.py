@@ -22,9 +22,6 @@ from app.modules.quotations.domain.entities import (
     QuotationDetail,
     QuotationLine,
     QuotationPage,
-    QuotationRef,
-    RequestedProduct,
-    RequestedProductPage,
     Seller,
     SellerContact,
     ValueTaxKey,
@@ -113,24 +110,11 @@ class QuotationRepository(Protocol):
         replace_lines: bool = False,
         inserted: Sequence[QuotationLine] = (),
         removed: Sequence[UUID] = (),
-        requested: Sequence[RequestedProduct] = (),
     ) -> QuotationDetail: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...
 
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None: ...
-
-    async def get_requested_product(self, product_id: UUID) -> RequestedProduct | None: ...
-
-    async def list_requested_products(
-        self, *, status: str | None, q: str | None, page: int, size: int
-    ) -> RequestedProductPage: ...
-
-    async def requested_product_quotations(
-        self, product_ids: Sequence[UUID]
-    ) -> dict[UUID, list[QuotationRef]]: ...
-
-    async def update_requested_product(self, product: RequestedProduct) -> RequestedProduct: ...
 
 
 class SalesScope(Protocol):

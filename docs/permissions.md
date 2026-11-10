@@ -61,7 +61,6 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
-| bi, comercial | `productos-solicitados` | el registro de productos que no existen en SIESA (`/requested-products`). Quien cotiza o valida en el cotizador también lo lee | resolver una entrada lo hace quien valida en el cotizador o un administrador ([productos-solicitados.md](productos-solicitados.md)) |
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
@@ -70,6 +69,10 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 
 `/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador` y `validador-pedidos`, porque
 esas pantallas buscan proveedores y productos.
+
+Un permiso guardado sobre un módulo que salió del catálogo no da nada: `my_modules` y los permisos
+de un rol o de una persona no lo muestran, y desaparece de la base la próxima vez que se guardan los
+permisos del rol. No hace falta migración para retirar un módulo.
 
 **No son módulos.** La administración de la plataforma (`/users*`, `/roles`, `/sites`,
 `/directory/admin/*`, `/pqrsf/requests*`, `/jobs`, escrituras de áreas, roles, miembros, permisos y

@@ -60,9 +60,17 @@ LEADER_GRANTS = (RolePermission(WILDCARD, MANAGE),)
 
 
 def _sorted_grants(grants: dict[str, str]) -> list[RolePermission]:
+    """The grants to show, wildcard first.
+
+    A stored grant on a module that left the catalog is skipped: it grants nothing, and
+    the panel would send it back on save, where ``validate_grant`` rejects it. Saving the
+    role drops its row.
+    """
+
     return [
         RolePermission(module, action)
         for module, action in sorted(grants.items(), key=lambda item: (item[0] != WILDCARD, item))
+        if module == WILDCARD or get_module(module) is not None
     ]
 
 

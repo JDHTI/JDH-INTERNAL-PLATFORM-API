@@ -292,7 +292,6 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `PUT` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}/lines/{sku}` | `relaxed` |  |
-| `POST` | `/v1/quotations/{quotation_id}/lines/{sku}/promote` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/local-lines` | `relaxed` |  |
 | `PATCH` | `/v1/quotations/{quotation_id}/offer` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
@@ -300,9 +299,6 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/uploaded` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |
-| `GET` | `/v1/requested-products` | `read` |  |
-| `GET` | `/v1/requested-products/permissions` | `read` |  |
-| `PATCH` | `/v1/requested-products/{product_id}` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |
 | `GET` | `/v1/salespeople/links` | `read` |  |
 | `POST` | `/v1/salespeople/links` | `relaxed` |  |

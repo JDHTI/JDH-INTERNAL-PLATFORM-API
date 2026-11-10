@@ -182,6 +182,28 @@ async def test_role_grants_decide_what_members_do(areas, area_repo, admin, login
     assert last.detail["after"] == {"pqrsf": "manage"}
 
 
+async def test_a_stored_grant_on_a_retired_module_is_ignored(
+    areas, area_repo, admin, login
+) -> None:
+    await areas.create_area(CreateAreaCommand(slug="bi", name="BI"), admin)
+    role = await areas.create_role("bi", "Compras", admin)
+    # A row written while the module existed (``productos-solicitados`` was retired).
+    area_repo.permissions[role.id] = {"productos-solicitados": "manage", "cotizador": "read"}
+    ana = await login("ana@jdh.com.co")
+    await areas.add_member("bi", ana.email, role.id, admin)
+
+    assert (await areas.get_area("bi", ana)).my_modules == {"cotizador": "read"}
+    assert await areas.allows(ana, "bi", "productos-solicitados") is False
+    _, grants = await areas.get_role_permissions("bi", role.id, admin)
+    assert [(g.module, g.action) for g in grants] == [("cotizador", "read")]
+    (view,) = await areas.user_permissions(ana.user_id, admin)
+    assert [(g.module, g.action) for g in view.grants] == [("cotizador", "read")]
+
+    # Saving what the panel shows drops the stale row.
+    await areas.set_role_permissions("bi", role.id, [("cotizador", "read")], admin)
+    assert area_repo.permissions[role.id] == {"cotizador": "read"}
+
+
 async def test_a_policy_without_area_follows_every_area_of_the_module(areas, admin, login) -> None:
     for slug, name in (("bi", "BI"), ("comercial", "Comercial"), ("calidad", "Calidad")):
         await areas.create_area(CreateAreaCommand(slug=slug, name=name), admin)

@@ -111,7 +111,11 @@ class QuotationModel(Base):
 
 
 class RequestedProductModel(Base):
-    """A product advisors quoted that SIESA does not have, for BI to create or discard."""
+    """Table of a registry of local products that was dropped before going live.
+
+    Nothing reads or writes it. It stays mapped only so autogenerate and ``alembic check``
+    match the schema ``0051`` created instead of proposing to drop it.
+    """
 
     __tablename__ = "quotation_requested_products"
     __table_args__ = (
@@ -201,6 +205,8 @@ class QuotationLineModel(Base):
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="historico")
     category: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Unused (see RequestedProductModel): QuotationLine has no such field, so the
+    # repository never writes it and new lines store NULL.
     requested_product_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("quotation_requested_products.id", ondelete="SET NULL"),

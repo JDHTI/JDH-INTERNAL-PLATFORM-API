@@ -603,10 +603,6 @@ class V1Container(containers.DeclarativeContainer):
     quotation_policy = providers.Singleton(
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
     )
-    # The requested products registry is its own module, granted in any area.
-    requested_products_policy = providers.Factory(
-        PermissionPolicy, areas=area_service, area_slug=None, module="productos-solicitados"
-    )
     quotation_offer_writer = providers.Singleton(CustomerOfferWorkbook)
     quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
     quotation_warehouse_source = providers.Factory(
@@ -654,7 +650,6 @@ class V1Container(containers.DeclarativeContainer):
         max_lines=config.quotations.max_lines,
         approvers=quotation_approver_policy,
         offer_writer=quotation_offer_writer,
-        registry_readers=requested_products_policy,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.
