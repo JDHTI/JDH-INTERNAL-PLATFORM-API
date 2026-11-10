@@ -45,6 +45,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
                 "factor_empaque": Decimal(45),
                 "estado": "I",
                 "categoria": "DESECHABLES ",
+                "co": "004 ",
             }
         ]
     )
@@ -59,7 +60,30 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert sales[0].net_price.quantize(Decimal("0.01")) == Decimal("3323.36")
     assert sales[0].unit == "UNID" and sales[0].sale_unit == "C45"
     assert not sales[0].is_active and sales[0].category == "DESECHABLES"
-    assert 'p."categoria"' in query
+    assert 'p."categoria"' in query and sales[0].center_code == "004"
+    # The last sale of each billing center, then the highest net price among them.
+    assert 'PARTITION BY v."sku", v."co"' in query
+    assert 'PARTITION BY l."sku" ORDER BY l.precio_neto DESC' in query
+    assert "l.rn_co = 1" in query and "l.rn = 1" in query
+
+
+async def test_billing_centers_are_the_active_operation_centers() -> None:
+    connection = FakeConnection(
+        [
+            {"codigo": "001", "descripcion": "ANTIOQUIA"},
+            {"codigo": "004 ", "descripcion": "COSTA"},
+            {"codigo": " ", "descripcion": "VACIO"},
+        ]
+    )
+
+    centers = await WarehouseQuotationSource(connection).billing_centers()
+
+    query = connection.queries[0][0]
+    assert '"consumo"."centros_operacion"' in query and "\"estado\" = 'A'" in query
+    assert [(item.code, item.name) for item in centers] == [
+        ("001", "ANTIOQUIA"),
+        ("004", "COSTA"),
+    ]
 
 
 async def test_items_carry_the_category() -> None:

@@ -12,6 +12,7 @@ import pytest
 from app.core.errors import ConflictError, DependencyUnavailableError, NotFoundError
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import (
+    BillingCenter,
     Branch,
     CostInfo,
     CustomerOption,
@@ -32,13 +33,14 @@ from app.modules.quotations.domain.entities import (
 )
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
-from app.modules.quotations.infrastructure.template import QuotationTemplateFile
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
 from tests.modules.order_validation.conftest import FakeAgreementSource
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
 
 MANAGER = "asesor@jdh.com.co"
 APPROVER = "bi@jdh.com.co"
+# Holds only the ``productos-solicitados`` module.
+REGISTRY = "compras@jdh.com.co"
 NIT = "900315138"
 
 
@@ -126,6 +128,11 @@ class FakeWarehouse:
         self.contacts: dict[str, SellerContact] = {
             "0051": SellerContact("0051", "PEREZ ANA", MANAGER, "3001234567")
         }
+        self.centers: list[BillingCenter] = [
+            BillingCenter("004", "COSTA"),
+            BillingCenter("001", "ANTIOQUIA"),
+            BillingCenter("003", "CENTRO"),
+        ]
         self.list_customers = 28113
         self.down = False
         self.calls: list[tuple] = []
@@ -176,6 +183,10 @@ class FakeWarehouse:
     async def seller_contact(self, code):
         self._check()
         return self.contacts.get(code)
+
+    async def billing_centers(self):
+        self._check()
+        return list(self.centers)
 
 
 class FakeMasters:
@@ -366,13 +377,13 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         supports=supports,
         managers=FakeManagers([MANAGER]),
         approvers=FakeManagers([APPROVER]),
-        template=QuotationTemplateFile(),
         calendar=FixedCalendar(),
         workbook=PriceListWorkbookWriter(),
         flat_file=SiesaPriceFileWriter(),
         policy=QuotationPolicy(Decimal("0.01")),
         max_lines=100,
         offer_writer=CustomerOfferWorkbook(),
+        registry_readers=FakeManagers([REGISTRY]),
     )
 
 

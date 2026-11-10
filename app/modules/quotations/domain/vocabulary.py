@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 # Life of a price list: the advisor edits a draft and confirms it; the approver validates
-# it, and only then are the files generated and the list counts as created or updated.
+# it (the files are released and wait to be loaded in SIESA) and then marks it loaded.
 DRAFT = "borrador"
 PENDING = "pendiente_validacion"
-CREATED = "creada"
-UPDATED = "actualizada"
-STATUSES = (DRAFT, PENDING, CREATED, UPDATED)
-CLOSED = (CREATED, UPDATED)
+UPLOAD_PENDING = "pendiente_carga"
+UPLOADED = "cargada"
+STATUSES = (DRAFT, PENDING, UPLOAD_PENDING, UPLOADED)
+# The files can be downloaded.
+CLOSED = (UPLOAD_PENDING, UPLOADED)
 STATUS_LABELS = {
     DRAFT: "Borrador",
     PENDING: "Pendiente de validación",
-    CREATED: "Creada",
-    UPDATED: "Actualizada",
+    UPLOAD_PENDING: "Pendiente de carga",
+    UPLOADED: "Cargada",
 }
 
 # What the files do in SIESA: update the customer's list or create a new one.
@@ -22,8 +23,14 @@ UPDATE_LIST = "actualizacion"
 CREATE_LIST = "creacion"
 LIST_ACTIONS = (UPDATE_LIST, CREATE_LIST)
 LIST_ACTION_LABELS = {UPDATE_LIST: "Actualización de lista", CREATE_LIST: "Creación de lista"}
-# Status a validated quotation ends in, by list action.
-CLOSED_BY_ACTION = {UPDATE_LIST: UPDATED, CREATE_LIST: CREATED}
+
+# Where the quotation's billing operation center comes from: the customer's branches, or
+# chosen by the advisor (a refresh keeps it).
+CENTER_AUTO = "auto"
+CENTER_MANUAL = "manual"
+CENTER_SOURCES = (CENTER_AUTO, CENTER_MANUAL)
+# Longest text of a temporary customer's fields.
+TEMPORARY_TEXT_LENGTH = 120
 
 # Months of sales history a quotation looks back on.
 WINDOWS = (6, 12)

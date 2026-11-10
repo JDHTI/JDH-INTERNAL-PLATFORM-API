@@ -37,8 +37,12 @@ class QuotationModel(Base):
     __tablename__ = "quotations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('borrador', 'pendiente_validacion', 'creada', 'actualizada')",
+            "status IN ('borrador', 'pendiente_validacion', 'pendiente_carga', 'cargada')",
             name="ck_quotations_status",
+        ),
+        CheckConstraint(
+            "billing_center_source IN ('auto', 'manual')",
+            name="ck_quotations_billing_center_source",
         ),
         CheckConstraint("window_months IN (6, 12)", name="ck_quotations_window"),
         CheckConstraint(
@@ -57,7 +61,7 @@ class QuotationModel(Base):
     customer_name: Mapped[str | None] = mapped_column(Text)
     channel_code: Mapped[str | None] = mapped_column(String(10))
     channel: Mapped[str | None] = mapped_column(Text)
-    price_list_id: Mapped[str] = mapped_column(String(3), nullable=False)
+    price_list_id: Mapped[str | None] = mapped_column(String(3))
     price_list_name: Mapped[str | None] = mapped_column(Text)
     price_list_customers: Mapped[int | None] = mapped_column(Integer)
     billing_center_code: Mapped[str | None] = mapped_column(String(10))
@@ -98,6 +102,12 @@ class QuotationModel(Base):
     quote_quantities: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     offer_scope: Mapped[str] = mapped_column(String(10), nullable=False, default="changed")
     seller_contact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    billing_center_source: Mapped[str] = mapped_column(String(10), nullable=False, default="auto")
+    billing_center_name: Mapped[str | None] = mapped_column(Text)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    uploaded_by: Mapped[str | None] = mapped_column(String(320))
+    temporary_customer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    include_variation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class RequestedProductModel(Base):

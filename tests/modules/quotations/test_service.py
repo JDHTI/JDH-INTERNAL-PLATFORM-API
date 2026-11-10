@@ -27,8 +27,6 @@ from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
 from tests.modules.supplier_supports.conftest import person
 
-XLSX = "cotizacion.xlsx"
-
 
 async def test_create_builds_every_sku_with_cost_support_and_target(
     service, advisor, warehouse, masters, supports
@@ -139,85 +137,63 @@ async def test_a_selection_is_priced_at_one_margin(service, advisor, warehouse, 
         )
 
 
-async def test_confirm_validate_and_export_an_update(service, advisor, approver) -> None:
+async def test_confirm_validate_upload_and_export_an_update(service, advisor, approver) -> None:
     quotation = (await service.create(advisor, NIT, 12)).quotation
-    with pytest.raises(InvalidInputError, match="No hay precios"):
-        await service.confirm(
-            advisor,
-            quotation.id,
-            1,
-            list_action=None,
-            price_list_id=None,
-            new_list_name=None,
-            activation_date=None,
-        )
-    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
-    with pytest.raises(InvalidInputError, match="no cumplen"):
-        await service.confirm(
-            advisor,
-            quotation.id,
-            2,
-            list_action=None,
-            price_list_id=None,
-            new_list_name=None,
-            activation_date=None,
-        )
-    await service.update_lines(advisor, quotation.id, 2, [LineChange("2537", Decimal("4100"))])
-    with pytest.raises(InvalidInputError, match="anterior a hoy"):
-        await service.confirm(
-            advisor,
-            quotation.id,
-            3,
-            list_action=None,
-            price_list_id=None,
-            new_list_name=None,
-            activation_date=date(2020, 1, 1),
-        )
-    with pytest.raises(InvalidInputError, match="lista del cliente"):
-        await service.confirm(
-            advisor,
-            quotation.id,
-            3,
-            list_action="actualizacion",
-            price_list_id="1M",
-            new_list_name=None,
-            activation_date=None,
-        )
 
-    pending = await service.confirm(
-        advisor,
-        quotation.id,
-        3,
-        list_action=None,
-        price_list_id=None,
-        new_list_name=None,
-        activation_date=None,
-    )
+    def confirm(version, **values):
+        options = {"list_action": None, "new_list_name": None, "activation_date": None}
+        return service.confirm(advisor, quotation.id, version, **{**options, **values})
+
+    with pytest.raises(InvalidInputError, match="No hay referencias activas con precio"):
+        await confirm(1)
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
+    with pytest.raises(InvalidInputError, match="anterior a hoy"):
+        await confirm(2, activation_date=date(2020, 1, 1))
+
+    # A price under the minimum no longer blocks: the validator sees it counted.
+    pending = await confirm(2)
 
     assert pending.quotation.status == "pendiente_validacion"
-    assert pending.quotation.export_price_list_id == "001"
+    assert pending.quotation.below_rule_count == 1
+    assert pending.quotation.export_price_list_id is None
     assert pending.quotation.confirmed_by == advisor.email
     assert pending.quotation.activation_date == date(2026, 10, 10)
     with pytest.raises(ConflictError, match="pendiente"):
-        await service.update_lines(advisor, quotation.id, 4, [LineChange("2537", None)])
+        await service.update_lines(advisor, quotation.id, 3, [LineChange("2537", None)])
     with pytest.raises(ConflictError, match="validada"):
         await service.export(advisor, quotation.id, "txt")
     with pytest.raises(ForbiddenError):
-        await service.validate(advisor, quotation.id, 4)
+        await service.validate(advisor, quotation.id, 3)
+    with pytest.raises(InvalidInputError, match="lista del cliente"):
+        await service.validate(approver, quotation.id, 3, price_list_id="1M")
 
-    validated = await service.validate(approver, quotation.id, 4)
+    validated = await service.validate(approver, quotation.id, 3)
 
-    assert validated.quotation.status == "actualizada"
+    assert validated.quotation.status == "pendiente_carga"
+    assert validated.quotation.list_action == "actualizacion"
+    assert validated.quotation.export_price_list_id == "001"
     assert validated.quotation.validated_by == approver.email
     flat = await service.export(approver, quotation.id, "txt")
     lines = flat.content.decode("ascii").split("\r\n")
     assert lines[1][7:11] == "0126" and lines[1][19:22] == "001" and lines[1][29:33] == "2537"
-    assert lines[1][139:147] == "20261010" and lines[1][167:187] == "000000000004100.0000"
+    assert lines[1][139:147] == "20261010" and lines[1][167:187] == "000000000003000.0000"
     assert flat.filename == "precios-lista001-900315138-20261010.txt"
+    with pytest.raises(ForbiddenError):
+        await service.mark_uploaded(advisor, quotation.id, 4)
+    with pytest.raises(ConflictError):
+        await service.mark_uploaded(approver, quotation.id, 3)
+
+    uploaded = await service.mark_uploaded(approver, quotation.id, 4)
+
+    assert uploaded.quotation.status == "cargada"
+    assert uploaded.quotation.uploaded_by == approver.email and uploaded.quotation.uploaded_at
     workbook = await service.export(advisor, quotation.id, "xlsx")
     assert workbook.filename == "ACTUALIZACION LISTAS PRECIOS_asesor@jdh.com.co.xlsx"
+    with pytest.raises(ConflictError, match="pendiente de carga"):
+        await service.mark_uploaded(approver, quotation.id, 5)
     edited, _ = await service.update_lines(advisor, quotation.id, 5, [LineChange("2537", None)])
     assert edited.quotation.status == "borrador" and edited.quotation.validated_at is None
+    assert edited.quotation.uploaded_at is None and edited.quotation.uploaded_by is None
 
 
 async def test_create_a_list_for_a_customer_on_list_one(
@@ -228,37 +204,38 @@ async def test_create_a_list_for_a_customer_on_list_one(
     await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("4100"))])
 
     def confirm(version, **values):
-        options = {
-            "list_action": None,
-            "price_list_id": None,
-            "new_list_name": None,
-            "activation_date": None,
-        }
+        options = {"list_action": None, "new_list_name": None, "activation_date": None}
         return service.confirm(advisor, quotation.id, version, **{**options, **values})
+
+    def validate(version, **values):
+        return service.validate(approver, quotation.id, version, **values)
 
     with pytest.raises(InvalidInputError, match="lista 1"):
         await confirm(2, list_action="actualizacion")
-    with pytest.raises(InvalidInputError, match="código de la lista nueva"):
-        await confirm(2)
-    with pytest.raises(InvalidInputError, match="ya existe"):
-        await confirm(2, price_list_id="c01")
-    with pytest.raises(InvalidInputError, match="1 a 3"):
-        await confirm(2, price_list_id="C-1")
 
-    pending = await confirm(2, price_list_id="c02", new_list_name="Hotel El Bosque Ñandú")
+    # The advisor no longer gives the code of the new list.
+    pending = await confirm(2, new_list_name="Hotel El Bosque Ñandú")
 
-    assert pending.quotation.export_price_list_id == "C02"
+    assert pending.quotation.export_price_list_id is None
     assert pending.quotation.new_list_name == "HOTEL EL BOSQUE NANDU"
     with pytest.raises(InvalidInputError, match="por qué"):
         await service.return_to_draft(approver, quotation.id, 3, None)
     returned = await service.return_to_draft(approver, quotation.id, 3, "Revisar la fecha")
     assert returned.quotation.status == "borrador"
     assert returned.quotation.review_note == "Revisar la fecha"
-    await confirm(4, price_list_id="C02")
+    await confirm(4)
+    with pytest.raises(InvalidInputError, match="código de la lista nueva"):
+        await validate(5)
+    with pytest.raises(InvalidInputError, match="ya existe"):
+        await validate(5, price_list_id="c01")
+    with pytest.raises(InvalidInputError, match="1 a 3"):
+        await validate(5, price_list_id="C-1")
 
-    created = await service.validate(approver, quotation.id, 5)
+    created = await validate(5, price_list_id="c02")
 
-    assert created.quotation.status == "creada"
+    assert created.quotation.status == "pendiente_carga"
+    assert created.quotation.export_price_list_id == "C02"
+    assert created.quotation.list_action == "creacion"
     lines = (await service.export(advisor, quotation.id, "txt")).content.split(b"\r\n")
     assert [len(item) for item in lines] == [18, 101, 254, 18, 0]
     assert lines[1][7:11] == b"0112" and lines[1][19:22] == b"C02"
@@ -361,57 +338,6 @@ async def test_inactive_history_skus_are_shown_skipped_and_removable(
     assert priced.quotation.changed_count == 1 and priced.quotation.below_rule_count == 0
     removed = await service.remove_line(advisor, quotation.id, 2, "1485")
     assert [item.sku for item in removed.lines] == ["2537"]
-
-
-async def test_the_workbook_round_trip(service, advisor, warehouse, masters) -> None:
-    masters.catalog["26278"] = product("26278")
-    warehouse.cost_rows["26278"] = cost("26278", inventory="60000")
-    quotation = (await service.create(advisor, NIT, 12)).quotation
-    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("4100"))])
-    downloaded = await service.template_file(advisor, quotation.id)
-    assert downloaded.filename == "cotizacion-900315138-lista001.xlsx"
-
-    book = load_workbook(io.BytesIO(downloaded.content))
-    sheet = book["Cotizacion"]
-    header = [cell.value for cell in sheet[1]]
-    price, margin = header.index("Precio nuevo") + 1, header.index("Margen nuevo") + 1
-    assert sheet.cell(2, 1).value == "2537" and sheet.cell(2, price).value == 4100
-    # Only the margin changes: the margin wins.
-    sheet.cell(2, margin).value = 0.30
-    sheet.append(["26278", None, None, None, None, None, None, None, None, None, None, None, 80000])
-    sheet.append(["404", None, None, None, None, None, None, None, None, None, None, None, 1000])
-    sheet.append(["2537X"] + [None] * 11 + ["abc"])
-    buffer = io.BytesIO()
-    book.save(buffer)
-
-    detail, result = await service.upload_template(
-        advisor, quotation.id, 2, XLSX, buffer.getvalue()
-    )
-
-    line = next(item for item in detail.lines if item.sku == "2537")
-    added = next(item for item in detail.lines if item.sku == "26278")
-    assert line.new_price == Decimal("4303") and added.new_price == Decimal("80000")
-    assert added.origin == "agregado"
-    assert result.updated == ("2537",) and result.added == ("26278",)
-    assert result.not_found == ("404",)
-    assert [(item.sku, item.row_number) for item in result.skipped] == [("2537X", 5)]
-
-    # Both cells blank clear the new price.
-    again = load_workbook(io.BytesIO((await service.template_file(advisor, quotation.id)).content))
-    again["Cotizacion"].cell(2, price).value = None
-    again["Cotizacion"].cell(2, margin).value = None
-    buffer = io.BytesIO()
-    again.save(buffer)
-    cleared, result = await service.upload_template(
-        advisor, quotation.id, detail.quotation.version, XLSX, buffer.getvalue()
-    )
-    assert result.cleared == ("2537",) and cleared.lines[0].new_price is None
-
-    other = (await service.create(advisor, NIT, 6)).quotation
-    with pytest.raises(InvalidInputError, match="otra cotización"):
-        await service.upload_template(advisor, other.id, 1, XLSX, buffer.getvalue())
-    with pytest.raises(InvalidInputError, match="Excel"):
-        await service.upload_template(advisor, other.id, 1, "precios.csv", b"a,b")
 
 
 async def test_every_line_carries_its_category(service, advisor, warehouse, masters) -> None:
@@ -551,13 +477,7 @@ async def test_a_local_product_follows_the_version_and_the_state(service, adviso
     with pytest.raises(ForbiddenError):
         await add_local(service, person("otro@jdh.com.co"), quotation.id, 2)
     await service.confirm(
-        advisor,
-        quotation.id,
-        2,
-        list_action=None,
-        price_list_id=None,
-        new_list_name=None,
-        activation_date=None,
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
     )
     with pytest.raises(ConflictError, match="pendiente"):
         await add_local(service, advisor, quotation.id, 3)
@@ -566,17 +486,6 @@ async def test_a_local_product_follows_the_version_and_the_state(service, adviso
 async def test_a_local_product_never_reaches_the_files(service, advisor, approver) -> None:
     quotation = (await service.create(advisor, NIT, 12)).quotation
     await add_local(service, advisor, quotation.id, 1, price=99)
-    # A local price alone is not something to confirm: SIESA gets nothing from it.
-    with pytest.raises(InvalidInputError, match="No hay precios"):
-        await service.confirm(
-            advisor,
-            quotation.id,
-            2,
-            list_action=None,
-            price_list_id=None,
-            new_list_name=None,
-            activation_date=None,
-        )
     priced, skipped = await service.update_lines(
         advisor,
         quotation.id,
@@ -590,22 +499,8 @@ async def test_a_local_product_never_reaches_the_files(service, advisor, approve
         ("LOC-1", "Producto solo para cotización: sin costo para calcular el precio")
     ]
     assert priced.quotation.changed_count == 1 and priced.quotation.below_rule_count == 0
-
-    template = load_workbook(
-        io.BytesIO((await service.template_file(advisor, quotation.id)).content)
-    )
-    assert [row[0] for row in template["Cotizacion"].iter_rows(min_row=2, values_only=True)] == [
-        "2537"
-    ]
-    # Its price does not block the confirmation.
     await service.confirm(
-        advisor,
-        quotation.id,
-        3,
-        list_action=None,
-        price_list_id=None,
-        new_list_name=None,
-        activation_date=None,
+        advisor, quotation.id, 3, list_action=None, new_list_name=None, activation_date=None
     )
     await service.validate(approver, quotation.id, 4)
     flat = (await service.export(advisor, quotation.id, "txt")).content.split(b"\r\n")
@@ -642,17 +537,6 @@ async def test_a_local_product_is_priced_kept_and_left_alone(service, advisor, w
     assert result.not_found == ("LOC-1",) and result.revalidated == ("2537",)
     assert pasted.lines[-1] == local
     assert all("LOC-1" not in call[1] for call in warehouse.calls if call[0] == "costs")
-    # A workbook row with its SKU is reported and skipped.
-    book = load_workbook(io.BytesIO((await service.template_file(advisor, quotation.id)).content))
-    book["Cotizacion"].append(["LOC-1"] + [None] * 11 + [1])
-    buffer = io.BytesIO()
-    book.save(buffer)
-    uploaded, outcome = await service.upload_template(
-        advisor, quotation.id, 7, XLSX, buffer.getvalue()
-    )
-    assert [(item.sku, item.row_number) for item in outcome.skipped] == [("LOC-1", 4)]
-    assert "plantilla" in outcome.skipped[0].reason
-    assert uploaded.lines[-1].new_price == Decimal(15000)
 
 
 async def test_customer_without_sales_starts_empty(service, advisor, warehouse) -> None:

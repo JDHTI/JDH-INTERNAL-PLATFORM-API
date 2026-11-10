@@ -161,10 +161,25 @@ def _majority(values: Iterable[str | None]) -> tuple[str | None, bool]:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0], len(counts) > 1
 
 
+def billing_center(branches: Sequence[Branch]) -> tuple[str | None, bool]:
+    """The center a quotation starts from, and whether the branches bill from several.
+
+    If any branch bills from a Coast center, the most frequent Coast center among them wins
+    (the higher liquor tax); otherwise the most frequent center.
+    """
+
+    centers = [item.billing_center_code for item in branches]
+    coast = [code for code in centers if code in pricing.COAST_CENTERS]
+    center, _ = _majority(coast) if coast else _majority(centers)
+    _, differ = _majority(centers)
+    return center, differ
+
+
 def customer_context(
     nit: str, branches: Sequence[Branch], price_list_customers: int | None = None
 ) -> CustomerContext:
-    """Merge the branches of a customer: the majority among the active ones decides.
+    """Merge the branches of a customer: the majority among the active ones decides, but a
+    Coast billing center among them wins (see :func:`billing_center`).
 
     Args:
         nit (str): The customer's NIT.
@@ -192,7 +207,7 @@ def customer_context(
     list_name = next(
         (item.price_list_name for item in active if item.price_list_id == price_list_id), None
     )
-    center, centers_differ = _majority(item.billing_center_code for item in active)
+    center, centers_differ = billing_center(active)
     if centers_differ:
         warnings.append("co_distintos")
     seller, _ = _majority(item.salesperson_code for item in active)
@@ -618,12 +633,6 @@ def exported(lines: Sequence[QuotationLine]) -> list[QuotationLine]:
     ]
 
 
-def siesa_lines(lines: Sequence[QuotationLine]) -> list[QuotationLine]:
-    """Every line but the local products: what the bulk-edit workbook carries."""
-
-    return [line for line in lines if not line.is_local]
-
-
 def counts(lines: Sequence[QuotationLine]) -> tuple[int, int, int, int]:
     """Lines, lines that go to the files, of those the ones that break the rule, and lines
     whose last price is under the minimum margin."""
@@ -651,6 +660,5 @@ __all__ = [
     "price_for_margin",
     "price_with_taxes",
     "reprice",
-    "siesa_lines",
     "variation",
 ]

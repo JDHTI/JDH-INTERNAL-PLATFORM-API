@@ -29,7 +29,6 @@ async def confirm(service, principal, quotation_id, version):
         quotation_id,
         version,
         list_action=None,
-        price_list_id=None,
         new_list_name=None,
         activation_date=None,
     )
@@ -118,7 +117,7 @@ async def test_offer_settings_change_in_any_status_without_moving_it(
     assert changed.quotation.confirmed_at == pending.quotation.confirmed_at
     validated = await service.validate(approver, quotation.id, 4)
     closed = await service.update_offer(advisor, quotation.id, 5, quote_quantities=True)
-    assert closed.quotation.status == "actualizada" == validated.quotation.status
+    assert closed.quotation.status == "pendiente_carga" == validated.quotation.status
 
 
 # ------------------------------------------------------------------ 3. seller contact

@@ -46,7 +46,8 @@ class CustomerContext:
     name: str | None
     channel_code: str | None
     channel: str | None
-    price_list_id: str
+    # ``None`` for a temporary customer: it has no list in SIESA.
+    price_list_id: str | None
     price_list_name: str | None
     price_list_customers: int | None
     billing_center_code: str | None
@@ -77,6 +78,43 @@ class LastSale:
     is_active: bool = True
     # ``consumo.productos.categoria``.
     category: str | None = None
+    # Billing operation center of the sale (``consumo.ventas.co``).
+    center_code: str | None = None
+
+
+@dataclass(frozen=True)
+class BillingCenter:
+    """An operation center a quotation can be billed and priced from."""
+
+    code: str
+    name: str | None
+
+
+@dataclass(frozen=True)
+class TemporaryCustomer:
+    """A customer that is not in SIESA yet, quoted with local data only."""
+
+    name: str
+    legal_name: str
+    trade_name: str | None = None
+    nit: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "legal_name": self.legal_name,
+            "trade_name": self.trade_name,
+            "nit": self.nit,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TemporaryCustomer:
+        return cls(
+            name=data["name"],
+            legal_name=data["legal_name"],
+            trade_name=data.get("trade_name"),
+            nit=data.get("nit"),
+        )
 
 
 @dataclass(frozen=True)
@@ -406,7 +444,8 @@ class Quotation:
     customer_name: str | None
     channel_code: str | None
     channel: str | None
-    price_list_id: str
+    # ``None`` for a temporary customer.
+    price_list_id: str | None
     price_list_name: str | None
     price_list_customers: int | None
     billing_center_code: str | None
@@ -454,6 +493,20 @@ class Quotation:
     offer_scope: str = vocabulary.OFFER_CHANGED
     # The customer's salesperson when the quotation was built or refreshed.
     seller_contact: SellerContact | None = None
+    # ``auto`` (from the customer's branches) or ``manual`` (chosen; a refresh keeps it).
+    billing_center_source: str = vocabulary.CENTER_AUTO
+    billing_center_name: str | None = None
+    # Who marked it loaded in SIESA, and when.
+    uploaded_at: datetime | None = None
+    uploaded_by: str | None = None
+    # A customer not in SIESA yet: no sales, no list, priced from the chosen center.
+    temporary_customer: TemporaryCustomer | None = None
+    # The offer shows the variation of each price against the last one.
+    include_variation: bool = False
+
+    @property
+    def is_temporary_customer(self) -> bool:
+        return self.temporary_customer is not None
 
     @property
     def valid_until(self) -> date | None:
@@ -496,21 +549,6 @@ class CustomerOption:
     @property
     def is_active(self) -> bool:
         return self.active_branch_count > 0
-
-
-@dataclass(frozen=True)
-class TemplateRow:
-    """One row of the quotation workbook the advisor uploads back.
-
-    ``new_price`` and ``new_margin_pct`` are what the cells say (``None`` when blank);
-    ``problem`` is set when a cell could not be read.
-    """
-
-    row_number: int
-    sku: str
-    new_price: Decimal | None = None
-    new_margin_pct: Decimal | None = None
-    problem: str | None = None
 
 
 @dataclass(frozen=True)
