@@ -121,6 +121,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/clientes` | `read` |  |
 | `GET` | `/v1/commercial/customers` | `read` |  |
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
+| `GET` | `/v1/commercial/price-increases` | `read` |  |
+| `POST` | `/v1/commercial/price-increases/upload` | `relaxed` |  |
+| `PATCH` | `/v1/commercial/price-increases/{increase_id}` | `relaxed` |  |
 | `GET` | `/v1/commercial/products` | `read` |  |
 | `POST` | `/v1/commercial/products/margins` | `relaxed` |  |
 | `GET` | `/v1/commercial/products/margins/template` | `read` |  |
@@ -287,6 +290,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}` | `read` |  |
 | `PATCH` | `/v1/quotations/{quotation_id}/billing-center` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/confirm` | `relaxed` |  |
+| `GET` | `/v1/quotations/{quotation_id}/cost-centers/compare` | `read` |  |
 | `GET` | `/v1/quotations/{quotation_id}/export.txt` | `read` |  |
 | `GET` | `/v1/quotations/{quotation_id}/export.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |

@@ -12,51 +12,62 @@ from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationS
 
 
 class FakeConnection:
-    def __init__(self, rows=(), fail: bool = False) -> None:
+    """Answers every query with ``rows``, or each one in turn with ``responses``."""
+
+    def __init__(self, rows=(), fail: bool = False, responses=None, cause=None) -> None:
         self.rows = list(rows)
         self.fail = fail
+        self.cause = cause
+        self.responses = list(responses) if responses is not None else None
         self.queries: list[tuple[str, tuple]] = []
 
-    async def fetch(self, query, *args, timeout=None):
+    async def fetch(self, query, *args, timeout=None, settings=None):
         self.queries.append((query, args))
         self.timeout = timeout
+        self.settings = settings
         if self.fail:
-            raise DataProviderUnavailable("down")
+            raise DataProviderUnavailable("down") from self.cause
+        if self.responses is not None:
+            return self.responses.pop(0)
         return self.rows
 
 
 async def test_last_sales_bound_by_customer_and_window() -> None:
+    sale_rows = [
+        {
+            "sku": "12799",
+            "fecha": date(2026, 10, 30),
+            "nro_transaccion": "FEV-1",
+            "unidad_medida_id": "C45",
+            "cantidad": Decimal(45),
+            "valor_bruto": Decimal(149551),
+            "subtotal": Decimal(149551),
+            "dscto": Decimal(0),
+            "n_lineas": 3,
+            "descripcion": "Vaso",
+            "unidad_inventario_id": "UNID ",
+            "iva_venta_pct": Decimal(19),
+            "cod_proveedor": "359",
+            "factor_empaque": Decimal(45),
+            "estado": "I",
+            "categoria": "DESECHABLES ",
+            "co": "004 ",
+        }
+    ]
     connection = FakeConnection(
-        [
-            {
-                "sku": "12799",
-                "fecha": date(2026, 10, 30),
-                "nro_transaccion": "FEV-1",
-                "unidad_medida_id": "C45",
-                "cantidad": Decimal(45),
-                "valor_bruto": Decimal(149551),
-                "subtotal": Decimal(149551),
-                "dscto": Decimal(0),
-                "n_lineas": 3,
-                "descripcion": "Vaso",
-                "unidad_inventario_id": "UNID ",
-                "iva_venta_pct": Decimal(19),
-                "cod_proveedor": "359",
-                "factor_empaque": Decimal(45),
-                "estado": "I",
-                "categoria": "DESECHABLES ",
-                "co": "004 ",
-            }
-        ]
+        responses=[[{"cliente_key": "K1"}, {"cliente_key": "K2"}], sale_rows]
     )
     source = WarehouseQuotationSource(connection, "consumo")
 
     sales = await source.last_sales("900315138", 6)
 
-    query, args = connection.queries[0]
-    assert '"consumo"."ventas"' in query and '"consumo"."clientes"' in query
-    assert 'naturaleza_codigo" = 2' in query and args == ("900315138", 6)
-    assert connection.timeout == 30.0
+    keys_query, keys_args = connection.queries[0]
+    assert '"consumo"."clientes"' in keys_query and keys_args == ("900315138",)
+    # The sales are bound by the customer's keys, so the planner uses their index.
+    query, args = connection.queries[1]
+    assert '"consumo"."ventas"' in query and 'v."cliente_key" = ANY($1::text[])' in query
+    assert 'naturaleza_codigo" = 2' in query and args == (["K1", "K2"], 6)
+    assert connection.timeout == 30.0 and connection.settings == {"jit": "off"}
     assert sales[0].net_price.quantize(Decimal("0.01")) == Decimal("3323.36")
     assert sales[0].unit == "UNID" and sales[0].sale_unit == "C45"
     assert not sales[0].is_active and sales[0].category == "DESECHABLES"
@@ -193,8 +204,19 @@ async def test_seller_contact_by_code() -> None:
     assert await WarehouseQuotationSource(FakeConnection()).seller_contact("1") is None
 
 
+async def test_a_customer_without_branches_reads_no_sales() -> None:
+    connection = FakeConnection(responses=[[]])
+
+    assert await WarehouseQuotationSource(connection).last_sales("1", 6) == []
+    assert len(connection.queries) == 1
+
+
 async def test_outage_is_a_503_and_schema_is_checked() -> None:
-    with pytest.raises(DependencyUnavailableError):
+    with pytest.raises(DependencyUnavailableError, match="No se pudo consultar"):
         await WarehouseQuotationSource(FakeConnection(fail=True)).branches("1")
+    # A read that runs out of time says so.
+    slow = FakeConnection(fail=True, cause=TimeoutError())
+    with pytest.raises(DependencyUnavailableError, match="tardó más de 30 s"):
+        await WarehouseQuotationSource(slow).branches("1")
     with pytest.raises(ValueError):
         WarehouseQuotationSource(FakeConnection(), 'consumo"; drop')

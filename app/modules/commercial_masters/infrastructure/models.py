@@ -253,3 +253,52 @@ class SupplierProductCodeModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class PriceIncreaseModel(Base):
+    """One cost change a supplier notified for a reference (``Acumulado Alza Precios``).
+
+    ``row_key`` (reference, increase date, notification date) is what an upload upserts on.
+    No foreign key to ``products``: the history keeps references SIESA no longer has. The
+    product's own data is read from ``products`` and never stored here.
+    """
+
+    __tablename__ = "product_price_increases"
+    __table_args__ = (
+        Index("ix_product_price_increases_sku", "sku", "increased_on"),
+        Index("ix_product_price_increases_status", "status"),
+        Index(
+            "ix_product_price_increases_pending",
+            "sku",
+            postgresql_where="system_updated_on IS NULL",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    row_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    notified_on: Mapped[date | None] = mapped_column(Date)
+    system_updated_on: Mapped[date | None] = mapped_column(Date)
+    increased_on: Mapped[date | None] = mapped_column(Date)
+    supplier_sku: Mapped[str | None] = mapped_column(Text)
+    ean: Mapped[str | None] = mapped_column(Text)
+    regional: Mapped[str | None] = mapped_column(Text)
+    icui_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    ibua: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    old_cost_with_tax: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    old_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    new_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    new_cost_with_tax: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    variation_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    variation_pct: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    status: Mapped[str | None] = mapped_column(String(10))
+    observations: Mapped[str | None] = mapped_column(Text)
+    margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    notified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    siesa_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

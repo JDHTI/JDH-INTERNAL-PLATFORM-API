@@ -75,10 +75,16 @@ CONDITION_LENGTH = 300
 # Quantities are in inventory units, with up to two decimals.
 MAX_QUANTITY = 10_000_000
 
-# Which cost won: the supplier's quotation in force or the inventory average cost.
+# Which cost won: the supplier's quotation in force, the inventory average cost, or a price
+# increase SIESA does not have yet (product master's history, no system update date).
 QUOTE_COST = "cotizacion"
 INVENTORY_COST = "inventario"
-COST_SOURCE_LABELS = {QUOTE_COST: "Cotización del proveedor", INVENTORY_COST: "Inventario"}
+INCREASE_COST = "alza"
+COST_SOURCE_LABELS = {
+    QUOTE_COST: "Cotización del proveedor",
+    INVENTORY_COST: "Inventario",
+    INCREASE_COST: "Alza de precios pendiente",
+}
 
 # Liquor tax regional: the Coast (billing operation center 004) pays its own value.
 NATIONAL = "nacional"

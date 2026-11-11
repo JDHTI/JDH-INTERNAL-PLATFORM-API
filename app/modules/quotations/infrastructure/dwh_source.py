@@ -67,9 +67,19 @@ class WarehouseQuotationSource:
 
     async def _fetch(self, query: str, *args: object):
         try:
-            return await self.connection.fetch(query, *args, timeout=self.timeout)
+            # JIT compiling costs the warehouse about 2 s per read here and saves nothing on
+            # reads bounded by customer or SKU list.
+            return await self.connection.fetch(
+                query, *args, timeout=self.timeout, settings={"jit": "off"}
+            )
         except DataProviderUnavailable as exc:
-            logger.warning("quotations: warehouse query failed: %s", exc.__cause__ or exc)
+            cause = exc.__cause__ or exc
+            logger.warning("quotations: warehouse query failed: %r", cause)
+            if isinstance(cause, TimeoutError):
+                raise DependencyUnavailableError(
+                    f"El datawarehouse tardó más de {self.timeout:.0f} s en responder; "
+                    "inténtalo de nuevo en unos minutos"
+                ) from exc
             raise DependencyUnavailableError(
                 "No se pudo consultar el datawarehouse; inténtalo de nuevo en unos minutos"
             ) from exc
@@ -121,8 +131,21 @@ class WarehouseQuotationSource:
         the date go to the higher document number, then the higher price, then the line key;
         across centers, a tie on the price goes to the later sale. Prices are per inventory
         unit, net of discounts and before VAT.
+
+        The customer's keys are read first and the sales are bound by them: given the NIT
+        through a sub-query, the planner walks a whole year of the company's sales by date
+        (2.3 million lines) and filters the customer after, which on a cold cache passed the
+        30 s limit; by key it reads only the customer's lines through their index.
         """
 
+        keys = [
+            row["cliente_key"]
+            for row in await self._fetch(
+                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = $1', nit
+            )
+        ]
+        if not keys:
+            return []
         rows = await self._fetch(
             "WITH lineas AS ("
             ' SELECT v."sku", v."co", v."fecha", v."nro_transaccion", v."unidad_medida_id",'
@@ -134,8 +157,7 @@ class WarehouseQuotationSource:
             ' DESC NULLS LAST, v."subtotal" / v."cantidad" DESC, v."venta_linea_key" DESC)'
             ' AS rn_co, v."producto_key"'
             f" FROM {self._view('ventas')} v"
-            f' WHERE v."cliente_key" IN (SELECT c."cliente_key" FROM {self._view("clientes")} c'
-            ' WHERE c."nit" = $1)'
+            ' WHERE v."cliente_key" = ANY($1::text[])'
             ' AND v."naturaleza_codigo" = 2 AND v."cantidad" > 0 AND v."subtotal" > 0'
             ' AND v."fecha" >= (current_date - make_interval(months => $2::int))'
             # The last sale of each center, then the highest price among them.
@@ -147,7 +169,7 @@ class WarehouseQuotationSource:
             ' p."cod_proveedor", p."factor_empaque", p."estado", p."categoria" FROM por_co l'
             f' LEFT JOIN {self._view("productos")} p ON p."producto_key" = l."producto_key"'
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
-            nit,
+            keys,
             months,
         )
         sales: list[LastSale] = []

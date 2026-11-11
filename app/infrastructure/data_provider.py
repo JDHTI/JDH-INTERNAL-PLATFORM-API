@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import asyncpg
 
@@ -95,7 +95,11 @@ class DataProviderConnection:
             raise DataProviderUnavailable("Data provider health check failed") from exc
 
     async def fetch(
-        self, query: str, *args: object, timeout: float | None = None
+        self,
+        query: str,
+        *args: object,
+        timeout: float | None = None,
+        settings: Mapping[str, str] | None = None,
     ) -> Sequence[asyncpg.Record]:
         """Execute a parameterized read-only query on the provider.
 
@@ -104,6 +108,8 @@ class DataProviderConnection:
             *args (object): Values bound to the SQL statement.
             timeout (float | None): Seconds for this query; ``None`` keeps the pool's
                 command timeout.
+            settings (Mapping[str, str] | None): Server settings for this query only
+                (``set_config`` local to its transaction), such as ``{"jit": "off"}``.
 
         Returns:
             Sequence[asyncpg.Record]: Rows returned by the provider.
@@ -119,6 +125,8 @@ class DataProviderConnection:
         try:
             async with pool.acquire() as connection:
                 async with connection.transaction(readonly=True):
+                    for name, value in (settings or {}).items():
+                        await connection.execute("SELECT set_config($1, $2, true)", name, value)
                     return await connection.fetch(query, *args, timeout=timeout)
         except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
             raise DataProviderUnavailable("Data provider query failed") from exc

@@ -138,6 +138,10 @@ class CreateRequest(BaseModel):
         le=MAX_VALIDITY_DAYS,
         description="Days the offer holds",
     )
+    with_history: bool = Field(
+        default=True,
+        description="False starts a SIESA customer's quotation empty, without its sales",
+    )
 
 
 class LineChangeRequest(BaseModel):
@@ -351,11 +355,13 @@ class LineResponse(BaseModel):
     quote_cost: Decimal | None
     discarded_quote_cost: Decimal | None
     inventory_cost: Decimal | None
-    cost_source: Literal["cotizacion", "inventario"] | None
+    cost_source: Literal["cotizacion", "inventario", "alza"] | None
     cost_source_label: str | None
     # The operation center whose warehouses set ``cost``; ``None`` for Nacional or a list
     # with its own warehouses.
     cost_center: str | None
+    # New cost of a price increase SIESA does not have yet, the third value compared.
+    increase_cost: Decimal | None
     target_margin_pct: Decimal | None
     margin_basis: str | None
     margin_basis_label: str | None
@@ -476,6 +482,8 @@ class QuotationResponse(SummaryResponse):
     # False when the list has its own warehouses (list 1 and the skill's): the centers
     # then change only the liquor tax regional, not the cost.
     centers_set_cost: bool
+    # False when it started empty: a refresh prices the added SKUs and reads no sales.
+    with_history: bool
     # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
     # (chosen; a refresh keeps it).
     billing_center_source: Literal["auto", "manual"]
@@ -567,6 +575,7 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         cost_source=line.cost_source,  # type: ignore[arg-type]
         cost_source_label=COST_SOURCE_LABELS.get(line.cost_source or ""),
         cost_center=line.cost_center,
+        increase_cost=line.increase_cost,
         target_margin_pct=line.target_margin_pct,
         margin_basis=line.margin_basis,
         margin_basis_label=BASIS_LABELS.get(line.margin_basis or ""),
@@ -677,6 +686,7 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         billing_center_name=quotation.billing_center_name,
         cost_centers=list(quotation.cost_centers),
         centers_set_cost=pricing.centers_set_cost(quotation.price_list_id),
+        with_history=quotation.with_history,
         billing_center_source=quotation.billing_center_source,  # type: ignore[arg-type]
         regional=quotation.regional,  # type: ignore[arg-type]
         regional_label=REGIONAL_LABELS.get(quotation.regional, quotation.regional),
@@ -838,6 +848,7 @@ async def create_quotation(
             if temporary
             else None,
             billing_center_code=body.billing_center_code,
+            with_history=body.with_history,
         )
     )
 
@@ -1195,6 +1206,34 @@ async def mark_uploaded(
     and when (``uploaded_by``, ``uploaded_at``)."""
 
     return _detail(await service.mark_uploaded(principal, quotation_id, body.version))
+
+
+class CenterComparisonResponse(BaseModel):
+    """The costliest of the compared centers, or ``null`` when they cost the same."""
+
+    highest: str | None
+
+
+@router.get(
+    "/{quotation_id}/cost-centers/compare",
+    dependencies=[_READ_GATE],
+    response_model=CenterComparisonResponse,
+    summary="Which operation center costs the most",
+)
+@inject
+async def compare_cost_centers(
+    quotation_id: UUID,
+    codes: list[str] = Query(min_length=2, max_length=30),  # noqa: B008
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> CenterComparisonResponse:
+    """For the quotation's SIESA references, the center with the highest sum of unit costs,
+    before choosing them. Only the code: no amounts. 422 with fewer than two centers or an
+    unknown one; ``null`` when they tie or the list has its own warehouses."""
+
+    return CenterComparisonResponse(
+        highest=await service.compare_centers(principal, quotation_id, codes)
+    )
 
 
 @router.patch(

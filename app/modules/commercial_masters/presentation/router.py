@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import asdict
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -13,6 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
+from app.modules.commercial_masters.application.price_increases import (
+    MAX_PAGE_SIZE as PRICE_INCREASES_MAX_PAGE,
+)
+from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
 from app.modules.commercial_masters.application.service import (
     MAX_PAGE_SIZE,
     CommercialMasterService,
@@ -20,6 +25,13 @@ from app.modules.commercial_masters.application.service import (
 )
 from app.modules.commercial_masters.domain.entities import Product
 from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, MarginReport
+from app.modules.commercial_masters.domain.price_increases import (
+    STATUS_LABELS as PRICE_STATUS_LABELS,
+)
+from app.modules.commercial_masters.domain.price_increases import (
+    PriceIncrease,
+    PriceIncreaseFilters,
+)
 from app.modules.commercial_masters.infrastructure.margins_file import template_workbook
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -34,6 +46,7 @@ router = APIRouter(
     ]
 )
 _service = Depends(Provide[ApplicationContainer.v1_container.commercial_master_service])
+_increases = Depends(Provide[ApplicationContainer.v1_container.price_increase_service])
 _principal = Depends(get_current_principal)
 
 
@@ -533,6 +546,185 @@ async def update_margins(
         principal, file.filename, content, apply=apply, sheet=sheet
     )
     return _report(report)
+
+
+class PriceIncreaseResponse(BaseModel):
+    """One cost change a supplier notified, with the product's data from the master."""
+
+    id: UUID
+    sku: str
+    description: str | None
+    supplier_name: str | None
+    category: str | None
+    is_known_product: bool
+    notified_on: date | None
+    system_updated_on: date | None
+    increased_on: date | None
+    supplier_sku: str | None
+    ean: str | None
+    regional: str | None
+    icui_pct: Decimal | None
+    ibua: Decimal | None
+    old_cost_with_tax: Decimal | None
+    old_cost: Decimal | None
+    new_cost: Decimal | None
+    new_cost_with_tax: Decimal | None
+    variation_amount: Decimal | None
+    variation_pct: Decimal | None
+    status: Literal["subio", "bajo", "estable"] | None
+    status_label: str | None
+    observations: str | None
+    margin_pct: Decimal | None
+    price: Decimal | None
+    notified: bool
+    siesa_changed: bool
+    # No system update date: SIESA does not have it, so the quoter compares its new cost.
+    is_pending: bool
+    updated_by: str
+    updated_at: datetime
+
+
+class PriceIncreaseCountsResponse(BaseModel):
+    subio: int
+    bajo: int
+    estable: int
+    pendientes: int
+
+
+class PriceIncreasePageResponse(BaseModel):
+    items: list[PriceIncreaseResponse]
+    total: int
+    page: int
+    size: int
+    # Counts of the whole filter, not the page.
+    counts: PriceIncreaseCountsResponse
+    # Whether the caller may upload the workbook and set the system update date.
+    can_manage: bool
+
+
+class PriceIncreaseIssueResponse(BaseModel):
+    row_number: int
+    sku: str | None
+    problem: str
+
+
+class PriceIncreaseReportResponse(BaseModel):
+    """What an upload did, or would do."""
+
+    applied: bool
+    rows_read: int
+    inserted: int
+    updated: int
+    unchanged: int
+    duplicated: int
+    unknown_skus: int
+    pending: int
+    issues: list[PriceIncreaseIssueResponse]
+    issues_truncated: bool
+
+
+class SystemDateRequest(BaseModel):
+    """The day SIESA got the increase; ``null`` marks it pending again."""
+
+    system_updated_on: date | None
+
+
+def _increase(item: PriceIncrease) -> PriceIncreaseResponse:
+    values = item.values
+    return PriceIncreaseResponse(
+        id=item.id,
+        description=item.description,
+        supplier_name=item.supplier_name,
+        category=item.category,
+        is_known_product=item.is_known_product,
+        status_label=PRICE_STATUS_LABELS.get(values.status or ""),
+        is_pending=item.is_pending,
+        updated_by=item.updated_by,
+        updated_at=item.updated_at,
+        **asdict(values),
+    )
+
+
+@router.get(
+    "/price-increases",
+    response_model=PriceIncreasePageResponse,
+    summary="Price increase history",
+)
+@inject
+async def list_price_increases(
+    q: str | None = Query(default=None, max_length=100),
+    status: Literal["subio", "bajo", "estable"] | None = Query(default=None),
+    pending: bool | None = Query(default=None),
+    sku: str | None = Query(default=None, max_length=40),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=PRICE_INCREASES_MAX_PAGE),
+    principal: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> PriceIncreasePageResponse:
+    """The history, the latest increase first. ``q`` matches the reference (prefix), the
+    description or the supplier; ``pending=true`` keeps the rows SIESA does not have yet."""
+
+    result = await service.page(
+        PriceIncreaseFilters(q=q, status=status, pending=pending, sku=sku), page, size
+    )
+    return PriceIncreasePageResponse(
+        items=[_increase(item) for item in result.items],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+        counts=PriceIncreaseCountsResponse(**result.counts),
+        can_manage=await service.can_manage(principal),
+    )
+
+
+@router.post(
+    "/price-increases/upload",
+    response_model=PriceIncreaseReportResponse,
+    summary="Upsert the price increase workbook",
+    description=(
+        "multipart/form-data with `file` (.xlsx, the `Acumulado Alza Precios` layout). Rows "
+        "are upserted by Referencia, Fecha de Incremento and Fecha de notificación; the "
+        "product's own columns are ignored. A simulation unless `apply=true`. Masters "
+        "managers only."
+    ),
+)
+@inject
+async def upload_price_increases(
+    file: UploadFile = File(...),  # noqa: B008
+    apply: bool = Query(default=False),
+    principal: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> PriceIncreaseReportResponse:
+    """Compare the workbook with the history and, with ``apply``, write the differences."""
+
+    content = await file.read(service.max_upload_bytes + 1)
+    report = await service.upload(principal, file.filename, content, apply=apply)
+    return PriceIncreaseReportResponse(
+        **{
+            name: getattr(report, name)
+            for name in PriceIncreaseReportResponse.model_fields
+            if name != "issues"
+        },
+        issues=[PriceIncreaseIssueResponse(**asdict(issue)) for issue in report.issues],
+    )
+
+
+@router.patch(
+    "/price-increases/{increase_id}",
+    response_model=PriceIncreaseResponse,
+    summary="Set the day SIESA got an increase",
+)
+@inject
+async def set_price_increase_system_date(
+    increase_id: UUID,
+    body: SystemDateRequest,
+    principal: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> PriceIncreaseResponse:
+    """``null`` marks it pending again: the quoter then compares its new cost. Masters
+    managers only."""
+
+    return _increase(await service.set_system_date(principal, increase_id, body.system_updated_on))
 
 
 @router.get("/products/{sku}", response_model=ProductResponse, summary="Get a product")

@@ -466,13 +466,14 @@ class QuotationService:
             )
             return pricing.highest_cost(dict(zip(setup.plans, rows, strict=True)))
 
-        costs, prices, taxes, agreements, scopes, names = await asyncio.gather(
+        costs, prices, taxes, agreements, scopes, names, increases = await asyncio.gather(
             costs_by_center(),
             list_prices(),
             self.warehouse.value_tax_keys(skus),
             self.supports.agreements(codes, skus, [context.nit]),
             self.supports.customers([context.nit]),
             self.masters.supplier_names(codes),
+            self.masters.pending_increases(skus),
         )
         today = self.calendar.today()
         lines: list[QuotationLine] = []
@@ -503,6 +504,7 @@ class QuotationService:
                     line_id=entry.line_id,
                     price_family=setup.family,
                     regional=setup.regional,
+                    increase=increases.get(sku),
                 )
             )
         snapshot = max(
@@ -516,13 +518,16 @@ class QuotationService:
         months: int,
         added: Sequence[str] = (),
         reserved: int = 0,
+        history: bool = True,
     ) -> tuple[list[QuotationLine], date | None]:
         """Lines of the sales window plus the SKUs the advisor had added.
 
         ``reserved`` lines (the local products a refresh keeps) count toward the maximum.
+        Without ``history`` (a quotation that started empty) the sales are not read: only
+        the added SKUs are priced.
         """
 
-        sales = await self.warehouse.last_sales(context.nit, months)
+        sales = await self.warehouse.last_sales(context.nit, months) if history else []
         sold = {sale.sku for sale in sales}
         extra = [sku for sku in added if sku not in sold]
         total = len(sales) + len(extra) + reserved
@@ -638,13 +643,16 @@ class QuotationService:
         *,
         temporary_customer: TemporaryCustomer | None = None,
         billing_center_code: str | None = None,
+        with_history: bool = True,
     ) -> QuotationDetail:
         """Build a quotation of a customer from its last sales in the window, or an empty one
         for a temporary customer.
 
         A temporary customer (not in SIESA) needs ``billing_center_code``: it has no sales and
         no list, and its lines are priced from that center. For a SIESA customer the center
-        is optional: given, it replaces the one of the branches (``manual``).
+        is optional: given, it replaces the one of the branches (``manual``). Without
+        ``with_history`` a SIESA customer's quotation starts empty too: the advisor adds the
+        references, and a refresh revalidates them without bringing the history in.
 
         Args:
             principal (Principal): The advisor.
@@ -695,9 +703,9 @@ class QuotationService:
                 context = replace(
                     context, billing_center_code=center.code, cost_centers=(center.code,)
                 )
-            lines, snapshot = await self._build(context, window_months)
+            lines, snapshot = await self._build(context, window_months, history=with_history)
             seller = await self._seller_contact(context)
-            if not lines:
+            if not lines and with_history:
                 # A customer without sales in the window is quoted with the SKUs the advisor
                 # adds.
                 context = replace(context, warnings=(*context.warnings, "sin_ventas"))
@@ -733,6 +741,7 @@ class QuotationService:
             billing_center_source=vocabulary.CENTER_MANUAL if center else vocabulary.CENTER_AUTO,
             billing_center_name=name,
             temporary_customer=temporary,
+            with_history=with_history and temporary is None,
             **fields,  # type: ignore[arg-type]
         )
         return await self.repository.create(quotation, lines)
@@ -979,7 +988,8 @@ class QuotationService:
 
         Local products do not come from the warehouse: they are kept as they are, after the
         rebuilt lines. A center the advisor chose (``manual``) stays. A temporary customer
-        has no sales to read: its lines are priced again as they are.
+        has no sales to read: its lines are priced again as they are. One that started empty
+        (``with_history`` false) revalidates its added SKUs and reads no sales.
         """
 
         detail = await self._editable(principal, quotation_id)
@@ -996,10 +1006,11 @@ class QuotationService:
             )
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
         local = [line for line in detail.lines if line.is_local]
+        history = detail.quotation.with_history
         lines, snapshot = await self._build(
-            context, detail.quotation.window_months, added, reserved=len(local)
+            context, detail.quotation.window_months, added, reserved=len(local), history=history
         )
-        if not lines and not local:
+        if not lines and not local and history:
             context = replace(context, warnings=(*context.warnings, "sin_ventas"))
         stored = {line.sku: line for line in detail.lines}
         lines = [_kept(line, stored.get(line.sku)) for line in lines]
@@ -1088,6 +1099,32 @@ class QuotationService:
         return await self._repriced(
             principal, detail, version, await self._centers(codes), vocabulary.CENTER_MANUAL
         )
+
+    async def compare_centers(
+        self, principal: Principal, quotation_id: UUID, codes: Sequence[str]
+    ) -> str | None:
+        """Which of two or more centers costs the most for the quotation's SIESA references,
+        before choosing them (see :func:`pricing.costliest_center`).
+
+        Anyone who reads the quotation may ask: only the center comes back, no amount.
+        ``None`` when they cost the same, or the list has its own warehouses (the centers
+        do not change the cost).
+
+        Raises:
+            InvalidInputError: Fewer than two centers, or one that is not active.
+        """
+
+        detail = await self.get(principal, quotation_id)
+        centers = await self._centers(codes)
+        if len(centers) < 2:
+            raise InvalidInputError("Elige al menos dos centros de operación para compararlos")
+        price_list_id = detail.quotation.price_list_id
+        skus = sorted({line.sku for line in detail.lines if not line.is_local})
+        if not skus or not pricing.centers_set_cost(price_list_id):
+            return None
+        plans = pricing.stock_plans(price_list_id, centers)
+        rows = await asyncio.gather(*(self.warehouse.costs(skus, plan) for plan in plans.values()))
+        return pricing.costliest_center(dict(zip(plans, rows, strict=True)))
 
     async def _centers(self, codes: Sequence[str]) -> tuple[str, ...]:
         """Distinct active operation centers, by code; none is *Nacional*.

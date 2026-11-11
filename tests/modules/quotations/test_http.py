@@ -382,6 +382,12 @@ def test_cost_centers_and_the_lines_workbook_contract(client, warehouse, masters
     )
     assert both.status_code == 422
     assert client.patch(f"{url}/billing-center", json={"version": 1}).status_code == 422
+    compared = client.get(
+        f"{url}/cost-centers/compare", params=[("codes", "001"), ("codes", "003")]
+    )
+    assert compared.status_code == 200 and compared.json() == {"highest": "003"}
+    one = client.get(f"{url}/cost-centers/compare", params={"codes": "001"})
+    assert one.status_code == 422
 
     several = client.patch(
         f"{url}/billing-center", json={"version": 1, "cost_centers": ["001", "003"]}

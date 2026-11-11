@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from decimal import Decimal
 
 from sqlalchemy import Integer, cast, func, or_, select
 
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.domain.entities import clean_nit
 from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
+from app.modules.commercial_masters.domain.price_increases import (
+    PriceIncreaseValues,
+    pending_cost,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
+    PriceIncreaseModel,
     ProductModel,
 )
 from app.modules.quotations.domain.entities import CustomerOption, CustomerPage, ProductMaster
 
 _CHUNK = 1000
+_INCREASE_FIELDS = ("sku", "system_updated_on", "new_cost", "new_cost_with_tax")
 _ACCENTS = str.maketrans("áéíóúüñ", "aeiouun")
 
 
@@ -71,6 +78,38 @@ class SqlAlchemyQuotationMasterSource:
                         liquor_tax=liquor,
                         liquor_tax_coast=coast,
                     )
+        return result
+
+    async def pending_increases(self, skus: Sequence[str]) -> dict[str, Decimal]:
+        """The new cost of each SKU whose latest price increase SIESA does not have yet.
+
+        The latest is the one that takes effect last (then the last notified); it is pending
+        when it has no system update date. A loaded latest increase leaves the SKU out, even
+        if an older one was never marked.
+        """
+
+        result: dict[str, Decimal] = {}
+        unique = list(dict.fromkeys(skus))
+        async with self.database.session_factory() as session:
+            for start in range(0, len(unique), _CHUNK):
+                rows = (
+                    await session.execute(
+                        select(*(getattr(PriceIncreaseModel, name) for name in _INCREASE_FIELDS))
+                        .where(PriceIncreaseModel.sku.in_(unique[start : start + _CHUNK]))
+                        .distinct(PriceIncreaseModel.sku)
+                        .order_by(
+                            PriceIncreaseModel.sku,
+                            PriceIncreaseModel.increased_on.desc().nulls_last(),
+                            PriceIncreaseModel.notified_on.desc().nulls_last(),
+                            PriceIncreaseModel.updated_at.desc(),
+                        )
+                    )
+                ).all()
+                for row in rows:
+                    values = PriceIncreaseValues(**dict(zip(_INCREASE_FIELDS, row, strict=True)))
+                    cost = pending_cost(values)
+                    if cost is not None:
+                        result[values.sku] = cost
         return result
 
     async def supplier_names(self, codes: Sequence[str]) -> dict[str, str]:

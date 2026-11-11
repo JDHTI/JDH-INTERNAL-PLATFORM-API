@@ -5,7 +5,8 @@ the lists; the quoter applies the same rules so a quoted price matches the list 
 
 - **Cost** = the highest of the supplier's quotation in force and the inventory average cost
   of the list's warehouse, rounded up, times the list family's factor (1,004 except the
-  wholesale lists).
+  wholesale lists). A product whose latest price increase SIESA does not have yet (no system
+  update date in the product master's history) compares its new cost too.
 - **Warehouse** of a list: fixed by the area (sheet "Faltantes en Lista"); warehouse 2 for
   frozen and refrigerated lines. List 1 takes the highest cost among its 17 warehouses.
   A list outside the skill uses the warehouses of the operation centers the quotation is
@@ -228,6 +229,30 @@ def regional_of(centers: Sequence[str], billing_center: str | None) -> str:
     )
 
 
+def costliest_center(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> str | None:
+    """The center whose references cost the most: the highest sum of unit costs over the
+    SKUs every center has a cost for. ``None`` when nothing compares or the top ties.
+    """
+
+    unit = {
+        code: {
+            sku: value
+            for sku, info in rows.items()
+            if (value := effective_cost(info.quote_cost, info.inventory_cost, ONE)[0]) is not None
+        }
+        for code, rows in costs.items()
+    }
+    if len(unit) < 2:
+        return None
+    common = set.intersection(*(set(values) for values in unit.values()))
+    if not common:
+        return None
+    totals = {code: sum(values[sku] for sku in common) for code, values in unit.items()}
+    top = max(totals.values())
+    leaders = [code for code, total in totals.items() if total == top]
+    return leaders[0] if len(leaders) == 1 else None
+
+
 def highest_cost(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> dict[str, CostInfo]:
     """Per SKU, the costs of the center whose cost is highest, marked with that center.
 
@@ -252,10 +277,26 @@ def highest_cost(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> dict[str
     return result
 
 
+# On a tie the quotation wins (what the supplier charges today), then the inventory: a
+# pending increase is taken only when it is strictly higher.
+_SOURCE_PRIORITY = {
+    vocabulary.QUOTE_COST: 2,
+    vocabulary.INVENTORY_COST: 1,
+    vocabulary.INCREASE_COST: 0,
+}
+
+
 def effective_cost(
-    quote: Decimal | None, inventory: Decimal | None, factor: Decimal
+    quote: Decimal | None,
+    inventory: Decimal | None,
+    factor: Decimal,
+    increase: Decimal | None = None,
 ) -> tuple[Decimal | None, str | None]:
-    """The highest of quotation and inventory, rounded up to pesos, times the factor.
+    """The highest of quotation, inventory and a pending price increase, rounded up to
+    pesos, times the factor.
+
+    ``increase`` is the new cost of the product's latest price increase when SIESA does not
+    have it yet (no system update date in the product master's history).
 
     Returns:
         tuple[Decimal | None, str | None]: The cost (4 decimals) and which source won.
@@ -266,13 +307,13 @@ def effective_cost(
         for source, value in (
             (vocabulary.QUOTE_COST, quote),
             (vocabulary.INVENTORY_COST, inventory),
+            (vocabulary.INCREASE_COST, increase),
         )
         if value is not None and value > MIN_COST
     }
     if not usable:
         return None, None
-    # A tie goes to the quotation: it is what the supplier charges today.
-    source = max(usable, key=lambda key: (usable[key], key == vocabulary.QUOTE_COST))
+    source = max(usable, key=lambda key: (usable[key], _SOURCE_PRIORITY[key]))
     cost = usable[source].to_integral_value(rounding=ROUND_CEILING) * factor
     return cost.quantize(Decimal("0.0001")), source
 
@@ -289,6 +330,7 @@ __all__ = [
     "NATIONAL_SOURCE",
     "StockPlan",
     "centers_set_cost",
+    "costliest_center",
     "effective_cost",
     "family",
     "highest_cost",
