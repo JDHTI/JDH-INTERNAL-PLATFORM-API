@@ -15,7 +15,10 @@ from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyAppli
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import PermissionPolicy, UnrestrictedAreaAccess
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
-from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
+from app.modules.commercial_masters.application.price_increases import (
+    AnalysisCache,
+    PriceIncreaseService,
+)
 from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
     MasterLookup,
@@ -475,12 +478,15 @@ class V1Container(containers.DeclarativeContainer):
         SqlAlchemyPriceIncreaseRepository, database=database
     )
     price_increase_reader = providers.Singleton(PriceIncreaseFileReader)
+    # Kept across requests: the analysis of a period is worked out once per data version.
+    price_increase_analysis_cache = providers.Singleton(AnalysisCache)
     price_increase_service = providers.Factory(
         PriceIncreaseService,
         repository=price_increase_repository,
         managers=commercial_master_manager_policy,
         reader=price_increase_reader,
         max_upload_bytes=config.product_margins.max_upload_bytes,
+        cache=price_increase_analysis_cache,
     )
     master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)
     pqrsf_product_catalog = providers.Factory(MasterProductCatalog, masters=master_lookup)

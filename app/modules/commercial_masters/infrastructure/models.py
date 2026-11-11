@@ -266,6 +266,8 @@ class PriceIncreaseModel(Base):
     __tablename__ = "product_price_increases"
     __table_args__ = (
         Index("ix_product_price_increases_sku", "sku", "increased_on"),
+        # The analysis reads a period by when the increase takes effect.
+        Index("ix_product_price_increases_increased_on", "increased_on"),
         Index("ix_product_price_increases_status", "status"),
         Index(
             "ix_product_price_increases_pending",

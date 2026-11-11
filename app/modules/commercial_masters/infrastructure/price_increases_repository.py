@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.core.errors import NotFoundError
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.price_increase_analysis import AnalysisRow
 from app.modules.commercial_masters.domain.price_increases import (
     VALUE_FIELDS,
     PriceIncrease,
@@ -166,6 +167,48 @@ class SqlAlchemyPriceIncreaseRepository:
         )
         counts = {"subio": up, "bajo": down, "estable": flat, "pendientes": pending}
         return PriceIncreasePage(items, int(total), page, size, counts)
+
+    async def version(self) -> tuple[int, datetime | None]:
+        """Rows and last change: when either moves, the analysis is worked out again."""
+
+        async with self.database.session_factory() as session:
+            count, last = (
+                await session.execute(select(func.count(), func.max(P.updated_at)))
+            ).one()
+        return int(count), last
+
+    async def analysis_rows(self) -> list[AnalysisRow]:
+        """Every dated row with only what the analysis reads, and the product's description,
+        supplier and category. The whole history: the rows before a period give the cost it
+        started at."""
+
+        statement = (
+            select(
+                P.sku,
+                P.increased_on,
+                P.notified_on,
+                P.status,
+                P.variation_pct,
+                P.old_cost,
+                P.old_cost_with_tax,
+                P.new_cost,
+                P.new_cost_with_tax,
+                P.system_updated_on.is_(None),
+                ProductModel.description,
+                CommercialSupplierModel.name,
+                ProductModel.category,
+            )
+            .select_from(
+                P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(
+                    CommercialSupplierModel,
+                    CommercialSupplierModel.code == ProductModel.commercial_supplier_code,
+                )
+            )
+            .where(P.increased_on.is_not(None))
+        )
+        async with self.database.session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [AnalysisRow(*row) for row in rows]
 
     async def set_system_date(
         self, increase_id: UUID, day: date | None, actor: str, now: datetime
