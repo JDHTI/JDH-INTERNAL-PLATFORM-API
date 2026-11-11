@@ -48,12 +48,18 @@ salvo `apply=true`, como el actualizador de márgenes.
 - **Llave:** referencia + fecha de incremento + fecha de notificación. Una fila con una llave
   nueva se inserta; con una existente se actualiza si cambió algo; si no, queda igual. Si el
   archivo repite una llave, queda la última fila (se reportan como repetidas).
-- **Celdas sucias:** el libro trae montos como texto en dos formatos (`$ 81.960,00` y
-  `$ 95.484`), errores de Excel (`#N/D`, `#¡REF!`), textos donde va un número (`CODIGO YA NO
-  EXISTE`), guiones y fechas de 1900 (un número escrito en una celda de fecha).
-  - Lo que se puede leer, se lee.
-  - Lo demás deja **esa celda vacía** y se reporta con su fila; la fila se carga igual.
-  - Una fecha anterior al año 2000 no se guarda.
+- **El libro tal como lo lleva el área:** todo carga, sin errores (decisión del 2026-11-11).
+  - Montos como texto en dos formatos (`$ 81.960,00` y `$ 95.484`) y guiones: se leen.
+  - Errores de fórmula de Excel (`#N/D`, `#¡REF!`, `#¡VALOR!`): son celdas sin valor; quedan
+    vacías y no se reportan.
+  - Palabras donde va un monto (`DESCODIFICADO`, `CODIGO YA NO EXISTE`, `SALIO DEL MERCADO`):
+    son una nota de la fila; pasan a Observaciones («Costo nuevo sin impuesto saludable:
+    DESCODIFICADO») y la celda queda vacía.
+  - Las fechas se guardan como vienen, por viejas que sean: 1900-01-18 (un número en una celda
+    de fecha) o `18/09/0206` (año 0206; en el acumulado son 340 filas cuyo incremento es
+    2026-09-25, un error de digitación de 2026 que hay que corregir en el libro).
+  - Solo se reporta lo que no es nada de eso: un monto con números que no se puede leer
+    (`12 mil`). Esa celda queda vacía y la fila se carga igual.
 - **Estado:** el del archivo (`SUBIO`, `BAJO`, `ESTABLE`). Si falta, se calcula comparando el
   costo nuevo con el anterior. La variación en pesos que falte también se calcula.
 - El libro se lee con openpyxl en modo de solo lectura y en un hilo aparte: las 50.208 filas
@@ -66,8 +72,8 @@ salvo `apply=true`, como el actualizador de márgenes.
   - filas pendientes en SIESA;
   - las primeras 200 celdas que no se pudieron leer.
 
-Con el acumulado de noviembre de 2026, la carga deja 50.105 filas, porque 103 tienen la llave
-repetida. Se reportan 342 fechas de notificación inválidas y 238 montos ilegibles. De las
+Con el acumulado de noviembre de 2026 no se reporta ninguna celda: 227 errores de fórmula quedan
+vacíos, 11 notas pasan a Observaciones y las 342 fechas raras se guardan como vienen. De las
 11.718 referencias, 270 quedan con el alza más reciente pendiente en SIESA.
 
 Subir y cambiar fechas exige gestionar los maestros (BI, módulo `maestros`). Leer está
@@ -97,7 +103,7 @@ la siguiente construcción o refresco de la cotización.
 | --- | --- |
 | `GET /price-increases` | `q` (prefijo de referencia, descripción o proveedor), `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
 | `POST /price-increases/upload` | Multipart `file`; `apply` (por defecto simulación). Devuelve `{applied, rows_read, inserted, updated, unchanged, duplicated, unknown_skus, pending, issues, issues_truncated}`. 403 sin permiso de gestión; 422 si el archivo no sirve |
-| `PATCH /price-increases/{id}` | `{system_updated_on: "AAAA-MM-DD" \| null}`. `null` la deja pendiente otra vez. 403 sin permiso de gestión; 422 antes del año 2000 |
+| `PATCH /price-increases/{id}` | `{system_updated_on: "AAAA-MM-DD" \| null}`. `null` la deja pendiente otra vez. 403 sin permiso de gestión; 422 antes del año 2000 (a mano es un error de digitación; el libro sí guarda fechas viejas) |
 
 Cada fila trae los campos guardados más `description`, `supplier_name`, `category` e
 `is_known_product` del maestro, `status_label` e `is_pending`.

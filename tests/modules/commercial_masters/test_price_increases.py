@@ -15,6 +15,7 @@ from app.main import create_app
 from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
 from app.modules.commercial_masters.domain.price_increases import (
     CellError,
+    CellNote,
     PriceIncrease,
     PriceIncreasePage,
     PriceIncreaseValues,
@@ -105,20 +106,25 @@ def test_money_cells_in_every_format_the_area_types() -> None:
     assert parse_money("$ 1,00") == Decimal("1.00")
     assert parse_money(70980.5) == Decimal("70980.5")
     assert parse_money("-") is None and parse_money("$ -") is None and parse_money(None) is None
-    with pytest.raises(CellError):
-        parse_money("#N/D")
-    with pytest.raises(CellError):
+    # Formula errors are cells without a value, not problems.
+    assert parse_money("#N/D") is None and parse_money("#¡REF!") is None
+    assert parse_money("#¡VALOR!") is None
+    # Words where a number goes are a note about the row.
+    with pytest.raises(CellNote):
         parse_money("CODIGO YA NO EXISTE")
+    with pytest.raises(CellError):
+        parse_money("12abc")
     assert parse_ratio("16,5 %") == Decimal("0.165") and parse_ratio(0.02) == Decimal("0.02")
 
 
-def test_dates_of_1900_are_numbers_not_dates() -> None:
+def test_dates_are_kept_as_the_file_has_them() -> None:
     assert parse_date(datetime(2026, 2, 19, 0, 0)) == date(2026, 2, 19)
     assert parse_date("19/02/2026") == date(2026, 2, 19)
     assert parse_date(46072) == date(2026, 2, 19)
     assert parse_date(None) is None and parse_date(" ") is None
-    with pytest.raises(CellError):
-        parse_date(datetime(1900, 1, 18))
+    # Old or mistyped, the history keeps them: 1900 and the year 0206 the file has.
+    assert parse_date(datetime(1900, 1, 18)) == date(1900, 1, 18)
+    assert parse_date("18/09/0206") == date(206, 9, 18)
     with pytest.raises(CellError):
         parse_date("pendiente")
 
@@ -148,7 +154,7 @@ def test_status_cost_and_key() -> None:
 # ------------------------------------------------------------------ file
 
 
-def test_the_workbook_reads_only_the_increase_and_reports_dirty_cells() -> None:
+def test_the_workbook_loads_as_the_area_keeps_it() -> None:
     content = workbook(
         [
             row(),
@@ -165,12 +171,22 @@ def test_the_workbook_reads_only_the_increase_and_reports_dirty_cells() -> None:
                 }
             ),
             row(**{"Referencia": None}),
+            row(
+                **{
+                    "Referencia": "4207",
+                    "Fecha de notificacion": "18/09/0206",
+                    "Costo Nuevo sin Impuesto Saludable": "DESCODIFICADO",
+                    "OBSERVACIONES": "MODIFICAR COTIZACION",
+                    "Precio": "#¡VALOR!",
+                }
+            ),
+            row(**{"Referencia": "1045", "Costo Nuevo sin Impuesto Saludable": "12 mil"}),
         ]
     )
 
     rows = PriceIncreaseFileReader().read("Acumulado_Alza_Precios.xlsx", content)
 
-    assert [item.row_number for item in rows] == [3, 4]
+    assert [item.row_number for item in rows] == [3, 4, 6, 7]
     first = rows[0].values
     assert (first.sku, first.old_cost, first.new_cost) == (
         "27914",
@@ -178,14 +194,23 @@ def test_the_workbook_reads_only_the_increase_and_reports_dirty_cells() -> None:
         Decimal("95484"),
     )
     assert first.variation_amount == Decimal("13524.00") and first.variation_pct == Decimal("0.165")
-    assert first.status == "subio" and first.price == Decimal("117015.0") and rows[0].problems == ()
-    second = rows[1]
-    assert second.values.notified_on is None and second.values.system_updated_on is None
-    assert second.values.notified is True
-    assert len(second.problems) == 2 and "#N/D" in second.problems[1]
+    assert first.status == "subio" and first.price == Decimal("117015.0")
+    # 1900 dates, formula errors and notes load without a problem.
+    assert [item.problems for item in rows[:3]] == [(), (), ()]
+    second = rows[1].values
+    assert second.notified_on == date(1900, 1, 25) and second.system_updated_on is None
+    assert second.notified is True and second.old_cost is None
     # Without a state in the file it is worked out; the old cost is unknown here.
-    assert second.values.status is None
-    assert pending_cost(second.values) == Decimal("89438.89")
+    assert second.status is None
+    assert pending_cost(second) == Decimal("89438.89")
+    third = rows[2].values
+    assert third.notified_on == date(206, 9, 18)
+    assert third.new_cost is None and third.price is None
+    assert third.observations == (
+        "MODIFICAR COTIZACION; Costo nuevo sin impuesto saludable: DESCODIFICADO"
+    )
+    # Only a number that cannot be read is reported.
+    assert rows[3].problems == ("Costo nuevo sin impuesto saludable: «12 mil» no se pudo leer",)
 
 
 def test_a_file_without_the_header_or_not_excel_is_refused() -> None:
