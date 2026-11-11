@@ -1,8 +1,10 @@
 """Analysis of the price increase history, reference by reference.
 
 The question it answers is how much a product went up in a period (the last year by
-default, or two years, or the whole history), how often it goes up, and how its last change
-ended. Rows are dated by when the increase takes effect (``increased_on``): the
+default; the last month, two years, the whole history, a calendar month or any range of
+days), how often it goes up, and how its last change ended. A period is a window of days,
+``since`` to ``until``, either end open. Rows are dated by when the increase takes effect
+(``increased_on``): the
 notification date is not used (the workbook has it mistyped in places, and it says nothing
 about when the cost moved).
 
@@ -15,7 +17,8 @@ basis (without the healthy-food tax; with it only when a row lacks the other):
 - **Change in the period** (``accumulated_pct``): the cost at the end of the period against
   the cost just before it started. The end is the new cost of the period's last row; the
   start, the new cost of the last row before the period, or the old cost of the period's
-  first row when there is none. A slip in a row in between does not add up.
+  first row when there is none. Rows after the period do not count. A slip in a row in
+  between does not add up.
 - **Movement** of the reference: up, down or flat by the sign of that change (flat within
   half a hundredth of a point).
 - **Change of a row:** its new cost against its old cost, both on the same basis; the file's
@@ -44,7 +47,7 @@ from app.modules.commercial_masters.domain.price_increases import DOWN, FLAT, UP
 ONE = Decimal(1)
 # Below this change (in either direction) a reference stayed flat.
 FLAT_TOLERANCE = Decimal("0.00005")
-PERIODS = {"12m": 12, "24m": 24, "all": None}
+PERIODS = {"1m": 1, "12m": 12, "24m": 24, "all": None}
 DEFAULT_PERIOD = "12m"
 MOVEMENTS = (UP, DOWN, FLAT)
 SORTS = ("accumulated", "increases", "frequency", "last_change", "sku")
@@ -75,6 +78,7 @@ class AnalysisRow:
     description: str | None = None
     supplier_name: str | None = None
     category: str | None = None
+    supplier_code: str | None = None
 
     @property
     def cost_before(self) -> Decimal | None:
@@ -120,6 +124,7 @@ class ReferenceAnalysis:
 
     sku: str
     description: str | None
+    supplier_code: str | None
     supplier_name: str | None
     category: str | None
     changes: int
@@ -188,18 +193,32 @@ def _ordered(rows: Iterable[AnalysisRow]) -> dict[str, list[AnalysisRow]]:
     return by_sku
 
 
-def in_period(rows: Iterable[AnalysisRow], since: date | None) -> list[AnalysisRow]:
-    return [row for row in rows if since is None or row.increased_on >= since]
+def in_period(
+    rows: Iterable[AnalysisRow], since: date | None, until: date | None = None
+) -> list[AnalysisRow]:
+    """The rows from ``since`` to ``until``, both days included; an open end has no limit."""
+
+    return [
+        row
+        for row in rows
+        if (since is None or row.increased_on >= since)
+        and (until is None or row.increased_on <= until)
+    ]
 
 
-def analyze(rows: Iterable[AnalysisRow], since: date | None) -> list[ReferenceAnalysis]:
-    """One analysis per reference with rows in the period (from ``since``; all without it).
+def analyze(
+    rows: Iterable[AnalysisRow], since: date | None, until: date | None = None
+) -> list[ReferenceAnalysis]:
+    """One analysis per reference with rows in the period (``since`` to ``until``).
 
-    ``rows`` is the whole history: the rows before the period give the cost it started at.
+    ``rows`` is the whole history: the rows before the period give the cost it started at;
+    the rows after it are left out.
     """
 
     result: list[ReferenceAnalysis] = []
     for sku, items in _ordered(rows).items():
+        if until is not None:
+            items = [item for item in items if item.increased_on <= until]
         period = in_period(items, since)
         if not period:
             continue
@@ -216,6 +235,7 @@ def analyze(rows: Iterable[AnalysisRow], since: date | None) -> list[ReferenceAn
             ReferenceAnalysis(
                 sku=sku,
                 description=first.description,
+                supplier_code=first.supplier_code,
                 supplier_name=first.supplier_name,
                 category=first.category,
                 changes=len(period),
@@ -255,20 +275,23 @@ def summarize(
     )
 
 
-def matches(item: ReferenceAnalysis, q: str | None, movement: str | None) -> bool:
-    """The reference passes the search (reference prefix, description or supplier) and the
-    movement filter."""
+def matches(
+    item: ReferenceAnalysis,
+    q: str | None,
+    movement: str | None,
+    supplier: str | None = None,
+) -> bool:
+    """The reference passes the search (reference prefix or description), the supplier (a
+    commercial supplier code, picked from a list) and the movement filter."""
 
     if movement and item.movement != movement:
+        return False
+    if supplier and item.supplier_code != supplier:
         return False
     if not q:
         return True
     term = q.strip().lower()
-    return (
-        item.sku.lower().startswith(term)
-        or term in (item.description or "").lower()
-        or term in (item.supplier_name or "").lower()
-    )
+    return item.sku.lower().startswith(term) or term in (item.description or "").lower()
 
 
 def _value(item: ReferenceAnalysis, sort: str):
