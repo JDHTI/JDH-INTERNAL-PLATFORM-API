@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date
+from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
@@ -65,6 +66,8 @@ class MasterSource(Protocol):
     async def products(self, skus: Sequence[str]) -> dict[str, ProductMaster]: ...
 
     async def supplier_names(self, codes: Sequence[str]) -> dict[str, str]: ...
+
+    async def pending_increases(self, skus: Sequence[str]) -> dict[str, Decimal]: ...
 
     async def customers(
         self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int

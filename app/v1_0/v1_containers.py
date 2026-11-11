@@ -15,6 +15,7 @@ from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyAppli
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import PermissionPolicy, UnrestrictedAreaAccess
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
+from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
 from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
     MasterLookup,
@@ -22,6 +23,12 @@ from app.modules.commercial_masters.application.service import (
 from app.modules.commercial_masters.application.sync import MasterSyncService
 from app.modules.commercial_masters.infrastructure.dwh_source import WarehouseMasterSource
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
+from app.modules.commercial_masters.infrastructure.price_increases_file import (
+    PriceIncreaseFileReader,
+)
+from app.modules.commercial_masters.infrastructure.price_increases_repository import (
+    SqlAlchemyPriceIncreaseRepository,
+)
 from app.modules.commercial_masters.infrastructure.repository import (
     SqlAlchemyCommercialMasterRepository,
 )
@@ -462,6 +469,17 @@ class V1Container(containers.DeclarativeContainer):
         repository=commercial_master_repository,
         managers=commercial_master_manager_policy,
         margin_reader=commercial_margin_reader,
+        max_upload_bytes=config.product_margins.max_upload_bytes,
+    )
+    price_increase_repository = providers.Factory(
+        SqlAlchemyPriceIncreaseRepository, database=database
+    )
+    price_increase_reader = providers.Singleton(PriceIncreaseFileReader)
+    price_increase_service = providers.Factory(
+        PriceIncreaseService,
+        repository=price_increase_repository,
+        managers=commercial_master_manager_policy,
+        reader=price_increase_reader,
         max_upload_bytes=config.product_margins.max_upload_bytes,
     )
     master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)

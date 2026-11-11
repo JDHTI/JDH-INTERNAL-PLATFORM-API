@@ -398,13 +398,15 @@ def build_line(
     line_id: UUID,
     price_family: str = pricing.GENERAL,
     regional: str = vocabulary.NATIONAL,
+    increase: Decimal | None = None,
 ) -> QuotationLine:
     """Price one SKU from its last sale (if any), current cost, target margin and supports.
 
     A SKU the advisor adds has no last sale: it comes with the warehouse item (``item``) and
     is priced from scratch. Only the liquor tax is carried as a tax (VAT is not shown).
-    The cost is the highest of the supplier's quotation and the inventory of the list's
-    warehouse, times the list family's factor (see :mod:`pricing`).
+    The cost is the highest of the supplier's quotation, the inventory of the list's
+    warehouse and ``increase`` (a price increase SIESA does not have yet), times the list
+    family's factor (see :mod:`pricing`).
     """
 
     problems: list[str] = []
@@ -424,6 +426,7 @@ def build_line(
         cost.quote_cost if cost else None,
         cost.inventory_cost if cost else None,
         pricing.COST_FACTOR.get(price_family, ONE),
+        increase,
     )
     if cost_value is None:
         problems.append("sin_costo")
@@ -510,6 +513,7 @@ def build_line(
         inventory_cost=money(cost.inventory_cost) if cost else None,
         cost_source=cost_source,
         cost_center=cost.center_code if cost is not None and cost_value is not None else None,
+        increase_cost=money(increase) if increase is not None else None,
         optimal_price=optimal,
         # The support is already in the margin: a line it covers is not flagged.
         below_target=(

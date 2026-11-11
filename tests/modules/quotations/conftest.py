@@ -194,6 +194,8 @@ class FakeMasters:
     def __init__(self) -> None:
         self.catalog: dict[str, ProductMaster] = {"2537": product()}
         self.suppliers = {"359": "LOCERIA COLOMBIANA S.A."}
+        # New cost of a price increase SIESA does not have yet, by SKU.
+        self.increases: dict[str, Decimal] = {}
         self.options = [
             CustomerOption(
                 NIT, "HOTEL EL BOSQUE SAS", "0142", "HOTELES Y CLUBES", "0051", "PEREZ ANA", 2, 1
@@ -206,6 +208,9 @@ class FakeMasters:
 
     async def supplier_names(self, codes):
         return {code: self.suppliers[code] for code in codes if code in self.suppliers}
+
+    async def pending_increases(self, skus):
+        return {sku: self.increases[sku] for sku in skus if sku in self.increases}
 
     async def customers(self, seller_codes, q, page, size):
         items = [

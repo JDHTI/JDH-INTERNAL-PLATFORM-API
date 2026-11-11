@@ -82,6 +82,7 @@ _COLUMNS: tuple[tuple[str, int, str | None, Any], ...] = (
     ("Costo cotización del proveedor", 14, _MONEY, lambda line, _: line.quote_cost),
     ("Costo inventario", 14, _MONEY, lambda line, _: line.inventory_cost),
     ("Cotización descartada", 14, _MONEY, lambda line, _: line.discarded_quote_cost),
+    ("Alza pendiente", 14, _MONEY, lambda line, _: line.increase_cost),
     ("Alertas", 60, None, lambda line, _: _problems(line)),
 )
 

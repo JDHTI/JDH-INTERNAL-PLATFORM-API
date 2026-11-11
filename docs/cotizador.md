@@ -52,6 +52,12 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      Una lista con bodegas fijas (tabla del paso 4, y la lista 1) las conserva aunque cambie el CO
      (`centers_set_cost: false`): el CO decide las bodegas de las listas fuera de la tabla y de un
      cliente temporal.
+   - **Comparar antes de elegir**: con dos o más CO marcados, `GET
+     /cost-centers/compare?codes=…` dice cuál cuesta más para las referencias de la cotización: el
+     de mayor suma de costos unitarios sobre las referencias con costo en todos. Solo el código, sin
+     montos; `null` si empatan o si la lista tiene bodegas propias.
+   - **Empezar vacía** (`with_history: false` al crear): un cliente de SIESA sin el histórico de
+     ventas. El asesor agrega las referencias; un refresco las revalida y nunca trae el histórico.
 2. **Último precio** (`consumo.ventas`): por referencia se toma la **última venta de cada CO que
    facturó** (`ventas.co`) en la ventana y, entre ellas, la de **mayor precio neto**; su fecha,
    documento y unidad son los `last_*`. Dentro de un CO, un empate de fecha va al documento mayor,
@@ -60,6 +66,14 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
    cantidad y subtotal mayores que cero. El precio es `subtotal / cantidad`: neto de descuentos,
    **antes de IVA** y **por unidad de inventario** (una caja C45 vendida a 149.551 es 3.323,36 por
    unidad).
+   - **Lectura**: primero las llaves del cliente (`consumo.clientes`) y luego sus ventas por esas
+     llaves (`cliente_key = ANY(...)`, que usa el índice). Con el NIT en una subconsulta, el
+     planificador recorría por fecha todas las ventas de la compañía del último año (2,3 millones
+     de líneas): con el caché frío pasaba de los 30 s del límite y la cotización respondía «No se
+     pudo consultar el datawarehouse» (medido el 2026-11-11 con Sodexo: 33,6 s en frío; por
+     llaves, 1,4 s). Las lecturas del cotizador corren sin JIT (`jit = off`, unos 2 s menos cada
+     una), y si una se pasa del tiempo el mensaje lo dice: «El datawarehouse tardó más de 30 s en
+     responder».
 3. **Costo**: el **mayor** entre:
    - la **cotización vigente del proveedor** (`consumo.cotizaciones_proveedores`: vigente, ítem
      activo, unidad `UNID` o `KL`): `redondear(costo_bruto) × (1 + ICUI/100) + IBUA`, la mayor por
@@ -67,11 +81,16 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      Centro (003, 10U, 10S, o un cliente que factura desde el CO 003) y la `001` para el resto;
    - el **costo promedio de inventario** (`consumo.inventario_fecha`, la foto de SIESA de la
      mañana) de la bodega de la lista, redondeado al peso. La bodega 2 aplica a las líneas
-     CONGELADOS y REFRIGERADOS.
+     CONGELADOS y REFRIGERADOS;
+   - el **costo nuevo de un alza pendiente**: si la alza más reciente de la referencia en el
+     histórico del maestro de productos no tiene fecha de actualización en SIESA, su costo nuevo
+     (con impuesto saludable si lo trae). Solo gana si es estrictamente mayor
+     ([alzas-precios.md](alzas-precios.md)).
 
    El mayor se redondea hacia arriba y se multiplica por el factor de la familia de la lista:
    **1,004** en Generales, Salsamentarias y Market; **1** en Mayoristas. La cotización indica de
-   dónde salió (`cost_source`: `cotizacion` o `inventario`) y trae los dos valores.
+   dónde salió (`cost_source`: `cotizacion`, `inventario` o `alza`) y trae los valores
+   (`quote_cost`, `inventory_cost`, `increase_cost`).
    - **Cotización fuera de rango**: una cotización mayor que **3 veces la mediana del último
      costo** de las instalaciones del ítem es un error de captura en SIESA (por ejemplo, el precio
      de la caja cargado como unidad). No se usa, se muestra (`discarded_quote_cost`) y la línea
@@ -331,7 +350,7 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/permissions` | `{can_manage, can_validate, seller_linked, seller}` |
 | `GET /quotations/rules` | Reglas vigentes por secciones (`precio`, `margen`, `regla`, `formato`) |
 | `GET /quotations/customers` | Clientes para cotizar: `scope=mine` (defecto) o `all`, `q`, `page`, `size` (≤ 100) |
-| `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30), billing_center_code?}` o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
+| `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30), billing_center_code?, with_history?: true}` (`with_history: false` empieza vacía) o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
 | `GET /quotations/billing-centers` | `[{code, name, regional, regional_label}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`) |
 | `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
 | `GET /quotations/{id}` | Cotización completa |
@@ -349,7 +368,8 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `POST /quotations/{id}/uploaded` | `{version}`: de `pendiente_carga` a `cargada`, con `uploaded_by` y `uploaded_at`. Solo quien valida (403); 409 desde otro estado |
 | `GET /quotations/{id}/export.xlsx` | El Excel (solo `pendiente_carga`/`cargada`; si no, 409) |
 | `GET /quotations/{id}/export.txt` | El plano SIESA (solo `pendiente_carga`/`cargada`; si no, 409) |
-| `GET /quotations/{id}/lines.xlsx` | La plantilla de BI: cada línea con sus costos, en cualquier estado. Solo quien valida (403 para el resto) |
+| `GET /quotations/{id}/lines.xlsx` | La plantilla de BI: cada línea con sus costos (también el alza pendiente), en cualquier estado. Solo quien valida (403 para el resto) |
+| `GET /quotations/{id}/cost-centers/compare?codes=001&codes=003` | `{highest}`: el CO que más cuesta para las referencias de la cotización (mayor suma de costos unitarios), o `null` si empatan o la lista tiene bodegas propias. Para quien lee la cotización: sin montos. 422 con menos de dos CO o uno inexistente |
 | `DELETE /quotations/{id}` | 204. Quien la creó o un administrador |
 
 **Resumen** (lista): `id, customer_nit, customer_name, channel, price_list_id, window_months,
@@ -361,6 +381,7 @@ valid_until, is_temporary_customer, temporary_customer: {name, legal_name, trade
 
 **Cotización completa**: el resumen más `channel_code, price_list_name, price_list_customers,
 billing_center_code, billing_center_name, cost_centers (vacío = Nacional), centers_set_cost,
+with_history,
 billing_center_source: auto | manual, regional,
 regional_label, price_family, price_family_label, stock_source, salesperson_code,
 salesperson_name, built_at, cost_cut_date, activation_date, new_list_name,
@@ -384,6 +405,7 @@ vat_groups: [{vat_pct, base, vat}], liquor_tax, total} | null` y `lines`.
 | `cost`, `cost_source`, `cost_source_label` | costo de la regla y de dónde salió |
 | `quote_cost`, `inventory_cost`, `discarded_quote_cost` | la cotización usada, el inventario de la bodega y la cotización descartada por fuera de rango |
 | `cost_center` | el CO cuyas bodegas dieron el costo; `null` con Nacional o con una lista de bodegas fijas |
+| `increase_cost` | costo nuevo de un alza que SIESA aún no tiene, el tercer valor que se compara |
 | `target_margin_pct`, `margin_basis`, `min_margin_pct` | objetivo y mínimo permitido |
 | `min_price`, `optimal_price` | precio mínimo que cumple la regla y precio al margen objetivo |
 | `below_target` | el último precio deja el margen bajo el mínimo (alerta) |

@@ -44,7 +44,9 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "bodegas). Una lista sin bodega definida usa el C.O. del costo: Nacional, el "
                     "mayor de todas las bodegas referencia por referencia (lo que arranca un "
                     "cliente que factura desde varios C.O.); uno o varios C.O., y con varios cada "
-                    "referencia toma el más costoso. Se redondea hacia arriba y se multiplica por "
+                    "referencia toma el más costoso. Si la alza más reciente del producto no "
+                    "tiene fecha de actualización en SIESA, su costo nuevo también se compara y "
+                    "gana si es mayor. Se redondea hacia arriba y se multiplica por "
                     f"{factor} (las listas mayoristas no llevan ese factor). Lactalis cotiza por "
                     "sucursal: 003 para Centro y 001 para el resto.",
                     INFORMS,

@@ -109,6 +109,7 @@ class QuotationModel(Base):
     uploaded_by: Mapped[str | None] = mapped_column(String(320))
     temporary_customer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     include_variation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    with_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class RequestedProductModel(Base):
@@ -185,6 +186,7 @@ class QuotationLineModel(Base):
     inventory_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     cost_source: Mapped[str | None] = mapped_column(String(20))
     cost_center: Mapped[str | None] = mapped_column(String(10))
+    increase_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     optimal_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     below_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

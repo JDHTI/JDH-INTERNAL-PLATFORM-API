@@ -368,6 +368,9 @@ class QuotationLine:
     # The operation center whose warehouses set ``cost``; ``None`` for *Nacional* or a list
     # with its own warehouses.
     cost_center: str | None = None
+    # New cost of the product's latest price increase when SIESA does not have it yet (no
+    # system update date): the third value the cost compares.
+    increase_cost: Decimal | None = None
 
     @property
     def is_local(self) -> bool:
@@ -455,6 +458,8 @@ class Quotation:
     temporary_customer: TemporaryCustomer | None = None
     # The offer shows the variation of each price against the last one.
     include_variation: bool = False
+    # False when it started empty: a refresh prices the added SKUs and reads no sales.
+    with_history: bool = True
 
     @property
     def is_temporary_customer(self) -> bool:
