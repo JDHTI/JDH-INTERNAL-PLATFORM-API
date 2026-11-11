@@ -257,10 +257,38 @@ class PriceIncrease:
 
 @dataclass(frozen=True)
 class PriceIncreaseFilters:
+    # Reference prefix or description; the supplier is picked from a list (``supplier``).
     q: str | None = None
     status: str | None = None
     pending: bool | None = None
     sku: str | None = None
+    # A commercial supplier code.
+    supplier: str | None = None
+
+
+@dataclass(frozen=True)
+class SupplierOption:
+    """A commercial supplier with references in the history."""
+
+    code: str
+    name: str | None
+    references: int
+
+
+@dataclass(frozen=True)
+class MonthOption:
+    """A calendar month with increases taking effect, as ``YYYY-MM``."""
+
+    month: str
+    changes: int
+    references: int
+
+
+@dataclass(frozen=True)
+class FilterOptions:
+    suppliers: tuple[SupplierOption, ...]
+    # The latest month first; only from the year 2000 (older dates are typing slips).
+    months: tuple[MonthOption, ...]
 
 
 @dataclass(frozen=True)
@@ -315,10 +343,13 @@ __all__ = [
     "CellError",
     "CellNote",
     "FileRow",
+    "FilterOptions",
+    "MonthOption",
     "PriceIncrease",
     "PriceIncreaseFilters",
     "PriceIncreasePage",
     "PriceIncreaseValues",
+    "SupplierOption",
     "UploadIssue",
     "UploadReport",
     "clean_text",

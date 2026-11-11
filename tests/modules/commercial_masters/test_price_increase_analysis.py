@@ -1,7 +1,7 @@
 """Price increase analysis: how much each reference moved in a period, cached per version."""
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -12,6 +12,7 @@ from app.core.config import Environment, Settings
 from app.core.errors import InvalidInputError
 from app.main import create_app
 from app.modules.commercial_masters.application.price_increases import (
+    MAX_CACHED_WINDOWS,
     AnalysisCache,
     PriceIncreaseService,
 )
@@ -22,6 +23,11 @@ from app.modules.commercial_masters.domain.price_increase_analysis import (
     ordered,
     period_start,
     summarize,
+)
+from app.modules.commercial_masters.domain.price_increases import (
+    FilterOptions,
+    MonthOption,
+    SupplierOption,
 )
 from app.modules.commercial_masters.infrastructure.price_increases_file import (
     PriceIncreaseFileReader,
@@ -50,6 +56,7 @@ def row(sku: str, day: date, old: str | None, new: str | None, status=None, **va
         "description": f"Producto {sku}",
         "supplier_name": "DIVERSEY",
         "category": "ASEO",
+        "supplier_code": "100",
     }
     return AnalysisRow(**{**base, **values})
 
@@ -67,8 +74,8 @@ ROWS = [
     # No state in the file and no change: flat. Only before the period: left out.
     row("C", date(2026, 3, 1), "500", "500"),
     row("D", date(2024, 3, 1), "500", "600", "subio"),
-    # A placeholder cost of one peso is no cost.
-    row("E", date(2026, 4, 1), "1", "30000", "subio"),
+    # A placeholder cost of one peso is no cost. Another supplier.
+    row("E", date(2026, 4, 1), "1", "30000", "subio", supplier_code="200", supplier_name="ALPINA"),
 ]
 
 
@@ -113,7 +120,23 @@ def test_the_summary_counts_the_period() -> None:
     assert summary.movements == {"subio": 1, "bajo": 0, "estable": 2}
 
 
+def test_a_window_leaves_out_what_comes_after_it() -> None:
+    # February to April 2026: A's second increase (May) is after the window.
+    result = {item.sku: item for item in analyze(ROWS, date(2026, 2, 1), date(2026, 4, 30))}
+
+    assert set(result) == {"A", "C", "E"}
+    a = result["A"]
+    assert (a.start_cost, a.end_cost) == (Decimal(1000), Decimal(1050))
+    assert a.accumulated_pct == Decimal("0.05") and a.increases == 1
+    assert a.last_increased_on == date(2026, 2, 1)
+    assert len(in_period(ROWS, date(2026, 2, 1), date(2026, 4, 30))) == 3
+    # Open at the start: everything up to the last day.
+    assert {item.sku for item in analyze(ROWS, None, date(2025, 12, 31))} == {"A", "D"}
+
+
 def test_periods_end_today() -> None:
+    assert period_start("1m", TODAY) == date(2026, 10, 11)
+    assert period_start("1m", date(2026, 3, 31)) == date(2026, 2, 28)
     assert period_start("12m", TODAY) == SINCE
     assert period_start("24m", TODAY) == date(2024, 11, 11)
     assert period_start("all", TODAY) is None
@@ -165,6 +188,12 @@ class FakeAnalysisRepository:
         self.reads += 1
         return list(ROWS)
 
+    async def filter_options(self):
+        return FilterOptions(
+            suppliers=(SupplierOption("200", "ALPINA", 1), SupplierOption("100", "DIVERSEY", 4)),
+            months=(MonthOption("2026-06", 1, 1), MonthOption("2026-05", 1, 1)),
+        )
+
 
 @pytest.fixture
 def repository() -> FakeAnalysisRepository:
@@ -206,9 +235,13 @@ async def test_the_history_is_read_once_per_data_version(repository, cache) -> N
     await ask(service_for(repository, cache), movement="subio")
     await ask(service_for(repository, cache), period="all")
 
+    # A calendar month too.
+    await ask(service_for(repository, cache), since=date(2026, 2, 1), until=date(2026, 2, 28))
+
     assert repository.reads == 1
-    assert first.total == 4 and first.since == SINCE
+    assert first.total == 4 and (first.since, first.until) == (SINCE, None)
     assert [item.sku for item in first.items][0] == "A"
+    assert len(cache.periods) == 3
 
     repository.stamp = (9, datetime(2026, 11, 11, 9, 0))
     await ask(service_for(repository, cache))
@@ -225,12 +258,30 @@ async def test_filters_search_and_paging(repository, cache) -> None:
 
     searched = await ask(service, q="a")
     assert [item.sku for item in searched.items] == ["A"] and searched.summary.references == 1
+    # The supplier is not searched as text: it is picked by code.
+    assert (await ask(service, q="alpina")).total == 0
+    by_supplier = await ask(service, supplier="200")
+    assert [item.sku for item in by_supplier.items] == ["E"]
+    assert (by_supplier.summary.references, by_supplier.summary.increases) == (1, 1)
     paged = await ask(service, sort="sku", descending=False, size=3, page=2)
     assert [item.sku for item in paged.items] == ["E"] and paged.total == 4
+    month = await ask(service, since=date(2026, 6, 1), until=date(2026, 6, 30))
+    assert [item.sku for item in month.items] == ["B"]
+    assert (month.since, month.until) == (date(2026, 6, 1), date(2026, 6, 30))
     with pytest.raises(InvalidInputError):
         await ask(service, period="5y")
     with pytest.raises(InvalidInputError):
         await ask(service, movement="otro")
+    with pytest.raises(InvalidInputError):
+        await ask(service, since=date(2026, 6, 30), until=date(2026, 6, 1))
+
+
+async def test_the_cache_keeps_a_bounded_number_of_windows(repository, cache) -> None:
+    service = service_for(repository, cache)
+    for day in range(1, MAX_CACHED_WINDOWS + 6):
+        await ask(service, since=date(2026, 1, 1), until=date(2026, 1, 1) + timedelta(days=day))
+
+    assert len(cache.periods) == MAX_CACHED_WINDOWS and repository.reads == 1
 
 
 # ------------------------------------------------------------------ http
@@ -256,7 +307,30 @@ def test_the_analysis_route(repository, cache) -> None:
         assert body["since"] == "2024-11-11" and body["total"] == 1
         item = body["items"][0]
         assert item["sku"] == "A" and item["movement"] == "subio"
+        assert item["supplier_code"] == "100" and body["until"] is None
         # Two years take June 2025 in: gaps of 245 and 90 days, median 168.
         assert item["frequency_days"] == 168 and item["start_cost"] == "900"
         bad = client.get("/api/v1/commercial/price-increases/analysis", params={"period": "5y"})
         assert bad.status_code == 422
+        month = client.get(
+            "/api/v1/commercial/price-increases/analysis",
+            params={"since": "2026-05-01", "until": "2026-05-31", "supplier": "100"},
+        ).json()
+        assert (month["since"], month["until"], month["total"]) == ("2026-05-01", "2026-05-31", 1)
+        backwards = client.get(
+            "/api/v1/commercial/price-increases/analysis",
+            params={"since": "2026-05-31", "until": "2026-05-01"},
+        )
+        assert backwards.status_code == 422
+        options = client.get("/api/v1/commercial/price-increases/options")
+        assert options.status_code == 200
+        assert options.json() == {
+            "suppliers": [
+                {"code": "200", "name": "ALPINA", "references": 1},
+                {"code": "100", "name": "DIVERSEY", "references": 4},
+            ],
+            "months": [
+                {"month": "2026-06", "changes": 1, "references": 1},
+                {"month": "2026-05", "changes": 1, "references": 1},
+            ],
+        }

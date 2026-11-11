@@ -35,6 +35,7 @@ from app.modules.commercial_masters.domain.price_increases import (
     EARLIEST_DATE,
     STATUSES,
     FileRow,
+    FilterOptions,
     PriceIncrease,
     PriceIncreaseFilters,
     PriceIncreasePage,
@@ -52,7 +53,11 @@ from app.modules.identity.domain.principal import Principal
 
 MAX_PAGE_SIZE = 100
 MAX_REPORTED_ISSUES = 200
+# Windows kept per data version: the presets plus the months and ranges people look at.
+MAX_CACHED_WINDOWS = 32
 _BOGOTA = ZoneInfo("America/Bogota")
+
+Window = tuple[date | None, date | None]
 
 
 class AnalysisCache:
@@ -60,13 +65,14 @@ class AnalysisCache:
     process): the service is built per request, the cache is not.
 
     It holds one data version: ``key`` is (today, rows, last change) and ``periods`` maps a
-    period to its rows and analysis, worked out the first time it is asked.
+    window (since, until) to its rows and analysis, worked out the first time it is asked.
+    The oldest window goes when more than ``MAX_CACHED_WINDOWS`` are kept.
     """
 
     def __init__(self) -> None:
         self.key: tuple | None = None
         self.rows: list[AnalysisRow] = []
-        self.periods: dict[str, tuple[list[AnalysisRow], list[ReferenceAnalysis]]] = {}
+        self.periods: dict[Window, tuple[list[AnalysisRow], list[ReferenceAnalysis]]] = {}
 
 
 @dataclass(frozen=True)
@@ -78,8 +84,9 @@ class AnalysisPage:
     page: int
     size: int
     summary: AnalysisSummary
-    # First day of the period; ``None`` for the whole history.
+    # First and last day of the period; ``None`` is an open end (the whole history has both).
     since: date | None
+    until: date | None
 
 
 class PriceIncreaseService:
@@ -128,6 +135,12 @@ class PriceIncreaseService:
             raise InvalidInputError("Estado desconocido: subio, bajo o estable")
         return await self.repository.page(filters, page, size)
 
+    async def filter_options(self) -> FilterOptions:
+        """The suppliers with references in the history and the months with increases: what
+        the dropdowns of the history and the analysis offer."""
+
+        return await self.repository.filter_options()
+
     async def analysis(
         self,
         *,
@@ -138,28 +151,40 @@ class PriceIncreaseService:
         descending: bool,
         page: int,
         size: int,
+        since: date | None = None,
+        until: date | None = None,
+        supplier: str | None = None,
     ) -> AnalysisPage:
         """The references of a period with how much they moved, the figures of the period
         and the counts by movement (of the search, before the movement filter).
 
-        The rows of a period are read and analyzed once per day and data version (rows and
-        last change); filtering, sorting and paging run on that result.
+        The period is a preset (``1m``, ``12m``, ``24m``, ``all``: up to the latest row) or,
+        when ``since`` or ``until`` comes, those days (a calendar month is its first and
+        last day). The rows of a period are read and analyzed once per day and data version
+        (rows and last change); searching, filtering by supplier and movement, sorting and
+        paging run on that result.
 
         Raises:
-            InvalidInputError: Unknown period, movement or sort, or a bad page.
+            InvalidInputError: Unknown period, movement or sort, a range that ends before it
+                starts, or a bad page.
         """
 
         if page < 1 or not 1 <= size <= MAX_PAGE_SIZE:
             raise InvalidInputError(f"Página inválida; el tamaño máximo es {MAX_PAGE_SIZE}")
         if period not in PERIODS:
-            raise InvalidInputError("Periodo desconocido: 12m, 24m o all")
+            raise InvalidInputError("Periodo desconocido: 1m, 12m, 24m o all")
+        if since and until and since > until:
+            raise InvalidInputError("La fecha inicial es posterior a la final")
         if movement is not None and movement not in MOVEMENTS:
             raise InvalidInputError("Movimiento desconocido: subio, bajo o estable")
         if sort not in SORTS:
             raise InvalidInputError("Orden desconocido")
-        rows, analyses = await self._analyzed(period)
-        searched = [item for item in analyses if matches(item, q, None)]
-        if q:
+        window: Window = (
+            (since, until) if since or until else (period_start(period, self.today()), None)
+        )
+        rows, analyses = await self._analyzed(window)
+        searched = [item for item in analyses if matches(item, q, None, supplier)]
+        if q or supplier:
             skus = {item.sku for item in searched}
             rows = [row for row in rows if row.sku in skus]
         summary = summarize(rows, searched)
@@ -172,25 +197,27 @@ class PriceIncreaseService:
             page=page,
             size=size,
             summary=summary,
-            since=period_start(period, self.today()),
+            since=window[0],
+            until=window[1],
         )
 
-    async def _analyzed(self, period: str) -> tuple[list[AnalysisRow], list[ReferenceAnalysis]]:
-        """The period's rows and analysis, read once per day and data version."""
+    async def _analyzed(self, window: Window) -> tuple[list[AnalysisRow], list[ReferenceAnalysis]]:
+        """The window's rows and analysis, read once per day and data version."""
 
-        today = self.today()
         cache = self.cache
-        key = (today, await self.repository.version())
+        key = (self.today(), await self.repository.version())
         if cache.key != key:
             cache.rows = await self.repository.analysis_rows()
             cache.periods = {}
             cache.key = key
-        if period not in cache.periods:
-            since = period_start(period, today)
+        if window not in cache.periods:
+            since, until = window
             # Grouping 50 000 rows is CPU work: in a thread, it never holds up the API.
-            analyses = await asyncio.to_thread(analyze, cache.rows, since)
-            cache.periods[period] = (in_period(cache.rows, since), analyses)
-        return cache.periods[period]
+            analyses = await asyncio.to_thread(analyze, cache.rows, since, until)
+            if len(cache.periods) >= MAX_CACHED_WINDOWS:
+                cache.periods.pop(next(iter(cache.periods)))
+            cache.periods[window] = (in_period(cache.rows, since, until), analyses)
+        return cache.periods[window]
 
     async def upload(
         self, principal: Principal, filename: str | None, content: bytes, *, apply: bool

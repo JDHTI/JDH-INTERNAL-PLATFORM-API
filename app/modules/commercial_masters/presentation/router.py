@@ -653,6 +653,7 @@ class ReferenceAnalysisResponse(BaseModel):
 
     sku: str
     description: str | None
+    supplier_code: str | None
     supplier_name: str | None
     category: str | None
     # Rows of the period, of them how many went up and how many down.
@@ -692,8 +693,52 @@ class AnalysisPageResponse(BaseModel):
     page: int
     size: int
     summary: AnalysisSummaryResponse
-    # First day of the period; null for the whole history.
+    # First and last day of the period; null is an open end (both for the whole history).
     since: date | None
+    until: date | None
+
+
+class SupplierOptionResponse(BaseModel):
+    code: str
+    name: str | None
+    # References of the supplier in the history.
+    references: int
+
+
+class MonthOptionResponse(BaseModel):
+    # "YYYY-MM"
+    month: str
+    changes: int
+    references: int
+
+
+class FilterOptionsResponse(BaseModel):
+    """What the dropdowns of the history and the analysis offer."""
+
+    suppliers: list[SupplierOptionResponse]
+    # The latest month first, from the year 2000.
+    months: list[MonthOptionResponse]
+
+
+@router.get(
+    "/price-increases/options",
+    response_model=FilterOptionsResponse,
+    summary="Suppliers and months of the price increase history",
+)
+@inject
+async def price_increase_options(
+    _: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> FilterOptionsResponse:
+    """The commercial suppliers with references in the history, by name, and the months with
+    increases taking effect: the supplier and month dropdowns. Suppliers are picked from
+    this list, never typed."""
+
+    result = await service.filter_options()
+    return FilterOptionsResponse(
+        suppliers=[SupplierOptionResponse(**asdict(item)) for item in result.suppliers],
+        months=[MonthOptionResponse(**asdict(item)) for item in result.months],
+    )
 
 
 @router.get(
@@ -703,7 +748,10 @@ class AnalysisPageResponse(BaseModel):
 )
 @inject
 async def price_increase_analysis(
-    period: Literal["12m", "24m", "all"] = Query(default="12m"),
+    period: Literal["1m", "12m", "24m", "all"] = Query(default="12m"),
+    since: date | None = Query(default=None),  # noqa: B008
+    until: date | None = Query(default=None),  # noqa: B008
+    supplier: str | None = Query(default=None, max_length=40),
     movement: Movement | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
     sort: Literal["accumulated", "increases", "frequency", "last_change", "sku"] = Query(
@@ -715,14 +763,22 @@ async def price_increase_analysis(
     _: Principal = _principal,
     service: PriceIncreaseService = _increases,
 ) -> AnalysisPageResponse:
-    """Each reference with a change in the period (the last year by default; ``24m`` or
-    ``all``), dated by when the increase takes effect: its cost at the end against just
-    before the period, how many times it went up, how often, and its last change.
-    ``movement`` keeps the references that went up, down or stayed; ``summary`` covers the
-    search before that filter."""
+    """Each reference with a change in the period, dated by when the increase takes effect:
+    its cost at the end against just before the period, how many times it went up, how
+    often, and its last change.
+
+    The period is the last year by default, ``1m``, ``24m`` or ``all``; ``since`` and
+    ``until`` (both days included, either may be left open) replace it with a range or a
+    calendar month. ``q`` matches the reference (prefix) or the description; ``supplier`` is
+    a commercial supplier code from ``/price-increases/options``. ``movement`` keeps the
+    references that went up, down or stayed; ``summary`` covers the search before that
+    filter."""
 
     result = await service.analysis(
         period=period,
+        since=since,
+        until=until,
+        supplier=supplier,
         q=q,
         movement=movement,
         sort=sort,
@@ -737,6 +793,7 @@ async def price_increase_analysis(
         size=result.size,
         summary=AnalysisSummaryResponse(**asdict(result.summary)),
         since=result.since,
+        until=result.until,
     )
 
 
@@ -751,16 +808,20 @@ async def list_price_increases(
     status: Literal["subio", "bajo", "estable"] | None = Query(default=None),
     pending: bool | None = Query(default=None),
     sku: str | None = Query(default=None, max_length=40),
+    supplier: str | None = Query(default=None, max_length=40),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=PRICE_INCREASES_MAX_PAGE),
     principal: Principal = _principal,
     service: PriceIncreaseService = _increases,
 ) -> PriceIncreasePageResponse:
-    """The history, the latest increase first. ``q`` matches the reference (prefix), the
-    description or the supplier; ``pending=true`` keeps the rows SIESA does not have yet."""
+    """The history, the latest increase first. ``q`` matches the reference (prefix) or the
+    description; ``supplier`` is a commercial supplier code from ``/price-increases/options``;
+    ``pending=true`` keeps the rows SIESA does not have yet."""
 
     result = await service.page(
-        PriceIncreaseFilters(q=q, status=status, pending=pending, sku=sku), page, size
+        PriceIncreaseFilters(q=q, status=status, pending=pending, sku=sku, supplier=supplier),
+        page,
+        size,
     )
     return PriceIncreasePageResponse(
         items=[_increase(item) for item in result.items],

@@ -123,6 +123,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
 | `GET` | `/v1/commercial/price-increases` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/analysis` | `read` |  |
+| `GET` | `/v1/commercial/price-increases/options` | `read` |  |
 | `POST` | `/v1/commercial/price-increases/upload` | `relaxed` |  |
 | `PATCH` | `/v1/commercial/price-increases/{increase_id}` | `relaxed` |  |
 | `GET` | `/v1/commercial/products` | `read` |  |

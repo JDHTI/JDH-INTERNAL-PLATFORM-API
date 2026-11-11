@@ -100,10 +100,25 @@ la siguiente construcción o refresco de la cotización.
 ## Análisis de alzas
 
 La tercera vista del maestro de productos responde cuánto subió cada referencia en un periodo,
-cada cuánto sube y cómo terminó su último cambio. El periodo por defecto es el **último año**;
-también se puede ver a **2 años** o **todo el histórico**. Las filas se fechan por la **fecha de
+cada cuánto sube y cómo terminó su último cambio. Las filas se fechan por la **fecha de
 incremento**, no por la de notificación (que trae errores de digitación y no dice cuándo se
 movió el costo).
+
+**Periodo.** Es una ventana de días, `since` a `until`, ambos incluidos:
+
+- **Predefinidos** (`period`): el **último año** por defecto, el **último mes** (`1m`), **2 años**
+  (`24m`) o **todo el histórico** (`all`). Van desde el mismo día de hace uno, doce o veinticuatro
+  meses hasta la última alza cargada, aunque rija después de hoy.
+- **Un mes o un rango:** `since` y `until` reemplazan a `period`. Un mes es su primer y último día
+  (la UI ofrece los meses con alzas). Cualquiera de los dos puede quedar abierto. Si el rango
+  termina antes de empezar, la API responde 422.
+- **Qué cuenta:** las alzas posteriores al periodo no cuentan. Las anteriores solo dan el costo con
+  el que empezó.
+- **Respuesta:** trae `since` y `until`, así la UI describe el periodo exacto.
+
+**Filtros.** La referencia (prefijo) o la descripción se escriben en `q`. El **proveedor** no se
+busca como texto: se elige de la lista de `GET /price-increases/options` y viaja como código
+(`supplier`). El histórico usa el mismo filtro.
 
 El acumulado está digitado a mano: las filas de una referencia no forman una cadena limpia (el
 costo anterior de una fila no siempre es el costo nuevo de la anterior) y `Variacion %` a veces
@@ -131,7 +146,7 @@ unidad contra costo por caja) que hay que revisar en el libro.
 **Velocidad.** La API lee el histórico fechado una vez por día y versión de los datos (filas y
 última modificación): cargar el libro o cambiar una fecha cambia la versión. Analiza cada periodo
 en un hilo aparte la primera vez que se pide y lo guarda en memoria del proceso
-(`AnalysisCache`). Filtrar, buscar, ordenar y paginar se hace sobre ese resultado. Con el
+(`AnalysisCache`, hasta 32 periodos por versión; sale el más viejo). Filtrar, buscar, ordenar y paginar se hace sobre ese resultado. Con el
 acumulado real, analizar todo el histórico toma unos 0,2 s y el último año 0,08 s. La tabla
 tiene índice por fecha de incremento (`0056_price_increase_dates`), que también ordena el
 histórico.
@@ -151,8 +166,9 @@ módulo (BI). En la API, leer está abierto a quien tenga cualquiera de los mód
 
 | Método y ruta | Uso |
 | --- | --- |
-| `GET /price-increases` | `q` (prefijo de referencia, descripción o proveedor), `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
-| `GET /price-increases/analysis` | `period` (`12m` por defecto, `24m`, `all`), `movement` (`subio`, `bajo`, `estable`), `q`, `sort` (`accumulated` por defecto, `increases`, `frequency`, `last_change`, `sku`), `order` (`desc` por defecto), `page`, `size` (≤ 100). Devuelve `items` (por referencia: `start_cost`, `end_cost`, `accumulated_pct`, `movement`, `increases`, `decreases`, `changes`, `frequency_days`, `last_increased_on`, `last_status`, `last_change_pct`, `is_pending` y los datos del maestro), `total`, `since` y `summary: {references, increases, typical_increase_pct, pending, movements}` de la búsqueda, antes del filtro de movimiento |
+| `GET /price-increases/options` | Los proveedores comerciales con referencias en el histórico (`code`, `name`, `references`, por nombre) y los meses con alzas desde el año 2000 (`month` «AAAA-MM», `changes`, `references`, el más reciente primero): los dropdowns de proveedor y de mes |
+| `GET /price-increases` | `q` (prefijo de referencia o descripción), `supplier` (código del proveedor comercial), `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
+| `GET /price-increases/analysis` | `period` (`12m` por defecto, `1m`, `24m`, `all`), o `since` y `until` (AAAA-MM-DD, ambos incluidos; reemplazan a `period`), `supplier`, `movement` (`subio`, `bajo`, `estable`), `q`, `sort` (`accumulated` por defecto, `increases`, `frequency`, `last_change`, `sku`), `order` (`desc` por defecto), `page`, `size` (≤ 100). Devuelve `items` (por referencia: `start_cost`, `end_cost`, `accumulated_pct`, `movement`, `increases`, `decreases`, `changes`, `frequency_days`, `last_increased_on`, `last_status`, `last_change_pct`, `is_pending` y los datos del maestro, con `supplier_code`), `total`, `since`, `until` (null: abierto) y `summary: {references, increases, typical_increase_pct, pending, movements}` de la búsqueda, antes del filtro de movimiento |
 | `POST /price-increases/upload` | Multipart `file`; `apply` (por defecto simulación). Devuelve `{applied, rows_read, inserted, updated, unchanged, duplicated, unknown_skus, pending, issues, issues_truncated}`. 403 sin permiso de gestión; 422 si el archivo no sirve |
 | `PATCH /price-increases/{id}` | `{system_updated_on: "AAAA-MM-DD" \| null}`. `null` la deja pendiente otra vez. 403 sin permiso de gestión; 422 antes del año 2000 (a mano es un error de digitación; el libro sí guarda fechas viejas) |
 

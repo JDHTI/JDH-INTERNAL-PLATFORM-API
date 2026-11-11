@@ -8,18 +8,22 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import and_, case, func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.errors import NotFoundError
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.domain.price_increase_analysis import AnalysisRow
 from app.modules.commercial_masters.domain.price_increases import (
+    EARLIEST_DATE,
     VALUE_FIELDS,
+    FilterOptions,
+    MonthOption,
     PriceIncrease,
     PriceIncreaseFilters,
     PriceIncreasePage,
     PriceIncreaseValues,
+    SupplierOption,
 )
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
@@ -104,13 +108,14 @@ class SqlAlchemyPriceIncreaseRepository:
             conditions.append(P.system_updated_on.is_(None))
         elif filters.pending is False:
             conditions.append(P.system_updated_on.is_not(None))
+        if filters.supplier:
+            conditions.append(ProductModel.commercial_supplier_code == filters.supplier)
         if filters.q and filters.q.strip():
             term = filters.q.strip()
             conditions.append(
                 or_(
                     P.sku.startswith(term, autoescape=True),
                     ProductModel.description.icontains(term, autoescape=True),
-                    CommercialSupplierModel.name.icontains(term, autoescape=True),
                 )
             )
         joined = P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(
@@ -197,6 +202,7 @@ class SqlAlchemyPriceIncreaseRepository:
                 ProductModel.description,
                 CommercialSupplierModel.name,
                 ProductModel.category,
+                ProductModel.commercial_supplier_code,
             )
             .select_from(
                 P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(
@@ -209,6 +215,42 @@ class SqlAlchemyPriceIncreaseRepository:
         async with self.database.session_factory() as session:
             rows = (await session.execute(statement)).all()
         return [AnalysisRow(*row) for row in rows]
+
+    async def filter_options(self) -> FilterOptions:
+        """The commercial suppliers with references in the history (by name) and the months
+        with increases taking effect (the latest first, from the year 2000)."""
+
+        references = func.count(func.distinct(P.sku))
+        suppliers = (
+            select(CommercialSupplierModel.code, CommercialSupplierModel.name, references)
+            .select_from(
+                P.__table__.join(ProductModel, ProductModel.sku == P.sku).join(
+                    CommercialSupplierModel,
+                    CommercialSupplierModel.code == ProductModel.commercial_supplier_code,
+                )
+            )
+            .group_by(CommercialSupplierModel.code, CommercialSupplierModel.name)
+            .order_by(CommercialSupplierModel.name, CommercialSupplierModel.code)
+        )
+        # A literal format, not a bound one: GROUP BY must repeat the very same expression.
+        month = func.to_char(P.increased_on, literal_column("'YYYY-MM'"))
+        months = (
+            select(month, func.count(), references)
+            .where(P.increased_on >= EARLIEST_DATE)
+            .group_by(month)
+            .order_by(month.desc())
+        )
+        async with self.database.session_factory() as session:
+            supplier_rows = (await session.execute(suppliers)).all()
+            month_rows = (await session.execute(months)).all()
+        return FilterOptions(
+            suppliers=tuple(
+                SupplierOption(code, name, int(count)) for code, name, count in supplier_rows
+            ),
+            months=tuple(
+                MonthOption(value, int(changes), int(count)) for value, changes, count in month_rows
+            ),
+        )
 
     async def set_system_date(
         self, increase_id: UUID, day: date | None, actor: str, now: datetime
