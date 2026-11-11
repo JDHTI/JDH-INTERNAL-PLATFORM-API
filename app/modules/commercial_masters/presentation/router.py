@@ -645,6 +645,101 @@ def _increase(item: PriceIncrease) -> PriceIncreaseResponse:
     )
 
 
+Movement = Literal["subio", "bajo", "estable"]
+
+
+class ReferenceAnalysisResponse(BaseModel):
+    """One reference over the period: how much it moved and how its last change ended."""
+
+    sku: str
+    description: str | None
+    supplier_name: str | None
+    category: str | None
+    # Rows of the period, of them how many went up and how many down.
+    changes: int
+    increases: int
+    decreases: int
+    # Cost just before the period and at its end (without the healthy-food tax when known).
+    start_cost: Decimal | None
+    end_cost: Decimal | None
+    # end_cost against start_cost (a fraction: 0.1025 is 10,25 %).
+    accumulated_pct: Decimal | None
+    # Up, down or flat by the sign of accumulated_pct.
+    movement: Movement | None
+    # Median days between consecutive increases; null with fewer than two.
+    frequency_days: int | None
+    last_increased_on: date
+    last_status: Movement | None
+    last_change_pct: Decimal | None
+    # The last change has no system update date: the quoter compares its new cost.
+    is_pending: bool
+
+
+class AnalysisSummaryResponse(BaseModel):
+    """The period: references with a change, increases, the typical (median) increase,
+    references pending in SIESA and references by movement (all of the search)."""
+
+    references: int
+    increases: int
+    typical_increase_pct: Decimal | None
+    pending: int
+    movements: dict[Movement, int]
+
+
+class AnalysisPageResponse(BaseModel):
+    items: list[ReferenceAnalysisResponse]
+    total: int
+    page: int
+    size: int
+    summary: AnalysisSummaryResponse
+    # First day of the period; null for the whole history.
+    since: date | None
+
+
+@router.get(
+    "/price-increases/analysis",
+    response_model=AnalysisPageResponse,
+    summary="How much each reference moved in a period",
+)
+@inject
+async def price_increase_analysis(
+    period: Literal["12m", "24m", "all"] = Query(default="12m"),
+    movement: Movement | None = Query(default=None),  # noqa: B008
+    q: str | None = Query(default=None, max_length=100),
+    sort: Literal["accumulated", "increases", "frequency", "last_change", "sku"] = Query(
+        default="accumulated"
+    ),
+    order: Literal["asc", "desc"] = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=PRICE_INCREASES_MAX_PAGE),
+    _: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> AnalysisPageResponse:
+    """Each reference with a change in the period (the last year by default; ``24m`` or
+    ``all``), dated by when the increase takes effect: its cost at the end against just
+    before the period, how many times it went up, how often, and its last change.
+    ``movement`` keeps the references that went up, down or stayed; ``summary`` covers the
+    search before that filter."""
+
+    result = await service.analysis(
+        period=period,
+        q=q,
+        movement=movement,
+        sort=sort,
+        descending=order == "desc",
+        page=page,
+        size=size,
+    )
+    return AnalysisPageResponse(
+        items=[ReferenceAnalysisResponse(**asdict(item)) for item in result.items],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+        summary=AnalysisSummaryResponse(**asdict(result.summary)),
+        since=result.since,
+    )
+
+
 @router.get(
     "/price-increases",
     response_model=PriceIncreasePageResponse,
