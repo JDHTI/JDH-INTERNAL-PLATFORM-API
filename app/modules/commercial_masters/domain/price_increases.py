@@ -9,10 +9,15 @@ A row whose ``system_updated_on`` is empty is an increase SIESA does not have ye
 compares its new cost with the supplier's quotation and the inventory cost (see
 :func:`pending_cost`).
 
-The workbook is the area's own and comes dirty: money as text in two formats (``$ 81.960,00``
-and ``$ 95.484``), Excel errors (``#N/D``), dates of 1900 (a number typed in a date cell),
-dashes for zero. :func:`parse_money` and :func:`parse_date` read what can be read; anything
-else leaves the field empty and is reported for the row.
+The workbook is the area's own and comes as it is kept: money as text in two formats
+(``$ 81.960,00`` and ``$ 95.484``), formula errors (``#N/D``, ``#¡REF!``, ``#¡VALOR!``),
+notes typed where a cost goes (``DESCODIFICADO``), dates of 1900 or with a mistyped year
+(``18/09/0206``), dashes for zero. All of it loads:
+
+- a formula error is a cell without a value: it stays empty, it is not a problem;
+- a note in a money column goes to the observations (:class:`CellNote`);
+- a date is kept as the file has it, however old (the history is the area's record);
+- only what is neither (a number that cannot be read) is reported for the row.
 """
 
 from __future__ import annotations
@@ -31,8 +36,10 @@ STATUSES = (UP, DOWN, FLAT)
 STATUS_LABELS = {UP: "Subió", DOWN: "Bajó", FLAT: "Estable"}
 _STATUS_WORDS = {"subio": UP, "bajo": DOWN, "estable": FLAT}
 
-# A date before this is a number typed in a date cell (Excel shows 1900-01-18), not a date.
+# The system update date set by hand in the portal cannot be older than this (a typo). The
+# workbook's dates are kept as they are.
 EARLIEST_DATE = date(2000, 1, 1)
+_DIGIT = re.compile(r"\d")
 _EXCEL_EPOCH = date(1899, 12, 30)
 _THOUSANDS = re.compile(r"^-?\d{1,3}(\.\d{3})+$")
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y")
@@ -43,6 +50,11 @@ class CellError(ValueError):
     """A cell that holds something other than its kind of value."""
 
 
+class CellNote(CellError):
+    """Words where a number goes (``CODIGO YA NO EXISTE``): a note about the row, kept in
+    its observations rather than reported."""
+
+
 def _text(value: Any) -> str:
     return str(value).replace("\xa0", " ").strip()
 
@@ -50,11 +62,13 @@ def _text(value: Any) -> str:
 def parse_money(value: Any) -> Decimal | None:
     """A money cell: ``53958``, ``"$ 81.960,00"``, ``"$ 95.484"`` or ``"$ 1,00"``.
 
-    Blank, ``-`` and ``$ -`` are empty. In text, a comma is the decimal separator and dots
-    group thousands; without a comma, dots in groups of three are thousands.
+    Blank, ``-``, ``$ -`` and Excel's formula errors (``#N/D``, ``#¡REF!``) are empty. In
+    text, a comma is the decimal separator and dots group thousands; without a comma, dots in
+    groups of three are thousands.
 
     Raises:
-        CellError: Text that is not a number (``#N/D``, ``CODIGO YA NO EXISTE``).
+        CellNote: Words without a digit (``CODIGO YA NO EXISTE``).
+        CellError: Text with digits that is not a number.
     """
 
     if value is None or isinstance(value, bool):
@@ -62,8 +76,10 @@ def parse_money(value: Any) -> Decimal | None:
     if isinstance(value, int | float | Decimal):
         return Decimal(str(value))
     text = _text(value).replace("$", "").replace(" ", "")
-    if text in ("", "-"):
+    if text in ("", "-") or text.startswith("#"):
         return None
+    if not _DIGIT.search(text):
+        raise CellNote(_text(value))
     if "," in text:
         text = text.replace(".", "").replace(",", ".")
     elif _THOUSANDS.match(text):
@@ -91,12 +107,11 @@ def parse_ratio(value: Any) -> Decimal | None:
 
 
 def parse_date(value: Any) -> date | None:
-    """A date cell: a date, an Excel serial number or ``dd/mm/aaaa`` text.
-
-    A date before 2000 is a number typed in a date cell: it is reported, not kept.
+    """A date cell: a date, an Excel serial number or ``dd/mm/aaaa`` text, kept as the file
+    has it (1900-01-18, or ``18/09/0206`` read as the year 206).
 
     Raises:
-        CellError: Text that is not a date, or a date before 2000.
+        CellError: Text that is not a date.
     """
 
     if value is None or (isinstance(value, str) and _text(value) in ("", "-")):
@@ -117,8 +132,6 @@ def parse_date(value: Any) -> date | None:
                 continue
         else:
             raise CellError(text)
-    if day < EARLIEST_DATE:
-        raise CellError(day.isoformat())
     return day
 
 
@@ -300,6 +313,7 @@ __all__ = [
     "STATUS_LABELS",
     "UP",
     "CellError",
+    "CellNote",
     "FileRow",
     "PriceIncrease",
     "PriceIncreaseFilters",

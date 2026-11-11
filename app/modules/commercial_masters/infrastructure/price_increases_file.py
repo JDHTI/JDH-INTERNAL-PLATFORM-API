@@ -23,6 +23,7 @@ from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.margins import normalize
 from app.modules.commercial_masters.domain.price_increases import (
     CellError,
+    CellNote,
     FileRow,
     PriceIncreaseValues,
     clean_text,
@@ -155,12 +156,18 @@ class PriceIncreaseFileReader:
     def _row(number: int, sku: str, row: tuple, columns: dict) -> FileRow:
         values: dict[str, Any] = {"sku": sku}
         problems: list[str] = []
+        notes: list[str] = []
         for column, (name, reader, label) in columns.items():
             cell = row[column] if column < len(row) else None
             try:
                 values[name] = reader(cell)
+            except CellNote as exc:
+                # "DESCODIFICADO" where the new cost goes says something about the row.
+                notes.append(f"{label}: {exc}")
             except CellError as exc:
                 problems.append(f"{label}: «{exc}» no se pudo leer")
+        if notes:
+            values["observations"] = "; ".join(filter(None, [values.get("observations"), *notes]))
         parsed = PriceIncreaseValues(**values)
         old = parsed.old_cost_with_tax if parsed.old_cost_with_tax is not None else parsed.old_cost
         new = parsed.effective_new_cost
