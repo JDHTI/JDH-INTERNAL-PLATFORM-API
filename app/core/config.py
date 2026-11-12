@@ -234,9 +234,12 @@ class Settings(BaseSettings):
     QUOTATIONS_DWH_TIMEOUT_SECONDS: float = 30.0
     # SIESA company written in the import file (``f_cia``).
     QUOTATIONS_SIESA_COMPANY: str = "001"
-    # List updates (module ``actualizacion-listas``): lists only the approvers' area (BI's
-    # analysts and leader) updates, comma separated. The rest, whoever manages the module.
-    LIST_UPDATES_RESTRICTED_LISTS: str = "001,002,003,004,005,009"
+    # The main lists, comma separated, exact SIESA codes: only module ``listas-principales``
+    # (locked to BI) updates them; ``actualizacion-listas`` takes every other list.
+    LIST_UPDATES_MAIN_LISTS: str = "1,001,002,003,004,005,009,1M,10T,10U,11N,10N,1DR,35P"
+    # Lists that pay the Coast liquor tax (the rest pay the national one), as SIESA carries
+    # it on 2026-11-12. The operation center cannot tell it: list 009 pays the national one.
+    LIQUOR_TAX_COAST_LISTS: str = "004,11N,22N,36J,46V"
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -671,10 +674,11 @@ class Settings(BaseSettings):
                 "max_lines": self.QUOTATIONS_MAX_LINES,
                 "dwh_timeout": self.QUOTATIONS_DWH_TIMEOUT_SECONDS,
                 "siesa_company": self.QUOTATIONS_SIESA_COMPANY,
-                "restricted_lists": tuple(
-                    code.strip().upper()
-                    for code in self.LIST_UPDATES_RESTRICTED_LISTS.split(",")
-                    if code.strip()
+                "main_lists": tuple(
+                    code.strip() for code in self.LIST_UPDATES_MAIN_LISTS.split(",") if code.strip()
+                ),
+                "coast_lists": tuple(
+                    code.strip() for code in self.LIQUOR_TAX_COAST_LISTS.split(",") if code.strip()
                 ),
             },
             "dwh_monitoring": {

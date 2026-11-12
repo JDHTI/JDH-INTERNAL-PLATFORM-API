@@ -43,11 +43,18 @@ class Module:
     description: str = ""
     # Whether switching it on in an area takes settings (which masters, for ``maestros``).
     configurable: bool = False
+    # Only its default areas may have it: an administrator cannot switch it on elsewhere.
+    locked: bool = False
 
     def in_area(self, area_slug: str) -> bool:
         """Whether the module is on by default in the area."""
 
         return EVERY_AREA in self.area_slugs or area_slug in self.area_slugs
+
+    def allowed_in(self, area_slug: str) -> bool:
+        """Whether the module may be switched on in the area (a locked one, only its own)."""
+
+        return not self.locked or self.in_area(area_slug)
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,22 @@ MODULES: tuple[Module, ...] = (
         "Actualización de listas",
         ("bi",),
         "Actualizaciones de listas de precios vigentes de SIESA",
+    ),
+    Module(
+        "listas-principales",
+        "Listas principales",
+        ("bi",),
+        "Listas generales, mayoristas y Market de SIESA, e impuesto licor; solo BI",
+        locked=True,
+    ),
+    # A permission without a screen of its own: ``manage`` validates the items of the main
+    # lists and the liquor tax changes, and loads them in SIESA (BI's analysts and leader).
+    Module(
+        "validacion-listas",
+        "Validación de listas principales",
+        ("bi",),
+        "Valida los ítems de las listas principales y el impuesto licor, y los carga en SIESA",
+        locked=True,
     ),
     Module(
         "validador-pedidos",
@@ -119,7 +142,7 @@ def is_enabled(area_slug: str, module_key: str, overrides: ModuleOverrides | Non
     """
 
     module = _BY_KEY.get(module_key)
-    if module is None:
+    if module is None or not module.allowed_in(area_slug):
         return False
     choice = (overrides or {}).get(area_slug, {}).get(module_key)
     return choice.is_enabled if choice is not None else module.in_area(area_slug)

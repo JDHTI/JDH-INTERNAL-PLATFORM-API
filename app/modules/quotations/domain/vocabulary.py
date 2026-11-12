@@ -7,9 +7,36 @@ from __future__ import annotations
 # the states and the files; a list update has no customer offer and no quantities.
 QUOTATION = "cotizacion"
 LIST_UPDATE = "lista"
-KINDS = (QUOTATION, LIST_UPDATE)
+# The update of one of the main lists (general, wholesale and Market): module
+# ``listas-principales``, locked to BI. ``actualizacion-listas`` never opens those lists.
+MAIN_LIST = "principal"
+KINDS = (QUOTATION, LIST_UPDATE, MAIN_LIST)
+# Kinds that update an existing price list: reviewed item by item, loaded from the staging.
+LIST_KINDS = (LIST_UPDATE, MAIN_LIST)
 # Module of the catalog that grants each kind.
-KIND_MODULES = {QUOTATION: "cotizador", LIST_UPDATE: "actualizacion-listas"}
+KIND_MODULES = {
+    QUOTATION: "cotizador",
+    LIST_UPDATE: "actualizacion-listas",
+    MAIN_LIST: "listas-principales",
+}
+KIND_LABELS = {
+    QUOTATION: "Cotizador",
+    LIST_UPDATE: "Actualización de listas",
+    MAIN_LIST: "Listas principales",
+}
+
+# Review of each item of a list update: the editor marks it ready, the validator validates
+# it. A validated item waits in the staging of its list until it is loaded in SIESA.
+UNMARKED = "sin_marcar"
+TO_VALIDATE = "por_validar"
+VALIDATED = "validada"
+REVIEW_STATUSES = (UNMARKED, TO_VALIDATE, VALIDATED)
+REVIEW_LABELS = {UNMARKED: "Sin marcar", TO_VALIDATE: "Por validar", VALIDATED: "Validada"}
+# Longest observation on an item.
+NOTE_LENGTH = 500
+# Months of list price versions an item's history reads (the DWH keeps them from 2026 for
+# the main lists: older versions are not in SIESA any more).
+PRICE_HISTORY_MONTHS = 24
 # Where a list update starts: a customer (its assigned list) or the list itself (by code or
 # name).
 SOURCE_CUSTOMER = "cliente"
@@ -18,8 +45,9 @@ SOURCES = (SOURCE_CUSTOMER, SOURCE_LIST)
 # Months of sales a list update looks back on for the last sale of each SKU.
 LIST_UPDATE_WINDOW = 12
 
-# Life of a price list: the advisor edits a draft and confirms it; the approver validates
-# it (the files are released and wait to be loaded in SIESA) and then marks it loaded.
+# Life of a quotation: the advisor edits a draft and confirms it; the approver validates
+# it (the files are released and wait to be loaded in SIESA) and then marks it loaded. A
+# list update stays a draft: its items are reviewed one by one (``REVIEW_STATUSES``).
 DRAFT = "borrador"
 PENDING = "pendiente_validacion"
 UPLOAD_PENDING = "pendiente_carga"

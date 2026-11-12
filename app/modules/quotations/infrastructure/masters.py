@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import Integer, cast, func, or_, select
+from sqlalchemy import Integer, cast, func, or_, select, update
 
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.domain.entities import clean_nit
@@ -111,6 +112,37 @@ class SqlAlchemyQuotationMasterSource:
                     if cost is not None:
                         result[values.sku] = cost
         return result
+
+    async def set_liquor_taxes(
+        self, values: Mapping[str, tuple[Decimal, Decimal, str | None]], actor: str
+    ) -> int:
+        """Write the liquor tax (Nacional, Costa and tax group) of products of the margin
+        master, as a bulk change loaded in SIESA left them; products not in the master are
+        skipped. The group is kept when none is given.
+
+        Returns:
+            int: Products written.
+        """
+
+        if not values:
+            return 0
+        now = datetime.now(UTC)
+        written = 0
+        async with self.database.session_factory() as session, session.begin():
+            for sku, (national, coast, group) in values.items():
+                fields: dict[str, object] = {
+                    "liquor_tax": national,
+                    "liquor_tax_coast": coast,
+                    "margin_updated_by": actor,
+                    "margin_updated_at": now,
+                }
+                if group:
+                    fields["liquor_tax_group"] = group
+                result = await session.execute(
+                    update(ProductModel).where(ProductModel.sku == sku).values(**fields)
+                )
+                written += result.rowcount or 0
+        return written
 
     async def supplier_names(self, codes: Sequence[str]) -> dict[str, str]:
         """Name of each commercial supplier code."""

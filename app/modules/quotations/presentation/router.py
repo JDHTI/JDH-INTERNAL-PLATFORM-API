@@ -42,6 +42,7 @@ from app.modules.quotations.domain.vocabulary import (
     ORIGIN_LABELS,
     PROBLEM_LABELS,
     REGIONAL_LABELS,
+    REVIEW_LABELS,
     STATUS_LABELS,
     WARNING_LABELS,
 )
@@ -49,14 +50,18 @@ from app.modules.quotations.domain.vocabulary import (
 router = APIRouter()
 # The quoter and the list updates share these endpoints; the service checks each
 # quotation against the module of its kind.
-_READ_GATE = Depends(require_permission("cotizador", "actualizacion-listas"))
+_READ_GATE = Depends(require_permission("cotizador", "actualizacion-listas", "listas-principales"))
 _service = Depends(Provide[ApplicationContainer.v1_container.quotation_service])
 _principal = Depends(get_current_principal)
-# ``cotizacion`` or ``lista``: which module a listing, search or permission check is for.
+# ``cotizacion``, ``lista`` or ``principal``: which module a listing, search or permission
+# check is for.
 _KIND = Query(default="cotizacion")
+_LIST_KIND = Query(default="lista")
 
 Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada"]
-Kind = Literal["cotizacion", "lista"]
+Kind = Literal["cotizacion", "lista", "principal"]
+ListKind = Literal["lista", "principal"]
+ReviewStatus = Literal["sin_marcar", "por_validar", "validada"]
 ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
 OfferScope = Literal["changed", "all"]
@@ -426,6 +431,15 @@ class LineResponse(BaseModel):
     offer_price: Decimal | None
     # Whether the customer offer carries the line (``offer_scope``; never an inactive one).
     in_offer: bool
+    # A list update: the item's review, who set it and when, the person's observation, and
+    # the load that took it to SIESA (``loaded`` true; it left the staging).
+    review_status: ReviewStatus = "sin_marcar"
+    review_label: str = "Sin marcar"
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    note: str | None = None
+    load_id: UUID | None = None
+    loaded: bool = False
 
 
 class SellerContactResponse(BaseModel):
@@ -668,6 +682,13 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
             )
             for item in line.support_options
         ],
+        review_status=line.review_status,  # type: ignore[arg-type]
+        review_label=REVIEW_LABELS.get(line.review_status, line.review_status),
+        reviewed_by=line.reviewed_by,
+        reviewed_at=line.reviewed_at,
+        note=line.note,
+        load_id=line.load_id,
+        loaded=line.load_id is not None,
     )
 
 
@@ -958,8 +979,11 @@ class PriceListResponse(BaseModel):
     is_active: bool
     # Active branches assigned to it (SIESA counts branches, not NITs).
     active_branches: int | None
-    # The regional base lists (001 to 009): only BI's analysts and leader update them.
+    # It belongs to the other module: a main list searched from ``lista``, or any other list
+    # from ``principal``. It cannot be chosen here.
     restricted: bool
+    # One of the main lists (module ``listas-principales``).
+    main: bool = False
 
 
 class PriceListPageResponse(BaseModel):
@@ -976,6 +1000,8 @@ class ListUpdateRequest(BaseModel):
 
     customer_nit: str | None = Field(default=None, max_length=30)
     price_list_id: str | None = Field(default=None, max_length=3)
+    # ``lista`` (Actualización de listas) or ``principal`` (Listas principales).
+    kind: ListKind = "lista"
 
 
 # Declared before ``/{quotation_id}`` so the paths are not taken for an id.
@@ -988,12 +1014,14 @@ class ListUpdateRequest(BaseModel):
 @inject
 async def price_lists(
     q: str | None = Query(default=None, max_length=80),
+    kind: ListKind = _LIST_KIND,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> PriceListPageResponse:
     """Lists whose code is ``q`` or whose name contains it (accents and case ignored),
     active and most used first; at most 50, in one page. Names repeat: each comes with its
-    code."""
+    code. With ``kind=principal`` and no ``q``, every main list. ``restricted`` marks the
+    lists of the other module."""
 
     items = [
         PriceListResponse(
@@ -1001,9 +1029,10 @@ async def price_lists(
             name=item.name,
             is_active=item.is_active,
             active_branches=item.active_branches,
-            restricted=service.is_restricted_list(item.code),
+            restricted=not service.list_allowed(kind, item.code),
+            main=service.is_main_list(item.code),
         )
-        for item in await service.price_lists(principal, q)
+        for item in await service.price_lists(principal, q, kind)
     ]
     return PriceListPageResponse(items=items, total=len(items), page=1, size=max(len(items), 1))
 
@@ -1027,7 +1056,10 @@ async def create_list_update(
 
     return _detail(
         await service.create_list_update(
-            principal, customer_nit=body.customer_nit, price_list_id=body.price_list_id
+            principal,
+            customer_nit=body.customer_nit,
+            price_list_id=body.price_list_id,
+            kind=body.kind,
         )
     )
 

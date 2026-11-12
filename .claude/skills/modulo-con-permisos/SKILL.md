@@ -12,7 +12,8 @@ falta uno, el módulo aparece en el menú y responde 403, o lo contrario.
 
 Contexto: [`docs/permissions.md`](../../../docs/permissions.md) (roles, `read` y `manage`,
 módulos por área) y [`docs/module-guideline.md`](../../../docs/module-guideline.md) (estructura).
-El ejemplo completo es `actualizacion-listas` (PR de la API y de la UI, 2026-11-12).
+El ejemplo completo es `actualizacion-listas` (PR de la API y de la UI, 2026-11-12). El de un
+módulo bloqueado con su permiso de validación aparte es `listas-principales` + `validacion-listas`.
 
 ## API
 
@@ -23,6 +24,12 @@ El ejemplo completo es `actualizacion-listas` (PR de la API y de la UI, 2026-11-
      panel, sin desplegar.
    - No necesita migración: un permiso guardado sobre un módulo que no está en el catálogo no da
      nada.
+   - **Bloqueado** (`locked=True`): solo vive en sus áreas por defecto y el panel no lo enciende en
+     otra. Úsalo cuando un módulo nunca debe salir de un área, como `listas-principales` (BI).
+   - **Permiso sin pantalla**: cuando dentro de un área hay que separar quién edita de quién
+     valida, y los dos son del mismo área, crea una clave aparte que solo da `manage`
+     (`validacion-listas`) y úsala como política de validación. `read` y `manage` de un solo
+     módulo no alcanzan para esa diferencia.
 2. **Gate de lectura.** Usa `require_permission("<clave>")`
    (`app/modules/areas/presentation/dependencies.py`).
    - Va en el router, o por endpoint si el router expone un `GET /permissions`. Ese endpoint queda
@@ -40,9 +47,9 @@ El ejemplo completo es `actualizacion-listas` (PR de la API y de la UI, 2026-11-
      esa área. Así se define quién valida.
    - El servicio pregunta `is_manager` (manage) y `can_read` (read). Los administradores siempre
      pasan y el moderador solo lee.
-4. **Reglas por registro.** Van en el servicio: lo propio contra lo de todos, o listas
-   restringidas a quien valida (`LIST_UPDATES_RESTRICTED_LISTS`). Toda regla configurable va en
-   `app/core/config.py` y en `.env.example`.
+4. **Reglas por registro.** Van en el servicio: lo propio contra lo de todos, o qué registros le
+   tocan a cada módulo (las listas principales, `LIST_UPDATES_MAIN_LISTS`, solo las abre
+   `listas-principales`). Toda regla configurable va en `app/core/config.py` y en `.env.example`.
 5. **Motor compartido.** Si el módulo reutiliza el motor de otro, distingue los registros con una
    columna (`kind`) y elige la política por tipo en cada operación: leer el registro primero y
    luego revisar el permiso de su tipo. Filtra los listados por tipo, de modo que el permiso de

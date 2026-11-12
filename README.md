@@ -61,7 +61,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   arma la lista de precios de un cliente desde el DWH, la cruza con el maestro de márgenes y
   de apoyos y genera el Excel y el plano de SIESA; ver [`docs/cotizador.md`](docs/cotizador.md).
   Con el mismo motor, BI actualiza una lista vigente de SIESA (BI → Actualización de listas);
-  ver [`docs/actualizacion-listas.md`](docs/actualizacion-listas.md).
+  ver [`docs/actualizacion-listas.md`](docs/actualizacion-listas.md). Las listas principales y el
+  impuesto licor de todas las listas van por un módulo bloqueado a BI (BI → Listas principales);
+  ver [`docs/listas-principales.md`](docs/listas-principales.md).
 - El directorio de empleados vive en `/api/v1/directory` (lectura para toda persona
   autenticada) y `/api/v1/directory/admin` (administradores): copia nocturna de Entra
   que además crea los usuarios de la plataforma; ver [`docs/directory.md`](docs/directory.md).

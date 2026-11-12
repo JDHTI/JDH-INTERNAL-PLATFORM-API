@@ -422,8 +422,14 @@ class AreaService:
 
         self._require_admin(principal)
         area = await self._get_area(slug)
-        if get_module(module) is None:
+        found = get_module(module)
+        if found is None:
             raise NotFoundError(f"El módulo {module} no existe")
+        if is_enabled_ and not found.allowed_in(area.slug):
+            raise InvalidInputError(
+                f"El módulo {found.label} está bloqueado: solo se activa en "
+                f"{', '.join(found.area_slugs)}"
+            )
         cleaned = clean_module_config(module, config)
         overrides = await self.repository.list_module_overrides()
         before = {

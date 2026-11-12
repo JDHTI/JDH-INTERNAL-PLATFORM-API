@@ -61,7 +61,9 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
-| bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, exportar | crear y editar actualizaciones de cualquier lista salvo las restringidas. Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar, devolver, marcar como cargada y actualizar las listas restringidas (`LIST_UPDATES_RESTRICTED_LISTS`, por defecto 001, 002, 003, 004, 005 y 009) |
+| bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, staging y cargas | crear y editar actualizaciones de cualquier lista **salvo las principales** y marcar ítems «Por validar». Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar ítems, descargar el staging y marcarlo cargado |
+| bi (bloqueado) | `listas-principales` | actualizaciones de las listas principales (`LIST_UPDATES_MAIN_LISTS`), staging, cargas e impuesto licor | crear y editar actualizaciones de esas listas, marcar ítems «Por validar» y proponer cambios del impuesto licor |
+| bi (bloqueado) | `validacion-listas` | — (no tiene pantalla) | validar los ítems de las listas principales y los cambios del impuesto licor, descargar sus archivos y marcarlos cargados (analistas y líder de BI) |
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
@@ -71,9 +73,15 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 `/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador`, `actualizacion-listas` y
 `validador-pedidos`, porque esas pantallas buscan proveedores y productos.
 
-`/quotations/*` lo abren `cotizador` y `actualizacion-listas`: comparten los endpoints, y el
-servicio revisa cada cotización contra el módulo de su tipo (`kind`), así que tener uno no abre
-las del otro.
+`/quotations/*` lo abren `cotizador`, `actualizacion-listas` y `listas-principales`: comparten
+los endpoints, y el servicio revisa cada cotización contra el módulo de su tipo (`kind`), así que
+tener uno no abre las de los otros. `/price-list-updates/*` (revisión por ítem, staging, cargas e
+impuesto licor) lo abren `actualizacion-listas` y `listas-principales`.
+
+**Módulo bloqueado** (`locked=True` en el catálogo): solo se enciende en sus áreas por defecto. El
+panel no lo deja encender en otra (`set_area_module` responde 422) y una fila guardada en otra área
+no cuenta. `listas-principales` y `validacion-listas` están bloqueados a BI, así que un comercial
+nunca los recibe, aunque tenga `actualizacion-listas`.
 
 **Agregar un módulo** sigue la skill del proyecto
 [`modulo-con-permisos`](../.claude/skills/modulo-con-permisos/SKILL.md): catálogo, gate, política,

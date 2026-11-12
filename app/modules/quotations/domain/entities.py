@@ -467,6 +467,25 @@ class QuotationLine:
     last_sale_cost: Decimal | None = None
     # A list update: every support of the list's customers on the SKU, with its prices.
     support_options: tuple[SupportOption, ...] = ()
+    # A list update's review of the item (``sin_marcar``, ``por_validar``, ``validada``), who
+    # set it last and when.
+    review_status: str = vocabulary.UNMARKED
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    # The person's observation on the item.
+    note: str | None = None
+    # The load that took the validated price to SIESA; ``None`` while it waits in the staging.
+    load_id: UUID | None = None
+
+    @property
+    def is_staged(self) -> bool:
+        """Validated with a price and not loaded yet: it waits in its list's staging."""
+
+        return (
+            self.review_status == vocabulary.VALIDATED
+            and self.load_id is None
+            and self.new_price is not None
+        )
 
     @property
     def is_local(self) -> bool:
@@ -567,7 +586,9 @@ class Quotation:
 
     @property
     def is_list_update(self) -> bool:
-        return self.kind == vocabulary.LIST_UPDATE
+        """The update of an existing list (``lista`` or ``principal``)."""
+
+        return self.kind in vocabulary.LIST_KINDS
 
     @property
     def valid_until(self) -> date | None:
@@ -584,6 +605,85 @@ class QuotationDetail:
 
     quotation: Quotation
     lines: tuple[QuotationLine, ...]
+
+
+@dataclass(frozen=True)
+class StagedItem:
+    """A validated item waiting in its list's staging, with the update it belongs to."""
+
+    quotation_id: UUID
+    quotation_version: int
+    # The customer's name for an update started from a customer, else the list's name.
+    quotation_name: str | None
+    price_list_id: str
+    price_list_name: str | None
+    line: QuotationLine
+
+
+@dataclass(frozen=True)
+class PriceListLoad:
+    """Prices of one list's staging loaded in SIESA: what went and who loaded it."""
+
+    id: UUID
+    kind: str
+    price_list_id: str
+    price_list_name: str | None
+    activation_date: date
+    line_count: int
+    # ``{"sku", "unit", "price", "tax_key", "tax_amount", "quotation_id", "line_id"}`` each.
+    rows: tuple[dict[str, Any], ...]
+    created_by: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class StockRow:
+    """Stock of a SKU in one warehouse (``consumo.inventario_fecha``, the morning's photo)."""
+
+    sku: str
+    warehouse: str
+    warehouse_name: str | None
+    center_code: str | None
+    on_hand: Decimal
+    available: Decimal | None
+    snapshot_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class PriceVersion:
+    """A version of a SKU's price on a list, per inventory unit (``precios_lista_historico``);
+    ``valid_to`` is ``None`` for the one in force."""
+
+    valid_from: date
+    valid_to: date | None
+    price: Decimal
+    value_tax_amount: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class MonthlySale:
+    """What a SKU sold for in one month: net price per inventory unit and quantity."""
+
+    month: date
+    price: Decimal
+    quantity: Decimal
+
+
+@dataclass(frozen=True)
+class LineInsight:
+    """What an item's detail shows beyond the line: stock by warehouse, the list price's
+    history and the monthly sale price to the list's customers.
+
+    ``sales_read`` is false when the warehouse did not answer the sales in time.
+    """
+
+    sku: str
+    warehouses: tuple[str, ...]
+    stock: tuple[StockRow, ...]
+    history: tuple[PriceVersion, ...]
+    sales: tuple[MonthlySale, ...]
+    sales_scope: str
+    sales_read: bool = True
 
 
 @dataclass(frozen=True)
