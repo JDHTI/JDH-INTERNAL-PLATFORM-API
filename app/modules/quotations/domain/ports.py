@@ -17,7 +17,9 @@ from app.modules.quotations.domain.entities import (
     CustomerPage,
     ItemInfo,
     LastSale,
+    ListItem,
     ListPrice,
+    PriceListInfo,
     ProductMaster,
     Quotation,
     QuotationDetail,
@@ -58,6 +60,22 @@ class WarehouseSource(Protocol):
     async def seller_contact(self, code: str) -> SellerContact | None: ...
 
     async def billing_centers(self) -> list[BillingCenter]: ...
+
+    async def price_lists(self, q: str, limit: int = 50) -> list[PriceListInfo]: ...
+
+    async def price_list(self, code: str) -> PriceListInfo | None: ...
+
+    async def list_branches(self, price_list_id: str) -> list[Branch]: ...
+
+    async def list_items(self, price_list_id: str) -> list[ListItem]: ...
+
+    async def list_last_sales(
+        self,
+        skus: Sequence[str],
+        months: int,
+        customer_keys: Sequence[str] | None,
+        timeout: float | None = None,
+    ) -> dict[str, LastSale]: ...
 
 
 class MasterSource(Protocol):
@@ -103,6 +121,7 @@ class QuotationRepository(Protocol):
         page: int,
         size: int,
         visible_to: tuple[UUID, Sequence[str]] | None = None,
+        kind: str = "cotizacion",
     ) -> QuotationPage: ...
 
     async def save(

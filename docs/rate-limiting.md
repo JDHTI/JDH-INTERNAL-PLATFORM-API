@@ -290,7 +290,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/quotations` | `relaxed` |  |
 | `GET` | `/v1/quotations/billing-centers` | `read` |  |
 | `GET` | `/v1/quotations/customers` | `read` |  |
+| `POST` | `/v1/quotations/list-updates` | `relaxed` |  |
 | `GET` | `/v1/quotations/permissions` | `read` |  |
+| `GET` | `/v1/quotations/price-lists` | `read` |  |
 | `GET` | `/v1/quotations/rules` | `read` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}` | `read` |  |

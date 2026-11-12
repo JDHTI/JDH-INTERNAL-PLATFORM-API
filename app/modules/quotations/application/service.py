@@ -6,13 +6,19 @@ import asyncio
 import logging
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import UUID, uuid4
 
-from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import (
+    ConflictError,
+    DependencyUnavailableError,
+    ForbiddenError,
+    InvalidInputError,
+    NotFoundError,
+)
 from app.modules.commercial_masters.domain.entities import clean_nit
 from app.modules.commercial_masters.domain.margins import channel_field
 from app.modules.identity.domain.principal import Principal
@@ -22,12 +28,14 @@ from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
     BillingCenter,
+    Branch,
     CostInfo,
     CustomerContext,
     CustomerPage,
     ItemInfo,
     LastSale,
     ListPrice,
+    PriceListInfo,
     Quotation,
     QuotationDetail,
     QuotationLine,
@@ -60,6 +68,11 @@ from app.modules.quotations.domain.ports import (
 logger = logging.getLogger(__name__)
 MAX_PAGE_SIZE = 100
 MAX_PRICE = Decimal(10) ** 15
+# Most SKUs of a list update: list 1 (GENERAL) has about 7,600.
+LIST_MAX_LINES = 10_000
+# A list with more active branches than this reads the whole company's last sales: reading
+# by its 28 thousand branches (list 1) passed 20 s.
+LIST_SALES_BRANCH_LIMIT = 1_000
 # SKUs one paste may carry.
 MAX_PASTED_SKUS = 500
 # Excel columns arrive one per line; lists may use commas, semicolons, tabs or spaces.
@@ -136,11 +149,54 @@ class _Entry:
     line_id: UUID
     sale: LastSale | None = None
     item: ItemInfo | None = None
+    # A list update's line: ``lista`` or ``agregado``.
+    origin: str | None = None
 
 
-def _entry_of(line: QuotationLine) -> _Entry:
+@dataclass(frozen=True)
+class _Audience:
+    """Who a list update serves: the NITs whose supports count and the branches whose sales
+    give the last sale (``None``: the whole company, for a list of thousands of branches)."""
+
+    nits: tuple[str, ...]
+    sale_keys: tuple[str, ...] | None
+
+
+def _list_entry_of(line: QuotationLine) -> _Entry:
+    """A list update's stored line as an entry: its item and the last sale it was built with
+    (the list price is read again)."""
+
+    item = ItemInfo(
+        sku=line.sku,
+        description=line.description,
+        unit=line.unit,
+        vat_pct=line.vat_pct,
+        supplier_code=line.supplier_code,
+        pack_factor=line.pack_factor,
+        category=line.category,
+    )
+    sale = None
+    if line.last_sale_date is not None and line.last_sale_price is not None:
+        sale = LastSale(
+            sku=line.sku,
+            sale_date=line.last_sale_date,
+            document=line.last_document,
+            sale_unit=line.last_sale_unit,
+            quantity=line.last_quantity or Decimal(1),
+            gross_price=line.last_gross_price or line.last_sale_price,
+            net_price=line.last_sale_price,
+            discount_pct=line.last_discount_pct,
+            sales_in_window=line.sales_in_window,
+            unit_cost=line.last_sale_cost,
+        )
+    return _Entry(line.sku, line.position, line.id, sale=sale, item=item, origin=line.origin)
+
+
+def _entry_of(line: QuotationLine, for_list: bool = False) -> _Entry:
     """Rebuild a stored line's source, to price it again without asking for its last sale."""
 
+    if for_list:
+        return _list_entry_of(line)
     if line.origin == vocabulary.HISTORY and line.last_price is not None:
         sale = LastSale(
             sku=line.sku,
@@ -257,6 +313,9 @@ class QuotationService:
         sales: SalesScopeResolver | None = None,
         offer_writer: OfferWriter | None = None,
         lines_writer: LinesWriter | None = None,
+        list_managers: ManagerPolicy | None = None,
+        list_approvers: ManagerPolicy | None = None,
+        restricted_lists: Sequence[str] = (),
     ) -> None:
         """Create the service.
 
@@ -277,8 +336,18 @@ class QuotationService:
                 Without one every reader sees every customer and quotation.
             offer_writer (OfferWriter | None): Writes the offer the customer receives.
             lines_writer (LinesWriter | None): Writes BI's workbook of lines and costs.
+            list_managers (ManagerPolicy | None): Who updates price lists (module
+                ``actualizacion-listas``); without one only administrators do.
+            list_approvers (ManagerPolicy | None): Who validates list updates and edits the
+                restricted lists; without one only administrators do.
+            restricted_lists (Sequence[str]): Lists only ``list_approvers`` update (the
+                regional base lists 001 to 009).
         """
 
+        self.list_managers = list_managers
+        self.list_approvers = list_approvers
+        self.list_max_lines = LIST_MAX_LINES
+        self.restricted_lists = frozenset(code.strip().upper() for code in restricted_lists)
         self.repository = repository
         self.offer_writer = offer_writer
         self.lines_writer = lines_writer
@@ -296,64 +365,115 @@ class QuotationService:
 
     # ------------------------------------------------------------ access
 
-    async def can_manage(self, principal: Principal) -> bool:
-        """Whether the caller quotes: Comercial, and BI too (it validates and also quotes)."""
+    def _policies(self, kind: str) -> tuple[ManagerPolicy | None, ManagerPolicy | None]:
+        """Who manages and who validates each kind (module ``cotizador`` or
+        ``actualizacion-listas``)."""
 
-        if await self.managers.is_manager(principal):
-            return True
-        return self.approvers is not None and await self.approvers.is_manager(principal)
+        if kind == vocabulary.LIST_UPDATE:
+            return self.list_managers, self.list_approvers
+        if kind != vocabulary.QUOTATION:
+            raise InvalidInputError("Tipo desconocido: cotizacion o lista")
+        return self.managers, self.approvers
 
-    async def can_validate(self, principal: Principal) -> bool:
+    @staticmethod
+    def _noun(kind: str) -> str:
+        return "la actualización" if kind == vocabulary.LIST_UPDATE else "la cotización"
+
+    async def can_manage(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
+        """Whether the caller quotes: Comercial, and BI too (it validates and also quotes).
+        For list updates, whoever manages ``actualizacion-listas``."""
+
+        managers, approvers = self._policies(kind)
         if principal.is_platform_admin:
             return True
-        return self.approvers is not None and await self.approvers.is_manager(principal)
+        if managers is not None and await managers.is_manager(principal):
+            return True
+        return approvers is not None and await approvers.is_manager(principal)
 
-    async def _sees_all(self, principal: Principal) -> bool:
+    async def can_validate(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
+        _, approvers = self._policies(kind)
+        if principal.is_platform_admin:
+            return True
+        return approvers is not None and await approvers.is_manager(principal)
+
+    async def _sees_all(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
         """Validators and moderators read every quotation; anyone else only the ones they made."""
 
-        return principal.is_moderator or await self.can_validate(principal)
+        return principal.is_moderator or await self.can_validate(principal, kind)
 
     async def _require_owner_or_validator(
         self, principal: Principal, quotation: Quotation, action: str
     ) -> None:
-        if quotation.created_by_id == principal.user_id or await self.can_validate(principal):
+        if quotation.created_by_id == principal.user_id or await self.can_validate(
+            principal, quotation.kind
+        ):
             return
-        raise ForbiddenError(f"Solo quien creó la cotización puede {action}")
+        raise ForbiddenError(f"Solo quien creó {self._noun(quotation.kind)} puede {action}")
 
-    async def _require_manager(self, principal: Principal) -> None:
-        if not await self.can_manage(principal):
+    async def _require_manager(
+        self, principal: Principal, kind: str = vocabulary.QUOTATION
+    ) -> None:
+        if not await self.can_manage(principal, kind):
+            if kind == vocabulary.LIST_UPDATE:
+                raise ForbiddenError("No tienes permiso para actualizar listas de precios")
             raise ForbiddenError("No tienes permiso para usar el cotizador")
 
-    async def can_read(self, principal: Principal) -> bool:
+    async def can_read(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
         """Read on the quoter in either area (comercial quotes, BI validates)."""
 
-        if await self.managers.can_read(principal):
+        managers, approvers = self._policies(kind)
+        if principal.is_platform_admin:
             return True
-        return self.approvers is not None and await self.approvers.can_read(principal)
+        if managers is not None and await managers.can_read(principal):
+            return True
+        return approvers is not None and await approvers.can_read(principal)
 
-    async def _require_reader(self, principal: Principal) -> None:
-        if not await self.can_read(principal):
+    async def _require_reader(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> None:
+        if not await self.can_read(principal, kind):
+            if kind == vocabulary.LIST_UPDATE:
+                raise ForbiddenError(
+                    "No tienes permiso para consultar las actualizaciones de listas"
+                )
             raise ForbiddenError("No tienes permiso para consultar el cotizador")
 
-    async def permissions(self, principal: Principal) -> Permissions:
+    def is_restricted_list(self, price_list_id: str | None) -> bool:
+        """A regional base list (001 to 009): only BI's analysts and leader update it."""
+
+        return (price_list_id or "").strip().upper() in self.restricted_lists
+
+    async def _check_restricted(self, principal: Principal, quotation: Quotation) -> None:
+        """A list update of a restricted list is only touched by its validators (BI)."""
+
+        if not quotation.is_list_update or not self.is_restricted_list(quotation.price_list_id):
+            return
+        if not await self.can_validate(principal, vocabulary.LIST_UPDATE):
+            raise ForbiddenError(
+                f"La lista {quotation.price_list_id} solo la actualizan los analistas y el líder "
+                "de BI"
+            )
+
+    async def permissions(
+        self, principal: Principal, kind: str = vocabulary.QUOTATION
+    ) -> Permissions:
         """Whether the caller may quote or validate, and the salesperson linked by e-mail.
 
-        A warehouse outage never hides the page: the seller is just unknown.
+        A warehouse outage never hides the page: the seller is just unknown. A list update
+        has no salesperson.
         """
 
-        can_manage = await self.can_manage(principal)
+        can_manage = await self.can_manage(principal, kind)
         seller = None
-        if can_manage:
+        if can_manage and kind == vocabulary.QUOTATION:
             try:
                 sellers = await self.warehouse.sellers(principal.email)
             except Exception:  # noqa: BLE001 - the link is a convenience
                 sellers = []
             seller = sellers[0] if sellers else None
-        scope = await self._scope(principal)
+        scope = await self._scope(principal) if kind == vocabulary.QUOTATION else None
         return Permissions(
             can_manage,
             seller,
-            await self.can_validate(principal),
+            await self.can_validate(principal, kind),
             scope.scope if scope is not None else None,
         )
 
@@ -374,12 +494,22 @@ class QuotationService:
     async def _check_visible(self, principal: Principal, quotation: Quotation) -> None:
         """Outside validation, each person reaches only the quotations they created."""
 
-        if quotation.created_by_id == principal.user_id or await self._sees_all(principal):
+        if quotation.created_by_id == principal.user_id or await self._sees_all(
+            principal, quotation.kind
+        ):
             return
+        if quotation.is_list_update:
+            raise ForbiddenError("Solo puedes ver las actualizaciones que creaste")
         raise ForbiddenError("Solo puedes ver las cotizaciones que creaste")
 
     async def customers(
-        self, principal: Principal, scope: str, q: str | None, page: int, size: int
+        self,
+        principal: Principal,
+        scope: str,
+        q: str | None,
+        page: int,
+        size: int,
+        kind: str = vocabulary.QUOTATION,
     ) -> tuple[CustomerPage, bool]:
         """Customers to quote: the caller's portfolio (``mine``) or all.
 
@@ -391,6 +521,11 @@ class QuotationService:
             tuple[CustomerPage, bool]: The page and whether the caller is linked to a seller.
         """
 
+        if kind == vocabulary.LIST_UPDATE:
+            # A list update is about the list, not a portfolio: every customer can be searched.
+            await self._require_manager(principal, kind)
+            _page(page, size)
+            return await self.masters.customers(None, q, page, size), False
         await self._require_manager(principal)
         _page(page, size)
         sales = await self._scope(principal)
@@ -429,12 +564,19 @@ class QuotationService:
         return context
 
     async def _price(
-        self, context: CustomerContext, entries: Sequence[_Entry]
+        self,
+        context: CustomerContext,
+        entries: Sequence[_Entry],
+        audience: _Audience | None = None,
     ) -> tuple[list[QuotationLine], date | None]:
         """Price SKUs (from the sales window or added) keeping each entry's id and position.
 
         The product copy goes first (it gives the supplier of each SKU); then the warehouse
         reads and the supports are fetched at the same time.
+
+        With an ``audience`` (a list update) each line is compared against the list's price
+        in force (a placeholder of $1 or less is no price), the supports are those of every
+        customer of the list, and each entry carries its last sale.
         """
 
         if not entries:
@@ -466,12 +608,13 @@ class QuotationService:
             )
             return pricing.highest_cost(dict(zip(setup.plans, rows, strict=True)))
 
+        nits = list(audience.nits) if audience is not None else [context.nit]
         costs, prices, taxes, agreements, scopes, names, increases = await asyncio.gather(
             costs_by_center(),
             list_prices(),
             self.warehouse.value_tax_keys(skus),
-            self.supports.agreements(codes, skus, [context.nit]),
-            self.supports.customers([context.nit]),
+            self.supports.agreements(codes, skus, nits),
+            self.supports.customers(nits),
             self.masters.supplier_names(codes),
             self.masters.pending_increases(skus),
         )
@@ -479,6 +622,43 @@ class QuotationService:
         lines: list[QuotationLine] = []
         for entry in entries:
             sku, supplier = entry.sku, supplier_of(entry.sku)
+            if audience is not None:
+                listed = prices.get(sku)
+                base = listed.price if listed is not None else None
+                placeholder = base is not None and base <= 1
+                line = rules.build_line(
+                    entry.position,
+                    sku,
+                    entry.sale,
+                    item=entry.item,
+                    nit=context.nit,
+                    channel=context.channel,
+                    scope=None,
+                    product=products.get(sku),
+                    supplier_name=names.get(supplier or ""),
+                    cost=costs.get(sku),
+                    list_price=listed,
+                    tax=taxes.get(sku),
+                    agreements=[
+                        item
+                        for item in agreements
+                        if item.supplier_code in (supplier, None)
+                        and item.product_sku in (sku, None)
+                    ],
+                    policy=self.policy,
+                    day=today,
+                    line_id=entry.line_id,
+                    price_family=setup.family,
+                    regional=setup.regional,
+                    increase=increases.get(sku),
+                    list_scopes=scopes,
+                    base_price=None if placeholder else base,
+                    origin=entry.origin or vocabulary.ADDED,
+                )
+                if placeholder:
+                    line = replace(line, problems=(*line.problems, "precio_marcador"))
+                lines.append(line)
+                continue
             lines.append(
                 rules.build_line(
                     entry.position,
@@ -602,7 +782,8 @@ class QuotationService:
     async def billing_centers(self, principal: Principal) -> list[BillingCenter]:
         """Active operation centers a quotation can be billed and priced from, by code."""
 
-        await self._require_reader(principal)
+        if not await self.can_read(principal, vocabulary.LIST_UPDATE):
+            await self._require_reader(principal)
         return sorted(await self.warehouse.billing_centers(), key=lambda item: item.code)
 
     async def _center(self, code: str | None) -> BillingCenter | None:
@@ -746,13 +927,307 @@ class QuotationService:
         )
         return await self.repository.create(quotation, lines)
 
+    # ------------------------------------------------------------ list updates
+
+    async def price_lists(self, principal: Principal, q: str | None) -> list[PriceListInfo]:
+        """SIESA lists to update, by code or by part of the name (at most 50).
+
+        Each one says whether the caller may update it: the restricted lists only BI does.
+        """
+
+        await self._require_manager(principal, vocabulary.LIST_UPDATE)
+        text = (q or "").strip()
+        if len(text) < 1:
+            return []
+        return await self.warehouse.price_lists(text[:80])
+
+    async def _list_branches(self, code: str) -> list[Branch]:
+        return await self.warehouse.list_branches(code)
+
+    def _audience(self, branches: Sequence[Branch], customer_nit: str | None = None) -> _Audience:
+        """The NITs (supports) and the branch keys (last sale) of a list update.
+
+        Supports count for every active customer of the list. The last sale is the one to
+        the customer it started from, or to the list's active branches; a list with more
+        than :data:`LIST_SALES_BRANCH_LIMIT` of them reads the whole company's (reading by
+        28 thousand branches passed 20 s).
+        """
+
+        active = [branch for branch in branches if branch.is_active] or list(branches)
+        nits = tuple(sorted({branch.nit for branch in active if branch.nit}))
+        if customer_nit:
+            keys = tuple(
+                branch.customer_key
+                for branch in branches
+                if branch.nit == customer_nit and branch.customer_key
+            )
+            return _Audience(nits, keys)
+        keys = tuple(branch.customer_key for branch in active if branch.customer_key)
+        if len(keys) > LIST_SALES_BRANCH_LIMIT:
+            return _Audience(nits, None)
+        return _Audience(nits, keys)
+
+    async def _list_sales(
+        self, skus: Sequence[str], audience: _Audience
+    ) -> tuple[dict[str, LastSale], bool]:
+        """The last sale of each SKU to the audience, and whether it could be read.
+
+        The warehouse can take long on this read; the list update is still built without
+        it (``ultima_venta_no_leida``) and a refresh tries again.
+        """
+
+        if not skus or (audience.sale_keys is not None and not audience.sale_keys):
+            return {}, True
+        try:
+            sales = await self.warehouse.list_last_sales(
+                skus, vocabulary.LIST_UPDATE_WINDOW, audience.sale_keys
+            )
+        except DependencyUnavailableError as exc:
+            logger.warning("quotations: last sales of a list not read: %s", exc)
+            return {}, False
+        return sales, True
+
+    async def _build_list(
+        self,
+        context: CustomerContext,
+        audience: _Audience,
+        added: Sequence[_Entry] = (),
+        previous: Mapping[str, LastSale] | None = None,
+    ) -> tuple[list[QuotationLine], date | None, bool]:
+        """Every SKU with a price in force on the list, then the SKUs the person had added.
+
+        ``previous`` are the last sales the lines had, kept when the warehouse does not
+        answer with the new ones.
+
+        Returns:
+            tuple: The lines, the cost snapshot and whether the last sales were read.
+        """
+
+        code = context.price_list_id or ""
+        items = await self.warehouse.list_items(code)
+        listed = {item.item.sku for item in items}
+        extra = [entry for entry in added if entry.sku not in listed]
+        total = len(items) + len(extra)
+        if total > self.list_max_lines:
+            raise InvalidInputError(
+                f"La lista {code} tiene {total} referencias; el máximo es {self.list_max_lines}"
+            )
+        skus = [item.item.sku for item in items] + [entry.sku for entry in extra]
+        sales, read = await self._list_sales(skus, audience)
+        if not read and previous:
+            sales = dict(previous)
+        entries = [
+            _Entry(
+                item.item.sku,
+                position,
+                uuid4(),
+                sale=sales.get(item.item.sku),
+                item=item.item,
+                origin=vocabulary.FROM_LIST,
+            )
+            for position, item in enumerate(items, start=1)
+        ]
+        entries += [
+            replace(
+                entry,
+                position=len(items) + offset,
+                sale=sales.get(entry.sku, entry.sale),
+                origin=vocabulary.ADDED,
+            )
+            for offset, entry in enumerate(extra, start=1)
+        ]
+        lines, snapshot = await self._price(context, entries, audience)
+        return lines, snapshot, read
+
+    async def _resolve_list(
+        self, customer_nit: str | None, price_list_id: str | None
+    ) -> tuple[PriceListInfo, str, str | None]:
+        """The list a list update starts from, its source and the customer's NIT if any.
+
+        Raises:
+            NotFoundError: No such customer or list.
+            InvalidInputError: Both or neither were given, or the customer has no list.
+        """
+
+        has_nit = bool((customer_nit or "").strip())
+        has_list = bool((price_list_id or "").strip())
+        if has_nit == has_list:
+            raise InvalidInputError("Elige un cliente o una lista de precios")
+        if has_nit:
+            nit = normalize_nit(customer_nit or "")
+            branches = await self.warehouse.branches(nit)
+            if not branches:
+                raise NotFoundError(f"No se encontró el cliente con NIT {nit}")
+            draft = rules.customer_context(nit, branches)
+            if "sin_lista" in draft.warnings or not draft.price_list_id:
+                raise InvalidInputError(f"El cliente {nit} no tiene lista de precios asignada")
+            info = await self.warehouse.price_list(draft.price_list_id)
+            if info is None:
+                raise NotFoundError(f"La lista {draft.price_list_id} del cliente no está en SIESA")
+            return info, vocabulary.SOURCE_CUSTOMER, nit
+        info = await self.warehouse.price_list(price_list_id or "")
+        if info is None:
+            raise NotFoundError(f"No existe la lista de precios {price_list_id}")
+        return info, vocabulary.SOURCE_LIST, None
+
+    async def create_list_update(
+        self,
+        principal: Principal,
+        *,
+        customer_nit: str | None = None,
+        price_list_id: str | None = None,
+    ) -> QuotationDetail:
+        """Start the update of an existing SIESA price list, chosen by a customer (its
+        assigned list), by code or by name (the code of the list picked in the search).
+
+        Every SKU with a price in force on the list becomes a line compared against that
+        price, with the same cost, target, rule and states as a quotation, the last sale of
+        the SKU to the customer (or to the list's customers) and every support of the list's
+        customers. The files always update that list. The regional base lists (001 to 009)
+        only BI's analysts and leader update.
+
+        Raises:
+            ForbiddenError: The caller does not update lists, or the list is restricted.
+        """
+
+        await self._require_manager(principal, vocabulary.LIST_UPDATE)
+        info, source, nit = await self._resolve_list(customer_nit, price_list_id)
+        if self.is_restricted_list(info.code) and not await self.can_validate(
+            principal, vocabulary.LIST_UPDATE
+        ):
+            raise ForbiddenError(
+                f"La lista {info.code} solo la actualizan los analistas y el líder de BI"
+            )
+        branches = await self._list_branches(info.code)
+        customer_name = None
+        if nit:
+            customer_name = next(
+                (
+                    branch.legal_name
+                    for branch in branches
+                    if branch.nit == nit and branch.legal_name
+                ),
+                None,
+            )
+            if customer_name is None:
+                own = await self.warehouse.branches(nit)
+                customer_name = next((item.legal_name for item in own if item.legal_name), None)
+        context = rules.list_context(
+            info.code, info.name, branches, nit=nit or "", customer_name=customer_name
+        )
+        audience = self._audience(branches, nit)
+        lines, snapshot, read = await self._build_list(context, audience)
+        warnings = list(context.warnings)
+        if not lines:
+            warnings.append("lista_sin_precios")
+        if not read:
+            warnings.append("ultima_venta_no_leida")
+        context = replace(context, warnings=tuple(warnings))
+        fields = self._customer_fields(context)
+        fields["list_action"] = vocabulary.UPDATE_LIST
+        now = datetime.now(UTC)
+        total, changed, below, below_target = rules.counts(lines)
+        quotation = Quotation(
+            id=uuid4(),
+            customer_nit=nit or "",
+            window_months=vocabulary.LIST_UPDATE_WINDOW,
+            status=vocabulary.DRAFT,
+            activation_date=None,
+            export_price_list_id=None,
+            built_at=now,
+            cost_cut_date=snapshot,
+            max_points_below_target=self.policy.max_points_below_target,
+            line_count=total,
+            changed_count=changed,
+            below_rule_count=below,
+            below_target_count=below_target,
+            version=1,
+            created_by_id=principal.user_id,
+            created_by=principal.email,
+            created_at=now,
+            updated_by=principal.email,
+            updated_at=now,
+            valid_from=self.calendar.today(),
+            billing_center_source=vocabulary.CENTER_AUTO,
+            billing_center_name=await self._center_name(context.billing_center_code),
+            kind=vocabulary.LIST_UPDATE,
+            source=source,
+            **fields,  # type: ignore[arg-type]
+        )
+        return await self.repository.create(quotation, lines)
+
+    async def _refresh_list(
+        self, principal: Principal, detail: QuotationDetail, version: int
+    ) -> QuotationDetail:
+        """Rebuild a list update from the list as SIESA has it now, keeping the new prices
+        by SKU and the added SKUs; a center chosen by hand stays."""
+
+        quotation = detail.quotation
+        code = quotation.price_list_id or ""
+        branches = await self._list_branches(code)
+        nit = quotation.customer_nit or None
+        context = rules.list_context(
+            code,
+            quotation.price_list_name,
+            branches,
+            nit=quotation.customer_nit,
+            customer_name=quotation.customer_name if nit else None,
+        )
+        manual = quotation.billing_center_source == vocabulary.CENTER_MANUAL
+        if manual:
+            context = replace(
+                context,
+                billing_center_code=quotation.billing_center_code,
+                cost_centers=quotation.cost_centers,
+            )
+        added = [_list_entry_of(line) for line in detail.lines if line.origin == vocabulary.ADDED]
+        # If the warehouse does not answer with the last sales, each line keeps the one it had.
+        previous = {
+            entry.sku: entry.sale
+            for entry in map(_list_entry_of, detail.lines)
+            if entry.sale is not None
+        }
+        lines, snapshot, read = await self._build_list(
+            context, self._audience(branches, nit), added, previous
+        )
+        warnings = list(context.warnings)
+        if not lines:
+            warnings.append("lista_sin_precios")
+        if not read:
+            warnings.append("ultima_venta_no_leida")
+        context = replace(context, warnings=tuple(warnings))
+        stored = {line.sku: line for line in detail.lines}
+        lines = [_kept(line, stored.get(line.sku)) for line in lines]
+        fields = self._customer_fields(context)
+        fields["list_action"] = vocabulary.UPDATE_LIST
+        if not manual:
+            fields["billing_center_name"] = await self._center_name(context.billing_center_code)
+        refreshed = replace(
+            self._touched(quotation, lines, principal.email),
+            built_at=datetime.now(UTC),
+            cost_cut_date=snapshot,
+            max_points_below_target=self.policy.max_points_below_target,
+            **fields,  # type: ignore[arg-type]
+        )
+        return await self.repository.save(refreshed, lines, version, replace_lines=True)
+
+    async def _stored_audience(self, quotation: Quotation) -> _Audience | None:
+        """The audience of a stored list update (``None`` for a quotation)."""
+
+        if not quotation.is_list_update:
+            return None
+        branches = await self._list_branches(quotation.price_list_id or "")
+        return self._audience(branches, quotation.customer_nit or None)
+
     # ------------------------------------------------------------ read
 
     async def get(self, principal: Principal, quotation_id: UUID) -> QuotationDetail:
-        await self._require_reader(principal)
+        """A quotation or list update; the permission is the one of its module."""
+
         detail = await self.repository.get(quotation_id)
         if detail is None:
             raise NotFoundError("Cotización no encontrada")
+        await self._require_reader(principal, detail.quotation.kind)
         await self._check_visible(principal, detail.quotation)
         return await self._with_categories(detail)
 
@@ -799,14 +1274,28 @@ class QuotationService:
         (offer settings, quantities).
         """
 
-        await self._require_manager(principal)
         detail = await self.get(principal, quotation_id)
+        await self._require_manager(principal, detail.quotation.kind)
         await self._require_owner_or_validator(principal, detail.quotation, "editarla")
+        await self._check_restricted(principal, detail.quotation)
         if not any_status and detail.quotation.status == vocabulary.PENDING:
+            noun = self._noun(detail.quotation.kind)
             raise ConflictError(
-                "La cotización está pendiente de validación; devuélvela a borrador para editarla"
+                f"{noun[0].upper()}{noun[1:]} está pendiente de validación; devuélvela a "
+                "borrador para editarla"
             )
         return detail
+
+    @staticmethod
+    def _no_offer(quotation: Quotation) -> None:
+        """A list update goes to SIESA only: it has no customer offer, quantities or local
+        products."""
+
+        if quotation.is_list_update:
+            raise InvalidInputError(
+                "Una actualización de lista no tiene oferta al cliente, cantidades ni productos "
+                "solo para cotización"
+            )
 
     async def list(
         self,
@@ -818,12 +1307,13 @@ class QuotationService:
         q: str | None,
         page: int,
         size: int,
+        kind: str = vocabulary.QUOTATION,
     ) -> QuotationPage:
-        await self._require_reader(principal)
+        await self._require_reader(principal, kind)
         _page(page, size)
         if status is not None and status not in vocabulary.STATUSES:
             raise InvalidInputError("Estado desconocido")
-        own_only = mine or not await self._sees_all(principal)
+        own_only = mine or not await self._sees_all(principal, kind)
         return await self.repository.list(
             created_by_id=principal.user_id if own_only else None,
             status=status,
@@ -831,6 +1321,7 @@ class QuotationService:
             q=q.strip() if q and q.strip() else None,
             page=page,
             size=size,
+            kind=kind,
         )
 
     # ------------------------------------------------------------ change
@@ -923,6 +1414,8 @@ class QuotationService:
 
         only_quantities = bool(changes) and not any(change.set_price for change in changes)
         detail = await self._editable(principal, quotation_id, any_status=only_quantities)
+        if any(change.set_quantity for change in changes):
+            self._no_offer(detail.quotation)
         self._check_version(detail.quotation, version)
         if not changes:
             raise InvalidInputError("No hay precios para guardar")
@@ -994,6 +1487,8 @@ class QuotationService:
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
+        if detail.quotation.is_list_update:
+            return await self._refresh_list(principal, detail, version)
         if detail.quotation.is_temporary_customer:
             return await self._repriced(principal, detail, version, detail.quotation.cost_centers)
         context = await self._context(detail.quotation.customer_nit)
@@ -1056,7 +1551,12 @@ class QuotationService:
         quotation = detail.quotation
         context = replace(self._stored_context(quotation), cost_centers=centers)
         siesa = [line for line in detail.lines if not line.is_local]
-        priced, snapshot = await self._price(context, [_entry_of(line) for line in siesa])
+        for_list = quotation.is_list_update
+        priced, snapshot = await self._price(
+            context,
+            [_entry_of(line, for_list) for line in siesa],
+            await self._stored_audience(quotation),
+        )
         stored = {line.id: line for line in siesa}
         by_id = {line.id: _kept(line, stored.get(line.id)) for line in priced}
         lines = [by_id.get(line.id, line) for line in detail.lines]
@@ -1153,11 +1653,24 @@ class QuotationService:
         not_found = [sku for sku in skus if sku not in items]
         inactive = [sku for sku in skus if sku in items and not items[sku].is_active]
         valid = [sku for sku in skus if sku in items and items[sku].is_active]
-        if len(detail.lines) + len(valid) > self.max_lines:
-            raise InvalidInputError(f"La cotización admite máximo {self.max_lines} referencias")
+        quotation = detail.quotation
+        most = self.list_max_lines if quotation.is_list_update else self.max_lines
+        if len(detail.lines) + len(valid) > most:
+            raise InvalidInputError(
+                f"{self._noun(quotation.kind).capitalize()} admite máximo {most} referencias"
+            )
+        sales: dict[str, LastSale] = {}
+        if quotation.is_list_update and valid:
+            # A SKU added to a list update still shows its last sale to the list's customers.
+            audience = await self._stored_audience(quotation)
+            if audience is not None:
+                sales, _ = await self._list_sales(valid, audience)
         start = max((line.position for line in detail.lines), default=0) + 1
+        origin = vocabulary.ADDED if quotation.is_list_update else None
         entries = [
-            _Entry(sku, start + offset, uuid4(), item=items[sku])
+            _Entry(
+                sku, start + offset, uuid4(), sale=sales.get(sku), item=items[sku], origin=origin
+            )
             for offset, sku in enumerate(valid)
         ]
         return entries, not_found, inactive
@@ -1199,8 +1712,13 @@ class QuotationService:
                 + (f"; no existen: {', '.join(not_found[:10])}" if not_found else "")
                 + (f"; inactivas en SIESA: {', '.join(inactive[:10])}" if inactive else "")
             )
-        entries = [_entry_of(present[sku]) for sku in existing] + fresh
-        priced, _ = await self._price(self._stored_context(detail.quotation), entries)
+        for_list = detail.quotation.is_list_update
+        entries = [_entry_of(present[sku], for_list) for sku in existing] + fresh
+        priced, _ = await self._price(
+            self._stored_context(detail.quotation),
+            entries,
+            await self._stored_audience(detail.quotation),
+        )
         by_sku = {line.sku: _kept(line, present.get(line.sku)) for line in priced}
         valid = [entry.sku for entry in fresh]
         lines = [by_sku.get(line.sku, line) for line in detail.lines]
@@ -1255,6 +1773,7 @@ class QuotationService:
         """
 
         detail = await self._editable(principal, quotation_id)
+        self._no_offer(detail.quotation)
         self._check_version(detail.quotation, version)
         amount = _decimal_input(price, "El precio debe ser un número en pesos")
         text = " ".join((description or "").split())
@@ -1299,6 +1818,11 @@ class QuotationService:
         line = next((item for item in detail.lines if item.sku == sku), None)
         if line is None:
             raise NotFoundError(f"La referencia {sku} no está en la cotización")
+        if line.origin == vocabulary.FROM_LIST and line.is_active:
+            raise InvalidInputError(
+                "Solo se quitan referencias agregadas o inactivas; para no actualizar una de la "
+                "lista, deja vacío su precio nuevo"
+            )
         if line.origin == vocabulary.HISTORY and line.is_active:
             raise InvalidInputError(
                 "Solo se quitan referencias agregadas, inactivas o solo para cotización; para no "
@@ -1334,6 +1858,7 @@ class QuotationService:
 
         detail = await self._editable(principal, quotation_id, any_status=True)
         quotation = detail.quotation
+        self._no_offer(quotation)
         self._check_version(quotation, version)
         values: dict[str, object] = {}
         if validity_days is not None:
@@ -1371,6 +1896,7 @@ class QuotationService:
         if self.offer_writer is None:
             raise InvalidInputError("La oferta en Excel no está disponible")
         detail = await self.get(principal, quotation_id)
+        self._no_offer(detail.quotation)
         today = self.calendar.today()
         document = offer.offer_document(detail, today)
         quotation = detail.quotation
@@ -1390,12 +1916,12 @@ class QuotationService:
         API while it is written.
         """
 
-        if not await self.can_validate(principal):
-            raise ForbiddenError("Solo quien valida las cotizaciones descarga la plantilla")
         if self.lines_writer is None:
             raise InvalidInputError("La plantilla en Excel no está disponible")
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        if not await self.can_validate(principal, quotation.kind):
+            raise ForbiddenError("Solo quien valida las cotizaciones descarga la plantilla")
         names = {}
         try:
             names = {item.code: item.name for item in await self.warehouse.billing_centers()}
@@ -1475,13 +2001,17 @@ class QuotationService:
         action = list_action or quotation.list_action
         if action not in vocabulary.LIST_ACTIONS:
             raise InvalidInputError("La acción de lista es actualizacion o creacion")
+        if quotation.is_list_update and action != vocabulary.UPDATE_LIST:
+            raise InvalidInputError("Una actualización de lista escribe en la misma lista")
         name: str | None = None
         if action == vocabulary.UPDATE_LIST and quotation.is_temporary_customer:
             raise InvalidInputError(
                 "Un cliente temporal no tiene lista en SIESA: solo se crea una lista nueva"
             )
-        if quotation.price_list_id == vocabulary.GENERAL_PRICE_LIST and (
-            action == vocabulary.UPDATE_LIST
+        if (
+            not quotation.is_list_update
+            and quotation.price_list_id == vocabulary.GENERAL_PRICE_LIST
+            and action == vocabulary.UPDATE_LIST
         ):
             raise InvalidInputError(
                 "El cliente está en la lista 1, que no se actualiza por este medio: "
@@ -1525,8 +2055,8 @@ class QuotationService:
         self._check_version(quotation, version)
         if quotation.status != vocabulary.PENDING:
             raise ConflictError("Solo se devuelve una cotización pendiente de validación")
-        approver = await self.can_validate(principal)
-        if not approver and not await self.can_manage(principal):
+        approver = await self.can_validate(principal, quotation.kind)
+        if not approver and not await self.can_manage(principal, quotation.kind):
             raise ForbiddenError("No tienes permiso para devolver la cotización")
         text = (note or "").strip() or None
         if approver and quotation.created_by_id != principal.user_id and text is None:
@@ -1567,10 +2097,10 @@ class QuotationService:
             InvalidInputError: A missing, malformed or existing list code.
         """
 
-        if not await self.can_validate(principal):
-            raise ForbiddenError("No tienes permiso para validar cotizaciones")
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        if not await self.can_validate(principal, quotation.kind):
+            raise ForbiddenError("No tienes permiso para validar cotizaciones")
         self._check_version(quotation, version)
         if quotation.status != vocabulary.PENDING:
             raise ConflictError("La cotización no está pendiente de validación")
@@ -1621,10 +2151,10 @@ class QuotationService:
             ConflictError: Stale version, or not pending upload.
         """
 
-        if not await self.can_validate(principal):
-            raise ForbiddenError("Solo quien valida marca la cotización como cargada")
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        if not await self.can_validate(principal, quotation.kind):
+            raise ForbiddenError("Solo quien valida marca la cotización como cargada")
         self._check_version(quotation, version)
         if quotation.status != vocabulary.UPLOAD_PENDING:
             raise ConflictError("Solo se marca como cargada una cotización pendiente de carga")
@@ -1697,9 +2227,10 @@ class QuotationService:
                 f"ACTUALIZACION LISTAS PRECIOS_{principal.email}.xlsx",
                 _XLSX,
             )
+        owner = quotation.customer_nit or ("actualizacion" if quotation.is_list_update else "")
         return ExportFile(
             await asyncio.to_thread(self.flat_file.write, export),
-            f"precios-lista{list_id}-{quotation.customer_nit}-{stamp}.txt",
+            f"precios-lista{list_id}-{owner}-{stamp}.txt",
             "text/plain; charset=us-ascii",
         )
 

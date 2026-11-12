@@ -36,6 +36,34 @@ class Branch:
     salesperson_code: str | None
     salesperson_name: str | None
     is_active: bool
+    # Filled when the branches of a price list are read (a list update): its customer and key.
+    nit: str | None = None
+    customer_key: str | None = None
+
+
+@dataclass(frozen=True)
+class PriceListInfo:
+    """A SIESA price list (``consumo.listas_precios``), as it is chosen for a list update."""
+
+    code: str
+    name: str | None
+    is_active: bool
+    # Active branches assigned to it (SIESA counts branches, not NITs).
+    active_branches: int | None = None
+
+
+@dataclass(frozen=True)
+class ListItem:
+    """A SKU with a price in force on a list, per inventory unit, with its item data.
+
+    ``price`` is ``None`` when SIESA keeps a placeholder ($1 or less) or only a unit with no
+    factor: the line then has no current price to compare.
+    """
+
+    item: ItemInfo
+    price: Decimal | None
+    value_tax_amount: Decimal | None = None
+    placeholder: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +110,8 @@ class LastSale:
     category: str | None = None
     # Billing operation center of the sale (``consumo.ventas.co``).
     center_code: str | None = None
+    # Cost of goods sold per inventory unit on that sale; read only by list updates.
+    unit_cost: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -306,6 +336,66 @@ class SupportCandidate:
 
 
 @dataclass(frozen=True)
+class SupportOption:
+    """A support that covers a list update's line, with the prices it would leave.
+
+    A list update shows every support of the list's customers on the SKU so the person sees
+    what each one allows: ``min_price`` (the rule's floor with that support) and
+    ``optimal_price`` (its target margin). The one with the lowest minimum is applied.
+    ``reason`` says why one cannot be applied (in review, one warehouse, no value...).
+    """
+
+    support_id: UUID
+    kind: str
+    calc_method: str
+    program: str | None
+    detail: str
+    amount: Decimal | None = None
+    required_margin_pct: Decimal | None = None
+    min_price: Decimal | None = None
+    optimal_price: Decimal | None = None
+    applied: bool = False
+    reason: str | None = None
+    customer_nit: str | None = None
+    valid_to: date | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "support_id": str(self.support_id),
+            "kind": self.kind,
+            "calc_method": self.calc_method,
+            "program": self.program,
+            "detail": self.detail,
+            "amount": _text(self.amount),
+            "required_margin_pct": _text(self.required_margin_pct),
+            "min_price": _text(self.min_price),
+            "optimal_price": _text(self.optimal_price),
+            "applied": self.applied,
+            "reason": self.reason,
+            "customer_nit": self.customer_nit,
+            "valid_to": self.valid_to.isoformat() if self.valid_to else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SupportOption:
+        return cls(
+            support_id=UUID(data["support_id"]),
+            kind=data.get("kind") or "",
+            calc_method=data["calc_method"],
+            program=data.get("program"),
+            detail=data.get("detail") or "",
+            amount=_decimal(data.get("amount")),
+            required_margin_pct=_decimal(data.get("required_margin_pct")),
+            min_price=_decimal(data.get("min_price")),
+            optimal_price=_decimal(data.get("optimal_price")),
+            applied=bool(data.get("applied")),
+            reason=data.get("reason"),
+            customer_nit=data.get("customer_nit"),
+            valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
+        )
+
+
+@dataclass(frozen=True)
 class QuotationLine:
     """One SKU of a quotation: the snapshot it was built with and the advisor's price."""
 
@@ -371,6 +461,12 @@ class QuotationLine:
     # New cost of the product's latest price increase when SIESA does not have it yet (no
     # system update date): the third value the cost compares.
     increase_cost: Decimal | None = None
+    # A list update compares the list price (``last_price``), so the SKU's last sale to the
+    # list's customers goes here: its net price and unit cost of goods sold.
+    last_sale_price: Decimal | None = None
+    last_sale_cost: Decimal | None = None
+    # A list update: every support of the list's customers on the SKU, with its prices.
+    support_options: tuple[SupportOption, ...] = ()
 
     @property
     def is_local(self) -> bool:
@@ -460,10 +556,18 @@ class Quotation:
     include_variation: bool = False
     # False when it started empty: a refresh prices the added SKUs and reads no sales.
     with_history: bool = True
+    # ``cotizacion`` or ``lista`` (the update of an existing price list).
+    kind: str = vocabulary.QUOTATION
+    # A list update: ``cliente`` (started from a customer's list) or ``lista``.
+    source: str | None = None
 
     @property
     def is_temporary_customer(self) -> bool:
         return self.temporary_customer is not None
+
+    @property
+    def is_list_update(self) -> bool:
+        return self.kind == vocabulary.LIST_UPDATE
 
     @property
     def valid_until(self) -> date | None:

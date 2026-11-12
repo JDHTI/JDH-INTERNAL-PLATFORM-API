@@ -234,6 +234,9 @@ class Settings(BaseSettings):
     QUOTATIONS_DWH_TIMEOUT_SECONDS: float = 30.0
     # SIESA company written in the import file (``f_cia``).
     QUOTATIONS_SIESA_COMPANY: str = "001"
+    # List updates (module ``actualizacion-listas``): lists only the approvers' area (BI's
+    # analysts and leader) updates, comma separated. The rest, whoever manages the module.
+    LIST_UPDATES_RESTRICTED_LISTS: str = "001,002,003,004,005,009"
 
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
@@ -668,6 +671,11 @@ class Settings(BaseSettings):
                 "max_lines": self.QUOTATIONS_MAX_LINES,
                 "dwh_timeout": self.QUOTATIONS_DWH_TIMEOUT_SECONDS,
                 "siesa_company": self.QUOTATIONS_SIESA_COMPANY,
+                "restricted_lists": tuple(
+                    code.strip().upper()
+                    for code in self.LIST_UPDATES_RESTRICTED_LISTS.split(",")
+                    if code.strip()
+                ),
             },
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,

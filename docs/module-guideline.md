@@ -93,7 +93,9 @@ lectura con `require_permission("<módulo>")`
 (`app/modules/areas/presentation/dependencies.py`), a nivel de router o por endpoint si
 expone un `GET /permissions` que debe responder `false`. Las escrituras las decide el
 servicio con un `PermissionPolicy(areas, área, módulo)` inyectado desde
-`v1_containers.py`. Detalle en [`permissions.md`](permissions.md).
+`v1_containers.py`. Detalle en [`permissions.md`](permissions.md); la lista completa de pasos en
+la API y en la UI está en la skill
+[`modulo-con-permisos`](../.claude/skills/modulo-con-permisos/SKILL.md).
 
 ## Modelos y Alembic
 

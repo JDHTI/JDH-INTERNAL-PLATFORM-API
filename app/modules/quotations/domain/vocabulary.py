@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+# What a quotation is: a customer quotation (``cotizador`` module) or the update of an
+# existing SIESA price list (``actualizacion-listas`` module, BI). Both share the engine,
+# the states and the files; a list update has no customer offer and no quantities.
+QUOTATION = "cotizacion"
+LIST_UPDATE = "lista"
+KINDS = (QUOTATION, LIST_UPDATE)
+# Module of the catalog that grants each kind.
+KIND_MODULES = {QUOTATION: "cotizador", LIST_UPDATE: "actualizacion-listas"}
+# Where a list update starts: a customer (its assigned list) or the list itself (by code or
+# name).
+SOURCE_CUSTOMER = "cliente"
+SOURCE_LIST = "lista"
+SOURCES = (SOURCE_CUSTOMER, SOURCE_LIST)
+# Months of sales a list update looks back on for the last sale of each SKU.
+LIST_UPDATE_WINDOW = 12
+
 # Life of a price list: the advisor edits a draft and confirms it; the approver validates
 # it (the files are released and wait to be loaded in SIESA) and then marks it loaded.
 DRAFT = "borrador"
@@ -52,8 +68,15 @@ COMPLIANCE_LABELS = {
 HISTORY = "historico"
 ADDED = "agregado"
 LOCAL = "local"
-ORIGINS = (HISTORY, ADDED, LOCAL)
-ORIGIN_LABELS = {HISTORY: "Histórico", ADDED: "Agregado", LOCAL: "Solo cotización"}
+# A SKU with a price in force on the list a list update starts from.
+FROM_LIST = "lista"
+ORIGINS = (HISTORY, ADDED, LOCAL, FROM_LIST)
+ORIGIN_LABELS = {
+    HISTORY: "Histórico",
+    ADDED: "Agregado",
+    LOCAL: "Solo cotización",
+    FROM_LIST: "En la lista",
+}
 # Stored category of a SIESA line that was looked up and has none (no product row, or no
 # category): it is not looked up again. The API shows it as ``null``.
 NO_CATEGORY = ""
@@ -102,6 +125,8 @@ PROBLEM_LABELS = {
     "apoyo_en_revision": "Hay un apoyo en revisión que no se aplica",
     "apoyo_fuera_bodega": "Hay un apoyo de una bodega puntual que no se aplica",
     INACTIVE_ITEM: "Referencia inactiva en SIESA: reemplázala; no sale en los archivos",
+    "precio_marcador": "La lista tiene un precio marcador ($1 o menos): no hay precio actual "
+    "que comparar",
     "cotizacion_descartada": "Hay una cotización del proveedor fuera de rango (más de 3 veces el "
     "último costo): no se usa; revísala en SIESA",
 }
@@ -116,6 +141,11 @@ WARNING_LABELS = {
     "sin_ventas": "El cliente no tiene ventas en la ventana: agrega las referencias a cotizar",
     "lista_general": "El cliente está en la lista 1, que no se actualiza por este medio: "
     "se crea una lista nueva",
+    "lista_sin_clientes": "La lista no tiene clientes activos: se usa el margen Lista 1 y el "
+    "costo Nacional",
+    "lista_sin_precios": "La lista no tiene precios vigentes: agrega las referencias a actualizar",
+    "ultima_venta_no_leida": "El datawarehouse no respondió a tiempo con la última venta de "
+    "cada referencia: actualiza para volver a intentarlo",
 }
 
 BASIS_LABELS = {

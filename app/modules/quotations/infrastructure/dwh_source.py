@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
@@ -24,7 +25,9 @@ from app.modules.quotations.domain.entities import (
     CostInfo,
     ItemInfo,
     LastSale,
+    ListItem,
     ListPrice,
+    PriceListInfo,
     Seller,
     SellerContact,
     ValueTaxKey,
@@ -33,6 +36,8 @@ from app.modules.quotations.domain.pricing import StockPlan
 
 logger = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Master columns of ``listas_precios`` only: its count columns aggregate every price again.
+_LIST_COLUMNS = '"lista_precio_id", "lista_precio", "estado_activo", "clientes_activos_asignados"'
 
 
 class WarehouseQuotationSource:
@@ -65,19 +70,18 @@ class WarehouseQuotationSource:
     def _view(self, name: str) -> str:
         return f'"{self.schema}"."{name}"'
 
-    async def _fetch(self, query: str, *args: object):
+    async def _fetch(self, query: str, *args: object, timeout: float | None = None):
+        limit = timeout if timeout is not None else self.timeout
         try:
             # JIT compiling costs the warehouse about 2 s per read here and saves nothing on
             # reads bounded by customer or SKU list.
-            return await self.connection.fetch(
-                query, *args, timeout=self.timeout, settings={"jit": "off"}
-            )
+            return await self.connection.fetch(query, *args, timeout=limit, settings={"jit": "off"})
         except DataProviderUnavailable as exc:
             cause = exc.__cause__ or exc
             logger.warning("quotations: warehouse query failed: %r", cause)
             if isinstance(cause, TimeoutError):
                 raise DependencyUnavailableError(
-                    f"El datawarehouse tardó más de {self.timeout:.0f} s en responder; "
+                    f"El datawarehouse tardó más de {limit or 0:.0f} s en responder; "
                     "inténtalo de nuevo en unos minutos"
                 ) from exc
             raise DependencyUnavailableError(
@@ -379,6 +383,212 @@ class WarehouseQuotationSource:
             phone=_strip(row["celular"]),
         )
 
+    # ------------------------------------------------------------ list updates
+
+    async def price_lists(self, q: str, limit: int = 50) -> list[PriceListInfo]:
+        """Lists whose code is ``q`` (any case) or whose name contains it, active first.
+
+        Only the master columns are read: the count columns of ``listas_precios`` (prices in
+        force, versions, last change) aggregate the whole ``core.precio_lista`` again per list
+        found, which took 24 s for a name search instead of 4 ms. The DWH has no ``unaccent``:
+        both sides go upper case without accents.
+        """
+
+        term = _plain(q)
+        if not term:
+            return []
+        pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = await self._fetch(
+            f"SELECT {_LIST_COLUMNS} FROM {self._view('listas_precios')}"
+            ' WHERE upper("lista_precio_id") = $1'
+            " OR translate(upper(\"lista_precio\"), 'ÁÉÍÓÚÜÑ', 'AEIOUUN') LIKE $2"
+            ' ORDER BY upper("lista_precio_id") = $1 DESC, "estado_activo" DESC,'
+            ' "clientes_activos_asignados" DESC NULLS LAST, "lista_precio_id" LIMIT $3',
+            term,
+            pattern,
+            limit,
+        )
+        return [_price_list(row) for row in rows]
+
+    async def price_list(self, code: str) -> PriceListInfo | None:
+        """The list with this code, typed in any case; ``None`` when SIESA has none.
+
+        A code typed by a person is matched upper case on the master and the stored code is
+        used from then on (13 real lists have lower-case codes).
+        """
+
+        term = (code or "").strip().upper()
+        if not term:
+            return None
+        rows = await self._fetch(
+            f"SELECT {_LIST_COLUMNS} FROM {self._view('listas_precios')}"
+            ' WHERE upper("lista_precio_id") = $1'
+            ' ORDER BY "lista_precio_id" = $1 DESC LIMIT 1',
+            term,
+        )
+        return _price_list(rows[0]) if rows else None
+
+    async def list_branches(self, price_list_id: str) -> list[Branch]:
+        """Every branch assigned to a list (``consumo.clientes``), with its NIT and key."""
+
+        rows = await self._fetch(
+            'SELECT "nit", "cliente_key", "id_sucursal", "razon_social", "cod_canal", "canal",'
+            ' "lista_precio_id", "lista_precio", "cod_co_factura", "cod_vendedor",'
+            ' "nombre_vendedor", "estado", "estado_sucursal"'
+            f' FROM {self._view("clientes")} WHERE "lista_precio_id" = $1',
+            price_list_id,
+        )
+        return [
+            Branch(
+                branch_id=row["id_sucursal"],
+                legal_name=row["razon_social"],
+                channel_code=row["cod_canal"],
+                channel=row["canal"],
+                price_list_id=_strip(row["lista_precio_id"]),
+                price_list_name=row["lista_precio"],
+                billing_center_code=_strip(row["cod_co_factura"]),
+                salesperson_code=_strip(row["cod_vendedor"]),
+                salesperson_name=row["nombre_vendedor"],
+                is_active=row["estado"] == "A" and row["estado_sucursal"] == "A",
+                nit=_strip(row["nit"]),
+                customer_key=_strip(row["cliente_key"]),
+            )
+            for row in rows
+        ]
+
+    async def list_items(self, price_list_id: str) -> list[ListItem]:
+        """Every SKU with a price in force on the list: one row per SKU, the inventory unit.
+
+        The list is read by its exact code (``trim`` would skip the index: 316 ms instead of
+        35). A price of $1 or less is a SIESA placeholder (the promotional list, about 100
+        SKUs of list 1): it comes as no price. A unit without a factor (``unid`` lower case)
+        has no price per inventory unit either.
+        """
+
+        rows = await self._fetch(
+            'SELECT DISTINCT ON (l."sku") l."sku", l."producto",'
+            ' l."producto_activo", l."categoria", l."iva_venta_pct", l."precio_sin_iva",'
+            ' l."precio_unidad_inventario",'
+            ' l."impoconsumo_valor" / nullif(l."factor_um", 0) AS impuesto_unidad,'
+            ' p."unidad_inventario_id", p."cod_proveedor", p."factor_empaque", p."estado",'
+            ' p."descripcion"'
+            f" FROM {self._view('precios_lista_vigentes')} l"
+            f' LEFT JOIN {self._view("productos")} p ON p."producto_key" = l."producto_key"'
+            ' WHERE l."lista_precio_id" = $1'
+            ' ORDER BY l."sku", l."es_unidad_inventario" DESC NULLS LAST, l."factor_um"',
+            price_list_id,
+        )
+        result: list[ListItem] = []
+        for row in rows:
+            sku = str(row["sku"]).strip()
+            price = _decimal(row["precio_unidad_inventario"])
+            raw = _decimal(row["precio_sin_iva"])
+            placeholder = raw is not None and raw <= 1
+            state = row["estado"]
+            item = ItemInfo(
+                sku=sku,
+                description=row["descripcion"] or row["producto"],
+                unit=_strip(row["unidad_inventario_id"]),
+                vat_pct=_decimal(row["iva_venta_pct"]),
+                supplier_code=_strip(row["cod_proveedor"]),
+                pack_factor=_decimal(row["factor_empaque"]),
+                is_active=(state == "A") if state is not None else bool(row["producto_activo"]),
+                category=_strip(row["categoria"]),
+            )
+            result.append(
+                ListItem(
+                    item=item,
+                    price=None if placeholder else price,
+                    value_tax_amount=_decimal(row["impuesto_unidad"]),
+                    placeholder=placeholder,
+                )
+            )
+        return result
+
+    async def list_last_sales(
+        self,
+        skus: Sequence[str],
+        months: int,
+        customer_keys: Sequence[str] | None,
+        timeout: float | None = None,
+    ) -> dict[str, LastSale]:
+        """The last sale of each product: its date, net price and unit cost of goods sold.
+
+        With ``customer_keys`` only the sales to those branches count (the list's customers):
+        their lines are read first through the customer index. Without them (a list with
+        thousands of branches, where that read passed 20 s) the whole company counts, read in
+        two steps: the last month for every product, then the rest of the window for the ones
+        with no sale in it (a single 12-month read sorted to disk for 27 s).
+
+        ``ventas.costo`` is the line's total cost and ``cantidad`` is in inventory units, so
+        the unit cost is ``costo / cantidad`` (the base of ``precio_unidad_inventario``). A
+        cost of zero or less comes as ``None``. ``ventas`` has no index on ``sku`` (it comes
+        from a join): the product keys are looked up first and the sales are bound by them.
+        """
+
+        if not skus:
+            return {}
+        keys = [
+            str(row["producto_key"]).strip()
+            for row in await self._fetch(
+                f'SELECT "producto_key" FROM {self._view("productos")}'
+                ' WHERE "sku" = ANY($1::text[])',
+                list(skus),
+            )
+            if row["producto_key"] is not None
+        ]
+        if not keys:
+            return {}
+        order = (
+            ' ORDER BY v."producto_key", v."fecha" DESC,'
+            " nullif(regexp_replace(v.\"nro_transaccion\", '\\D', '', 'g'), '')::bigint"
+            ' DESC NULLS LAST, v."venta_linea_key" DESC'
+        )
+        columns = (
+            'v."producto_key", v."sku", v."fecha", v."nro_transaccion", v."co",'
+            ' v."unidad_medida_id", v."cantidad", v."costo", v."subtotal", v."valor_bruto",'
+            ' v."dscto", v."venta_linea_key"'
+        )
+        sold = 'v."naturaleza_codigo" = 2 AND v."cantidad" > 0 AND v."subtotal" > 0'
+        if customer_keys is not None:
+            if not customer_keys:
+                return {}
+            rows = await self._fetch(
+                f"WITH v AS MATERIALIZED (SELECT {columns} FROM {self._view('ventas')} v"
+                f' WHERE v."cliente_key" = ANY($1::text[]) AND {sold}'
+                # ``+ 0`` keeps the planner off a BitmapAnd with the date index.
+                ' AND v."fecha" + 0 >= (current_date - make_interval(months => $2::int)))'
+                f' SELECT DISTINCT ON (v."producto_key") v.* FROM v'
+                f' WHERE v."producto_key" = ANY($3::text[]){order}',
+                list(customer_keys),
+                months,
+                keys,
+                timeout=timeout,
+            )
+            return _sales(rows)
+        recent = await self._fetch(
+            f'SELECT DISTINCT ON (v."producto_key") {columns} FROM {self._view("ventas")} v'
+            f' WHERE v."producto_key" = ANY($1::text[]) AND {sold}'
+            f" AND v.\"fecha\" >= (current_date - interval '1 month'){order}",
+            keys,
+            timeout=timeout,
+        )
+        found = _sales(recent)
+        seen = {_strip(row["producto_key"]) for row in recent}
+        missing = [key for key in keys if key not in seen]
+        if missing and months > 1:
+            older = await self._fetch(
+                f'SELECT DISTINCT ON (v."producto_key") {columns} FROM {self._view("ventas")} v'
+                f' WHERE v."producto_key" = ANY($1::text[]) AND {sold}'
+                ' AND v."fecha" >= (current_date - make_interval(months => $2::int))'
+                f" AND v.\"fecha\" < (current_date - interval '1 month'){order}",
+                missing,
+                months,
+                timeout=timeout,
+            )
+            found.update(_sales(older))
+        return found
+
     async def items(self, skus: Sequence[str]) -> dict[str, ItemInfo]:
         """Description, SIESA unit id, VAT, supplier, pack and category of each SKU
         (``productos``)."""
@@ -404,6 +614,48 @@ class WarehouseQuotationSource:
             )
             for row in rows
         }
+
+
+def _plain(value: str) -> str:
+    """Upper case without accents, as the list names are compared."""
+
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join(text.upper().split())
+
+
+def _price_list(row) -> PriceListInfo:
+    customers = row["clientes_activos_asignados"]
+    return PriceListInfo(
+        code=str(row["lista_precio_id"]).strip(),
+        name=_strip(row["lista_precio"]),
+        is_active=bool(row["estado_activo"]),
+        active_branches=int(customers) if customers is not None else None,
+    )
+
+
+def _sales(rows) -> dict[str, LastSale]:
+    """The last sale of each SKU from rows of ``ventas`` (one per product)."""
+
+    result: dict[str, LastSale] = {}
+    for row in rows:
+        quantity = Decimal(row["cantidad"])
+        sku = str(row["sku"]).strip()
+        cost = _decimal(row["costo"])
+        result[sku] = LastSale(
+            sku=sku,
+            sale_date=row["fecha"],
+            document=row["nro_transaccion"],
+            sale_unit=_strip(row["unidad_medida_id"]),
+            quantity=quantity,
+            gross_price=Decimal(row["valor_bruto"]) / quantity,
+            net_price=Decimal(row["subtotal"]) / quantity,
+            discount_pct=_decimal(row["dscto"]),
+            sales_in_window=0,
+            center_code=_strip(row["co"]),
+            unit_cost=cost / quantity if cost is not None and cost > 0 else None,
+        )
+    return result
 
 
 def _strip(value: object) -> str | None:

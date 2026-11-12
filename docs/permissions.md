@@ -61,14 +61,23 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
+| bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, exportar | crear y editar actualizaciones de cualquier lista salvo las restringidas. Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar, devolver, marcar como cargada y actualizar las listas restringidas (`LIST_UPDATES_RESTRICTED_LISTS`, por defecto 001, 002, 003, 004, 005 y 009) |
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
 | bi | `casos-especiales` | casos especiales | crear, editar |
 | bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 
-`/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador` y `validador-pedidos`, porque
-esas pantallas buscan proveedores y productos.
+`/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador`, `actualizacion-listas` y
+`validador-pedidos`, porque esas pantallas buscan proveedores y productos.
+
+`/quotations/*` lo abren `cotizador` y `actualizacion-listas`: comparten los endpoints, y el
+servicio revisa cada cotización contra el módulo de su tipo (`kind`), así que tener uno no abre
+las del otro.
+
+**Agregar un módulo** sigue la skill del proyecto
+[`modulo-con-permisos`](../.claude/skills/modulo-con-permisos/SKILL.md): catálogo, gate, política,
+contenedor, límite de tráfico, plantilla y página en la UI, y esta tabla.
 
 Un permiso guardado sobre un módulo que salió del catálogo no da nada: `my_modules` y los permisos
 de un rol o de una persona no lo muestran, y desaparece de la base la próxima vez que se guardan los

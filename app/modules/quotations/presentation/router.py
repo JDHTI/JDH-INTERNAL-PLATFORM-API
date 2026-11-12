@@ -47,11 +47,16 @@ from app.modules.quotations.domain.vocabulary import (
 )
 
 router = APIRouter()
-_READ_GATE = Depends(require_permission("cotizador"))
+# The quoter and the list updates share these endpoints; the service checks each
+# quotation against the module of its kind.
+_READ_GATE = Depends(require_permission("cotizador", "actualizacion-listas"))
 _service = Depends(Provide[ApplicationContainer.v1_container.quotation_service])
 _principal = Depends(get_current_principal)
+# ``cotizacion`` or ``lista``: which module a listing, search or permission check is for.
+_KIND = Query(default="cotizacion")
 
 Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada"]
+Kind = Literal["cotizacion", "lista"]
 ListAction = Literal["actualizacion", "creacion"]
 Compliance = Literal["cumple", "bajo_minimo", "sin_objetivo", "sin_costo"]
 OfferScope = Literal["changed", "all"]
@@ -327,6 +332,26 @@ class CandidateResponse(BaseModel):
     reason: str
 
 
+class SupportOptionResponse(BaseModel):
+    """A list update: one support of the list's customers on the SKU, with its prices."""
+
+    support_id: UUID
+    kind: str
+    calc_method: str
+    program: str | None
+    detail: str
+    amount: Decimal | None
+    required_margin_pct: Decimal | None
+    min_price: Decimal | None
+    optimal_price: Decimal | None
+    applied: bool
+    # Why it cannot be applied (in review, one warehouse, rebate, no value...).
+    reason: str | None
+    # Set when the support is for one customer of the list.
+    customer_nit: str | None
+    valid_to: date | None
+
+
 class LineResponse(BaseModel):
     """One SKU: what was last sold, at what cost and margin, and the advisor's price."""
 
@@ -383,9 +408,16 @@ class LineResponse(BaseModel):
     price_with_taxes: Decimal | None
     problems: list[str]
     problem_labels: list[str]
-    # ``local``: a product only for the quotation (SKU ``LOC-<n>``), not in SIESA.
-    origin: Literal["historico", "agregado", "local"]
+    # ``local``: a product only for the quotation (SKU ``LOC-<n>``), not in SIESA; ``lista``:
+    # a SKU with a price in force on the list a list update starts from.
+    origin: Literal["historico", "agregado", "local", "lista"]
     origin_label: str
+    # A list update: ``last_price`` is the list's price in force, and these are the net price
+    # and unit cost of goods sold of the SKU's last sale (``last_sale_date``).
+    last_sale_price: Decimal | None = None
+    last_sale_cost: Decimal | None = None
+    # A list update: every support of the list's customers on the SKU, lowest minimum first.
+    support_options: list[SupportOptionResponse] = Field(default_factory=list)
     # Product category in SIESA; ``None`` when unknown and for a local product.
     category: str | None
     # Inventory units the customer would buy.
@@ -467,13 +499,17 @@ class SummaryResponse(BaseModel):
     valid_until: date
     is_temporary_customer: bool
     temporary_customer: TemporaryCustomerResponse | None
+    # ``cotizacion`` or ``lista`` (the update of an existing price list).
+    kind: Kind = "cotizacion"
+    # A list update: ``cliente`` (from a customer's list) or ``lista``.
+    source: Literal["cliente", "lista"] | None = None
+    price_list_name: str | None = None
 
 
 class QuotationResponse(SummaryResponse):
     """A quotation with its header and lines."""
 
     channel_code: str | None
-    price_list_name: str | None
     price_list_customers: int | None
     billing_center_code: str | None
     billing_center_name: str | None
@@ -612,6 +648,26 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         quantity=line.quantity,
         offer_price=offer.offer_price(line),
         in_offer=offer.in_offer(line, scope),
+        last_sale_price=line.last_sale_price,
+        last_sale_cost=line.last_sale_cost,
+        support_options=[
+            SupportOptionResponse(
+                support_id=item.support_id,
+                kind=item.kind,
+                calc_method=item.calc_method,
+                program=item.program,
+                detail=item.detail,
+                amount=item.amount,
+                required_margin_pct=item.required_margin_pct,
+                min_price=item.min_price,
+                optimal_price=item.optimal_price,
+                applied=item.applied,
+                reason=item.reason,
+                customer_nit=item.customer_nit,
+                valid_to=item.valid_to,
+            )
+            for item in line.support_options
+        ],
     )
 
 
@@ -672,6 +728,9 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "temporary_customer": TemporaryCustomerResponse(**quotation.temporary_customer.as_dict())
         if quotation.temporary_customer
         else None,
+        "kind": quotation.kind,
+        "source": quotation.source,
+        "price_list_name": quotation.price_list_name,
     }
 
 
@@ -680,7 +739,6 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
     return QuotationResponse(
         **_summary_values(quotation),  # type: ignore[arg-type]
         channel_code=quotation.channel_code,
-        price_list_name=quotation.price_list_name,
         price_list_customers=quotation.price_list_customers,
         billing_center_code=quotation.billing_center_code,
         billing_center_name=quotation.billing_center_name,
@@ -724,12 +782,14 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
 @router.get("/permissions", response_model=PermissionsResponse, summary="What the caller may do")
 @inject
 async def permissions(
+    kind: Kind = _KIND,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> PermissionsResponse:
-    """Whether the caller may quote, and the warehouse salesperson whose e-mail is theirs."""
+    """Whether the caller may quote (or update lists, ``kind=lista``), and the warehouse
+    salesperson whose e-mail is theirs."""
 
-    result = await service.permissions(principal)
+    result = await service.permissions(principal, kind)
     seller = result.seller
     return PermissionsResponse(
         can_manage=result.can_manage,
@@ -786,13 +846,15 @@ async def customers(
     q: str | None = Query(default=None, max_length=100),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    kind: Kind = _KIND,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> CustomerPageResponse:
     """The caller's portfolio (``mine``: customers of the salespeople whose e-mail is theirs)
-    or every customer, merged by NIT and active first."""
+    or every customer, merged by NIT and active first. For a list update (``kind=lista``)
+    every customer."""
 
-    result, linked = await service.customers(principal, scope, q, page, size)
+    result, linked = await service.customers(principal, scope, q, page, size, kind)
     return CustomerPageResponse(
         items=[
             CustomerResponse(
@@ -864,10 +926,11 @@ async def list_quotations(
     q: str | None = Query(default=None, max_length=100),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    kind: Kind = _KIND,
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationPageResponse:
-    """Quotations, most recently changed first."""
+    """Quotations (or list updates, ``kind=lista``), most recently changed first."""
 
     result = await service.list(
         principal,
@@ -877,6 +940,7 @@ async def list_quotations(
         q=q,
         page=page,
         size=size,
+        kind=kind,
     )
     return QuotationPageResponse(
         items=[SummaryResponse(**_summary_values(item)) for item in result.items],  # type: ignore[arg-type]
@@ -886,7 +950,88 @@ async def list_quotations(
     )
 
 
-# Declared before ``/{quotation_id}`` so the path is not taken for an id.
+class PriceListResponse(BaseModel):
+    """A SIESA price list to update."""
+
+    code: str
+    name: str | None
+    is_active: bool
+    # Active branches assigned to it (SIESA counts branches, not NITs).
+    active_branches: int | None
+    # The regional base lists (001 to 009): only BI's analysts and leader update them.
+    restricted: bool
+
+
+class PriceListPageResponse(BaseModel):
+    """The lists found, shaped like the other searches (one page of up to 50)."""
+
+    items: list[PriceListResponse]
+    total: int
+    page: int
+    size: int
+
+
+class ListUpdateRequest(BaseModel):
+    """The list to update: a customer's (``customer_nit``) or one by ``price_list_id``."""
+
+    customer_nit: str | None = Field(default=None, max_length=30)
+    price_list_id: str | None = Field(default=None, max_length=3)
+
+
+# Declared before ``/{quotation_id}`` so the paths are not taken for an id.
+@router.get(
+    "/price-lists",
+    dependencies=[_READ_GATE],
+    response_model=PriceListPageResponse,
+    summary="SIESA price lists to update, by code or name",
+)
+@inject
+async def price_lists(
+    q: str | None = Query(default=None, max_length=80),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> PriceListPageResponse:
+    """Lists whose code is ``q`` or whose name contains it (accents and case ignored),
+    active and most used first; at most 50, in one page. Names repeat: each comes with its
+    code."""
+
+    items = [
+        PriceListResponse(
+            code=item.code,
+            name=item.name,
+            is_active=item.is_active,
+            active_branches=item.active_branches,
+            restricted=service.is_restricted_list(item.code),
+        )
+        for item in await service.price_lists(principal, q)
+    ]
+    return PriceListPageResponse(items=items, total=len(items), page=1, size=max(len(items), 1))
+
+
+@router.post(
+    "/list-updates",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start the update of an existing price list",
+)
+@inject
+async def create_list_update(
+    body: ListUpdateRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Every SKU with a price in force on the list, compared against that price, with the
+    quoter's cost, target, rule and states, the last sale to the customer (or the list's
+    customers) and every support of the list's customers. No offer and no quantities."""
+
+    return _detail(
+        await service.create_list_update(
+            principal, customer_nit=body.customer_nit, price_list_id=body.price_list_id
+        )
+    )
+
+
 @router.get(
     "/billing-centers",
     dependencies=[_READ_GATE],

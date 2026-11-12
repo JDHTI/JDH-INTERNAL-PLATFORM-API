@@ -40,7 +40,12 @@ router = APIRouter(
     dependencies=[
         Depends(
             require_permission(
-                "maestros", "apoyos", "casos-especiales", "cotizador", "validador-pedidos"
+                "maestros",
+                "apoyos",
+                "casos-especiales",
+                "cotizador",
+                "actualizacion-listas",
+                "validador-pedidos",
             )
         )
     ]

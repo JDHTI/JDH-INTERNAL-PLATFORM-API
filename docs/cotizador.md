@@ -22,6 +22,10 @@ oferta). Área: Comercial (`/comercial/cotizador`). Datos del DWH: [cotizador-dw
 antes de salir a producción. Quedan en la base sin uso: nada las lee ni las escribe, y las líneas
 nuevas guardan `NULL` en la columna.
 
+El mismo motor actualiza una lista vigente de SIESA en el módulo de BI
+[Actualización de listas](actualizacion-listas.md) (`kind = 'lista'`): sin oferta y comparando
+contra el precio de la lista.
+
 Las reglas de costo, bodega, redondeo e impuesto son las del área de listas de precios, escritas
 en la skill del proyecto [`lista-precios`](../.claude/skills/lista-precios/SKILL.md). El cotizador
 las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia, se cambia ahí.
