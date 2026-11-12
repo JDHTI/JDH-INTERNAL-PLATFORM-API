@@ -13,8 +13,7 @@ tres diferencias:
 
 - **Módulo del catálogo:** `actualizacion-listas`. Por defecto está activo en `bi`; un
   administrador lo activa en otras áreas desde el panel.
-- **Migración:** `0057_list_updates`. Además de crear las columnas, une las dos cabezas
-  `0054_dwh_outbox_support_loads` y `0056_price_increase_dates`.
+- **Migración:** `0058_list_updates`, después de `0057_dwh_outbox_support_loads`.
 - **Datos del DWH:** se validaron contra el DWH el 2026-11-12. Ver
   [cotizador-dwh.md](cotizador-dwh.md) §4 para las vistas `listas_precios` y
   `precios_lista_vigentes`.

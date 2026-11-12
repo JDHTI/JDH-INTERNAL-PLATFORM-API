@@ -10,8 +10,6 @@
 - ``quotation_lines.support_options``: every support that covers the line, each with the
   minimum and optimal price it leaves.
 - ``quotation_lines.origin`` accepts ``lista``: a SKU with a price in force on the list.
-
-It also merges the two heads ``0054_dwh_outbox_support_loads`` and ``0056_price_increase_dates``.
 """
 
 from collections.abc import Sequence
@@ -20,11 +18,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0057_list_updates"
-down_revision: str | Sequence[str] | None = (
-    "0054_dwh_outbox_support_loads",
-    "0056_price_increase_dates",
-)
+revision: str = "0058_list_updates"
+down_revision: str | Sequence[str] | None = "0057_dwh_outbox_support_loads"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
