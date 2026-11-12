@@ -7,9 +7,9 @@ read as a support id.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -41,7 +41,7 @@ class RowIssueResponse(BaseModel):
 
 
 class PreviewRowResponse(BaseModel):
-    """A row that would be created."""
+    """A row of the file and what it does: ``crear``, ``actualizar`` or ``sin_cambio``."""
 
     row_number: int
     supplier_code: str | None
@@ -53,6 +53,21 @@ class PreviewRowResponse(BaseModel):
     supplier_value: Decimal | None
     valid_from: date | None
     valid_to: date | None
+    action: Literal["crear", "actualizar", "sin_cambio"]
+    # The stored support it updates or leaves as it is.
+    support_id: UUID | None
+
+
+class MissingSupportResponse(BaseModel):
+    """A stored support the file no longer brings."""
+
+    support_id: UUID
+    customer_nit: str | None
+    product_sku: str | None
+    valid_from: date | None
+    valid_to: date | None
+    # Whether the load closes it (``expire_missing`` and in force).
+    expires: bool
 
 
 class BulkReportResponse(BaseModel):
@@ -73,6 +88,18 @@ class BulkReportResponse(BaseModel):
     profile_used: bool
     created: list[UUID]
     with_conflicts: int
+    to_create: int
+    to_update: int
+    unchanged: int
+    missing: int
+    to_expire: int
+    missing_preview: list[MissingSupportResponse]
+    updated: list[UUID]
+    expired: list[UUID]
+    # The load's trace id once applied (``supplier_support_loads``, ``carga_id`` in the DWH).
+    load_id: UUID | None
+    # A big load reaches the DWH from this moment (its quiet hours); null = right away.
+    publish_not_before: datetime | None
 
 
 def _json_object(text: str | None, name: str) -> dict[str, Any]:
@@ -115,6 +142,10 @@ async def bulk_template(
         description="Follow the layout of this supplier's profile (its own headers, fixed "
         "columns left out)",
     ),
+    full: bool = Query(
+        default=False,
+        description="Every field instead of the short general template",
+    ),
     _: Principal = _principal,
     service: SupportBulkService = _service,
 ) -> Response:
@@ -122,7 +153,7 @@ async def bulk_template(
 
     profile = await service.template_profile(supplier_code)
     return Response(
-        content=template_workbook(profile),
+        content=template_workbook(profile, full),
         media_type=_XLSX,
         headers={"Content-Disposition": 'attachment; filename="carga-apoyos.xlsx"'},
     )
@@ -135,10 +166,13 @@ async def bulk_template(
     description=(
         "multipart/form-data with `file` (.xlsx or .csv). Every row goes through the checks of "
         "a manual create and the load is all or nothing: one error blocks it. A simulation "
-        "unless `apply=true`. `supplier_code` selects the supplier's profile (defaults, sheet, "
-        "column names). `defaults` and `column_map` (JSON objects, as form fields) override "
-        'it for this load: `{"kind": "tactico_cliente"}`, '
-        '`{"supplier_value": ["% APOYO"]}`.'
+        "unless `apply=true`. Each row creates the support with its key (supplier, NIT, SKU, "
+        "agreement, start date), updates it (only the columns the file brings) or leaves it "
+        "as it is; stored supports of the same suppliers and classes the file no longer "
+        "brings are reported, and closed the day before with `expire_missing=true`. "
+        "`supplier_code` selects the supplier's profile (defaults, sheet, column names). "
+        "`defaults` and `column_map` (JSON objects, as form fields) override it for this load: "
+        '`{"kind": "tactico_cliente"}`, `{"supplier_value": ["% APOYO"]}`.'
     ),
 )
 @inject
@@ -147,12 +181,13 @@ async def bulk_load(
     apply: bool = Query(default=False),
     supplier_code: str | None = Query(default=None, max_length=20),
     sheet: str | None = Query(default=None, max_length=100),
+    expire_missing: bool = Query(default=False),
     defaults: str | None = Form(default=None),
     column_map: str | None = Form(default=None),
     principal: Principal = _principal,
     service: SupportBulkService = _service,
 ) -> BulkReportResponse:
-    """Simulate the load of a file and, with ``apply`` and no errors, create every row."""
+    """Simulate the load of a file and, with ``apply`` and no errors, write every row."""
 
     # One byte over the limit is enough for the service to reject the file.
     content = await file.read(service.max_upload_bytes + 1)
@@ -165,6 +200,7 @@ async def bulk_load(
         sheet=sheet,
         defaults=_json_object(defaults, "defaults"),
         column_map=_json_object(column_map, "column_map"),
+        expire_missing=expire_missing,
     )
     return _report(report)
 

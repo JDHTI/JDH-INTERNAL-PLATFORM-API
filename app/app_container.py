@@ -51,6 +51,7 @@ WIRED_MODULES = (
     "app.modules.notifications.presentation.router",
     "app.modules.salespeople.presentation.router",
     "app.modules.jobs.presentation.router",
+    "app.modules.dwh_publish.presentation.router",
 )
 
 

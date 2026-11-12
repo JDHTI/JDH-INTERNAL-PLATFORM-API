@@ -47,6 +47,8 @@ class FieldSpec:
     # Whether the bulk template carries a column for it.
     in_template: bool = True
     max_length: int | None = None
+    # Whether the short general template (the default download) carries it.
+    core: bool = False
 
 
 FIELD_SPECS: tuple[FieldSpec, ...] = (
@@ -58,15 +60,17 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("codigo proveedor", "cod proveedor", "proveedor codigo"),
         help="Código del proveedor comercial. Puede omitirse si se elige en la carga.",
         max_length=20,
+        core=True,
     ),
     FieldSpec(
         "kind",
-        "Tipo",
+        "Clase de apoyo",
         GROUP_IDENTITY,
         CHOICE,
-        ("tipo de apoyo", "tipo apoyo"),
+        ("clase apoyo", "clase", "tipo"),
         vocabulary.KINDS,
-        "Tipo de apoyo.",
+        "Clase de apoyo. En la carga, si falta: excepcion_margen con margen mínimo, "
+        "tactico_cliente si hay NIT y actividad_temporal si no.",
     ),
     FieldSpec(
         "funding",
@@ -90,9 +94,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "Referencia externa",
         GROUP_IDENTITY,
         TEXT,
-        ("ref externa", "consecutivo proveedor", "no apoyo"),
-        help="Número o código con el que el proveedor identifica el apoyo.",
+        ("ref externa", "consecutivo proveedor", "no apoyo", "n acuerdo", "no acuerdo"),
+        help="Número o código con el que el proveedor identifica el apoyo (acuerdo).",
         max_length=200,
+        core=True,
     ),
     FieldSpec(
         "customer_nit",
@@ -102,6 +107,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("nit", "nit cliente", "nit del cliente"),
         help="Sin dígito de verificación. Vacío = todos los clientes.",
         max_length=30,
+        core=True,
     ),
     FieldSpec("customer_branch_id", "Sucursal Cliente", GROUP_SCOPE, TEXT, ("sucursal",)),
     FieldSpec(
@@ -120,23 +126,27 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         TEXT,
         ("grupo empresarial", "grupo"),
         max_length=200,
+        core=True,
     ),
     FieldSpec(
         "product_sku",
-        "Referencia JDH",
+        "SKU JDH",
         GROUP_SCOPE,
         SKU,
-        ("sku jdh", "ref jdh", "ref. jdh", "referencia", "sku"),
+        ("referencia jdh", "sku jdh", "ref jdh", "ref. jdh", "referencia", "sku"),
         help="Referencia (SKU) del maestro de productos. Vacío = todo el portafolio.",
         max_length=50,
+        core=True,
     ),
     FieldSpec(
         "supplier_sku",
-        "Referencia Proveedor",
+        "SKU Proveedor",
         GROUP_SCOPE,
         SKU,
-        ("sku proveedor", "ref proveedor", "codigo proveedor sku", "ref"),
+        ("referencia proveedor", "sku proveedor", "ref proveedor", "codigo proveedor sku", "ref"),
+        help="Código del producto en el proveedor; se usa si no hay SKU JDH.",
         max_length=100,
+        core=True,
     ),
     FieldSpec("brand", "Marca", GROUP_SCOPE, TEXT, max_length=100),
     FieldSpec(
@@ -146,6 +156,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("regionales", "c o", "centro de operacion"),
         help="Varias separadas por coma, barra o punto y coma. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "business_units",
@@ -154,6 +165,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("unidades de negocio", "un", "u n"),
         help="Varias separadas por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "channels",
@@ -162,48 +174,73 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("canales",),
         help="Varios separados por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50),
     FieldSpec(
         "calc_method",
-        "Método de cálculo",
+        "Tipo de apoyo",
         GROUP_BENEFIT,
         CHOICE,
-        ("metodo", "metodo calculo", "base del apoyo"),
+        (
+            "tipo apoyo",
+            "tipo de apoyo",
+            "metodo",
+            "metodo calculo",
+            "metodo de calculo",
+            "base del apoyo",
+        ),
         vocabulary.CALC_METHODS,
-        "Cómo se aplica el valor del proveedor.",
+        "Cómo se lee el valor del apoyo: "
+        + ", ".join(vocabulary.CALC_METHOD_LABELS.values())
+        + " (o su código).",
+        core=True,
     ),
     FieldSpec(
         "supplier_value",
-        "Valor Proveedor",
+        "Valor apoyo",
         GROUP_BENEFIT,
         NUMBER,
-        ("apoyo", "valor apoyo", "% apoyo", "% dcto", "descuento", "costo apoyado"),
-        help="Porcentaje (5 %, 0,05 o 5) o dinero, según el método de cálculo.",
+        (
+            "valor apoyo proveedor",
+            "valor proveedor",
+            "apoyo",
+            "% apoyo",
+            "% dcto",
+            "descuento",
+            "costo apoyado",
+        ),
+        help="Porcentaje (5 %, 0,05 o 5) o dinero, según el tipo de apoyo.",
+        core=True,
     ),
     FieldSpec(
         "jdh_pct",
         "% Apoyo JDH",
         GROUP_BENEFIT,
         FRACTION,
-        ("apoyo jdh", "% jdh", "descuento jdh"),
-        help="Descuento que pone JDH, aparte del proveedor.",
+        ("apoyo jdh", "% jdh", "descuento jdh", "% dcto jdh"),
+        help="Descuento que pone JDH, aparte del proveedor. Si se deja vacío al actualizar, "
+        "se conserva el aprobado.",
+        core=True,
     ),
     FieldSpec(
         "value_unit",
-        "Unidad del costo",
+        "Unidad del valor",
         GROUP_BENEFIT,
         CHOICE,
-        ("unidad", "unidad costo", "costo por"),
+        ("unidad del costo", "unidad", "unidad costo", "costo por"),
         vocabulary.VALUE_UNITS,
-        "Si el costo está por caja o por unidad. Vacío = se infiere del DWH.",
+        "Si el valor en pesos está por caja o por unidad. Vacío = se infiere del DWH.",
+        core=True,
     ),
     FieldSpec(
         "target_margin_pct",
-        "Margen Objetivo",
+        "Margen garantizado",
         GROUP_BENEFIT,
         FRACTION,
-        ("margen garantizado", "margen optimo", "% margen optimo"),
+        ("margen objetivo", "margen optimo", "% margen optimo", "% margen garantizado"),
+        help="Obligatorio con precio apoyado sin IVA.",
+        core=True,
     ),
     FieldSpec(
         "min_margin_pct",
@@ -255,6 +292,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_CONDITIONS,
         NUMBER,
         ("volumen", "volumen compromiso"),
+        core=True,
     ),
     FieldSpec("budget_amount", "Presupuesto", GROUP_CONDITIONS, NUMBER, ("presupuesto valor",)),
     FieldSpec(
@@ -285,16 +323,18 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "Fecha Inicio",
         GROUP_VALIDITY,
         DATE,
-        ("fecha inicial", "vigencia desde", "inicio", "desde"),
-        help="dd/mm/aaaa o aaaa-mm-dd.",
+        ("vigencia inicial", "fecha inicial", "vigencia desde", "inicio", "desde"),
+        help="dd/mm/aaaa o aaaa-mm-dd. Forma parte de la llave del apoyo.",
+        core=True,
     ),
     FieldSpec(
         "valid_to",
         "Fecha Fin",
         GROUP_VALIDITY,
         DATE,
-        ("fecha final", "vigencia hasta", "fin", "hasta"),
-        help="Vacío, INDEFINIDO o UFN = sin fecha final.",
+        ("vigencia final", "fecha final", "vigencia hasta", "fin", "hasta"),
+        help="INDEFINIDO o UFN = sin fecha final.",
+        core=True,
     ),
     FieldSpec(
         "end_condition",
@@ -309,8 +349,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "Forma de liquidación",
         GROUP_SETTLEMENT,
         CHOICE,
-        ("liquidacion", "metodo liquidacion"),
+        ("liquidacion", "metodo liquidacion", "forma de cobro", "metodologia cobro"),
         vocabulary.SETTLEMENTS,
+        core=True,
     ),
     FieldSpec(
         "settlement_frequency",
@@ -327,6 +368,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         TEXT,
         ("autoriza", "autorizado"),
         max_length=200,
+        core=True,
     ),
     FieldSpec(
         "supplier_contact",
@@ -351,6 +393,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         TEXT,
         ("observacion", "notas", "comentarios", "obervaciones"),
         max_length=2000,
+        core=True,
     ),
 )
 
@@ -436,6 +479,8 @@ def form_schema() -> dict[str, object]:
             for name, rule in METHOD_RULES.items()
         },
         "required_always": ["kind", "calc_method"],
+        # How each calc method reads in the general template's "Tipo de apoyo" column.
+        "calc_method_labels": dict(vocabulary.CALC_METHOD_LABELS),
         "tiers": {"threshold_types": list(vocabulary.THRESHOLD_TYPES), "max": 20},
     }
 

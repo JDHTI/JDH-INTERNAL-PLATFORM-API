@@ -180,6 +180,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/dwh-monitoring/sync` | `read` |  |
 | `POST` | `/v1/dwh-monitoring/sync` | `relaxed` |  |
 | `GET` | `/v1/dwh-monitoring/transformations` | `read` |  |
+| `GET` | `/v1/dwh-publish` | `read` |  |
+| `GET` | `/v1/dwh-publish/failed` | `read` |  |
+| `POST` | `/v1/dwh-publish/reconcile` | `relaxed` |  |
+| `POST` | `/v1/dwh-publish/retry` | `relaxed` |  |
 | `GET` | `/v1/jobs` | `read` |  |
 | `GET` | `/v1/jobs/runs` | `read` |  |
 | `POST` | `/v1/jobs/{key}/run` | `strict` | Lanza una sincronización de maestros contra el datawarehouse |

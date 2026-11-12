@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: str = "bi"
     # Largest file, and most rows, of a bulk load of supports.
     SUPPLIER_SUPPORTS_MAX_UPLOAD_MB: int = 10
-    SUPPLIER_SUPPORTS_MAX_BULK_ROWS: int = 2000
+    SUPPLIER_SUPPORTS_MAX_BULK_ROWS: int = 10000
     # Area (document manager) and folder that keep the supporting files of supports: the
     # supports master belongs to BI, so its proofs are listed in BI's document manager. The
     # supports managers file them there even when they are not members of that area.
@@ -281,6 +281,35 @@ class Settings(BaseSettings):
     JOBS_TIMEZONE: str = "America/Bogota"
     # Longest wait for a reloading sequence before a job gives up.
     JOBS_WAIT_FOR_DWH_SECONDS: int = 1800
+
+    # Publication to the DWH (``plataforma`` schema): every change is queued in ``dwh_outbox``
+    # in its own transaction; with DWH_PUBLISH_ENABLED a background loop sends it with the
+    # writer role below (its own small pool, never the read-only DWH_* user). Off, the queue
+    # keeps growing and is sent when it is turned on.
+    DWH_PUBLISH_ENABLED: bool = False
+    DWH_WRITER_HOST: str = ""
+    DWH_WRITER_PORT: int = 5432
+    # Empty: DWH_DATABASE.
+    DWH_WRITER_DATABASE: str = ""
+    DWH_WRITER_USER: str = ""
+    DWH_WRITER_PASSWORD: SecretStr = SecretStr("")
+    # require | verify-ca | verify-full | disable (local tests only).
+    DWH_WRITER_SSLMODE: str = "require"
+    DWH_WRITER_POOL_SIZE: int = 2
+    DWH_WRITER_STATEMENT_TIMEOUT_SECONDS: int = 60
+    DWH_WRITER_LOCK_TIMEOUT_SECONDS: int = 10
+    DWH_PUBLISH_POLL_SECONDS: int = 10
+    DWH_PUBLISH_BATCH_SIZE: int = 1000
+    # Attempts of an event the DWH rejects before it is set aside as failed.
+    DWH_PUBLISH_MAX_ATTEMPTS: int = 12
+    # The DWH's quiet hours (no ETL, measured 2026-11): loads writing more than
+    # DWH_PUBLISH_DEFER_OVER_ROWS supports are published from DWH_PUBLISH_QUIET_START.
+    DWH_PUBLISH_QUIET_START: str = "18:00"
+    DWH_PUBLISH_QUIET_END: str = "03:00"
+    DWH_PUBLISH_DEFER_OVER_ROWS: int = 5000
+    # Daily comparison with the DWH that queues again what it lacks.
+    DWH_PUBLISH_RECONCILE_AT: str = "19:00"
+    DWH_PUBLISH_TIMEZONE: str = "America/Bogota"
 
     # Application monitoring (TI → Monitoreo → Aplicativos): a background loop requests the
     # health endpoint and the UI of every registered platform; checks older than the
@@ -415,6 +444,49 @@ class Settings(BaseSettings):
             raise ValueError("JOBS_TIMEZONE must be an IANA timezone") from exc
         if self.JOBS_DWH_POLL_SECONDS < 10:
             raise ValueError("JOBS_DWH_POLL_SECONDS must be at least 10")
+        return self
+
+    @property
+    def dwh_publish_quiet_start(self) -> time:
+        """Local time the DWH's quiet hours start (big loads are published from then)."""
+
+        return time.fromisoformat(self.DWH_PUBLISH_QUIET_START.strip())
+
+    @property
+    def dwh_publish_quiet_end(self) -> time:
+        """Local time the DWH's quiet hours end (the reconciliation runs inside them)."""
+
+        return time.fromisoformat(self.DWH_PUBLISH_QUIET_END.strip())
+
+    @property
+    def dwh_publish_reconcile_at(self) -> time:
+        """Local time of the daily reconciliation with the DWH."""
+
+        return time.fromisoformat(self.DWH_PUBLISH_RECONCILE_AT.strip())
+
+    @model_validator(mode="after")
+    def validate_dwh_publish_settings(self) -> "Settings":
+        """Reject bad times, timezone, batch or attempts of the DWH publication."""
+
+        for name in (
+            "DWH_PUBLISH_QUIET_START",
+            "DWH_PUBLISH_QUIET_END",
+            "DWH_PUBLISH_RECONCILE_AT",
+        ):
+            try:
+                time.fromisoformat(getattr(self, name).strip())
+            except ValueError as exc:
+                raise ValueError(f"{name} must be HH:MM") from exc
+        try:
+            ZoneInfo(self.DWH_PUBLISH_TIMEZONE)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("DWH_PUBLISH_TIMEZONE must be an IANA timezone") from exc
+        if not 1 <= self.DWH_PUBLISH_BATCH_SIZE <= 5000:
+            raise ValueError("DWH_PUBLISH_BATCH_SIZE must be between 1 and 5000")
+        if not 1 <= self.DWH_WRITER_POOL_SIZE <= 5:
+            raise ValueError("DWH_WRITER_POOL_SIZE must be between 1 and 5 (the role allows 5)")
+        if self.DWH_PUBLISH_MAX_ATTEMPTS < 1 or self.DWH_PUBLISH_POLL_SECONDS < 1:
+            raise ValueError("DWH_PUBLISH_MAX_ATTEMPTS and DWH_PUBLISH_POLL_SECONDS must be > 0")
         return self
 
     @property
@@ -607,6 +679,26 @@ class Settings(BaseSettings):
                 "fallback_at": self.jobs_fallback_at,
                 "timezone": self.JOBS_TIMEZONE,
                 "wait_for_dwh": self.JOBS_WAIT_FOR_DWH_SECONDS,
+            },
+            "dwh_publish": {
+                "enabled": self.DWH_PUBLISH_ENABLED,
+                "host": self.DWH_WRITER_HOST,
+                "port": self.DWH_WRITER_PORT,
+                "database": self.DWH_WRITER_DATABASE or self.DWH_DATABASE,
+                "user": self.DWH_WRITER_USER,
+                "password": self.DWH_WRITER_PASSWORD.get_secret_value(),
+                "ssl": self.DWH_WRITER_SSLMODE,
+                "pool_size": self.DWH_WRITER_POOL_SIZE,
+                "statement_timeout_ms": self.DWH_WRITER_STATEMENT_TIMEOUT_SECONDS * 1000,
+                "lock_timeout_ms": self.DWH_WRITER_LOCK_TIMEOUT_SECONDS * 1000,
+                "configured": bool(self.DWH_WRITER_HOST and self.DWH_WRITER_USER),
+                "batch_size": self.DWH_PUBLISH_BATCH_SIZE,
+                "max_attempts": self.DWH_PUBLISH_MAX_ATTEMPTS,
+                "poll_seconds": self.DWH_PUBLISH_POLL_SECONDS,
+                "quiet_start": self.dwh_publish_quiet_start,
+                "quiet_end": self.dwh_publish_quiet_end,
+                "defer_over_rows": self.DWH_PUBLISH_DEFER_OVER_ROWS,
+                "timezone": self.DWH_PUBLISH_TIMEZONE,
             },
             "app_monitoring": {
                 "enabled": self.APP_MONITORING_ENABLED,

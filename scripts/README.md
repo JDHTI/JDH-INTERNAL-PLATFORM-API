@@ -89,6 +89,14 @@ poetry run python scripts/import-supplier-supports.py "1. MAESTRO APOYOS PROVEED
     --report inconsistencias.csv --apply
 ```
 
+Después, cuando los proveedores envían sus archivos por separado (`Apoyos Proveedor - X.xlsx`),
+se recargan por llave sin duplicar (simulación salvo `--apply`; `--expire-missing` cierra los que
+ya no vienen). Ver [docs/apoyos-proveedores.md](../docs/apoyos-proveedores.md):
+
+```bash
+poetry run python scripts/reload-supplier-supports.py "Apoyos proveedores" --report recarga.csv
+```
+
 Carga el margen por producto y canal y el impuesto al licor desde `Maestro Margen.xlsx` (hoja
 `Margen Producto`). Necesita los productos ya sincronizados; simula salvo `--apply` y se puede
 repetir. El mismo archivo se puede subir desde la app. Detalle en

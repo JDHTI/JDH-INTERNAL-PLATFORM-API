@@ -1,5 +1,7 @@
 """Dependency providers owned by API version 1."""
 
+from zoneinfo import ZoneInfo
+
 from dependency_injector import containers, providers
 
 from app.core.config import Settings
@@ -53,6 +55,13 @@ from app.modules.dwh_monitoring.application.sync import MonitoringSyncService
 from app.modules.dwh_monitoring.infrastructure.dwh_source import WarehouseMonitoringSource
 from app.modules.dwh_monitoring.infrastructure.repository import SqlAlchemyMonitoringRepository
 from app.modules.dwh_monitoring.infrastructure.worker import SyncTrigger
+from app.modules.dwh_publish.application.service import (
+    DwhPublishService,
+    PublishSettings,
+    PublishState,
+)
+from app.modules.dwh_publish.infrastructure.repository import SqlAlchemyOutboxRepository
+from app.modules.dwh_publish.infrastructure.writer import WarehouseWriterConnection
 from app.modules.health.application.service import HealthService
 from app.modules.identity.application.directory import UserDirectory
 from app.modules.identity.application.provisioning import UserProvisioning
@@ -147,7 +156,8 @@ from app.modules.salespeople.infrastructure.repository import SqlAlchemyLinkRepo
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
-from app.modules.supplier_supports.application.bulk import SupportBulkService
+from app.modules.supplier_supports.application.bulk import QuietHours, SupportBulkService
+from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.application.profiles import SupportProfileService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
@@ -156,11 +166,20 @@ from app.modules.supplier_supports.infrastructure.attachments_repository import 
     SqlAlchemyAttachmentRepository,
 )
 from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
+from app.modules.supplier_supports.infrastructure.costs import (
+    SqlAlchemyCostRepository,
+    WarehouseCostSource,
+)
 from app.modules.supplier_supports.infrastructure.document_store import (
     DocumentManagerSupportStore,
 )
 from app.modules.supplier_supports.infrastructure.profiles_repository import (
     SqlAlchemyProfileRepository,
+)
+from app.modules.supplier_supports.infrastructure.publication import (
+    LoadTopic,
+    SupportTopic,
+    build_topics,
 )
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
 from app.modules.supplier_supports.infrastructure.requests_repository import (
@@ -574,6 +593,14 @@ class V1Container(containers.DeclarativeContainer):
         max_file_bytes=config.documents.max_upload_bytes,
     )
     supplier_support_file_reader = providers.Singleton(SpreadsheetSupportReader)
+    dwh_publish_zone = providers.Singleton(ZoneInfo, config.dwh_publish.timezone)
+    supplier_support_quiet_hours = providers.Singleton(
+        QuietHours,
+        start=config.dwh_publish.quiet_start,
+        end=config.dwh_publish.quiet_end,
+        zone=dwh_publish_zone,
+        defer_over=config.dwh_publish.defer_over_rows,
+    )
     supplier_support_bulk_service = providers.Factory(
         SupportBulkService,
         supports=supplier_support_service,
@@ -581,6 +608,44 @@ class V1Container(containers.DeclarativeContainer):
         reader=supplier_support_file_reader,
         max_upload_bytes=config.supplier_supports.max_upload_bytes,
         max_rows=config.supplier_supports.max_bulk_rows,
+        quiet_hours=supplier_support_quiet_hours,
+    )
+    # --- Publication to the DWH (plataforma schema): outbox, writer role, worker ---
+    dwh_writer = providers.Singleton(
+        WarehouseWriterConnection,
+        host=config.dwh_publish.host,
+        port=config.dwh_publish.port,
+        database=config.dwh_publish.database,
+        user=config.dwh_publish.user,
+        password=config.dwh_publish.password,
+        ssl=config.dwh_publish.ssl,
+        max_size=config.dwh_publish.pool_size,
+        statement_timeout_ms=config.dwh_publish.statement_timeout_ms,
+        lock_timeout_ms=config.dwh_publish.lock_timeout_ms,
+    )
+    dwh_outbox_repository = providers.Factory(SqlAlchemyOutboxRepository, database=database)
+    dwh_publish_topics = providers.Singleton(
+        build_topics,
+        supports=providers.Factory(SupportTopic, database=database),
+        loads=providers.Factory(LoadTopic, database=database),
+    )
+    dwh_publish_settings = providers.Singleton(
+        PublishSettings,
+        enabled=config.dwh_publish.enabled,
+        batch_size=config.dwh_publish.batch_size,
+        max_attempts=config.dwh_publish.max_attempts,
+        poll_seconds=config.dwh_publish.poll_seconds,
+    )
+    # The worker and the status endpoint share what the worker last did.
+    dwh_publish_state = providers.Singleton(PublishState)
+    dwh_publish_service = providers.Factory(
+        DwhPublishService,
+        repository=dwh_outbox_repository,
+        writer=dwh_writer,
+        topics=dwh_publish_topics,
+        settings=dwh_publish_settings,
+        state=dwh_publish_state,
+        configured=config.dwh_publish.configured,
     )
     # --- Retained orders validator (reads the supports master) ---
     order_validation_manager_policy = providers.Factory(
@@ -705,10 +770,23 @@ class V1Container(containers.DeclarativeContainer):
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)
     job_watermarks = providers.Factory(SqlAlchemySequenceWatermarks, database=database)
     job_sequence_source = providers.Factory(WarehouseSequenceSource, connection=data_provider)
+    supplier_support_cost_source = providers.Factory(
+        WarehouseCostSource,
+        connection=data_provider,
+        quotations=quotation_warehouse_source,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.quotations.dwh_timeout,
+    )
+    supplier_support_cost_service = providers.Factory(
+        SupportCostService,
+        repository=providers.Factory(SqlAlchemyCostRepository, database=database),
+        warehouse=supplier_support_cost_source,
+    )
     job_handlers = providers.Singleton(
         build_job_handlers,
         masters=master_service.provider,
         commercial_sync=master_sync_service.provider,
+        support_costs=supplier_support_cost_service.provider,
     )
     # The worker and the API share the last poll result and the queue of runs.
     job_poll_status = providers.Singleton(PollStatus)

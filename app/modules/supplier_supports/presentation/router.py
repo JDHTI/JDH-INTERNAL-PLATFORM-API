@@ -191,6 +191,24 @@ class DerivedResponse(BaseModel):
     supplier_amount_per: MoneyPairResponse
     net_cost_per: MoneyPairResponse
     suggested_price_per: MoneyPairResponse
+    # Which cost the figures use: "dwh" (quoter's rule) or "referencia" (stored); null = none.
+    cost_basis: Literal["dwh", "referencia"] | None
+
+
+class DwhCostResponse(BaseModel):
+    """The cost of the support's SKU in the DWH with the quoter's rule (daily job)."""
+
+    # Per inventory unit, the higher of quotation and inventory, without the lists' factor.
+    unit_cost: Decimal | None
+    # "cotizacion" or "inventario": which one won.
+    source: str | None
+    quote_cost: Decimal | None
+    inventory_cost: Decimal | None
+    # Warehouses used: the client's price list (or billing center), or list 1's highest.
+    plan_key: str
+    plan_label: str
+    snapshot_date: date | None
+    computed_at: datetime | None
 
 
 class SupportResponse(_SupportFields):
@@ -218,6 +236,10 @@ class SupportResponse(_SupportFields):
     issues: list[IssueResponse]
     tiers: list[TierBody]
     derived: DerivedResponse
+    dwh_cost: DwhCostResponse | None
+    # What wrote the current version (manual, carga, aprobacion_jdh…) and its bulk load.
+    last_origin: str | None
+    last_load_id: UUID | None
     source: str | None
     source_key: str | None
     void_reason: str | None
@@ -343,6 +365,13 @@ def _response(view: SupportView) -> SupportResponse:
             for tier in data.tiers
         ],
         derived=DerivedResponse.model_validate(view.derived, from_attributes=True),
+        dwh_cost=(
+            DwhCostResponse.model_validate(view.dwh_cost, from_attributes=True)
+            if view.dwh_cost
+            else None
+        ),
+        last_origin=support.last_origin,
+        last_load_id=support.last_load_id,
         void_reason=support.void_reason,
         voided_at=support.voided_at,
         created_by=support.created_by,

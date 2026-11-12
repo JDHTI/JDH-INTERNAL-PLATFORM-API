@@ -1,0 +1,110 @@
+"""DWH cost of the supports with the quoter's rule, and how the figures use it."""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from uuid import uuid4
+
+from app.modules.quotations.domain.entities import CostInfo
+from app.modules.supplier_supports.application.costs import (
+    BranchPlan,
+    CostTarget,
+    SupportCostService,
+    plan_key,
+)
+from app.modules.supplier_supports.domain.entities import SupportData
+from app.modules.supplier_supports.domain.pricing import derive, dwh_cost_in_unit
+
+D = Decimal
+
+
+class FakeRepository:
+    def __init__(self, targets):
+        self._targets = targets
+        self.saved = []
+
+    async def targets(self):
+        return self._targets
+
+    async def save(self, costs, now):
+        self.saved = list(costs)
+        return len(costs)
+
+
+class FakeWarehouse:
+    """Costs by warehouse plan: the cold room of Medellín is the most expensive."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def branches(self, nits):
+        return {
+            "900": [
+                BranchPlan("001", "001", True),  # Antioquia list
+                BranchPlan("003", "003", True),  # Centro list
+                BranchPlan("002", "002", False),  # inactive branch: ignored
+            ]
+        }
+
+    async def costs(self, skus, plan):
+        self.calls.append(plan_key(plan))
+        by_plan = {
+            "MDE1/MDE3": CostInfo(
+                "1128", D("100.4"), None, D("98"), D(5), "ABARROTES", True, date(2026, 11, 10)
+            ),
+            "BTA9/BTA8": CostInfo(
+                "1128", D("90"), None, D("120.2"), D(5), "ABARROTES", True, date(2026, 11, 10)
+            ),
+            "lista1-mayor": CostInfo(
+                "1128", D("1"), None, D("110"), D(5), "ABARROTES", True, date(2026, 11, 10)
+            ),
+        }
+        info = by_plan.get(plan_key(plan))
+        return {sku: info for sku in skus if info is not None}
+
+
+async def test_the_highest_cost_of_the_clients_plans_without_the_list_factor() -> None:
+    client, everyone = uuid4(), uuid4()
+    repo = FakeRepository([CostTarget(client, "1128", "900"), CostTarget(everyone, "1128", None)])
+    warehouse = FakeWarehouse()
+
+    summary = await SupportCostService(repo, warehouse).run()
+
+    costs = {cost.support_id: cost for cost in repo.saved}
+    # Antioquia 100.4 (quotation) vs Centro 120.2 (inventory): the higher, rounded up.
+    assert costs[client].unit_cost == D("121.0000") and costs[client].source == "inventario"
+    assert costs[client].plan_key == "BTA9/BTA8"
+    # No client: list 1, highest among its warehouses; a 1-peso quotation never counts.
+    assert costs[everyone].unit_cost == D("110.0000") and costs[everyone].plan_key == "lista1-mayor"
+    assert "OCC1/OCC16" not in warehouse.calls  # the inactive branch
+    assert summary["with_cost"] == 2 and summary["without_cost"] == 0
+
+
+def test_the_figures_use_the_dwh_cost_in_the_supports_unit() -> None:
+    data = SupportData(
+        kind="tactico_cliente",
+        calc_method="pct_costo",
+        supplier_value=D("0.10"),
+        reference_cost=D("999"),
+        value_unit="caja",
+        pack_factor=D("12"),
+        target_margin_pct=D("0.2"),
+    )
+
+    derived = derive(data, dwh_unit_cost=D("100"))
+
+    assert derived.cost_basis == "dwh"
+    assert derived.supplier_amount == D("120.0")  # 10 % of a box of 12 x 100
+    assert derive(data).cost_basis == "referencia"
+    assert derive(data).supplier_amount == D("99.9")
+    # Unknown unit: the DWH cost cannot be placed, the reference stays.
+    assert dwh_cost_in_unit(D("100"), None, D("12")) is None
+    assert dwh_cost_in_unit(D("100"), "caja", None) is None
+
+
+def test_a_sku_that_is_the_box_is_not_multiplied_again() -> None:
+    # Ohra: the SKU is a case of 18 bottles; the DWH cost 108.000 is already the case.
+    assert dwh_cost_in_unit(D("108000"), "caja", D("18"), D("108000")) == D("108000")
+    # Familia: the DWH cost is per roll and the sheet's box has 24.
+    assert dwh_cost_in_unit(D("3636"), "caja", D("24"), D("87275")) == D("87264")

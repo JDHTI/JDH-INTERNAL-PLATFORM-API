@@ -25,6 +25,7 @@ from app.core.rate_limit_middleware import RateLimitMiddleware
 from app.modules.app_monitoring.infrastructure.worker import AppCheckWorker
 from app.modules.directory.infrastructure.worker import DirectorySyncWorker
 from app.modules.dwh_monitoring.infrastructure.worker import MonitoringSyncWorker
+from app.modules.dwh_publish.infrastructure.worker import DwhPublishWorker
 from app.modules.jobs.infrastructure.worker import JobsWorker
 from app.modules.notifications.infrastructure.worker import NotificationDispatchWorker
 from app.modules.pqrsf.infrastructure.email_worker import EmailIntakeWorker
@@ -48,6 +49,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         directory_worker: DirectorySyncWorker | None = None
         notification_worker_loop: NotificationDispatchWorker | None = None
         jobs_worker: JobsWorker | None = None
+        publish_worker: DwhPublishWorker | None = None
         try:
             # Instantiate clients at startup; network probes remain part of readiness.
             resources = await initialize_global_resources(container)
@@ -124,6 +126,19 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     f"{runtime_settings.JOBS_DWH_POLL_SECONDS}s, fallback at "
                     f"{runtime_settings.JOBS_FALLBACK_AT} {runtime_settings.JOBS_TIMEZONE})"
                 )
+            if runtime_settings.DWH_PUBLISH_ENABLED:
+                publish_worker = DwhPublishWorker(
+                    container.v1_container.dwh_publish_service,
+                    poll_seconds=runtime_settings.DWH_PUBLISH_POLL_SECONDS,
+                    reconcile_at=runtime_settings.dwh_publish_reconcile_at,
+                    zone=ZoneInfo(runtime_settings.DWH_PUBLISH_TIMEZONE),
+                )
+                publish_worker.start()
+                logger.info(
+                    "DWH publish sending the outbox every "
+                    f"{runtime_settings.DWH_PUBLISH_POLL_SECONDS}s as "
+                    f"{runtime_settings.DWH_WRITER_USER or '(writer not configured)'}"
+                )
             logger.info(f"{runtime_settings.APP_NAME} starting in {runtime_settings.APP_ENV}")
             logger.info(
                 f"API running on http://localhost:{runtime_settings.PORT}{runtime_settings.API_PREFIX}"
@@ -138,6 +153,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.info(f"{runtime_settings.APP_NAME} shutdown")
+            if publish_worker is not None:
+                await publish_worker.stop()
+                await container.v1_container.dwh_writer().close()
             if jobs_worker is not None:
                 await jobs_worker.stop()
             if notification_worker_loop is not None:

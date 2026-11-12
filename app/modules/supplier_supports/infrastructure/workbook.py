@@ -333,7 +333,8 @@ SOURCES: tuple[Source, ...] = (
             "reference_cost": "COSTO CAJA",
             "supplier_value": "COSTO APOYADO CAJA",
             "pack_factor": "FACTOR U.E",
-            "target_margin_pct": "MARGEN OBJETIVO",
+            # "MARGEN" in the per-supplier file of 2026-11.
+            "target_margin_pct": ("MARGEN OBJETIVO", "MARGEN"),
             "business_units": "UN",
             "notes": "OBSERVACION",
         },
@@ -478,10 +479,11 @@ SOURCES: tuple[Source, ...] = (
         TEAM,
         "tactico_cliente",
         "pct_costo",
+        # The second header of each pair is the per-supplier file of 2026-11.
         {
-            "valid_from": "FECHA INICIO",
-            "valid_to": "FECHA FIN",
-            "regionals": "REGIONAL FACTURACIÓN",
+            "valid_from": ("FECHA INICIO", "FECHA INICIAL"),
+            "valid_to": ("FECHA FIN", "FECHA FINAL"),
+            "regionals": ("REGIONAL FACTURACIÓN", "REGIONAL DE FACTURACIÓN"),
             "supplier_contact": "RESPONSABLE TEAM",
             "sales_rep": "EJECUTIVO",
             "customer_group": "GRUPO EMPRESARIAL",
@@ -491,9 +493,9 @@ SOURCES: tuple[Source, ...] = (
             "supplier_sku": "SKU TEAM",
             "reference_cost": "COSTO DISTRIBUIDOR",
             "list_margin_pct": "MARGEN JDH",
-            "reference_list_price": "PVP SIN IVA",
-            "supplier_value": "% DCTO TEAM (En Costo)",
-            "jdh_pct": "% DCTO JDH (En PVP)",
+            "reference_list_price": ("PVP SIN IVA", "PVP MARGEN JDH"),
+            "supplier_value": ("% DCTO TEAM (En Costo)", "DCTO TEAM (SOBRE COSTO)"),
+            "jdh_pct": ("% DCTO JDH (En PVP)", "DCTO JDH (SOBRE PVP)"),
             "pack_factor": "U.E",
             "notes": "OBSERVACION",
         },
@@ -894,6 +896,60 @@ class Workbook:
                 rows.append(Row(line[0].row, values))
         return rows
 
+    def has_table(self, sheet: str, table: str) -> bool:
+        """Whether the book holds that table on that sheet."""
+
+        return sheet in self.book.sheetnames and table in self.book[sheet].tables
+
+
+class FolderWorkbook:
+    """The supplier files of a folder (one ``Apoyos Proveedor - X.xlsx`` per supplier) read as
+    one book: the same Excel tables as the old master workbook, split by supplier.
+
+    A table is found by its name alone, because some sheets were renamed when the workbook
+    was split (``Team (Desactualizada)`` is now ``Team``); tables missing from the folder are
+    skipped by :func:`read_supports`.
+    """
+
+    def __init__(self, folder: Path) -> None:
+        """Open every ``.xlsx`` of the folder (Excel's ``~$`` lock files are ignored).
+
+        Raises:
+            FileNotFoundError: If the folder does not exist or holds no workbook.
+        """
+
+        paths = sorted(path for path in folder.glob("*.xlsx") if not path.name.startswith("~$"))
+        if not folder.is_dir() or not paths:
+            raise FileNotFoundError(folder)
+        self.books = {path: Workbook(path) for path in paths}
+
+    def _find(self, table: str) -> tuple[Path, Workbook, str] | None:
+        for path, book in self.books.items():
+            for worksheet in book.book.worksheets:
+                if table in worksheet.tables:
+                    return path, book, worksheet.title
+        return None
+
+    def file_of(self, table: str) -> Path | None:
+        """The file that holds a table."""
+
+        found = self._find(table)
+        return found[0] if found else None
+
+    def has_table(self, sheet: str, table: str) -> bool:
+        """Whether some file holds the table (whatever its sheet is called now)."""
+
+        return self._find(table) is not None
+
+    def table(self, sheet: str, table: str) -> list[Row]:
+        """Rows of one Excel table, wherever it is."""
+
+        found = self._find(table)
+        if found is None:
+            raise KeyError(f"Falta la tabla {table!r}")
+        _, book, title = found
+        return book.table(title, table)
+
 
 def _draft(source: Source, row: Row) -> Draft | None:
     draft = Draft(source.kind, source.calc)
@@ -939,12 +995,19 @@ def _to_data(origin: str, draft: Draft, key: str) -> SupportData:
     )
 
 
-def read_supports(book: Workbook, only: Sequence[str] | None = None) -> Iterator[ImportedSupport]:
+def read_supports(
+    book: Workbook | FolderWorkbook,
+    only: Sequence[str] | None = None,
+    *,
+    skip_missing: bool = False,
+) -> Iterator[ImportedSupport]:
     """Yield every support of the workbook, normalized, in sheet order.
 
     Args:
-        book (Workbook): The opened workbook.
+        book (Workbook | FolderWorkbook): The opened workbook or folder of supplier files.
         only (Sequence[str] | None): Sheet names to read; all when ``None``.
+        skip_missing (bool): Skip the tables (and untabled sheets) the book does not hold,
+            instead of failing: a folder of supplier files brings only some of them.
 
     Yields:
         ImportedSupport: One support per row (several for expanded exceptions).
@@ -953,6 +1016,8 @@ def read_supports(book: Workbook, only: Sequence[str] | None = None) -> Iterator
     selected = {name.casefold() for name in only} if only else None
     for source in SOURCES:
         if selected is not None and source.sheet.casefold() not in selected:
+            continue
+        if skip_missing and not book.has_table(source.sheet, source.table):
             continue
         rows = book.table(source.sheet, source.table)
         drafts = [(row, _draft(source, row)) for row in rows]
@@ -988,6 +1053,10 @@ def read_supports(book: Workbook, only: Sequence[str] | None = None) -> Iterator
                 source.sheet,
                 source.table,
             )
+    if skip_missing:
+        # The untabled sheets (Estra, Azteca's rebates, Condiciones Especiales) only live in
+        # the old master workbook.
+        return
     if selected is None or "estra" in selected:
         yield from _estra(book)
     if selected is None or "azteca" in selected:
