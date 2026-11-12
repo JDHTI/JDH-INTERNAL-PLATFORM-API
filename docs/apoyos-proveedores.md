@@ -247,11 +247,27 @@ Un solo formato para todos los proveedores, basado en la propuesta TI v0.3
 (`Plantilla_Apoyos_Proveedor_v0_3.xlsx`). **El proveedor solo escribe lo que se negocia**; lo que
 ya existe en el DWH no se pide y lo calculado no se diligencia:
 
-| Se diligencia | Columna | |
-| --- | --- | --- |
-| Llave | `Fecha Inicio` (o `Vigencia inicial`), `NIT Cliente`, `SKU JDH` (o `SKU Proveedor`), `Referencia externa` (n.º de acuerdo, si lo hay) | El proveedor se elige en la Suite al subir (o columna `Cod. Proveedor`) |
-| Apoyo | `Tipo de apoyo` + `Valor apoyo` | Un único valor y cómo leerlo: `% sobre costo`, `% sobre precio lista`, `Costo apoyado`, `Precio apoyado sin IVA`, `$ por unidad`, `Margen mínimo` (o el código) |
-| Opcional | `Fecha Fin` (`INDEFINIDO`), `Unidad del valor` (caja/unidad), `% Apoyo JDH`, `Margen garantizado`, `Regional`, `Unidad de Negocio`, `Canal`, `Grupo Cliente`, `Volumen Comprometido`, `Forma de liquidación`, `Autorizado por`, `Observaciones` | |
+La plantilla corta (la que se descarga por defecto) trae solo estas columnas. **Obligatorio: el
+`Tipo de apoyo`**; el proveedor se elige en la Suite al subir.
+
+| Columna | Cuándo |
+| --- | --- |
+| `Fecha Inicio`, `Fecha Fin` | Fecha Fin `INDEFINIDO` = sin fin. La fecha inicio es parte de la llave |
+| `NIT Cliente` | Vacío = todos los clientes |
+| `SKU JDH` (o `SKU Proveedor`) | Vacío = todo el portafolio |
+| `Tipo de apoyo` | `% sobre costo`, `% sobre precio lista`, `Costo apoyado`, `Precio apoyado sin IVA`, `$ por unidad`, `Margen mínimo` (o el código) |
+| `Valor apoyo` | El valor según el tipo (no se usa con `Margen mínimo`) |
+| `Unidad del valor` | Opcional: caja o unidad, para los tipos en pesos; vacío se infiere del DWH |
+| `Margen garantizado` | Obligatorio solo con `Precio apoyado sin IVA` |
+| `Margen Mínimo` | Solo con `Margen mínimo` |
+| `% Apoyo JDH` | Opcional, si JDH pone un descuento aparte |
+| `Observaciones` | Opcional |
+
+Todo lo demás es **opcional y no va en la plantilla corta**: `Autorizado por` (quién autorizó
+comercialmente el apoyo, texto libre), `Volumen Comprometido` y `Referencia externa` (n.º de
+acuerdo; hoy solo Kimberly), `Regional`, `Unidad de Negocio`, `Canal`, `Grupo Cliente`,
+`Forma de liquidación`, `Cod. Proveedor`. Se leen igual si el archivo las trae y están en la
+plantilla completa (`full=true`) y en el perfil del proveedor que las use.
 
 | Del DWH (no se pide) | Calculado (no se diligencia) |
 | --- | --- |

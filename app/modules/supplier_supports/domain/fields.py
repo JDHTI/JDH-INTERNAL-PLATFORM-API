@@ -60,7 +60,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("codigo proveedor", "cod proveedor", "proveedor codigo"),
         help="Código del proveedor comercial. Puede omitirse si se elige en la carga.",
         max_length=20,
-        core=True,
     ),
     FieldSpec(
         "kind",
@@ -97,7 +96,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("ref externa", "consecutivo proveedor", "no apoyo", "n acuerdo", "no acuerdo"),
         help="Número o código con el que el proveedor identifica el apoyo (acuerdo).",
         max_length=200,
-        core=True,
     ),
     FieldSpec(
         "customer_nit",
@@ -126,7 +124,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         TEXT,
         ("grupo empresarial", "grupo"),
         max_length=200,
-        core=True,
     ),
     FieldSpec(
         "product_sku",
@@ -156,7 +153,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("regionales", "c o", "centro de operacion"),
         help="Varias separadas por coma, barra o punto y coma. TODOS = sin restricción.",
-        core=True,
     ),
     FieldSpec(
         "business_units",
@@ -165,7 +161,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("unidades de negocio", "un", "u n"),
         help="Varias separadas por coma o barra. TODOS = sin restricción.",
-        core=True,
     ),
     FieldSpec(
         "channels",
@@ -174,7 +169,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("canales",),
         help="Varios separados por coma o barra. TODOS = sin restricción.",
-        core=True,
     ),
     FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50),
     FieldSpec(
@@ -247,7 +241,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "Margen Mínimo",
         GROUP_BENEFIT,
         FRACTION,
-        ("margen minimo autorizado",),
+        ("margen minimo autorizado", "margen min pedido autorizado"),
+        help="Solo con Tipo de apoyo = Margen mínimo: el margen de pedido autorizado.",
+        core=True,
     ),
     FieldSpec("list_margin_pct", "Margen Lista", GROUP_BENEFIT, FRACTION, ("margen lista 1",)),
     FieldSpec(
@@ -292,7 +288,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_CONDITIONS,
         NUMBER,
         ("volumen", "volumen compromiso"),
-        core=True,
     ),
     FieldSpec("budget_amount", "Presupuesto", GROUP_CONDITIONS, NUMBER, ("presupuesto valor",)),
     FieldSpec(
@@ -351,7 +346,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         CHOICE,
         ("liquidacion", "metodo liquidacion", "forma de cobro", "metodologia cobro"),
         vocabulary.SETTLEMENTS,
-        core=True,
     ),
     FieldSpec(
         "settlement_frequency",
@@ -368,7 +362,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         TEXT,
         ("autoriza", "autorizado"),
         max_length=200,
-        core=True,
     ),
     FieldSpec(
         "supplier_contact",
