@@ -206,6 +206,23 @@ def stock_plans(price_list_id: str | None, centers: Sequence[str]) -> dict[str |
     return {code: stock_plan(price_list_id, code) for code in centers}
 
 
+def stock_warehouses(price_list_id: str | None, centers: Sequence[str]) -> tuple[str, ...]:
+    """The sellable warehouses whose stock a list update shows.
+
+    The list's own (warehouse 1 and the cold one) when the skill names it; list 1 and a list
+    costed *Nacional* or from centers without a rule, the 17 main warehouses; otherwise the
+    warehouses of its centers. Obsolete, transit or returns warehouses never count: the DWH
+    cannot tell them apart (``bodegas.facturable`` is 'Si' for all but one).
+    """
+
+    if price_list_id in LIST_WAREHOUSES:
+        return tuple(dict.fromkeys(LIST_WAREHOUSES[price_list_id]))
+    own = [code for center in centers for code in CENTER_WAREHOUSES.get(center, ())]
+    if price_list_id == vocabulary.GENERAL_PRICE_LIST or not own:
+        return GENERAL_WAREHOUSES
+    return tuple(dict.fromkeys(own))
+
+
 def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
     """Where the inventory cost comes from, in words, for the header."""
 
@@ -340,4 +357,5 @@ __all__ = [
     "stock_label",
     "stock_plan",
     "stock_plans",
+    "stock_warehouses",
 ]

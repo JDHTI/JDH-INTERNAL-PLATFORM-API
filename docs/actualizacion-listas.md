@@ -1,32 +1,45 @@
 # Actualización de listas
 
-Módulo de BI para actualizar una **lista de precios vigente de SIESA**. Usa el motor del
-[cotizador](cotizador.md) (costo, margen objetivo, regla general, estados, Excel y plano), con
-tres diferencias:
+Módulo para actualizar una **lista de precios vigente de SIESA**. Usa el motor del
+[cotizador](cotizador.md) (costo, margen objetivo, regla general, Excel y plano), con cuatro
+diferencias:
 
 - **Origen de las líneas.** Las líneas salen de la lista, no de las ventas de un cliente.
 - **Sin oferta.** No hay oferta al cliente, cotización con cantidades ni productos solo para
   cotización.
 - **Siempre actualización.** Los archivos actualizan siempre esa misma lista.
+- **Revisión por ítem.** Cada ítem se marca y se valida por separado, y lo validado espera en el
+  **staging** de su lista hasta que se carga en SIESA (ver [Revisión por ítem y
+  staging](#revisión-por-ítem-y-staging)).
+
+Las **listas principales** (`LIST_UPDATES_MAIN_LISTS`: 1, 001, 002, 003, 004, 005, 009, 1M, 10T,
+10U, 11N, 10N, 1DR y 35P) no se actualizan aquí: van por [Listas principales](listas-principales.md),
+un módulo bloqueado a BI con el mismo motor (`kind = 'principal'`).
 
 ## Datos generales
 
 - **Módulo del catálogo:** `actualizacion-listas`. Por defecto está activo en `bi`; un
   administrador lo activa en otras áreas desde el panel.
-- **Migración:** `0058_list_updates`, después de `0057_dwh_outbox_support_loads`.
+- **Migraciones:** `0058_list_updates` (el tipo `lista`) y `0059_main_lists_review` (revisión por
+  ítem, staging, cargas, el tipo `principal` y el impuesto licor).
 - **Datos del DWH:** se validaron contra el DWH el 2026-11-12. Ver
   [cotizador-dwh.md](cotizador-dwh.md) §4 para las vistas `listas_precios` y
-  `precios_lista_vigentes`.
+  `precios_lista_vigentes`, y §10 para existencias, historial y licores.
 
 ## Dónde se guarda
 
-Una actualización es una fila de `quotations` con `kind = 'lista'`, y comparte endpoints con el
-cotizador (`/api/v1/quotations`). El servicio revisa cada cotización contra el módulo de su tipo,
-así que el permiso de un módulo no abre las del otro.
+Una actualización es una fila de `quotations` con `kind = 'lista'` (o `principal`), y comparte
+endpoints con el cotizador (`/api/v1/quotations`). Lo que solo tienen las actualizaciones va en
+`/api/v1/price-list-updates`. El servicio revisa cada cotización contra el módulo de su tipo, así
+que el permiso de un módulo no abre las del otro.
 
 | Campo | Valor en una actualización |
 | --- | --- |
-| `kind` | `lista` (`cotizacion` en el cotizador) |
+| `kind` | `lista`, o `principal` en Listas principales (`cotizacion` en el cotizador) |
+| `status` | siempre `borrador`: el estado está en cada ítem |
+| línea `review_status` | `sin_marcar`, `por_validar` o `validada`, con `reviewed_by` y `reviewed_at` |
+| línea `note` | la observación del ítem, hasta 500 caracteres |
+| línea `load_id` | la carga (`price_list_loads`) que llevó el precio validado a SIESA |
 | `source` | `cliente` (se eligió un cliente y se tomó su lista) o `lista` (por código o nombre) |
 | `price_list_id`, `price_list_name` | la lista que se actualiza |
 | `customer_nit`, `customer_name` | si se creó por cliente, el cliente; si no, `""` y el nombre de la lista |
@@ -91,38 +104,93 @@ así que el permiso de un módulo no abre las del otro.
      listan con su motivo y no se aplican.
    - El cotizador sigue aplicando el apoyo que trae más dinero.
 
+## Revisión por ítem y staging
+
+Una actualización no se confirma ni se valida entera (`confirm`, `validate`, `return` y
+`uploaded` responden 422). Cada ítem pasa por:
+
+1. **Sin marcar.** Así nace, y así vuelve cada vez que cambia su precio nuevo.
+2. **Por validar.** Quien edita la actualización dice que su precio está listo. Necesita una
+   referencia activa, precio nuevo y unidad.
+3. **Validada.** Quien valida el tipo lo acepta. Queda en el **staging** de su lista.
+4. **Cargada.** Quien valida descarga los archivos del staging de la lista (las dos hojas de
+   SIESA: `Precios` e `Impuestos en valor`, o el plano con `0126` y `0127`), los carga en SIESA y
+   marca la carga. El ítem sigue `validada` y apunta a la carga (`load_id`); sale del staging.
+
+Reglas:
+
+- Solo quien valida pone un ítem en `validada` o lo saca de ahí.
+- Un ítem cargado no cambia de estado hasta que cambie su precio: eso empieza otra revisión.
+- Una referencia no puede estar validada sin cargar en dos actualizaciones de la misma lista: la
+  segunda validación se rechaza.
+- La carga recibe los ítems de los archivos que se descargaron (`line_ids`). Si alguno salió del
+  staging mientras tanto, la carga entera se rechaza (409) y hay que descargar de nuevo.
+- Cada carga guarda lo que escribió (`price_list_loads.rows`): referencia, unidad, precio
+  anterior y nuevo, impuesto y quién lo validó.
+- Las actualizaciones guardadas antes de `0059` pasaron así: las pendientes de validación dejaron
+  sus ítems con precio en `por_validar`, las validadas en `validada` (staging) y las cargadas en
+  `validada` con una carga armada desde la actualización. Todas quedaron en `borrador`.
+
+## Detalle del ítem
+
+- **Existencias por bodega** (`consumo.inventario_fecha`, la foto de SIESA de la mañana): solo
+  las bodegas vendibles de la lista (`pricing.stock_warehouses`): las propias de la skill
+  (bodega 1 y la de fríos), las 17 principales para la lista 1 o una lista *Nacional*, o las de
+  sus C.O. Las de obsoletos, tránsito o devoluciones nunca cuentan. La tabla trae el total por
+  referencia (`GET /{id}/stock`).
+- **Historial del precio** (`precios_lista_historico`, últimos 24 meses): versiones del precio de
+  la lista por unidad de inventario. Las listas principales solo tienen versiones desde 2026 (la
+  lista 1 desde el 2026-08-12): las anteriores ya no están en SIESA. Los precios marcador no
+  salen y dos versiones seguidas con el mismo precio se juntan.
+- **Precio de venta por mes** (últimos 12 meses): precio neto por unidad de inventario a los
+  clientes de la lista (al cliente, si se creó por cliente; a toda la compañía, si la lista tiene
+  más de 1.000 sucursales). Toda la compañía se lee mes por mes: 0,6 s contra 7,5 s de una sola
+  lectura de 12 meses. Si el DWH no responde, el detalle sale sin ventas (`sales_read: false`).
+
 ## Quién hace qué
 
 | Acción | Quién |
 | --- | --- |
-| Ver | `actualizacion-listas: read` (solo las propias), y quien valida (todas) |
-| Crear, editar, confirmar y retirar de validación | `actualizacion-listas: manage` en cualquier área donde esté activo |
-| Validar, devolver, marcar cargada y descargar la plantilla | `actualizacion-listas: manage` desde el área de `QUOTATIONS_APPROVER_AREA_SLUG` (BI) y los administradores |
-| Crear o editar una **lista restringida** | solo quien valida (analistas y líder de BI). Son las de `LIST_UPDATES_RESTRICTED_LISTS`, por defecto `001,002,003,004,005,009` |
-
-La lista 1 (GENERAL) no está restringida y se actualiza como cualquier otra. En el cotizador
-sigue yendo por creación.
+| Ver, y ver el staging y las cargas | `actualizacion-listas: read` (solo las propias), y quien valida (todas) |
+| Crear, editar, marcar «Por validar», escribir observaciones | `actualizacion-listas: manage` en cualquier área donde esté activo |
+| Validar ítems, descargar el staging y marcarlo cargado | `actualizacion-listas: manage` desde el área de `QUOTATIONS_APPROVER_AREA_SLUG` (BI) y los administradores |
+| Una **lista principal** | nadie desde aquí (403): va por Listas principales |
 
 ## API
 
-- **Endpoints propios:**
-  - `GET /quotations/price-lists?q=`: listas por código exacto (sin importar mayúsculas) o por
-    parte del nombre (sin tildes), activas y más usadas primero.
+- **Crear:**
+  - `GET /quotations/price-lists?q=&kind=lista|principal`: listas por código exacto (sin importar
+    mayúsculas) o por parte del nombre (sin tildes), activas y más usadas primero.
     - Máximo 50, en una página con la forma de los demás buscadores (`items`, `total`, `page`,
       `size`).
-    - Cada una trae `restricted`.
+    - Cada una trae `main` (es principal) y `restricted` (es del otro módulo: no se puede elegir).
+    - `kind=principal` sin `q` trae todas las listas principales.
     - Solo lee las columnas del maestro: con las columnas de conteo, la búsqueda por nombre
       tardaba 24 s.
-  - `POST /quotations/list-updates` con `{customer_nit}` o `{price_list_id}`: crea la
+  - `POST /quotations/list-updates` con `{customer_nit}` o `{price_list_id}` y `kind`: crea la
     actualización.
-- **`kind=lista` en los endpoints comunes:** `GET /quotations`, `GET /quotations/permissions` y
-  `GET /quotations/customers`. Para una actualización, este último busca entre todos los
-  clientes, sin cartera.
+- **`kind=lista` (o `principal`) en los endpoints comunes:** `GET /quotations`,
+  `GET /quotations/permissions` y `GET /quotations/customers`. Para una actualización, este último
+  busca entre todos los clientes, sin cartera.
 - **Endpoints del cotizador:** el resto funciona igual por `id`.
-  - Responden 422 en una actualización: `PATCH /offer`, `GET /offer.xlsx`,
-    `POST /local-lines` y `PUT /lines` con cantidades.
-  - `confirm` solo acepta `actualizacion`.
-- **Archivos:** el plano se llama `precios-lista<lista>-<NIT o "actualizacion">-<AAAAMMDD>.txt`.
+  - Responden 422 en una actualización: `PATCH /offer`, `GET /offer.xlsx`, `POST /local-lines`,
+    `PUT /lines` con cantidades, `confirm`, `validate`, `return` y `uploaded`.
+- **`/price-list-updates`:**
+
+  | Endpoint | Qué hace |
+  | --- | --- |
+  | `PUT /{id}/review` `{version, skus, status}` | marca ítems; los que no se pueden marcar vienen en `skipped` |
+  | `PUT /{id}/lines/{sku}/note` `{version, note}` | escribe o borra la observación |
+  | `GET /{id}/lines/{sku}/insight` | existencias por bodega, historial del precio y venta por mes |
+  | `GET /{id}/stock` | existencias de todas las referencias, sumadas |
+  | `GET /staging?kind=` | listas con ítems validados sin cargar |
+  | `GET /staging/{lista}/file.xlsx\|txt?kind=&activation_date=` | archivos del staging de la lista (quien valida) |
+  | `POST /staging/{lista}/loads` `{kind, line_ids, activation_date}` | marca la carga (quien valida) |
+  | `GET /loads?kind=` | últimas cargas |
+
+- **Archivos del staging:** `ACTUALIZACION LISTA <lista>_<AAAAMMDD>.xlsx` y
+  `precios-lista<lista>-staging-<AAAAMMDD>.txt`. La fecha de activación es mañana si no se da, y
+  nunca antes de hoy.
 
 ## UI
 
@@ -130,8 +198,14 @@ Ruta `/<área>/actualizacion-listas` (`src/app/(app)/(workspace)/[area]/actualiz
 Usa los componentes del cotizador con `QuotationKindProvider kind="lista"`
 (`src/features/quotations/lib/kind.tsx`).
 
-- **Lo que no aparece:** oferta, «Cotizar con cantidades» y «Crear producto».
-- **Confirmación:** es de un solo paso, la lista y la fecha de activación.
-- **Columna de precio:** dice «Precio actual». Debajo va la última venta, y su costo solo para
-  quien valida.
-- **Detalle de la línea:** muestra todos los apoyos de la lista con su mínimo y su óptimo.
+- **Lo que no aparece:** oferta, «Cotizar con cantidades», «Crear producto» y la confirmación.
+- **Columna de precio:** dice «Precio actual». La última venta va en un tooltip: «Última venta
+  $X», o «Sin venta en los últimos 12 meses».
+- **Estado del ítem:** un chip por ítem (Sin marcar, Por validar, Validada, Cargada) y acciones
+  sobre la selección.
+- **Filtros:** por estado del ítem y por margen actual contra el objetivo, con ±0,5 puntos de
+  tolerancia: «Con alza» (bajo el objetivo), «En el objetivo», «Por encima» (para bajar el precio o
+  revisar el costo) y «Alerta» (bajo el mínimo, sin costo o con precio marcador).
+- **Detalle de la línea:** apoyos con su mínimo y su óptimo, existencias por bodega, la gráfica
+  del precio de lista y del precio de venta por mes, y la observación.
+- **Por cargar:** la página del staging, por lista, con los archivos y la carga.

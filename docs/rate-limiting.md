@@ -283,6 +283,21 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/subjects/{subject_id}/causes` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/supplier-contacts` | `read` |  |
 | `GET` | `/v1/pqrsf/tracking/catalogs` | `read` |  |
+| `GET` | `/v1/price-list-updates/liquor-taxes` | `read` |  |
+| `GET` | `/v1/price-list-updates/liquor-taxes/updates` | `read` |  |
+| `POST` | `/v1/price-list-updates/liquor-taxes/updates` | `relaxed` |  |
+| `GET` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/file.{fmt}` | `read` |  |
+| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/return` | `relaxed` |  |
+| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/uploaded` | `relaxed` |  |
+| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/validate` | `relaxed` |  |
+| `GET` | `/v1/price-list-updates/loads` | `read` |  |
+| `GET` | `/v1/price-list-updates/staging` | `read` |  |
+| `GET` | `/v1/price-list-updates/staging/{price_list_id}/file.{fmt}` | `read` |  |
+| `POST` | `/v1/price-list-updates/staging/{price_list_id}/loads` | `relaxed` |  |
+| `GET` | `/v1/price-list-updates/{quotation_id}/lines/{sku}/insight` | `read` |  |
+| `PUT` | `/v1/price-list-updates/{quotation_id}/lines/{sku}/note` | `relaxed` |  |
+| `PUT` | `/v1/price-list-updates/{quotation_id}/review` | `relaxed` |  |
+| `GET` | `/v1/price-list-updates/{quotation_id}/stock` | `read` |  |
 | `GET` | `/v1/public/pqrsf/catalogs` | `read` |  |
 | `GET` | `/v1/public/pqrsf/products` | `read` |  |
 | `POST` | `/v1/public/pqrsf/requests` | `strict` | Abierto a cualquiera: además tamaño, tope global y CAPTCHA (public_guard) |

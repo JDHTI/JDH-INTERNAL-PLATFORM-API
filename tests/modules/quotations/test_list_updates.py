@@ -12,7 +12,7 @@ from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain.entities import ItemInfo, ListPrice
 from tests.modules.order_validation.conftest import agreement
-from tests.modules.quotations.conftest import LIST_MANAGER, NIT, branch
+from tests.modules.quotations.conftest import LIST_MANAGER, MAIN_MANAGER, NIT, branch
 from tests.modules.supplier_supports.conftest import TODAY, person
 
 WHOLESALE = frozenset({"MAYORISTAS Y DISTRIBUIDORES"})
@@ -84,15 +84,28 @@ async def test_every_support_of_the_list_is_shown_and_the_lowest_price_applies(
     assert "apoyo_en_revision" in line.problems
 
 
-async def test_the_regional_base_lists_are_only_for_bi(service, lister, approver) -> None:
-    with pytest.raises(ForbiddenError, match="analistas y el líder de BI"):
+async def test_the_main_lists_only_go_through_listas_principales(service, lister, approver) -> None:
+    # Not from Actualización de listas, not even for its validators.
+    with pytest.raises(ForbiddenError, match="lista principal"):
         await service.create_list_update(lister, price_list_id="001")
+    with pytest.raises(ForbiddenError, match="lista principal"):
+        await service.create_list_update(approver, price_list_id="001")
+    # Listas principales takes only those.
+    collaborator = person(MAIN_MANAGER)
+    with pytest.raises(InvalidInputError, match="no es una lista principal"):
+        await service.create_list_update(collaborator, price_list_id="10U", kind="principal")
+    # Managing Actualización de listas does not open Listas principales.
+    with pytest.raises(ForbiddenError, match="listas principales"):
+        await service.create_list_update(lister, price_list_id="001", kind="principal")
 
-    detail = await service.create_list_update(approver, price_list_id="001")
+    detail = await service.create_list_update(collaborator, price_list_id="001", kind="principal")
 
-    assert detail.quotation.price_list_id == "001"
-    with pytest.raises(ForbiddenError):
-        await service.refresh(lister, detail.quotation.id, detail.quotation.version)
+    assert detail.quotation.kind == "principal" and detail.quotation.price_list_id == "001"
+    found = await service.price_lists(lister, "001")
+    assert [item.code for item in found] == ["001"]
+    assert not service.list_allowed("lista", "001") and service.list_allowed("principal", "001")
+    main = await service.price_lists(collaborator, None, "principal")
+    assert [item.code for item in main] == ["001"]
 
 
 async def test_by_customer_it_updates_its_list_with_its_own_last_sales(
@@ -157,27 +170,18 @@ async def test_a_list_update_has_no_offer_quantities_or_new_list(service, lister
     priced, _ = await service.update_lines(
         lister, quotation.id, quotation.version, [LineChange("2537", Decimal(4700))]
     )
-    with pytest.raises(InvalidInputError, match="misma lista"):
+    # Reviewed item by item: never confirmed or validated as a whole.
+    with pytest.raises(InvalidInputError, match="se valida por ítem"):
         await service.confirm(
             lister,
             quotation.id,
             priced.quotation.version,
-            list_action="creacion",
+            list_action=None,
             new_list_name=None,
-            activation_date=None,
+            activation_date=TODAY + timedelta(days=1),
         )
-    confirmed = await service.confirm(
-        lister,
-        quotation.id,
-        priced.quotation.version,
-        list_action=None,
-        new_list_name=None,
-        activation_date=TODAY + timedelta(days=1),
-    )
-    validated = await service.validate(approver, quotation.id, confirmed.quotation.version)
-    assert validated.quotation.export_price_list_id == "10U"
-    file = await service.export(approver, quotation.id, "txt")
-    assert file.filename.startswith("precios-lista10U-actualizacion-")
+    with pytest.raises(InvalidInputError, match="se valida por ítem"):
+        await service.validate(approver, quotation.id, priced.quotation.version)
 
 
 async def test_refresh_keeps_the_new_prices_and_the_added_skus(service, lister, warehouse) -> None:

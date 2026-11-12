@@ -140,6 +140,9 @@ class ModuleInfoResponse(BaseModel):
     label: str
     description: str
     configurable: bool
+    # Only its default areas may have it (``area_slugs``).
+    locked: bool = False
+    area_slugs: list[str] = []
 
 
 class ModuleStateResponse(BaseModel):
@@ -179,6 +182,8 @@ async def area_modules(
                 "label": m.label,
                 "description": m.description,
                 "configurable": m.configurable,
+                "locked": m.locked,
+                "area_slugs": list(m.area_slugs),
             }
             for m in MODULES
         ],

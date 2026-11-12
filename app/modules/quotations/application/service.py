@@ -315,7 +315,9 @@ class QuotationService:
         lines_writer: LinesWriter | None = None,
         list_managers: ManagerPolicy | None = None,
         list_approvers: ManagerPolicy | None = None,
-        restricted_lists: Sequence[str] = (),
+        main_lists: Sequence[str] = (),
+        main_managers: ManagerPolicy | None = None,
+        main_approvers: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
@@ -338,16 +340,21 @@ class QuotationService:
             lines_writer (LinesWriter | None): Writes BI's workbook of lines and costs.
             list_managers (ManagerPolicy | None): Who updates price lists (module
                 ``actualizacion-listas``); without one only administrators do.
-            list_approvers (ManagerPolicy | None): Who validates list updates and edits the
-                restricted lists; without one only administrators do.
-            restricted_lists (Sequence[str]): Lists only ``list_approvers`` update (the
-                regional base lists 001 to 009).
+            list_approvers (ManagerPolicy | None): Who validates list updates; without one
+                only administrators do.
+            main_lists (Sequence[str]): The main lists (general, wholesale, Market): only
+                module ``listas-principales`` updates them, never ``actualizacion-listas``.
+            main_managers (ManagerPolicy | None): Who updates the main lists.
+            main_approvers (ManagerPolicy | None): Who validates their items (BI's analysts
+                and leader).
         """
 
         self.list_managers = list_managers
         self.list_approvers = list_approvers
+        self.main_managers = main_managers
+        self.main_approvers = main_approvers
         self.list_max_lines = LIST_MAX_LINES
-        self.restricted_lists = frozenset(code.strip().upper() for code in restricted_lists)
+        self.main_lists = frozenset(code.strip() for code in main_lists if code.strip())
         self.repository = repository
         self.offer_writer = offer_writer
         self.lines_writer = lines_writer
@@ -371,13 +378,15 @@ class QuotationService:
 
         if kind == vocabulary.LIST_UPDATE:
             return self.list_managers, self.list_approvers
+        if kind == vocabulary.MAIN_LIST:
+            return self.main_managers, self.main_approvers
         if kind != vocabulary.QUOTATION:
-            raise InvalidInputError("Tipo desconocido: cotizacion o lista")
+            raise InvalidInputError("Tipo desconocido: cotizacion, lista o principal")
         return self.managers, self.approvers
 
     @staticmethod
     def _noun(kind: str) -> str:
-        return "la actualización" if kind == vocabulary.LIST_UPDATE else "la cotización"
+        return "la actualización" if kind in vocabulary.LIST_KINDS else "la cotización"
 
     async def can_manage(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
         """Whether the caller quotes: Comercial, and BI too (it validates and also quotes).
@@ -414,6 +423,8 @@ class QuotationService:
         self, principal: Principal, kind: str = vocabulary.QUOTATION
     ) -> None:
         if not await self.can_manage(principal, kind):
+            if kind == vocabulary.MAIN_LIST:
+                raise ForbiddenError("No tienes permiso para actualizar las listas principales")
             if kind == vocabulary.LIST_UPDATE:
                 raise ForbiddenError("No tienes permiso para actualizar listas de precios")
             raise ForbiddenError("No tienes permiso para usar el cotizador")
@@ -430,27 +441,50 @@ class QuotationService:
 
     async def _require_reader(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> None:
         if not await self.can_read(principal, kind):
+            if kind == vocabulary.MAIN_LIST:
+                raise ForbiddenError("No tienes permiso para consultar las listas principales")
             if kind == vocabulary.LIST_UPDATE:
                 raise ForbiddenError(
                     "No tienes permiso para consultar las actualizaciones de listas"
                 )
             raise ForbiddenError("No tienes permiso para consultar el cotizador")
 
-    def is_restricted_list(self, price_list_id: str | None) -> bool:
-        """A regional base list (001 to 009): only BI's analysts and leader update it."""
+    def is_main_list(self, price_list_id: str | None) -> bool:
+        """One of the main lists: only module ``listas-principales`` updates it."""
 
-        return (price_list_id or "").strip().upper() in self.restricted_lists
+        return (price_list_id or "").strip() in self.main_lists
+
+    def list_allowed(self, kind: str, price_list_id: str | None) -> bool:
+        """Whether a list update of this kind may take the list: the main lists go to
+        ``principal`` and every other list to ``lista``."""
+
+        return (kind == vocabulary.MAIN_LIST) == self.is_main_list(price_list_id)
+
+    def _check_list_kind(self, kind: str, price_list_id: str | None) -> None:
+        """Raise when the list belongs to the other module.
+
+        Raises:
+            ForbiddenError: A main list asked from ``actualizacion-listas``.
+            InvalidInputError: Any other list asked from ``listas-principales``.
+        """
+
+        if self.list_allowed(kind, price_list_id):
+            return
+        if kind == vocabulary.MAIN_LIST:
+            raise InvalidInputError(
+                f"La lista {price_list_id} no es una lista principal: actualízala en "
+                "Actualización de listas"
+            )
+        raise ForbiddenError(
+            f"La lista {price_list_id} es una lista principal: solo se actualiza en Listas "
+            "principales (BI)"
+        )
 
     async def _check_restricted(self, principal: Principal, quotation: Quotation) -> None:
-        """A list update of a restricted list is only touched by its validators (BI)."""
+        """A stored list update whose list moved to the other module is not touched here."""
 
-        if not quotation.is_list_update or not self.is_restricted_list(quotation.price_list_id):
-            return
-        if not await self.can_validate(principal, vocabulary.LIST_UPDATE):
-            raise ForbiddenError(
-                f"La lista {quotation.price_list_id} solo la actualizan los analistas y el líder "
-                "de BI"
-            )
+        if quotation.is_list_update:
+            self._check_list_kind(quotation.kind, quotation.price_list_id)
 
     async def permissions(
         self, principal: Principal, kind: str = vocabulary.QUOTATION
@@ -521,7 +555,7 @@ class QuotationService:
             tuple[CustomerPage, bool]: The page and whether the caller is linked to a seller.
         """
 
-        if kind == vocabulary.LIST_UPDATE:
+        if kind in vocabulary.LIST_KINDS:
             # A list update is about the list, not a portfolio: every customer can be searched.
             await self._require_manager(principal, kind)
             _page(page, size)
@@ -782,7 +816,10 @@ class QuotationService:
     async def billing_centers(self, principal: Principal) -> list[BillingCenter]:
         """Active operation centers a quotation can be billed and priced from, by code."""
 
-        if not await self.can_read(principal, vocabulary.LIST_UPDATE):
+        if not (
+            await self.can_read(principal, vocabulary.LIST_UPDATE)
+            or await self.can_read(principal, vocabulary.MAIN_LIST)
+        ):
             await self._require_reader(principal)
         return sorted(await self.warehouse.billing_centers(), key=lambda item: item.code)
 
@@ -929,16 +966,25 @@ class QuotationService:
 
     # ------------------------------------------------------------ list updates
 
-    async def price_lists(self, principal: Principal, q: str | None) -> list[PriceListInfo]:
+    async def price_lists(
+        self, principal: Principal, q: str | None, kind: str = vocabulary.LIST_UPDATE
+    ) -> list[PriceListInfo]:
         """SIESA lists to update, by code or by part of the name (at most 50).
 
-        Each one says whether the caller may update it: the restricted lists only BI does.
+        The router says of each one whether this module may take it (:meth:`list_allowed`):
+        the main lists belong to ``principal`` and the rest to ``lista``. ``principal``
+        with no text gives every main list.
         """
 
-        await self._require_manager(principal, vocabulary.LIST_UPDATE)
+        if kind not in vocabulary.LIST_KINDS:
+            raise InvalidInputError("Tipo de actualización desconocido: lista o principal")
+        await self._require_manager(principal, kind)
         text = (q or "").strip()
-        if len(text) < 1:
-            return []
+        if not text:
+            if kind != vocabulary.MAIN_LIST:
+                return []
+            found = [await self.warehouse.price_list(code) for code in sorted(self.main_lists)]
+            return [info for info in found if info is not None]
         return await self.warehouse.price_lists(text[:80])
 
     async def _list_branches(self, code: str) -> list[Branch]:
@@ -1076,28 +1122,28 @@ class QuotationService:
         *,
         customer_nit: str | None = None,
         price_list_id: str | None = None,
+        kind: str = vocabulary.LIST_UPDATE,
     ) -> QuotationDetail:
         """Start the update of an existing SIESA price list, chosen by a customer (its
         assigned list), by code or by name (the code of the list picked in the search).
 
         Every SKU with a price in force on the list becomes a line compared against that
-        price, with the same cost, target, rule and states as a quotation, the last sale of
-        the SKU to the customer (or to the list's customers) and every support of the list's
-        customers. The files always update that list. The regional base lists (001 to 009)
-        only BI's analysts and leader update.
+        price, with the same cost, target and rule as a quotation, the last sale of the SKU
+        to the customer (or to the list's customers) and every support of the list's
+        customers. Its items are reviewed one by one and loaded from the list's staging. The
+        main lists are updated only from ``principal`` (module ``listas-principales``).
 
         Raises:
-            ForbiddenError: The caller does not update lists, or the list is restricted.
+            ForbiddenError: The caller does not update lists of this kind, or the list is a
+                main list asked from ``lista``.
+            InvalidInputError: A list that is not a main list asked from ``principal``.
         """
 
-        await self._require_manager(principal, vocabulary.LIST_UPDATE)
+        if kind not in vocabulary.LIST_KINDS:
+            raise InvalidInputError("Tipo de actualización desconocido: lista o principal")
+        await self._require_manager(principal, kind)
         info, source, nit = await self._resolve_list(customer_nit, price_list_id)
-        if self.is_restricted_list(info.code) and not await self.can_validate(
-            principal, vocabulary.LIST_UPDATE
-        ):
-            raise ForbiddenError(
-                f"La lista {info.code} solo la actualizan los analistas y el líder de BI"
-            )
+        self._check_list_kind(kind, info.code)
         branches = await self._list_branches(info.code)
         customer_name = None
         if nit:
@@ -1150,7 +1196,7 @@ class QuotationService:
             valid_from=self.calendar.today(),
             billing_center_source=vocabulary.CENTER_AUTO,
             billing_center_name=await self._center_name(context.billing_center_code),
-            kind=vocabulary.LIST_UPDATE,
+            kind=kind,
             source=source,
             **fields,  # type: ignore[arg-type]
         )
@@ -1285,6 +1331,26 @@ class QuotationService:
                 "borrador para editarla"
             )
         return detail
+
+    async def editable(
+        self, principal: Principal, quotation_id: UUID, *, any_status: bool = False
+    ) -> QuotationDetail:
+        """:meth:`_editable` for the services built on this one (review, staging)."""
+
+        return await self._editable(principal, quotation_id, any_status=any_status)
+
+    async def audience_of(self, quotation: Quotation) -> _Audience | None:
+        """Whose sales count for a stored list update (``None`` for a quotation)."""
+
+        return await self._stored_audience(quotation)
+
+    @staticmethod
+    def check_version(quotation: Quotation, version: int) -> None:
+        QuotationService._check_version(quotation, version)
+
+    @staticmethod
+    def bumped(quotation: Quotation, actor: str) -> Quotation:
+        return QuotationService._bumped(quotation, actor)
 
     @staticmethod
     def _no_offer(quotation: Quotation) -> None:
@@ -1432,6 +1498,8 @@ class QuotationService:
             if priced is None:
                 skipped.append(reason)  # type: ignore[arg-type]
             else:
+                if priced.new_price != line.new_price:
+                    priced = _unreviewed(priced)
                 updated[change.sku] = priced
         if not updated:
             raise InvalidInputError(
@@ -1996,6 +2064,7 @@ class QuotationService:
 
         detail = await self._editable(principal, quotation_id)
         quotation = detail.quotation
+        _whole_review(quotation)
         self._check_version(quotation, version)
         self._check_rule(detail.lines)
         action = list_action or quotation.list_action
@@ -2052,6 +2121,7 @@ class QuotationService:
 
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        _whole_review(quotation)
         self._check_version(quotation, version)
         if quotation.status != vocabulary.PENDING:
             raise ConflictError("Solo se devuelve una cotización pendiente de validación")
@@ -2099,6 +2169,7 @@ class QuotationService:
 
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        _whole_review(quotation)
         if not await self.can_validate(principal, quotation.kind):
             raise ForbiddenError("No tienes permiso para validar cotizaciones")
         self._check_version(quotation, version)
@@ -2153,6 +2224,7 @@ class QuotationService:
 
         detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        _whole_review(quotation)
         if not await self.can_validate(principal, quotation.kind):
             raise ForbiddenError("Solo quien valida marca la cotización como cargada")
         self._check_version(quotation, version)
@@ -2286,10 +2358,43 @@ def _temporary(value: TemporaryCustomer) -> TemporaryCustomer:
 
 
 def _kept(line: QuotationLine, stored: QuotationLine | None) -> QuotationLine:
-    """A repriced line with the advisor's price and quantity it had stored."""
+    """A repriced line with the advisor's price and quantity it had stored, and the review,
+    observation and load of a list update's item (the price did not change)."""
 
     priced = rules.reprice(line, stored.new_price if stored else None)
-    return replace(priced, quantity=stored.quantity if stored else None)
+    if stored is None:
+        return replace(priced, quantity=None)
+    return replace(
+        priced,
+        quantity=stored.quantity,
+        review_status=stored.review_status,
+        reviewed_by=stored.reviewed_by,
+        reviewed_at=stored.reviewed_at,
+        note=stored.note,
+        load_id=stored.load_id,
+    )
+
+
+def _whole_review(quotation: Quotation) -> None:
+    """A list update is reviewed item by item and loaded from its list's staging: it is
+    never confirmed, validated or marked loaded as a whole."""
+
+    if quotation.is_list_update:
+        raise InvalidInputError(
+            "Una actualización de lista se valida por ítem y se carga desde «Por cargar»"
+        )
+
+
+def _unreviewed(line: QuotationLine) -> QuotationLine:
+    """An item whose price changed: unmarked again and out of any load (a new cycle)."""
+
+    return replace(
+        line,
+        review_status=vocabulary.UNMARKED,
+        reviewed_by=None,
+        reviewed_at=None,
+        load_id=None,
+    )
 
 
 def _quantity(value: Decimal | str | None, sku: str) -> Decimal | None:

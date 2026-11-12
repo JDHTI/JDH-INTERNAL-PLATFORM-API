@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 
 from app.core.errors import ConflictError, DependencyUnavailableError, NotFoundError
+from app.modules.quotations.application.list_review import ListReviewService
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import (
     BillingCenter,
@@ -21,13 +22,18 @@ from app.modules.quotations.domain.entities import (
     LastSale,
     ListItem,
     ListPrice,
+    MonthlySale,
     PriceListInfo,
+    PriceListLoad,
+    PriceVersion,
     ProductMaster,
     QuotationDetail,
     QuotationPage,
     QuotationPolicy,
     Seller,
     SellerContact,
+    StagedItem,
+    StockRow,
     ValueTaxKey,
 )
 from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
@@ -41,6 +47,9 @@ MANAGER = "asesor@jdh.com.co"
 APPROVER = "bi@jdh.com.co"
 # Manages list updates only (no quoter).
 LIST_MANAGER = "listas@jdh.com.co"
+# Edits the main lists (BI collaborator) and validates them (BI analyst).
+MAIN_MANAGER = "colaborador.bi@jdh.com.co"
+MAIN_APPROVER = "analista.bi@jdh.com.co"
 NIT = "900315138"
 
 
@@ -310,6 +319,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.items: dict[UUID, QuotationDetail] = {}
         self.category_writes: list[dict[UUID, str]] = []
+        self.loads_made: list[PriceListLoad] = []
 
     async def create(self, quotation, lines):
         detail = QuotationDetail(quotation, tuple(sorted(lines, key=lambda item: item.position)))
@@ -383,6 +393,94 @@ class FakeRepository:
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
 
+    # ------------------------------------------------------------ staging
+
+    async def staged(self, kind, price_list_id=None):
+        return [
+            StagedItem(
+                detail.quotation.id,
+                detail.quotation.version,
+                detail.quotation.customer_name,
+                detail.quotation.price_list_id or "",
+                detail.quotation.price_list_name,
+                line,
+            )
+            for detail in self.items.values()
+            if detail.quotation.kind == kind
+            and (price_list_id is None or detail.quotation.price_list_id == price_list_id)
+            for line in detail.lines
+            if line.is_staged
+        ]
+
+    async def staged_elsewhere(self, price_list_id, skus, quotation_id):
+        return {
+            line.sku: detail.quotation.id
+            for detail in self.items.values()
+            if detail.quotation.price_list_id == price_list_id
+            and detail.quotation.id != quotation_id
+            for line in detail.lines
+            if line.sku in skus and line.is_staged
+        }
+
+    async def create_load(self, load, line_ids):
+        wanted = set(line_ids)
+        found = 0
+        for quotation_id, detail in list(self.items.items()):
+            lines = []
+            touched = False
+            for line in detail.lines:
+                if line.id in wanted and line.is_staged:
+                    lines.append(replace(line, load_id=load.id))
+                    found += 1
+                    touched = True
+                else:
+                    lines.append(line)
+            if touched:
+                quotation = replace(detail.quotation, version=detail.quotation.version + 1)
+                self.items[quotation_id] = QuotationDetail(quotation, tuple(lines))
+        if found != len(wanted):
+            raise ConflictError("El staging cambió")
+        self.loads_made.append(load)
+        return load
+
+    async def loads(self, kind, limit=30):
+        return [load for load in reversed(self.loads_made) if load.kind == kind][:limit]
+
+    async def get_load(self, load_id):
+        return next((load for load in self.loads_made if load.id == load_id), None)
+
+
+class FakeInsights:
+    """Stock, list price history and monthly sales in memory."""
+
+    def __init__(self) -> None:
+        self.stock_rows = [
+            StockRow("2537", "BTA9", "BOGOTA PRINCIPAL", "003", Decimal(120), Decimal(100)),
+            StockRow("2537", "BTA8", "BOGOTA FRIO", "003", Decimal(30), Decimal(30)),
+            StockRow("2537", "MDE1", "MEDELLIN PRINCIPAL", "001", Decimal(80), Decimal(80)),
+        ]
+        self.history = [
+            PriceVersion(date(2026, 5, 26), date(2026, 9, 1), Decimal(4200)),
+            PriceVersion(date(2026, 9, 1), None, Decimal(4568)),
+        ]
+        self.sales = [MonthlySale(date(2026, 10, 1), Decimal(4400), Decimal(30))]
+        self.sales_down = False
+        self.calls: list[tuple] = []
+
+    async def stock(self, skus, warehouses):
+        self.calls.append(("stock", tuple(skus), tuple(warehouses)))
+        return [row for row in self.stock_rows if row.sku in skus and row.warehouse in warehouses]
+
+    async def price_history(self, price_list_id, sku, months):
+        self.calls.append(("history", price_list_id, sku, months))
+        return list(self.history)
+
+    async def monthly_sales(self, sku, months, customer_keys):
+        self.calls.append(("sales", sku, months, customer_keys))
+        if self.sales_down:
+            raise DependencyUnavailableError("El datawarehouse tardó más de 15 s en responder")
+        return list(self.sales)
+
 
 @pytest.fixture
 def warehouse() -> FakeWarehouse:
@@ -422,7 +520,26 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         lines_writer=QuotationLinesWorkbook(),
         list_managers=FakeManagers([MANAGER, LIST_MANAGER]),
         list_approvers=FakeManagers([APPROVER]),
-        restricted_lists=("001", "002", "003", "004", "005", "009"),
+        main_lists=("1", "001", "002", "003", "004", "005", "009"),
+        main_managers=FakeManagers([MAIN_MANAGER]),
+        main_approvers=FakeManagers([MAIN_APPROVER]),
+    )
+
+
+@pytest.fixture
+def insights() -> FakeInsights:
+    return FakeInsights()
+
+
+@pytest.fixture
+def review(service, repository, insights) -> ListReviewService:
+    return ListReviewService(
+        quotations=service,
+        repository=repository,
+        insights=insights,
+        calendar=FixedCalendar(),
+        workbook=PriceListWorkbookWriter(),
+        flat_file=SiesaPriceFileWriter(),
     )
 
 
@@ -439,6 +556,8 @@ def approver():
 __all__ = [
     "APPROVER",
     "LIST_MANAGER",
+    "MAIN_APPROVER",
+    "MAIN_MANAGER",
     "MANAGER",
     "NIT",
     "branch",

@@ -19,7 +19,10 @@ from app.modules.quotations.domain.entities import (
     LastSale,
     ListItem,
     ListPrice,
+    MonthlySale,
     PriceListInfo,
+    PriceListLoad,
+    PriceVersion,
     ProductMaster,
     Quotation,
     QuotationDetail,
@@ -27,6 +30,8 @@ from app.modules.quotations.domain.entities import (
     QuotationPage,
     Seller,
     SellerContact,
+    StagedItem,
+    StockRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.export import PriceListExport
@@ -137,6 +142,36 @@ class QuotationRepository(Protocol):
     async def delete(self, quotation_id: UUID) -> bool: ...
 
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None: ...
+
+
+class StagingRepository(QuotationRepository, Protocol):
+    """Quotations plus the staging of the list updates and their loads."""
+
+    async def staged(self, kind: str, price_list_id: str | None = None) -> list[StagedItem]: ...
+
+    async def staged_elsewhere(
+        self, price_list_id: str, skus: Sequence[str], quotation_id: UUID
+    ) -> dict[str, UUID]: ...
+
+    async def create_load(self, load: PriceListLoad, line_ids: Sequence[UUID]) -> PriceListLoad: ...
+
+    async def loads(self, kind: str, limit: int = 30) -> list[PriceListLoad]: ...
+
+    async def get_load(self, load_id: UUID) -> PriceListLoad | None: ...
+
+
+class InsightSource(Protocol):
+    """Warehouse reads of an item's detail in a list update."""
+
+    async def stock(self, skus: Sequence[str], warehouses: Sequence[str]) -> list[StockRow]: ...
+
+    async def price_history(
+        self, price_list_id: str, sku: str, months: int
+    ) -> list[PriceVersion]: ...
+
+    async def monthly_sales(
+        self, sku: str, months: int, customer_keys: Sequence[str] | None
+    ) -> list[MonthlySale]: ...
 
 
 class SalesScope(Protocol):

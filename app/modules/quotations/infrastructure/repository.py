@@ -13,17 +13,23 @@ from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
+    PriceListLoad,
     Quotation,
     QuotationDetail,
     QuotationLine,
     QuotationPage,
     SellerContact,
+    StagedItem,
     SupportCandidate,
     SupportOption,
     TemporaryCustomer,
 )
-from app.modules.quotations.domain.vocabulary import QUOTATION
-from app.modules.quotations.infrastructure.models import QuotationLineModel, QuotationModel
+from app.modules.quotations.domain.vocabulary import LIST_KINDS, QUOTATION, VALIDATED
+from app.modules.quotations.infrastructure.models import (
+    PriceListLoadModel,
+    QuotationLineModel,
+    QuotationModel,
+)
 
 Q = QuotationModel
 L = QuotationLineModel
@@ -82,6 +88,20 @@ def _line(model: QuotationLineModel) -> QuotationLine:
             SupportOption.from_dict(item) for item in model.support_options or ()
         ),
         problems=tuple(model.problems or ()),
+    )
+
+
+def _load(model: PriceListLoadModel) -> PriceListLoad:
+    return PriceListLoad(
+        id=model.id,
+        kind=model.kind,
+        price_list_id=model.price_list_id,
+        price_list_name=model.price_list_name,
+        activation_date=model.activation_date,
+        line_count=model.line_count,
+        rows=tuple(model.rows or ()),
+        created_by=model.created_by,
+        created_at=model.created_at,
     )
 
 
@@ -153,7 +173,7 @@ class SqlAlchemyQuotationRepository:
         """Quotations of one kind, newest first.
 
         Args:
-            kind (str): ``cotizacion`` or ``lista`` (list updates).
+            kind (str): ``cotizacion``, ``lista`` or ``principal`` (list updates).
             visible_to (tuple[UUID, Sequence[str]] | None): ``(user, salesperson codes)``:
                 only the ones the user created or whose customer is of those salespeople.
             created_by_id (UUID | None): Only the ones this user created.
@@ -296,6 +316,142 @@ class SqlAlchemyQuotationRepository:
         async with self.database.session_factory() as session, session.begin():
             result = await session.execute(delete(Q).where(Q.id == quotation_id))
         return bool(result.rowcount)
+
+    async def staged(self, kind: str, price_list_id: str | None = None) -> list[StagedItem]:
+        """Validated items not loaded yet of every update of a kind (the staging).
+
+        Args:
+            kind (str): ``lista`` or ``principal``.
+            price_list_id (str | None): Only this list.
+
+        Returns:
+            list[StagedItem]: By list, then by update and position.
+        """
+
+        conditions = [
+            Q.kind == kind,
+            L.review_status == VALIDATED,
+            L.load_id.is_(None),
+            L.new_price.is_not(None),
+        ]
+        if price_list_id is not None:
+            conditions.append(Q.price_list_id == price_list_id)
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(L, Q.id, Q.version, Q.customer_name, Q.price_list_id, Q.price_list_name)
+                    .join(Q, Q.id == L.quotation_id)
+                    .where(*conditions)
+                    .order_by(Q.price_list_id, Q.created_at, L.position)
+                )
+            ).all()
+        return [
+            StagedItem(
+                quotation_id=quotation_id,
+                quotation_version=version,
+                quotation_name=name,
+                price_list_id=list_id or "",
+                price_list_name=list_name,
+                line=_line(line),
+            )
+            for line, quotation_id, version, name, list_id, list_name in rows
+        ]
+
+    async def staged_elsewhere(
+        self, price_list_id: str, skus: Sequence[str], quotation_id: UUID
+    ) -> dict[str, UUID]:
+        """SKUs of ``skus`` already validated and not loaded in another update of the list.
+
+        Returns:
+            dict[str, UUID]: The other update of each such SKU.
+        """
+
+        if not skus:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(L.sku, L.quotation_id)
+                    .join(Q, Q.id == L.quotation_id)
+                    .where(
+                        Q.price_list_id == price_list_id,
+                        Q.id != quotation_id,
+                        Q.kind.in_(LIST_KINDS),
+                        L.sku.in_(list(skus)),
+                        L.review_status == VALIDATED,
+                        L.load_id.is_(None),
+                        L.new_price.is_not(None),
+                    )
+                )
+            ).all()
+        return {sku: owner for sku, owner in rows}
+
+    async def create_load(self, load: PriceListLoad, line_ids: Sequence[UUID]) -> PriceListLoad:
+        """Store a load and take its items out of the staging, in one transaction.
+
+        Every quotation touched gets a new version, so an editor holding the old one reloads
+        before saving over the load.
+
+        Raises:
+            ConflictError: Some item is not in the staging any more (changed or loaded).
+        """
+
+        async with self.database.session_factory() as session, session.begin():
+            session.add(
+                PriceListLoadModel(
+                    id=load.id,
+                    kind=load.kind,
+                    price_list_id=load.price_list_id,
+                    price_list_name=load.price_list_name,
+                    activation_date=load.activation_date,
+                    line_count=load.line_count,
+                    rows=list(load.rows),
+                    created_by=load.created_by,
+                    created_at=load.created_at,
+                )
+            )
+            await session.flush()
+            result = await session.execute(
+                update(L)
+                .where(
+                    L.id.in_(list(line_ids)),
+                    L.review_status == VALIDATED,
+                    L.load_id.is_(None),
+                    L.new_price.is_not(None),
+                )
+                .values(load_id=load.id)
+                .returning(L.quotation_id)
+            )
+            updated = result.all()
+            owners = {row[0] for row in updated}
+            if not updated or len(updated) != len(set(line_ids)):
+                raise ConflictError(
+                    "El staging cambió desde que lo abriste: recárgalo y descarga los archivos "
+                    "de nuevo"
+                )
+            await session.execute(
+                update(Q).where(Q.id.in_(list(owners))).values(version=Q.version + 1)
+            )
+        return load
+
+    async def loads(self, kind: str, limit: int = 30) -> list[PriceListLoad]:
+        """The latest loads of a kind, newest first."""
+
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.scalars(
+                    select(PriceListLoadModel)
+                    .where(PriceListLoadModel.kind == kind)
+                    .order_by(PriceListLoadModel.created_at.desc())
+                    .limit(limit)
+                )
+            ).all()
+        return [_load(row) for row in rows]
+
+    async def get_load(self, load_id: UUID) -> PriceListLoad | None:
+        async with self.database.session_factory() as session:
+            row = await session.get(PriceListLoadModel, load_id)
+        return _load(row) if row is not None else None
 
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None:
         """Store the category of some lines, by line id. The header is not touched: no new

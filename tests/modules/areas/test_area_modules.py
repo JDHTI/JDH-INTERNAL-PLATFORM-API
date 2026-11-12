@@ -23,6 +23,22 @@ def test_a_stored_choice_beats_the_catalog_default() -> None:
     assert not is_enabled("bi", "no-existe", overrides)
 
 
+def test_a_locked_module_stays_in_its_own_areas() -> None:
+    assert is_enabled("bi", "listas-principales")
+    overrides = {"comercial": {"listas-principales": AreaModule(True)}}
+    assert not is_enabled("comercial", "listas-principales", overrides)
+    assert not is_enabled("comercial", "validacion-listas", overrides)
+
+
+async def test_a_locked_module_cannot_be_switched_on_elsewhere(areas, admin) -> None:
+    await areas.create_area(CreateAreaCommand(slug="comercial", name="Comercial"), admin)
+
+    with pytest.raises(InvalidInputError, match="bloqueado"):
+        await areas.set_area_module("comercial", "listas-principales", True, None, admin)
+    state = await areas.set_area_module("comercial", "listas-principales", False, None, admin)
+    assert not state.is_enabled
+
+
 def test_only_maestros_takes_settings() -> None:
     assert clean_module_config("maestros", {"masters": [" Clientes", "clientes", "productos"]}) == {
         "masters": ["clientes", "productos"]

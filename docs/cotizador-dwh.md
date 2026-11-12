@@ -835,3 +835,73 @@ Longitudes: 18 / **101** / 254 / 18.
 | Estado | A/I | A/I en consumo; Bloqueado solo en staging t121 (pedir `estado_siesa`) |
 | Impoconsumo | Maestro Margen Nacional/Costa | `precios_lista_vigentes.impoconsumo_valor` de la lista (004/11N ya traen Costa) |
 | Lista nueva | — | 0112 v01 + 0126 v03 (+ 0127); asignación por 0201 con riesgo (§9.5.4) |
+
+---
+
+## 10. Listas principales: existencias, historial, ventas por mes y licores (2026-11-12)
+
+Validado por el agente del DWH en solo lectura (`statement_timeout` de 60 s) y probado con
+`WarehouseInsightSource` (`app/modules/quotations/infrastructure/dwh_insights.py`).
+
+### 10.1 Códigos de las listas
+
+- Se guardan tal cual SIESA: ninguno de los 14 códigos tiene variante de mayúsculas o espacios.
+- **1** (GENERAL, 7.623 SKU, 28.093 sucursales) y **001** (GENERAL ANTIOQUIA, 7.594 SKU, 84
+  sucursales) son listas distintas: comparten 7.405 SKU, 5.922 con el mismo precio.
+- Hay códigos parecidos que son otras listas: `01`, `01M`, `2`…`9` frente a `002`…`009`.
+- **11M** es de un solo cliente, sin sucursales activas y sin cambios desde 2023-01-10; la que se
+  quiso decir es **11N** (MAYORISTAS CARTAGENA, 1.943 SKU).
+- **1DR** (MAYORISTAS BARRANQUILLA, 1.745 SKU) no tiene sucursales asignadas.
+- En estas listas cada precio vigente es una sola fila de unidad de inventario.
+- `listas_precios.clientes_activos_asignados` no es el conteo de sucursales activas (1M: 856 frente
+  a 735). Para sucursales se cuenta `clientes`.
+
+### 10.2 Existencias (`inventario_fecha`)
+
+- Foto completa de t400 una vez al día, hacia las 08:15 de Bogotá (227.410 filas en 2,5 min);
+  14.651 filas con existencia, ninguna negativa.
+- **Bodegas:** `bodegas.facturable` es 'Si' en todas menos BAQ15, así que no separa las de
+  obsoletos (MDE23 «OBSOLETOS Y CORTA FECHA», 911 SKU), tránsito, devoluciones, averías,
+  consignación… Se filtra con la lista de bodegas de cada lista (§9.2.2, `pricing.stock_warehouses`).
+- `cant_disponible` es lo no comprometido: en 10U, 1.598 de 10.095 filas tienen parte comprometida.
+- Tiempos con las bodegas de la lista: 10U 0,10 s (2.297 SKU con existencia), lista 1 con las 17
+  bodegas 0,29 s (4.801 SKU).
+
+### 10.3 Historial (`precios_lista_historico`)
+
+- `vigente_hasta` es el `vigente_desde` de la versión siguiente (100 % en las listas 1 y 10U) y es
+  `NULL` solo en la última. `fecha_inactivacion` puede cortarla antes: el fin real es
+  `least(vigente_hasta, fecha_inactivacion)`.
+- Filtrar `es_unidad_inventario` y `precio_sin_iva > 1` (marcadores). Hay versiones seguidas con el
+  mismo precio (la lista se volvió a subir): se juntan.
+- **Desde cuándo hay versiones:** lista 1 desde 2026-08-12; 001–009 desde julio de 2026; 10T desde
+  2026-01-14; 10N desde 2026-05-06; 10U y 1M desde 2026-05-26; 1DR desde 2026-06-11; 35P desde
+  2026-05-19. Las listas 2 y 5 tienen versiones desde 2009: el DWH no corta, en SIESA ya no están.
+- Una lista × un SKU por `producto_key`: 0,2 ms en el servidor.
+- t126 sigue con extracción incremental (45 días): una edición o un borrado en SIESA fuera de esa
+  ventana puede no verse (§4.3).
+
+### 10.4 Precio de venta por mes
+
+- A los clientes de la lista (`cliente_key = ANY(...)`): 0,07 s para 10U.
+- A toda la compañía (listas de más de 1.000 sucursales): **mes por mes**. Una sola lectura de 12
+  meses de un SKU en frío tardó 7,5 s (y pasó de 15 s con otro); doce lecturas de un mes, 0,6 s.
+
+### 10.5 Licores
+
+- Clase de impuesto `99` (`clase_impuesto_id`, entero e indexado; el `ILIKE '%licor%'` de
+  `value_tax_keys` hace un barrido de unos 38 ms): 30 productos, 17 activos. 14 con llave `0024`
+  (grupo 0509) y 3 con `0011` (grupo 0503, vinos). `0005` IMPOCONSUMO tiene 150 productos y ninguno
+  activo.
+- 2.028 precios vigentes de esos 17 en listas activas e inactivas; 12 SKU con valor.
+- **Nacional frente a Costa:** solo 7 SKU (Juniper y Ron Carbón) cambian, la Costa entre 2,3 % y
+  3,3 % más. Las listas con valor Costa son 004, 11N, 22N, 36J y 46V; todas las demás, incluidas
+  009 y 1DR, van con el Nacional. Algunas listas con sucursales solo del C.O. 004 (34N, 47Z, 33O,
+  162) van con el Nacional: está por confirmar con el área.
+- El valor cuelga del precio de t126, en la unidad de esa fila. Hoy todos los valores de licor
+  están en filas de factor 1, así que es igual al de la unidad de inventario.
+- **Inconsistencias encontradas:** 12 licores activos del grupo 0507 sin la llave (solo 3108 tiene
+  valor, en una lista); 86 filas con llave y sin valor teniendo precio real; 3 SKU con valor y sin
+  llave; el Vino Rosado 12842 con 5.344 en 24 listas de 2023 y 6.911 en las demás; 5 SKU «Prom» sin
+  valor en ninguna lista.
+- Lectura de la pantalla: 0,12 s.

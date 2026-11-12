@@ -24,11 +24,66 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
+
+
+class PriceListLoadModel(Base):
+    """A load of a list's staging in SIESA: what went, when it activates and who loaded it.
+
+    ``rows`` keeps the prices and taxes as they were written (``ExportRow``/``ExportTaxRow``
+    as JSON), so the load can be read even after its items change.
+    """
+
+    __tablename__ = "price_list_loads"
+    __table_args__ = (
+        CheckConstraint("kind IN ('lista', 'principal')", name="ck_price_list_loads_kind"),
+        Index("ix_price_list_loads_kind_created", "kind", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    price_list_id: Mapped[str] = mapped_column(String(3), nullable=False)
+    price_list_name: Mapped[str | None] = mapped_column(Text)
+    activation_date: Mapped[date] = mapped_column(Date, nullable=False)
+    line_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LiquorTaxUpdateModel(Base):
+    """A bulk change of the liquor tax: new Nacional and Costa values per SKU, written to
+    every active list where the SKU has a price (``rows`` per SKU, ``export_rows`` per list
+    and SKU, fixed when it is validated)."""
+
+    __tablename__ = "liquor_tax_updates"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pendiente_validacion', 'pendiente_carga', 'cargada', 'devuelta')",
+            name="ck_liquor_tax_updates_status",
+        ),
+        Index("ix_liquor_tax_updates_created", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    export_rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    note: Mapped[str | None] = mapped_column(Text)
+    review_note: Mapped[str | None] = mapped_column(Text)
+    activation_date: Mapped[date | None] = mapped_column(Date)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    validated_by: Mapped[str | None] = mapped_column(String(320))
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    uploaded_by: Mapped[str | None] = mapped_column(String(320))
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class QuotationModel(Base):
@@ -51,7 +106,7 @@ class QuotationModel(Base):
         CheckConstraint("regional IN ('nacional', 'costa')", name="ck_quotations_regional"),
         CheckConstraint("validity_days BETWEEN 1 AND 365", name="ck_quotations_validity_days"),
         CheckConstraint("offer_scope IN ('changed', 'all')", name="ck_quotations_offer_scope"),
-        CheckConstraint("kind IN ('cotizacion', 'lista')", name="ck_quotations_kind"),
+        CheckConstraint("kind IN ('cotizacion', 'lista', 'principal')", name="ck_quotations_kind"),
         CheckConstraint(
             "source IS NULL OR source IN ('cliente', 'lista')", name="ck_quotations_source"
         ),
@@ -161,7 +216,18 @@ class QuotationLineModel(Base):
             name="ck_quotation_lines_origin",
         ),
         CheckConstraint("quantity IS NULL OR quantity > 0", name="ck_quotation_lines_quantity"),
+        CheckConstraint(
+            "review_status IN ('sin_marcar', 'por_validar', 'validada')",
+            name="ck_quotation_lines_review_status",
+        ),
         Index("ix_quotation_lines_requested_product", "requested_product_id"),
+        # The staging: validated items not loaded yet.
+        Index(
+            "ix_quotation_lines_staged",
+            "quotation_id",
+            postgresql_where=text("review_status = 'validada' AND load_id IS NULL"),
+        ),
+        Index("ix_quotation_lines_load", "load_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -221,6 +287,13 @@ class QuotationLineModel(Base):
     last_sale_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     support_options: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
+    )
+    review_status: Mapped[str] = mapped_column(String(20), nullable=False, default="sin_marcar")
+    reviewed_by: Mapped[str | None] = mapped_column(String(320))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    load_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("price_list_loads.id", ondelete="SET NULL")
     )
     # Unused (see RequestedProductModel): QuotationLine has no such field, so the
     # repository never writes it and new lines store NULL.

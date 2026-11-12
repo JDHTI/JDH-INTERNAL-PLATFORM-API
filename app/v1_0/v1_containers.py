@@ -141,10 +141,16 @@ from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseR
 from app.modules.projects.application.live import ProjectLiveService
 from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
+from app.modules.quotations.application.liquor_taxes import LiquorTaxService
+from app.modules.quotations.application.list_review import ListReviewService
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import QuotationPolicy
+from app.modules.quotations.infrastructure.dwh_insights import WarehouseInsightSource
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
 from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
+from app.modules.quotations.infrastructure.liquor_repository import (
+    SqlAlchemyLiquorTaxRepository,
+)
 from app.modules.quotations.infrastructure.masters import SqlAlchemyQuotationMasterSource
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
@@ -691,8 +697,7 @@ class V1Container(containers.DeclarativeContainer):
         module="cotizador",
     )
     # List updates (BI → Actualización de listas): the same engine, its own module. Whoever
-    # manages the module in any area updates lists; the approvers' area validates them and
-    # alone updates the restricted lists.
+    # manages the module in any area updates lists; the approvers' area validates the items.
     list_update_manager_policy = providers.Factory(
         PermissionPolicy, areas=area_service, area_slug=None, module="actualizacion-listas"
     )
@@ -701,6 +706,20 @@ class V1Container(containers.DeclarativeContainer):
         areas=area_service,
         area_slug=config.quotations.approver_area_slug,
         module="actualizacion-listas",
+    )
+    # The main lists (BI → Listas principales, locked to BI): ``manage`` on the module edits
+    # them; ``manage`` on ``validacion-listas`` (BI's analysts and leader) validates and loads.
+    main_list_manager_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.quotations.approver_area_slug,
+        module="listas-principales",
+    )
+    main_list_approver_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.quotations.approver_area_slug,
+        module="validacion-listas",
     )
     quotation_policy = providers.Singleton(
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
@@ -714,6 +733,13 @@ class V1Container(containers.DeclarativeContainer):
         schema=settings.provided.DWH_SCHEMA,
         timeout=config.quotations.dwh_timeout,
     )
+    quotation_insight_source = providers.Factory(
+        WarehouseInsightSource,
+        connection=data_provider,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.quotations.dwh_timeout,
+    )
+    liquor_tax_repository = providers.Factory(SqlAlchemyLiquorTaxRepository, database=database)
     quotation_master_source = providers.Factory(SqlAlchemyQuotationMasterSource, database=database)
     quotation_workbook_writer = providers.Singleton(PriceListWorkbookWriter)
     quotation_flat_file_writer = providers.Singleton(
@@ -756,7 +782,29 @@ class V1Container(containers.DeclarativeContainer):
         lines_writer=quotation_lines_writer,
         list_managers=list_update_manager_policy,
         list_approvers=list_update_approver_policy,
-        restricted_lists=config.quotations.restricted_lists,
+        main_lists=config.quotations.main_lists,
+        main_managers=main_list_manager_policy,
+        main_approvers=main_list_approver_policy,
+    )
+    list_review_service = providers.Factory(
+        ListReviewService,
+        quotations=quotation_service,
+        repository=quotation_repository,
+        insights=quotation_insight_source,
+        calendar=pqrsf_calendar,
+        workbook=quotation_workbook_writer,
+        flat_file=quotation_flat_file_writer,
+    )
+    liquor_tax_service = providers.Factory(
+        LiquorTaxService,
+        quotations=quotation_service,
+        source=quotation_insight_source,
+        masters=quotation_master_source,
+        repository=liquor_tax_repository,
+        calendar=pqrsf_calendar,
+        workbook=quotation_workbook_writer,
+        flat_file=quotation_flat_file_writer,
+        coast_lists=config.quotations.coast_lists,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.
