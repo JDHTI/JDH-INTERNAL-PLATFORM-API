@@ -51,7 +51,12 @@ class QuotationModel(Base):
         CheckConstraint("regional IN ('nacional', 'costa')", name="ck_quotations_regional"),
         CheckConstraint("validity_days BETWEEN 1 AND 365", name="ck_quotations_validity_days"),
         CheckConstraint("offer_scope IN ('changed', 'all')", name="ck_quotations_offer_scope"),
+        CheckConstraint("kind IN ('cotizacion', 'lista')", name="ck_quotations_kind"),
+        CheckConstraint(
+            "source IS NULL OR source IN ('cliente', 'lista')", name="ck_quotations_source"
+        ),
         Index("ix_quotations_owner_created", "created_by_id", "created_at"),
+        Index("ix_quotations_kind_created", "kind", "created_at"),
         Index("ix_quotations_customer", "customer_nit"),
         Index("ix_quotations_status", "status"),
     )
@@ -110,6 +115,8 @@ class QuotationModel(Base):
     temporary_customer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     include_variation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     with_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="cotizacion")
+    source: Mapped[str | None] = mapped_column(String(20))
 
 
 class RequestedProductModel(Base):
@@ -150,7 +157,8 @@ class QuotationLineModel(Base):
         UniqueConstraint("quotation_id", "sku", name="uq_quotation_lines_sku"),
         Index("ix_quotation_lines_position", "quotation_id", "position"),
         CheckConstraint(
-            "origin IN ('historico', 'agregado', 'local')", name="ck_quotation_lines_origin"
+            "origin IN ('historico', 'agregado', 'local', 'lista')",
+            name="ck_quotation_lines_origin",
         ),
         CheckConstraint("quantity IS NULL OR quantity > 0", name="ck_quotation_lines_quantity"),
         Index("ix_quotation_lines_requested_product", "requested_product_id"),
@@ -209,6 +217,11 @@ class QuotationLineModel(Base):
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="historico")
     category: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    last_sale_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    last_sale_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    support_options: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     # Unused (see RequestedProductModel): QuotationLine has no such field, so the
     # repository never writes it and new lines store NULL.
     requested_product_id: Mapped[uuid.UUID | None] = mapped_column(

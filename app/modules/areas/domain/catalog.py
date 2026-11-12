@@ -70,6 +70,12 @@ MODULES: tuple[Module, ...] = (
     Module("pqrsf", "PQRSF", ("calidad",), "Peticiones, quejas, reclamos y sugerencias"),
     Module("cotizador", "Cotizador", ("comercial", "bi"), "Cotizaciones a clientes"),
     Module(
+        "actualizacion-listas",
+        "Actualización de listas",
+        ("bi",),
+        "Actualizaciones de listas de precios vigentes de SIESA",
+    ),
+    Module(
         "validador-pedidos",
         "Validador de pedidos",
         ("bi", "comercial"),

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
@@ -47,6 +47,7 @@ from app.modules.quotations.domain.entities import (
     QuotationLine,
     QuotationPolicy,
     SupportCandidate,
+    SupportOption,
     ValueTaxKey,
 )
 
@@ -238,6 +239,54 @@ def customer_context(
     )
 
 
+def list_context(
+    code: str,
+    name: str | None,
+    branches: Sequence[Branch],
+    *,
+    nit: str = "",
+    customer_name: str | None = None,
+) -> CustomerContext:
+    """How a list update is priced: the list's branches decide, as a customer's do.
+
+    The majority channel among the active branches gives the target margin, and the billing
+    centers give the cost (a Coast center wins; several centers on a list without its own
+    warehouses cost it *Nacional*), exactly as :func:`customer_context` merges one customer.
+    The list is always ``code``; there is no salesperson. A list with no branches is costed
+    *Nacional* with the Lista 1 margin (``lista_sin_clientes``).
+    """
+
+    nits = {branch.nit for branch in branches if branch.is_active and branch.nit}
+    if not branches:
+        return CustomerContext(
+            nit=nit,
+            name=customer_name or name,
+            channel_code=None,
+            channel=None,
+            price_list_id=code,
+            price_list_name=name,
+            price_list_customers=0,
+            billing_center_code=None,
+            salesperson_code=None,
+            salesperson_name=None,
+            warnings=("lista_sin_clientes",),
+        )
+    merged = customer_context(nit, branches, len(nits))
+    dropped = {"listas_distintas", "sin_lista", "cliente_inactivo"}
+    warnings = [item for item in merged.warnings if item not in dropped]
+    if not nits:
+        warnings.append("lista_sin_clientes")
+    return replace(
+        merged,
+        name=customer_name or name,
+        price_list_id=code,
+        price_list_name=name,
+        salesperson_code=None,
+        salesperson_name=None,
+        warnings=tuple(warnings),
+    )
+
+
 # ------------------------------------------------------------------ supports
 
 
@@ -371,6 +420,197 @@ def pick_support(
     return None, tuple(candidates), tuple(dict.fromkeys(problems))
 
 
+def _covering_nit(
+    agreement: Agreement,
+    *,
+    sku: str,
+    supplier_code: str | None,
+    scopes: Mapping[str, CustomerScope],
+    day: date,
+) -> str | None:
+    """A customer of the list the agreement covers today (its NIT), or ``None``.
+
+    An agreement for one customer is checked against that customer only; any other is
+    checked once per distinct scope (channel, business unit, regional) of the list's
+    customers, so a list of thousands of customers costs a handful of checks.
+    """
+
+    def covers(nit: str, scope: CustomerScope) -> bool:
+        probe = OrderLine(
+            row_number=0, document="", customer_nit=nit, sku=sku, supplier_code=supplier_code
+        )
+        return scope_of(agreement, probe, scope, day) == APPLIES
+
+    if agreement.customer_nit:
+        scope = scopes.get(agreement.customer_nit)
+        if scope is None:
+            return None
+        return agreement.customer_nit if covers(agreement.customer_nit, scope) else None
+    seen: set[tuple[frozenset[str], frozenset[str], frozenset[str]]] = set()
+    for nit, scope in scopes.items():
+        profile = (scope.channels, scope.business_units, scope.regionals)
+        if profile in seen:
+            continue
+        seen.add(profile)
+        if covers(nit, scope):
+            return nit
+    return None
+
+
+def pick_list_support(
+    agreements: Sequence[Agreement],
+    *,
+    sku: str,
+    supplier_code: str | None,
+    scopes: Mapping[str, CustomerScope],
+    cost: Decimal | None,
+    product_target: Decimal | None,
+    policy: QuotationPolicy,
+    family: str,
+    day: date,
+) -> tuple[
+    AppliedSupport | None, tuple[SupportCandidate, ...], tuple[SupportOption, ...], tuple[str, ...]
+]:
+    """The support a list update's line is priced with, and every support of the list.
+
+    A price list serves all its customers, so every support in force that covers at least
+    one of them (``scopes``, by NIT) is listed with the minimum and optimal price it leaves.
+    The one with the **lowest minimum price** is applied (then the lowest optimal price, then
+    the one that lasts longer). Supports in review, for one warehouse, rebates and those
+    whose value cannot be computed are listed with the reason and never applied.
+
+    Returns:
+        tuple: The applied support (or ``None``), the ones not applied as candidates, every
+        option with its prices, and the line problems they raise.
+    """
+
+    options: list[tuple[SupportOption, Agreement, Decimal | None]] = []
+    problems: list[str] = []
+
+    def prices(amount: Decimal, target: Decimal | None) -> tuple[Decimal | None, Decimal | None]:
+        floor = minimum_margin(target, policy)
+        low = minimum_price(cost, amount, floor)
+        optimal = price_at_margin(cost, amount, target, family)
+        if optimal is not None and low is not None:
+            optimal = max(optimal, low)
+        return low, optimal
+
+    for agreement in agreements:
+        probe = replace(agreement, warehouse=None) if agreement.warehouse else agreement
+        nit = _covering_nit(probe, sku=sku, supplier_code=supplier_code, scopes=scopes, day=day)
+        if nit is None:
+            continue
+        base = SupportOption(
+            support_id=agreement.id,
+            kind=agreement.kind,
+            calc_method=agreement.calc_method,
+            program=agreement.program,
+            detail="",
+            customer_nit=agreement.customer_nit,
+            valid_to=agreement.valid_to,
+        )
+        reason: str | None = None
+        if agreement.warehouse:
+            reason = f"Solo para la bodega {agreement.warehouse}"
+            problems.append("apoyo_fuera_bodega")
+        elif agreement.status == "pendiente_revision":
+            reason = "Apoyo en revisión"
+            problems.append("apoyo_en_revision")
+        method = agreement.calc_method
+        if method in AMOUNT_METHODS:
+            share, how = share_of_cost(agreement)
+            if share is None:
+                options.append(
+                    (
+                        replace(base, detail=how, reason=f"No se puede calcular: {how}"),
+                        agreement,
+                        None,
+                    )
+                )
+                continue
+            amount = money(share * cost) if cost is not None else None
+            required = required_margin(agreement, product_target)
+            target = required if required is not None else product_target
+            low, optimal = prices(amount or ZERO, target)
+            option = replace(
+                base,
+                detail=f"Apoyo de {how}",
+                amount=amount,
+                required_margin_pct=ratio(required),
+                min_price=low,
+                optimal_price=optimal,
+                reason=reason,
+            )
+            options.append((option, agreement, share))
+        elif method in _TARGET_METHODS:
+            floor = _target_floor(agreement, product_target)
+            if floor is None:
+                options.append(
+                    (replace(base, reason="Sin margen mínimo autorizado"), agreement, None)
+                )
+                continue
+            low, optimal = prices(ZERO, floor)
+            option = replace(
+                base,
+                detail=f"Margen mínimo autorizado {pct(floor)}",
+                amount=ZERO,
+                required_margin_pct=ratio(floor),
+                min_price=low,
+                optimal_price=optimal,
+                reason=reason,
+            )
+            options.append((option, agreement, ZERO))
+        else:
+            options.append(
+                (
+                    replace(base, reason="Rebate sobre ventas: se liquida por periodo"),
+                    agreement,
+                    None,
+                )
+            )
+
+    usable = [item for item in options if item[0].reason is None and item[2] is not None]
+    chosen: tuple[SupportOption, Agreement, Decimal | None] | None = None
+    if usable:
+        chosen = min(
+            usable,
+            key=lambda item: (
+                item[0].min_price is None,
+                item[0].min_price or ZERO,
+                item[0].optimal_price or ZERO,
+                -(item[2] or ZERO),
+                -(item[1].valid_to or date.max).toordinal(),
+            ),
+        )
+    applied: AppliedSupport | None = None
+    if chosen is not None:
+        option, agreement, share = chosen
+        applied = _applied(
+            agreement, option.amount, share, option.required_margin_pct, option.detail
+        )
+        if agreement.min_quantity is not None:
+            problems.append("apoyo_condicionado")
+    listed = tuple(
+        replace(option, applied=chosen is not None and option.support_id == chosen[0].support_id)
+        # The applied one first, then the usable ones by minimum price, then the rest.
+        for option, _, _ in sorted(
+            options,
+            key=lambda item: (
+                chosen is None or item[0].support_id != chosen[0].support_id,
+                item[0].reason is not None,
+                item[0].min_price is None,
+                item[0].min_price or ZERO,
+            ),
+        )
+    )
+    candidates = tuple(
+        _candidate(agreement, option.reason or "Otro apoyo deja un precio mínimo más bajo")
+        for option, agreement, _ in options
+        if chosen is None or option.support_id != chosen[0].support_id
+    )
+    return applied, candidates, listed, tuple(dict.fromkeys(problems))
+
+
 # ------------------------------------------------------------------ lines
 
 
@@ -399,6 +639,9 @@ def build_line(
     price_family: str = pricing.GENERAL,
     regional: str = vocabulary.NATIONAL,
     increase: Decimal | None = None,
+    list_scopes: Mapping[str, CustomerScope] | None = None,
+    base_price: Decimal | None = None,
+    origin: str | None = None,
 ) -> QuotationLine:
     """Price one SKU from its last sale (if any), current cost, target margin and supports.
 
@@ -407,12 +650,18 @@ def build_line(
     The cost is the highest of the supplier's quotation, the inventory of the list's
     warehouse and ``increase`` (a price increase SIESA does not have yet), times the list
     family's factor (see :mod:`pricing`).
+
+    A list update passes ``list_scopes`` (its customers' scopes by NIT): the line is compared
+    against ``base_price`` (the price in force on the list) instead of the last sale, the last
+    sale goes to ``last_sale_price`` / ``last_sale_cost``, and every support of the list is
+    listed with its prices (see :func:`pick_list_support`).
     """
 
     problems: list[str] = []
     if product is None:
         problems.append("producto_no_sincronizado")
-    source = sale if sale is not None else item
+    for_list = list_scopes is not None
+    source = (item or sale) if for_list else (sale if sale is not None else item)
     is_active = all(value.is_active for value in (source, cost) if value is not None)
     if not is_active:
         problems.append(vocabulary.INACTIVE_ITEM)
@@ -433,17 +682,31 @@ def build_line(
     if cost is not None and cost.discarded_quote is not None:
         problems.append("cotizacion_descartada")
 
-    support, candidates, support_problems = pick_support(
-        agreements,
-        nit=nit,
-        sku=sku,
-        supplier_code=supplier_code,
-        channel=channel,
-        scope=scope,
-        cost=cost_value,
-        product_target=product_target,
-        day=day,
-    )
+    options: tuple[SupportOption, ...] = ()
+    if list_scopes is not None:
+        support, candidates, options, support_problems = pick_list_support(
+            agreements,
+            sku=sku,
+            supplier_code=supplier_code,
+            scopes=list_scopes,
+            cost=cost_value,
+            product_target=product_target,
+            policy=policy,
+            family=price_family,
+            day=day,
+        )
+    else:
+        support, candidates, support_problems = pick_support(
+            agreements,
+            nit=nit,
+            sku=sku,
+            supplier_code=supplier_code,
+            channel=channel,
+            scope=scope,
+            cost=cost_value,
+            product_target=product_target,
+            day=day,
+        )
     problems.extend(support_problems)
     target = product_target
     if support is not None and support.required_margin_pct is not None:
@@ -464,7 +727,10 @@ def build_line(
                 else product.liquor_tax
             )
         tax_amount = _first(list_price.value_tax_amount if list_price else None, master_tax)
-    last_price = money(sale.net_price) if sale else None
+    if for_list:
+        last_price = money(base_price)
+    else:
+        last_price = money(sale.net_price) if sale else None
     current_with_support = margin(last_price, cost_value, amount)
     min_price = minimum_price(cost_value, amount, floor)
     optimal = price_at_margin(cost_value, amount, target, price_family)
@@ -507,7 +773,10 @@ def build_line(
         support=support,
         support_candidates=candidates,
         problems=tuple(dict.fromkeys(problems)),
-        origin=vocabulary.HISTORY if sale is not None else vocabulary.ADDED,
+        origin=origin or (vocabulary.HISTORY if sale is not None else vocabulary.ADDED),
+        last_sale_price=money(sale.net_price) if for_list and sale else None,
+        last_sale_cost=money(sale.unit_cost) if for_list and sale else None,
+        support_options=options,
         quote_cost=money(cost.quote_cost) if cost and cost.quote_cost is not None else None,
         discarded_quote_cost=money(cost.discarded_quote) if cost else None,
         inventory_cost=money(cost.inventory_cost) if cost else None,

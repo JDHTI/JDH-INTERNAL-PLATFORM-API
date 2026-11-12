@@ -19,14 +19,16 @@ from app.modules.quotations.domain.entities import (
     QuotationPage,
     SellerContact,
     SupportCandidate,
+    SupportOption,
     TemporaryCustomer,
 )
+from app.modules.quotations.domain.vocabulary import QUOTATION
 from app.modules.quotations.infrastructure.models import QuotationLineModel, QuotationModel
 
 Q = QuotationModel
 L = QuotationLineModel
 _HEADER_FIELDS = tuple(item.name for item in fields(Quotation))
-_LINE_SPECIAL = {"support", "support_candidates", "problems"}
+_LINE_SPECIAL = {"support", "support_candidates", "support_options", "problems"}
 _LINE_FIELDS = tuple(item.name for item in fields(QuotationLine) if item.name not in _LINE_SPECIAL)
 _CHANGED = "La cotización cambió desde que la abriste; recárgala"
 
@@ -64,6 +66,7 @@ def _line_values(quotation_id: UUID, line: QuotationLine) -> dict[str, Any]:
     values["quotation_id"] = quotation_id
     values["support"] = line.support.as_dict() if line.support else None
     values["support_candidates"] = [item.as_dict() for item in line.support_candidates]
+    values["support_options"] = [item.as_dict() for item in line.support_options]
     values["problems"] = list(line.problems)
     return values
 
@@ -74,6 +77,9 @@ def _line(model: QuotationLineModel) -> QuotationLine:
         support=AppliedSupport.from_dict(model.support) if model.support else None,
         support_candidates=tuple(
             SupportCandidate.from_dict(item) for item in model.support_candidates or ()
+        ),
+        support_options=tuple(
+            SupportOption.from_dict(item) for item in model.support_options or ()
         ),
         problems=tuple(model.problems or ()),
     )
@@ -142,16 +148,19 @@ class SqlAlchemyQuotationRepository:
         page: int,
         size: int,
         visible_to: tuple[UUID, Sequence[str]] | None = None,
+        kind: str = QUOTATION,
     ) -> QuotationPage:
-        """Quotations, newest first.
+        """Quotations of one kind, newest first.
 
         Args:
+            kind (str): ``cotizacion`` or ``lista`` (list updates).
             visible_to (tuple[UUID, Sequence[str]] | None): ``(user, salesperson codes)``:
                 only the ones the user created or whose customer is of those salespeople.
             created_by_id (UUID | None): Only the ones this user created.
             status (str | None): Only this status.
             customer_nit (str | None): Only this customer.
-            q (str | None): NIT prefix or part of the customer's name.
+            q (str | None): NIT prefix, part of the customer's name or of the price list's
+                name, or the price list code.
             page (int): 1-based page.
             size (int): Page size.
 
@@ -159,7 +168,7 @@ class SqlAlchemyQuotationRepository:
             QuotationPage: The page.
         """
 
-        conditions = []
+        conditions = [Q.kind == kind]
         if visible_to is not None:
             owner, codes = visible_to
             conditions.append(
@@ -179,6 +188,8 @@ class SqlAlchemyQuotationRepository:
                 or_(
                     Q.customer_nit.startswith(term, autoescape=True),
                     Q.customer_name.icontains(term, autoescape=True),
+                    Q.price_list_name.icontains(term, autoescape=True),
+                    func.upper(Q.price_list_id) == term.upper(),
                 )
             )
         async with self.database.session_factory() as session:

@@ -690,6 +690,18 @@ class V1Container(containers.DeclarativeContainer):
         area_slug=config.quotations.approver_area_slug,
         module="cotizador",
     )
+    # List updates (BI → Actualización de listas): the same engine, its own module. Whoever
+    # manages the module in any area updates lists; the approvers' area validates them and
+    # alone updates the restricted lists.
+    list_update_manager_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug=None, module="actualizacion-listas"
+    )
+    list_update_approver_policy = providers.Factory(
+        PermissionPolicy,
+        areas=area_service,
+        area_slug=config.quotations.approver_area_slug,
+        module="actualizacion-listas",
+    )
     quotation_policy = providers.Singleton(
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
     )
@@ -742,6 +754,9 @@ class V1Container(containers.DeclarativeContainer):
         approvers=quotation_approver_policy,
         offer_writer=quotation_offer_writer,
         lines_writer=quotation_lines_writer,
+        list_managers=list_update_manager_policy,
+        list_approvers=list_update_approver_policy,
+        restricted_lists=config.quotations.restricted_lists,
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.

@@ -19,7 +19,9 @@ from app.modules.quotations.domain.entities import (
     CustomerPage,
     ItemInfo,
     LastSale,
+    ListItem,
     ListPrice,
+    PriceListInfo,
     ProductMaster,
     QuotationDetail,
     QuotationPage,
@@ -37,6 +39,8 @@ from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar
 
 MANAGER = "asesor@jdh.com.co"
 APPROVER = "bi@jdh.com.co"
+# Manages list updates only (no quoter).
+LIST_MANAGER = "listas@jdh.com.co"
 NIT = "900315138"
 
 
@@ -135,6 +139,53 @@ class FakeWarehouse:
         # Costs of one plan, by its main warehouse (``MDE1``) or its source (``nacional``);
         # any other plan gets ``cost_rows``.
         self.plan_costs: dict[str, dict[str, CostInfo]] = {}
+        # List updates: list 10U with two SKUs, served to two customers of Centro.
+        self.lists: dict[str, PriceListInfo] = {
+            "10U": PriceListInfo("10U", "MAYORISTAS CENTRO", True, 2),
+            "001": PriceListInfo("001", "GENERAL ANTIOQUIA", True, 1),
+        }
+        self.list_branch_rows: dict[str, list[Branch]] = {
+            "10U": [
+                branch(
+                    price_list_id="10U",
+                    price_list_name="MAYORISTAS CENTRO",
+                    channel_code="0150",
+                    channel="MAYORISTAS Y DISTRIBUIDORES",
+                    billing_center_code="003",
+                    nit=NIT,
+                    customer_key="1-900315138-001",
+                ),
+                branch(
+                    branch_id="001",
+                    legal_name="DISTRIBUIDORA CARPO",
+                    price_list_id="10U",
+                    price_list_name="MAYORISTAS CENTRO",
+                    channel_code="0150",
+                    channel="MAYORISTAS Y DISTRIBUIDORES",
+                    billing_center_code="003",
+                    nit="800111222",
+                    customer_key="1-800111222-001",
+                ),
+            ],
+            "001": [branch(nit=NIT, customer_key="1-900315138-001")],
+        }
+        self.list_item_rows: dict[str, list[ListItem]] = {
+            "10U": [
+                ListItem(ItemInfo("2537", "Abrasivo", "UNID", Decimal(19), "359"), Decimal("4568")),
+                ListItem(
+                    ItemInfo("26278", "Ginebra Selva x700ml", "UNID", Decimal(5), "359"),
+                    None,
+                    placeholder=True,
+                ),
+            ],
+            "001": [
+                ListItem(ItemInfo("2537", "Abrasivo", "UNID", Decimal(19), "359"), Decimal("4568"))
+            ],
+        }
+        self.list_sales: dict[str, LastSale] = {
+            "2537": sale("2537", "4400", unit_cost=Decimal("2950"), sales_in_window=0)
+        }
+        self.sales_down = False
 
     def _check(self) -> None:
         if self.down:
@@ -188,6 +239,39 @@ class FakeWarehouse:
     async def billing_centers(self):
         self._check()
         return list(self.centers)
+
+    # ------------------------------------------------------------ list updates
+
+    async def price_lists(self, q, limit=50):
+        self._check()
+        term = q.strip().upper()
+        return [
+            info
+            for info in self.lists.values()
+            if info.code.upper() == term or term in (info.name or "").upper()
+        ][:limit]
+
+    async def price_list(self, code):
+        self._check()
+        return next(
+            (info for info in self.lists.values() if info.code.upper() == code.strip().upper()),
+            None,
+        )
+
+    async def list_branches(self, price_list_id):
+        self._check()
+        return list(self.list_branch_rows.get(price_list_id, []))
+
+    async def list_items(self, price_list_id):
+        self._check()
+        return list(self.list_item_rows.get(price_list_id, []))
+
+    async def list_last_sales(self, skus, months, customer_keys, timeout=None):
+        self._check()
+        self.calls.append(("list_last_sales", tuple(skus), customer_keys))
+        if self.sales_down:
+            raise DependencyUnavailableError("El datawarehouse tardó más de 30 s en responder")
+        return {sku: self.list_sales[sku] for sku in skus if sku in self.list_sales}
 
 
 class FakeMasters:
@@ -244,11 +328,23 @@ class FakeRepository:
         )
         self.items[quotation_id] = QuotationDetail(detail.quotation, lines)
 
-    async def list(self, *, created_by_id, status, customer_nit, q, page, size, visible_to=None):
+    async def list(
+        self,
+        *,
+        created_by_id,
+        status,
+        customer_nit,
+        q,
+        page,
+        size,
+        visible_to=None,
+        kind="cotizacion",
+    ):
         items = [
             detail.quotation
             for detail in self.items.values()
-            if (
+            if detail.quotation.kind == kind
+            and (
                 visible_to is None
                 or detail.quotation.created_by_id == visible_to[0]
                 or detail.quotation.salesperson_code in visible_to[1]
@@ -324,6 +420,9 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         max_lines=100,
         offer_writer=CustomerOfferWorkbook(),
         lines_writer=QuotationLinesWorkbook(),
+        list_managers=FakeManagers([MANAGER, LIST_MANAGER]),
+        list_approvers=FakeManagers([APPROVER]),
+        restricted_lists=("001", "002", "003", "004", "005", "009"),
     )
 
 
@@ -337,4 +436,14 @@ def approver():
     return person(APPROVER)
 
 
-__all__ = ["APPROVER", "MANAGER", "NIT", "branch", "cost", "product", "replace", "sale"]
+__all__ = [
+    "APPROVER",
+    "LIST_MANAGER",
+    "MANAGER",
+    "NIT",
+    "branch",
+    "cost",
+    "product",
+    "replace",
+    "sale",
+]
