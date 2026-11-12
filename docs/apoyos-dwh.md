@@ -4,7 +4,7 @@ Los apoyos de proveedores se publican en el datawarehouse (esquema `plataforma`)
 trazados y consultarlos desde BI y el MCP. La fuente de verdad sigue siendo la base de la
 plataforma, que además guarda una copia de cada versión publicada (`dwh_outbox`). Módulos:
 `dwh_publish` (transversal: cualquier módulo puede publicar) y `supplier_supports`.
-Migración `0054`.
+Migración `0057`.
 
 ## Cómo se escribe sin afectar la disponibilidad
 
@@ -77,7 +77,7 @@ El publicador (`DwhPublishWorker`):
 | `DWH_PUBLISH_QUIET_START` / `_END`, `_DEFER_OVER_ROWS` | `18:00` / `03:00`, `5000` | |
 | `DWH_PUBLISH_RECONCILE_AT`, `_TIMEZONE` | `19:00`, `America/Bogota` | |
 
-**Puesta en marcha:** (1) migración `0054` en la plataforma; (2) el equipo del DWH aplica
+**Puesta en marcha:** (1) migración `0057` en la plataforma; (2) el equipo del DWH aplica
 [`dwh/plataforma-apoyos.sql`](dwh/plataforma-apoyos.sql) en `dwh-platform`, crea el rol, sus
 techos, `pg_hba` y la vista `consumo.apoyos_proveedor`; (3) se configuran `DWH_WRITER_*`; (4)
 `DWH_PUBLISH_ENABLED=true`; (5) `POST /dwh-publish/reconcile` publica todo lo existente.
