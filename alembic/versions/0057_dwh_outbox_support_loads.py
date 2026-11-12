@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0054_dwh_outbox_support_loads"
-down_revision: str | None = "0053_app_monitoring_jdh_com_co"
+revision: str = "0057_dwh_outbox_support_loads"
+down_revision: str | None = "0056_price_increase_dates"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
