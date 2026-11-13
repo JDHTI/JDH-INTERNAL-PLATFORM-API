@@ -553,6 +553,13 @@ class SupportBulkService:
                     "del perfil",
                 )
             )
+        if (
+            values.get("calc_method") == "margen_minimo"
+            and values.get("min_margin_pct") is None
+            and values.get("supported_margin_pct") is not None
+        ):
+            # The short template has one margin column: for a minimum margin it is that margin.
+            values["min_margin_pct"] = values["supported_margin_pct"]
         if not values.get("kind") and "kind" not in row_cells and values.get("calc_method"):
             values["kind"] = _default_kind(values)
         given = frozenset(name for name in values if name != "supplier_code")

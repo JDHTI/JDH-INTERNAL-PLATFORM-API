@@ -52,6 +52,11 @@ class SupplierSupportModel(Base):
             "jdh_net_cost IS NULL OR (calc_method = 'costo_neto' AND jdh_net_cost >= 0)",
             name="ck_support_jdh_net_cost",
         ),
+        CheckConstraint(
+            "supported_margin_pct IS NULL OR "
+            "(supported_margin_pct >= 0 AND supported_margin_pct < 1)",
+            name="ck_supplier_supports_supported_margin",
+        ),
         CheckConstraint(_in("kind", KINDS), name="ck_supplier_supports_kind"),
         CheckConstraint(_in("funding", FUNDINGS), name="ck_supplier_supports_funding"),
         CheckConstraint(_in("calc_method", CALC_METHODS), name="ck_supplier_supports_calc_method"),
@@ -143,6 +148,8 @@ class SupplierSupportModel(Base):
     target_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     list_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    # Margin the product may drop to on top of the supplier's support (supported price).
+    supported_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     pack_factor: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     reference_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     reference_list_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))

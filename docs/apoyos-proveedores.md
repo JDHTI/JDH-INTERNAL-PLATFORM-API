@@ -257,17 +257,29 @@ La plantilla corta (la que se descarga por defecto) trae solo estas columnas. **
 | `SKU JDH` (o `SKU Proveedor`) | Vacío = todo el portafolio |
 | `Tipo de apoyo` | `% sobre costo`, `% sobre precio lista`, `Costo apoyado`, `Precio apoyado sin IVA`, `$ por unidad`, `Margen mínimo` (o el código) |
 | `Valor apoyo` | El valor según el tipo (no se usa con `Margen mínimo`) |
-| `Unidad del valor` | Opcional: caja o unidad, para los tipos en pesos; vacío se infiere del DWH |
-| `Margen garantizado` | Obligatorio solo con `Precio apoyado sin IVA` |
-| `Margen Mínimo` | Solo con `Margen mínimo` |
-| `% Apoyo JDH` | Opcional, si JDH pone un descuento aparte |
+| `Margen apoyado` | Opcional: hasta qué margen se autoriza bajar el producto (ver abajo). Con `Margen mínimo` es ese margen |
 | `Observaciones` | Opcional |
 
-Todo lo demás es **opcional y no va en la plantilla corta**: `Autorizado por` (quién autorizó
-comercialmente el apoyo, texto libre), `Volumen Comprometido` y `Referencia externa` (n.º de
-acuerdo; hoy solo Kimberly), `Regional`, `Unidad de Negocio`, `Canal`, `Grupo Cliente`,
-`Forma de liquidación`, `Cod. Proveedor`. Se leen igual si el archivo las trae y están en la
-plantilla completa (`full=true`) y en el perfil del proveedor que las use.
+**Margen apoyado.** Reemplaza al `% Apoyo JDH` en la plantilla. Se calcula así:
+
+1. El precio lista es el costo del DWH al **margen general del producto** (maestro de márgenes,
+   `Margen Lista 1`).
+2. El dinero del proveedor deja un **margen recompuesto** a ese precio: `1 − costo neto / precio lista`.
+3. El margen apoyado dice hasta dónde puede bajar el margen sobre ese costo neto. El **precio
+   apoyado** es `costo neto / (1 − margen apoyado)` y el **descuento al cliente** es lo que ese
+   precio queda por debajo del precio lista.
+
+En la respuesta van en `derived`: `product_margin_pct`, `recomposed_list_margin`,
+`supported_margin_pct`, `supported_price` (y `supported_price_per` por caja y unidad) y
+`customer_discount_pct`. Se guarda en `supported_margin_pct` (migración `0061`). El `% Apoyo JDH`
+y el panel de solicitudes JDH siguen funcionando como antes.
+
+Todo lo demás es **opcional y no va en la plantilla corta**: `% Apoyo JDH`, `Unidad del valor`
+(caja o unidad; vacío se infiere del DWH), `Margen garantizado` (obligatorio con `Precio apoyado
+sin IVA`), `Autorizado por` (quién autorizó comercialmente el apoyo, texto libre),
+`Volumen Comprometido` y `Referencia externa` (n.º de acuerdo; hoy solo Kimberly), `Regional`,
+`Unidad de Negocio`, `Canal`, `Grupo Cliente`, `Forma de liquidación`, `Cod. Proveedor`. Se leen
+igual si el archivo las trae y están en la plantilla completa (`full=true`).
 
 | Del DWH (no se pide) | Calculado (no se diligencia) |
 | --- | --- |

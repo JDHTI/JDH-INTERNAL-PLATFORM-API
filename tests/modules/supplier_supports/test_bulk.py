@@ -285,10 +285,18 @@ async def test_template_follows_the_profile_layout(profiles, manager) -> None:
     assert "Tipo de apoyo" in general and "Valor apoyo" in general
     assert "NIT Cliente" in general and "SKU JDH" in general and "Fecha Inicio" in general
     assert "Costo Referencia" not in general and "Precio Lista Referencia" not in general
-    # Optional fields few suppliers use stay out of the short template (full and profiles).
-    assert "Margen Mínimo" in general and "Observaciones" in general
-    for rare in ("Autorizado por", "Volumen Comprometido", "Regional", "Cod. Proveedor"):
-        assert rare not in general
+    # The short template: NIT, SKUs, type, value, supported margin, dates and notes.
+    assert general == [
+        "NIT Cliente",
+        "SKU JDH",
+        "SKU Proveedor",
+        "Tipo de apoyo",
+        "Valor apoyo",
+        "Margen apoyado",
+        "Fecha Inicio",
+        "Fecha Fin",
+        "Observaciones",
+    ]
     full = [header for _, header in template_headers(None, full=True)]
     assert "Costo Referencia" in full and "Clase de apoyo" in full
 

@@ -97,16 +97,27 @@ def dwh_cost_in_unit(
     return min(candidates, key=lambda value: abs(math.log(value / reference_cost)))
 
 
-def derive(data: SupportData, dwh_unit_cost: Decimal | None = None) -> Derived:
+def derive(
+    data: SupportData,
+    dwh_unit_cost: Decimal | None = None,
+    product_margin: Decimal | None = None,
+) -> Derived:
     """Compute the derived amounts and margins of a support.
 
     The cost is the DWH's (the quoter's rule, refreshed daily) whenever it is known and can
     be put in the support's unit; otherwise the reference cost stored with the support.
     ``cost_basis`` says which one was used.
 
+    The list price is the cost at the product's general margin (margin master, ``margin_list``)
+    when it is known; otherwise the reference list price stored with the support. The supplier's
+    money leaves a **recomposed margin** at that price; the **supported margin** (margen
+    apoyado) is how far the margin may drop on top of it: the supported price is the net cost
+    at that margin, and the client's discount is how far it falls below the list price.
+
     Args:
         data (SupportData): The support inputs.
         dwh_unit_cost (Decimal | None): The DWH cost per inventory unit of its SKU.
+        product_margin (Decimal | None): The product's general margin (margin master).
 
     Returns:
         Derived: Whatever can be computed with the references available.
@@ -117,6 +128,10 @@ def derive(data: SupportData, dwh_unit_cost: Decimal | None = None) -> Derived:
     if live is not None:
         data = replace(data, reference_cost=live)
         basis = "dwh"
+    margin_of_product = product_margin if product_margin is not None else data.list_margin_pct
+    master_price = _margin_price(data.reference_cost, product_margin)
+    if master_price is not None:
+        data = replace(data, reference_list_price=master_price)
     cost, listed = data.reference_cost, data.reference_list_price
     amount = supplier_amount(data)
     net_cost = cost - amount if cost is not None and amount is not None else None
@@ -137,7 +152,13 @@ def derive(data: SupportData, dwh_unit_cost: Decimal | None = None) -> Derived:
     elif data.calc_method == "pct_precio_lista" and listed is not None:
         price = listed * (ONE - (data.supplier_value or ZERO) - (data.jdh_pct or ZERO))
     elif net_cost is not None:
-        price = _margin_price(net_cost, data.target_margin_pct or data.list_margin_pct)
+        price = _margin_price(net_cost, data.target_margin_pct or margin_of_product)
+
+    # The margin the supplier's money leaves at the list price, and the supported margin.
+    recomposed_at_list = None if listed is None else _complement(_div(net_cost, listed))
+    supported_price = _margin_price(net_cost, data.supported_margin_pct)
+    if supported_price is not None:
+        price = supported_price
 
     margin_order = None if price is None else _complement(_div(cost, price))
     margin_recomposed = None if price is None else _complement(_div(net_cost, price))
@@ -161,6 +182,16 @@ def derive(data: SupportData, dwh_unit_cost: Decimal | None = None) -> Derived:
         net_cost_per=per(net_cost),
         suggested_price_per=per(price),
         cost_basis=basis,
+        product_margin_pct=margin_of_product,
+        recomposed_list_margin=recomposed_at_list,
+        supported_margin_pct=data.supported_margin_pct,
+        supported_price=supported_price,
+        supported_price_per=per(supported_price),
+        customer_discount_pct=(
+            None
+            if supported_price is None or listed is None
+            else _complement(_div(supported_price, listed))
+        ),
     )
 
 
