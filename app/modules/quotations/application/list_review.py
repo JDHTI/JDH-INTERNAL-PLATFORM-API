@@ -8,7 +8,8 @@ A list update (``lista`` or ``principal``) is never confirmed as a whole. Each i
 - loaded: the validator downloads the staging's files (SIESA's two pages, prices and value
   taxes), loads them and marks them loaded; the items keep ``validada`` and point to the load.
 
-A new price sends the item back to ``sin_marcar`` and out of any load: a new cycle. Two updates
+A new price sends the item back to ``sin_marcar`` (on the board of the main lists, straight to
+``por_validar``) and out of any load: a new cycle. Two updates
 of the same list cannot both stage a SKU: the second validation is refused.
 """
 
@@ -108,8 +109,13 @@ class ListReviewService:
         version: int,
         skus: Sequence[str],
         status: str,
+        *,
+        full: bool = True,
     ) -> tuple[QuotationDetail, tuple[Skipped, ...]]:
         """Set the review of some items.
+
+        Without ``full`` (the board of the main lists), only the header and those items are
+        read and written, and only they come back: list 1 has thousands of rows.
 
         - ``por_validar`` and ``sin_marcar``: whoever edits the update.
         - ``validada``, or taking an item out of ``validada``: only who validates the kind.
@@ -130,7 +136,9 @@ class ListReviewService:
             raise InvalidInputError("Elige las referencias a marcar")
         if len(wanted) > MAX_REVIEW_SKUS:
             raise InvalidInputError(f"Máximo {MAX_REVIEW_SKUS} referencias por vez")
-        detail = await self.quotations.editable(principal, quotation_id, any_status=True)
+        detail = await self.quotations.editable(
+            principal, quotation_id, any_status=True, skus=None if full else wanted
+        )
         quotation = detail.quotation
         _list_only(quotation.is_list_update)
         self.quotations.check_version(quotation, version)
@@ -186,21 +194,36 @@ class ListReviewService:
                     + "; ".join(f"{item.sku} ({item.reason})" for item in skipped[:10])
                 )
             return detail, ()
-        saved = await self.repository.save(
-            self.quotations.bumped(quotation, principal.email), updated, version
-        )
+        header = self.quotations.bumped(quotation, principal.email)
+        if not full:
+            await self.repository.write(header, updated, version)
+            stored = {line.sku: line for line in updated}
+            lines = tuple(stored.get(line.sku, line) for line in detail.lines)
+            return QuotationDetail(header, lines), tuple(skipped)
+        saved = await self.repository.save(header, updated, version)
         return saved, tuple(skipped)
 
     async def set_note(
-        self, principal: Principal, quotation_id: UUID, version: int, sku: str, note: str | None
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        version: int,
+        sku: str,
+        note: str | None,
+        *,
+        full: bool = True,
     ) -> QuotationDetail:
         """Write or clear the observation of an item (whoever edits the update, any state).
+
+        Without ``full``, only the header and that item are read, written and returned.
 
         Raises:
             InvalidInputError: Not a list update, an unknown SKU or a note too long.
         """
 
-        detail = await self.quotations.editable(principal, quotation_id, any_status=True)
+        detail = await self.quotations.editable(
+            principal, quotation_id, any_status=True, skus=None if full else [sku]
+        )
         _list_only(detail.quotation.is_list_update)
         self.quotations.check_version(detail.quotation, version)
         line = next((item for item in detail.lines if item.sku == sku), None)
@@ -213,11 +236,12 @@ class ListReviewService:
             )
         if text == line.note:
             return detail
-        return await self.repository.save(
-            self.quotations.bumped(detail.quotation, principal.email),
-            [replace(line, note=text)],
-            version,
-        )
+        header = self.quotations.bumped(detail.quotation, principal.email)
+        noted = replace(line, note=text)
+        if not full:
+            await self.repository.write(header, [noted], version)
+            return QuotationDetail(header, (noted,))
+        return await self.repository.save(header, [noted], version)
 
     # ------------------------------------------------------------ staging
 

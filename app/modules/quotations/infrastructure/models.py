@@ -295,6 +295,11 @@ class QuotationLineModel(Base):
     load_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("price_list_loads.id", ondelete="SET NULL")
     )
+    # Stock of a main list's item in its list's warehouses, read by the sync (0 without stock,
+    # NULL when it was not read). The board sorts by it. QuotationLine has no such field: only
+    # the board reads and writes it, so an edit of the line keeps it.
+    stock_on_hand: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    stock_available: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     # Unused (see RequestedProductModel): QuotationLine has no such field, so the
     # repository never writes it and new lines store NULL.
     requested_product_id: Mapped[uuid.UUID | None] = mapped_column(

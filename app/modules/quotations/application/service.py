@@ -1286,10 +1286,19 @@ class QuotationService:
 
     # ------------------------------------------------------------ read
 
-    async def get(self, principal: Principal, quotation_id: UUID) -> QuotationDetail:
-        """A quotation or list update; the permission is the one of its module."""
+    async def get(
+        self, principal: Principal, quotation_id: UUID, skus: Sequence[str] | None = None
+    ) -> QuotationDetail:
+        """A quotation or list update; the permission is the one of its module.
 
-        detail = await self.repository.get(quotation_id)
+        With ``skus``, only those lines come: a few rows of a large list update.
+        """
+
+        detail = await (
+            self.repository.get(quotation_id)
+            if skus is None
+            else self.repository.get_lines(quotation_id, skus)
+        )
         if detail is None:
             raise NotFoundError("Cotización no encontrada")
         await self._require_reader(principal, detail.quotation.kind)
@@ -1330,16 +1339,21 @@ class QuotationService:
         return replace(detail, lines=lines)
 
     async def _editable(
-        self, principal: Principal, quotation_id: UUID, *, any_status: bool = False
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        *,
+        any_status: bool = False,
+        skus: Sequence[str] | None = None,
     ) -> QuotationDetail:
         """The quotation, if the caller may edit it and it is not awaiting validation.
 
         BI (and admins) has the whole module: it edits any quotation. Anyone else, only theirs.
         ``any_status`` lets through a pending one too: for changes that never touch prices
-        (offer settings, quantities).
+        (offer settings, quantities). With ``skus``, only those lines come.
         """
 
-        detail = await self.get(principal, quotation_id)
+        detail = await self.get(principal, quotation_id, skus)
         await self._require_manager(principal, detail.quotation.kind)
         await self._require_owner_or_validator(principal, detail.quotation, "editarla")
         await self._check_restricted(principal, detail.quotation)
@@ -1352,11 +1366,16 @@ class QuotationService:
         return detail
 
     async def editable(
-        self, principal: Principal, quotation_id: UUID, *, any_status: bool = False
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        *,
+        any_status: bool = False,
+        skus: Sequence[str] | None = None,
     ) -> QuotationDetail:
         """:meth:`_editable` for the services built on this one (review, staging)."""
 
-        return await self._editable(principal, quotation_id, any_status=any_status)
+        return await self._editable(principal, quotation_id, any_status=any_status, skus=skus)
 
     async def audience_of(self, quotation: Quotation) -> _Audience | None:
         """Whose sales count for a stored list update (``None`` for a quotation)."""
@@ -1412,11 +1431,16 @@ class QuotationService:
     # ------------------------------------------------------------ change
 
     def _touched(
-        self, quotation: Quotation, lines: Sequence[QuotationLine], actor: str
+        self,
+        quotation: Quotation,
+        lines: Sequence[QuotationLine],
+        actor: str,
+        counts: tuple[int, int, int, int] | None = None,
     ) -> Quotation:
-        """The header after an edit: back to draft, counts again, review stamps cleared."""
+        """The header after an edit: back to draft, counts again (the given ``counts`` when
+        the lines are not all at hand), review stamps cleared."""
 
-        total, changed, below, below_target = rules.counts(lines)
+        total, changed, below, below_target = counts or rules.counts(lines)
         return replace(
             quotation,
             status=vocabulary.DRAFT,
@@ -1529,6 +1553,85 @@ class QuotationService:
         quotation = self._touched(detail.quotation, lines, principal.email)
         saved = await self.repository.save(quotation, list(updated.values()), version)
         return saved, tuple(skipped)
+
+    async def price_rows(
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        changes: Sequence[LineChange],
+        *,
+        ready: bool = False,
+    ) -> tuple[QuotationDetail, tuple[Skipped, ...]]:
+        """New prices on a few rows of a large list update (the board of the main lists).
+
+        Unlike :meth:`update_lines`, only the header and the rows of ``changes`` are read and
+        written, never the whole update (list 1 has thousands of rows): the header's counts
+        move by what those rows changed. It writes at the version it read; the caller tries
+        again on a conflict.
+
+        With ``ready`` a row whose price changed goes to ``por_validar``, by whoever priced it,
+        when it can (active and with a unit); without a price it is ``sin_marcar``.
+
+        Returns:
+            tuple[QuotationDetail, tuple[Skipped, ...]]: The header and those rows as stored
+            (not the whole update), and the rows that were not priced.
+
+        Raises:
+            InvalidInputError: Not a list update, an unknown SKU or nothing could be priced.
+            ConflictError: The update changed while it was written.
+        """
+
+        if not changes or any(change.set_quantity or not change.set_price for change in changes):
+            raise InvalidInputError("Solo se cambian precios")
+        detail = await self._editable(
+            principal, quotation_id, skus=list(dict.fromkeys(change.sku for change in changes))
+        )
+        quotation = detail.quotation
+        if not quotation.is_list_update:
+            raise InvalidInputError("Solo una actualización de lista se edita por filas")
+        by_sku = {line.sku: line for line in detail.lines}
+        now = datetime.now(UTC)
+        updated: dict[str, QuotationLine] = {}
+        skipped: list[Skipped] = []
+        for change in changes:
+            line = by_sku.get(change.sku)
+            if line is None:
+                raise InvalidInputError(f"La referencia {change.sku} no está en la lista")
+            priced, reason = self._apply(line, change, quotation.price_family)
+            if priced is None:
+                skipped.append(reason)  # type: ignore[arg-type]
+                continue
+            if priced.new_price != line.new_price:
+                priced = _unreviewed(priced)
+                if ready and priced.new_price is not None and priced.is_active and priced.unit:
+                    priced = replace(
+                        priced,
+                        review_status=vocabulary.TO_VALIDATE,
+                        reviewed_by=principal.email,
+                        reviewed_at=now,
+                    )
+            updated[change.sku] = priced
+        if not updated:
+            raise InvalidInputError(
+                "Ninguna referencia se pudo actualizar: "
+                + "; ".join(f"{item.sku} ({item.reason})" for item in skipped[:10])
+            )
+        _, changed_before, blocked_before, _ = rules.counts([by_sku[sku] for sku in updated])
+        _, changed_after, blocked_after, _ = rules.counts(list(updated.values()))
+        header = self._touched(
+            quotation,
+            (),
+            principal.email,
+            counts=(
+                quotation.line_count,
+                quotation.changed_count + changed_after - changed_before,
+                quotation.below_rule_count + blocked_after - blocked_before,
+                quotation.below_target_count,
+            ),
+        )
+        await self.repository.write(header, list(updated.values()), quotation.version)
+        lines = tuple(updated.get(line.sku, line) for line in detail.lines)
+        return QuotationDetail(header, lines), tuple(skipped)
 
     async def _set_quantities(
         self,

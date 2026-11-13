@@ -41,6 +41,13 @@ class FakeBoardRepository:
 
     def __init__(self, quotations) -> None:
         self.quotations = quotations
+        # What the sync stored: (on hand, available) by (update, SKU).
+        self.stock: dict[tuple, tuple] = {}
+
+    async def set_stock(self, quotation_id, stock):
+        for line in self.quotations.items[quotation_id].lines:
+            if not line.is_local:
+                self.stock[(quotation_id, line.sku)] = stock.get(line.sku, (Decimal(0), Decimal(0)))
 
     async def current_updates(self, kind):
         latest = {}
@@ -67,16 +74,22 @@ class FakeBoardRepository:
                     continue
                 if with_chip and board.chip and not _chip(line, board.chip):
                     continue
+                on_hand, available = self.stock.get((quotation.id, line.sku), (None, None))
                 yield BoardRow(
                     quotation.id,
                     quotation.version,
                     quotation.price_list_id,
                     quotation.price_list_name,
                     line,
+                    on_hand,
+                    available,
                 )
 
     async def rows(self, ids, board, page, size):
         rows = list(self._matching(ids, board))
+        if board.sort == "existencia":
+            # Most stock first, unread last (as NULLS LAST does).
+            rows.sort(key=lambda row: (row.stock_on_hand is None, -(row.stock_on_hand or 0)))
         everything = list(self._matching(ids, board, with_chip=False))
         counts = {
             chip: sum(1 for row in everything if _chip(row.line, chip))
@@ -189,29 +202,47 @@ async def test_the_board_reads_every_list_in_one_table_and_filters_by_list(
         await board.rows(person("otro@jdh.com.co"), BoardFilter(), 1, 50)
 
 
-async def test_prices_reviews_and_notes_reach_each_list(board, collaborator, analyst) -> None:
+async def test_prices_reviews_and_notes_reach_each_list(
+    board, repository, collaborator, analyst
+) -> None:
     await board.build(collaborator, "001")
     await board.build(collaborator, "002")
     rows = (await board.rows(collaborator, BoardFilter(), 1, 50)).page.rows
     keys = [BoardKey(row.quotation_id, row.line.sku) for row in rows]
+    full_reads = repository.full_reads
 
-    written, skipped = await board.set_prices(
+    priced = await board.set_prices(
         collaborator,
         [
             PriceInput(keys[0].quotation_id, "2537", Decimal(4700)),
             PriceInput(keys[1].quotation_id, "2537", Decimal(3300)),
         ],
     )
-    assert written == 2 and skipped == ()
-    marked, skipped = await board.mark(collaborator, keys, "por_validar")
+    assert priced.done == 2 and priced.skipped == ()
+    # A new price is ready to validate at once; the answer has the rows as they are now.
+    assert [
+        (row.price_list_id, row.line.new_price, row.line.review_status, row.line.reviewed_by)
+        for row in priced.rows
+    ] == [
+        ("001", Decimal(4700), "por_validar", MAIN_MANAGER),
+        ("002", Decimal(3300), "por_validar", MAIN_MANAGER),
+    ]
+    assert priced.rows[1].line.variation_pct is not None
+    unmarked = await board.mark(collaborator, keys[:2], "sin_marcar")
+    assert unmarked.done == 2 and {row.line.review_status for row in unmarked.rows} == {
+        "sin_marcar"
+    }
+    marked = await board.mark(collaborator, keys, "por_validar")
     # The liquor has no new price: it cannot be marked.
-    assert marked == 2 and [item.sku for item in skipped] == ["26278"]
+    assert marked.done == 2 and [item.sku for item in marked.skipped] == ["26278"]
     with pytest.raises(ForbiddenError):
         await board.mark(collaborator, keys[:2], "validada")
-    validated, _ = await board.mark(analyst, keys[:2], "validada")
-    assert validated == 2
+    validated = await board.mark(analyst, keys[:2], "validada")
+    assert validated.done == 2
     noted = await board.note(collaborator, keys[2].quotation_id, "26278", "Revisar el impuesto")
     assert noted.line.note == "Revisar el impuesto"
+    # Every edit read and wrote only its rows, never a whole list.
+    assert repository.full_reads == full_reads
 
     after = await board.rows(collaborator, BoardFilter(chip="validada"), 1, 50)
     assert {(row.price_list_id, row.line.new_price) for row in after.page.rows} == {
@@ -226,23 +257,69 @@ async def test_the_board_is_shared_by_every_collaborator(board, service, collabo
     other = person("otro.colaborador@jdh.com.co")
     rows = (await board.rows(other, BoardFilter(), 1, 50)).page.rows
 
-    written, skipped = await board.apply(
+    edit = await board.apply(
         other, [BoardKey(row.quotation_id, row.line.sku) for row in rows], "optimo"
     )
 
     # Another collaborator edits a list someone else built; the liquor has no cost.
-    assert written == 1
-    assert [(item.sku, item.reason) for item in skipped] == [
+    assert edit.done == 1
+    assert [(item.sku, item.reason) for item in edit.skipped] == [
         ("26278", "Sin costo: no hay precio sugerido")
     ]
     after = {
         row.line.sku: row.line for row in (await board.rows(other, BoardFilter(), 1, 50)).page.rows
     }
     assert after["2537"].new_price == after["2537"].optimal_price
-    cleared, _ = await board.apply(
+    cleared = await board.apply(
         other, [BoardKey(row.quotation_id, row.line.sku) for row in rows], "limpiar"
     )
-    assert cleared == 2
+    assert cleared.done == 2
+
+
+async def test_a_price_moves_the_counts_of_its_list_without_reading_it_whole(
+    board, repository, collaborator
+) -> None:
+    await board.build(collaborator, "002")
+    rows = (await board.rows(collaborator, BoardFilter(), 1, 50)).page.rows
+    update = rows[0].quotation_id
+    before = repository.items[update].quotation
+
+    await board.set_prices(collaborator, [PriceInput(update, "2537", Decimal(3300))])
+    priced = repository.items[update].quotation
+    cleared = await board.set_prices(collaborator, [PriceInput(update, "2537", None)])
+    after = repository.items[update].quotation
+
+    assert priced.changed_count == before.changed_count + 1
+    assert priced.version == before.version + 1 and priced.line_count == before.line_count
+    # Cleared, the row is unmarked and out of the count again.
+    assert cleared.rows[0].line.review_status == "sin_marcar"
+    assert cleared.rows[0].line.reviewed_by is None
+    assert after.changed_count == before.changed_count
+
+
+async def test_the_sync_stores_the_stock_and_the_board_sorts_by_it(
+    board, insights, collaborator
+) -> None:
+    await board.build(collaborator, "002")
+    await board.build(collaborator, "001")
+    insights.calls.clear()
+
+    result = await board.rows(collaborator, BoardFilter(sort="existencia", descending=True), 1, 50)
+
+    first = result.page.rows[0]
+    # 2537 has 80 in MDE1 (list 001); list 002's warehouses have none.
+    assert (first.price_list_id, first.line.sku, first.stock_on_hand) == ("001", "2537", 80)
+    assert result.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
+    assert [row.stock_on_hand for row in result.page.rows[1:]] == [0, 0]
+    # The page does not read the warehouse: the sync stored the stock of every row.
+    assert not [call for call in insights.calls if call[0] == "stock"]
+
+    # A list not synced since the stock is stored is read page by page.
+    board.repository.stock.clear()
+    again = await board.rows(collaborator, BoardFilter(), 1, 50)
+    assert again.stock_read and again.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
+    # One read per list.
+    assert [call[0] for call in insights.calls] == ["stock", "stock"]
 
 
 class FakeRuns:

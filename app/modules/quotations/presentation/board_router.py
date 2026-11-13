@@ -17,9 +17,16 @@ from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.jobs.domain.entities import JobRun
-from app.modules.quotations.application.main_board import MainBoardService, PriceInput
+from app.modules.quotations.application.list_review import StockTotal
+from app.modules.quotations.application.main_board import BoardEdit, MainBoardService, PriceInput
 from app.modules.quotations.application.service import Skipped
-from app.modules.quotations.domain.board import MAX_KEYS, MAX_PAGE_SIZE, BoardFilter, BoardKey
+from app.modules.quotations.domain.board import (
+    MAX_KEYS,
+    MAX_PAGE_SIZE,
+    BoardFilter,
+    BoardKey,
+    BoardRow,
+)
 from app.modules.quotations.domain.vocabulary import WARNING_LABELS
 from app.modules.quotations.presentation.router import (
     LineResponse,
@@ -37,7 +44,9 @@ _principal = Depends(get_current_principal)
 Chip = Literal[
     "sin_marcar", "por_validar", "validada", "cargada", "alza", "objetivo", "encima", "alerta"
 ]
-Sort = Literal["lista", "sku", "precio_actual", "margen_actual", "precio_nuevo", "variacion"]
+Sort = Literal[
+    "lista", "sku", "precio_actual", "margen_actual", "precio_nuevo", "variacion", "existencia"
+]
 
 
 class BoardListResponse(BaseModel):
@@ -90,8 +99,11 @@ class BoardRowResponse(LineResponse):
     quotation_version: int
     price_list_id: str
     price_list_name: str | None
+    # In the list's warehouses; ``None`` without stock (or in an edit's answer, which does
+    # not read it).
     stock_on_hand: Decimal | None = None
     stock_available: Decimal | None = None
+    # Warehouses with stock when the page read it from the warehouse; 0 when the sync had.
     stock_warehouses: int = 0
 
 
@@ -101,7 +113,7 @@ class BoardPageResponse(BaseModel):
     page: int
     size: int
     counts: dict[str, int]
-    # False when the warehouse did not answer the stock of the page.
+    # False when the warehouse did not answer the stock of rows the sync had not read.
     stock_read: bool
 
 
@@ -136,6 +148,29 @@ class NoteRequest(BoardKeyModel):
 class ActionResponse(BaseModel):
     done: int
     skipped: list[SkippedResponse]
+    # The rows written, as they are now (prices and review; not the bulk prices).
+    rows: list[BoardRowResponse] = []
+
+
+def _row(row: BoardRow, stock: StockTotal | None = None) -> BoardRowResponse:
+    return BoardRowResponse(
+        **_line(row.line, "changed").model_dump(),
+        quotation_id=row.quotation_id,
+        quotation_version=row.quotation_version,
+        price_list_id=row.price_list_id,
+        price_list_name=row.price_list_name,
+        stock_on_hand=stock.on_hand if stock else None,
+        stock_available=stock.available if stock else None,
+        stock_warehouses=stock.warehouses if stock else 0,
+    )
+
+
+def _action(edit: BoardEdit, rows: bool = True) -> ActionResponse:
+    return ActionResponse(
+        done=edit.done,
+        skipped=_skipped(edit.skipped),
+        rows=[_row(row) for row in edit.rows] if rows else [],
+    )
 
 
 def _filter(
@@ -275,29 +310,16 @@ async def rows(
         page,
         size,
     )
-    stock = result.stock or {}
-    items = []
-    for row in result.page.rows:
-        total = stock.get((row.quotation_id, row.line.sku))
-        items.append(
-            BoardRowResponse(
-                **_line(row.line, "changed").model_dump(),
-                quotation_id=row.quotation_id,
-                quotation_version=row.quotation_version,
-                price_list_id=row.price_list_id,
-                price_list_name=row.price_list_name,
-                stock_on_hand=total.on_hand if total else None,
-                stock_available=total.available if total else None,
-                stock_warehouses=total.warehouses if total else 0,
-            )
-        )
     return BoardPageResponse(
-        items=items,
+        items=[
+            _row(row, result.stock.get((row.quotation_id, row.line.sku)))
+            for row in result.page.rows
+        ],
         total=result.page.total,
         page=result.page.page,
         size=result.page.size,
         counts=result.page.counts,
-        stock_read=result.stock is not None,
+        stock_read=result.stock_read,
     )
 
 
@@ -337,13 +359,15 @@ async def prices(
     principal: Principal = _principal,
     service: MainBoardService = _service,
 ) -> ActionResponse:
-    """Whole pesos; ``null`` clears it. A new price sends the item back to unmarked."""
+    """Whole pesos; ``null`` clears it. A new price sends the item to ``por_validar`` (when
+    it is active and has a unit), a cleared one to ``sin_marcar``. ``rows`` has the rows as
+    they are now."""
 
-    done, skipped = await service.set_prices(
+    edit = await service.set_prices(
         principal,
         [PriceInput(item.quotation_id, item.sku, item.new_price) for item in body.changes],
     )
-    return ActionResponse(done=done, skipped=_skipped(skipped))
+    return _action(edit)
 
 
 @router.post(
@@ -358,10 +382,12 @@ async def apply(
     principal: Principal = _principal,
     service: MainBoardService = _service,
 ) -> ActionResponse:
-    done, skipped = await service.apply(
+    """Up to 10,000 rows: the answer does not carry them (``rows`` is empty)."""
+
+    edit = await service.apply(
         principal, [BoardKey(item.quotation_id, item.sku) for item in body.keys], body.mode
     )
-    return ActionResponse(done=done, skipped=_skipped(skipped))
+    return _action(edit, rows=False)
 
 
 @router.put(
@@ -378,10 +404,10 @@ async def review(
 ) -> ActionResponse:
     """``por_validar`` and ``sin_marcar``: whoever edits; ``validada``: who validates."""
 
-    done, skipped = await service.mark(
+    edit = await service.mark(
         principal, [BoardKey(item.quotation_id, item.sku) for item in body.keys], body.status
     )
-    return ActionResponse(done=done, skipped=_skipped(skipped))
+    return _action(edit)
 
 
 @router.put(
@@ -396,14 +422,7 @@ async def note(
     principal: Principal = _principal,
     service: MainBoardService = _service,
 ) -> BoardRowResponse:
-    row = await service.note(principal, body.quotation_id, body.sku, body.note)
-    return BoardRowResponse(
-        **_line(row.line, "changed").model_dump(),
-        quotation_id=row.quotation_id,
-        quotation_version=row.quotation_version,
-        price_list_id=row.price_list_id,
-        price_list_name=row.price_list_name,
-    )
+    return _row(await service.note(principal, body.quotation_id, body.sku, body.note))
 
 
 __all__ = ["router"]

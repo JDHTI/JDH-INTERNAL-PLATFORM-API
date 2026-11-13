@@ -37,13 +37,23 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   filtros; `todos`, el total.
 - **Acciones sobre filas de cualquier lista:** precio nuevo por fila, precio óptimo, mínimo o
   limpiar sobre la selección, el estado de revisión (en la UI se cambia fila por fila, en el chip
-  de cada una o en su detalle) y la observación. Cada una va a la actualización de su lista, en la versión vigente; si otra persona
-  la cambió en el mismo momento, se intenta una vez más.
+  de cada una o en su detalle) y la observación. Cada una va a la actualización de su lista, en la
+  versión vigente; si otra persona la cambió en el mismo momento, se intenta una vez más.
+- **Un precio nuevo pasa a «Por validar» de inmediato,** a nombre de quien lo puso, si la
+  referencia está activa y tiene unidad. Borrar el precio la deja «Sin marcar». En Actualización
+  de listas, en cambio, un precio nuevo sigue volviendo a «Sin marcar».
+- **Las ediciones solo leen y escriben sus filas,** nunca la lista entera (la lista 1 tiene miles):
+  `price_rows` en `QuotationService`, `mark` y `set_note` con `full=False`. Los conteos del
+  encabezado se mueven por lo que cambiaron esas filas. Antes cada precio leía la lista completa
+  tres veces y tardaba varios segundos en la lista 1. La respuesta de precios y revisión trae las
+  filas como quedaron (`rows`), para que la UI las muestre sin releer la página.
 - **Compartido:** cualquiera con `manage` en el módulo edita todas las listas, aunque las haya
   armado otra persona; cualquiera con `read` las ve todas.
-- **Existencias:** cada página trae la existencia de sus filas en las bodegas de su lista (una
-  lectura del DWH por lista de la página). Si el DWH no responde, la página sale sin ellas
-  (`stock_read: false`).
+- **Existencias:** la sincronización guarda la existencia de cada referencia en las bodegas de su
+  lista (`quotation_lines.stock_on_hand` y `stock_available`, migración `0060`: 0 sin existencia,
+  NULL sin leer). La página la toma de ahí y se puede ordenar por ella (`sort=existencia`, sin
+  leer al final). Las filas sin leer (una lista sin sincronizar desde la `0060`) se leen del DWH
+  por página; si no responde, salen sin ella (`stock_read: false`).
 
 ## Datos generales
 
@@ -54,7 +64,7 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
 | Impuesto licor | `impuesto-licor`, también bloqueado a `bi`, sin pantalla propia: su `manage` cambia el impuesto y genera el plano, sin validación |
 | Listas | `LIST_UPDATES_MAIN_LISTS` = `1,001,002,003,004,005,009,1M,10T,10U,11N,10N,1DR,35P` (códigos exactos de SIESA) |
 | Regional del impuesto licor | `LIQUOR_TAX_COAST_LISTS` = `004,11N,22N,36J,46V` pagan el valor Costa; el resto, el Nacional |
-| Migración | `0059_main_lists_review` |
+| Migraciones | `0059_main_lists_review`, `0060_main_lists_stock` |
 | Validado contra el DWH | 2026-11-12 ([cotizador-dwh.md](cotizador-dwh.md) §10) |
 
 - **1 y 001 son dos listas distintas:** 1 es GENERAL (28.093 sucursales activas de todos los C.O.)
@@ -136,9 +146,9 @@ La revisión por ítem, el staging y las cargas son los de
 | `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
 | `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
-| `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos; `null` lo borra |
-| `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas |
-| `PUT /main/review` `{keys, status}` | marca las filas |
+| `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos (pasan a `por_validar`); `null` lo borra. Trae las filas como quedaron (`rows`) |
+| `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas (sin `rows`: pueden ser 10.000) |
+| `PUT /main/review` `{keys, status}` | marca las filas; trae las filas como quedaron (`rows`) |
 | `PUT /main/note` `{quotation_id, sku, note}` | la observación de una fila |
 | `GET /liquor-taxes` | la pantalla: licores, valores por lista, licores sin llave, listas de la Costa |
 | `GET /liquor-taxes/updates` | cambios, el más nuevo primero |

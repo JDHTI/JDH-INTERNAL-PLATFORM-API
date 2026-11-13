@@ -116,6 +116,10 @@ class QuotationRepository(Protocol):
 
     async def get(self, quotation_id: UUID) -> QuotationDetail | None: ...
 
+    async def get_lines(
+        self, quotation_id: UUID, skus: Sequence[str]
+    ) -> QuotationDetail | None: ...
+
     async def list(
         self,
         *,
@@ -138,6 +142,16 @@ class QuotationRepository(Protocol):
         inserted: Sequence[QuotationLine] = (),
         removed: Sequence[UUID] = (),
     ) -> QuotationDetail: ...
+
+    async def write(
+        self,
+        quotation: Quotation,
+        lines: Sequence[QuotationLine],
+        expected_version: int,
+        replace_lines: bool = False,
+        inserted: Sequence[QuotationLine] = (),
+        removed: Sequence[UUID] = (),
+    ) -> None: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...
 

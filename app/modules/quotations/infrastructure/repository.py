@@ -158,6 +158,33 @@ class SqlAlchemyQuotationRepository:
             ).all()
         return QuotationDetail(_quotation(model), tuple(_line(row) for row in rows))
 
+    async def get_lines(self, quotation_id: UUID, skus: Sequence[str]) -> QuotationDetail | None:
+        """A quotation with only the lines of ``skus``: a few rows of a large list update
+        (list 1 has thousands) without reading the rest.
+
+        Args:
+            quotation_id (UUID): Quotation.
+            skus (Sequence[str]): The SKUs wanted; none reads only the header.
+
+        Returns:
+            QuotationDetail | None: ``None`` when it does not exist.
+        """
+
+        async with self.database.session_factory() as session:
+            model = await session.get(Q, quotation_id)
+            if model is None:
+                return None
+            rows = []
+            if skus:
+                rows = (
+                    await session.scalars(
+                        select(L)
+                        .where(L.quotation_id == quotation_id, L.sku.in_(list(skus)))
+                        .order_by(L.position)
+                    )
+                ).all()
+        return QuotationDetail(_quotation(model), tuple(_line(row) for row in rows))
+
     async def list(
         self,
         *,
@@ -236,7 +263,8 @@ class SqlAlchemyQuotationRepository:
         inserted: Sequence[QuotationLine] = (),
         removed: Sequence[UUID] = (),
     ) -> QuotationDetail:
-        """Write the header and lines if nobody changed the quotation meanwhile.
+        """Write the header and lines if nobody changed the quotation meanwhile, and read it
+        back (see :meth:`write`).
 
         Args:
             quotation (Quotation): The new header; its ``version`` is stored as given.
@@ -249,6 +277,29 @@ class SqlAlchemyQuotationRepository:
 
         Returns:
             QuotationDetail: The quotation as stored.
+
+        Raises:
+            NotFoundError: It does not exist.
+            ConflictError: Its version is not ``expected_version`` any more.
+        """
+
+        await self.write(quotation, lines, expected_version, replace_lines, inserted, removed)
+        detail = await self.get(quotation.id)
+        if detail is None:  # pragma: no cover - deleted right after the commit
+            raise NotFoundError("Cotización no encontrada")
+        return detail
+
+    async def write(
+        self,
+        quotation: Quotation,
+        lines: Sequence[QuotationLine],
+        expected_version: int,
+        replace_lines: bool = False,
+        inserted: Sequence[QuotationLine] = (),
+        removed: Sequence[UUID] = (),
+    ) -> None:
+        """:meth:`save` without reading the quotation back: for a few rows of a large list
+        update, whose caller already has what it wrote.
 
         Raises:
             NotFoundError: It does not exist.
@@ -298,10 +349,6 @@ class SqlAlchemyQuotationRepository:
                 await session.execute(
                     L.__table__.insert(), [_line_values(quotation.id, line) for line in inserted]
                 )
-        detail = await self.get(quotation.id)
-        if detail is None:  # pragma: no cover - deleted right after the commit
-            raise NotFoundError("Cotización no encontrada")
-        return detail
 
     async def delete(self, quotation_id: UUID) -> bool:
         """Delete a quotation and its lines.
