@@ -21,7 +21,15 @@ MARGIN_CHIPS = ("alza", "objetivo", "encima", "alerta")
 CHIPS = REVIEW_CHIPS + MARGIN_CHIPS
 # Half a point of room either way around the target (decided 2026-11-12).
 TARGET_TOLERANCE = Decimal("0.005")
-SORTS = ("lista", "sku", "precio_actual", "margen_actual", "precio_nuevo", "variacion")
+SORTS = (
+    "lista",
+    "sku",
+    "precio_actual",
+    "margen_actual",
+    "precio_nuevo",
+    "variacion",
+    "existencia",
+)
 MAX_PAGE_SIZE = 200
 # Most rows one bulk action takes ("select every row of the filter").
 MAX_KEYS = 10_000
@@ -50,6 +58,10 @@ class BoardRow:
     price_list_id: str
     price_list_name: str | None
     line: QuotationLine
+    # Stock in the list's warehouses as the sync read it: 0 without stock, ``None`` when it
+    # was not read.
+    stock_on_hand: Decimal | None = None
+    stock_available: Decimal | None = None
 
 
 @dataclass(frozen=True)

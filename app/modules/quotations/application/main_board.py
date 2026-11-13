@@ -37,7 +37,7 @@ from app.modules.quotations.domain.board import (
     BoardPage,
     BoardRow,
 )
-from app.modules.quotations.domain.entities import Quotation
+from app.modules.quotations.domain.entities import Quotation, QuotationDetail
 from app.modules.quotations.domain.ports import InsightSource
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,10 @@ class BoardRepository(Protocol):
 
     async def options(self, quotation_ids: Sequence[UUID]) -> tuple[list[str], list[str]]: ...
 
+    async def set_stock(
+        self, quotation_id: UUID, stock: dict[str, tuple[Decimal, Decimal | None]]
+    ) -> None: ...
+
 
 @dataclass(frozen=True)
 class BoardOverview:
@@ -95,8 +99,10 @@ class BoardOverview:
 @dataclass(frozen=True)
 class BoardResult:
     page: BoardPage
-    # Stock of the page's rows in their list's warehouses; ``None`` when it was not read.
-    stock: dict[tuple[UUID, str], StockTotal] | None
+    # Stock of the page's rows in their list's warehouses (only rows with stock).
+    stock: dict[tuple[UUID, str], StockTotal]
+    # False when the warehouse did not answer for rows the sync had not read.
+    stock_read: bool = True
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,16 @@ class PriceInput:
     quotation_id: UUID
     sku: str
     new_price: Decimal | None
+
+
+@dataclass(frozen=True)
+class BoardEdit:
+    """What an edit on the board did: rows written, the ones that could not be, and the
+    written rows as they are now (without stock), for the UI to show them at once."""
+
+    done: int
+    skipped: tuple[Skipped, ...]
+    rows: tuple[BoardRow, ...] = ()
 
 
 class MainBoardService:
@@ -284,6 +300,7 @@ class MainBoardService:
         else:
             detail = await self.quotations.refresh(principal, update.id, update.version)
         quotation = detail.quotation
+        await self._store_stock(detail)
         counts = await self.repository.list_counts([quotation.id])
         return BoardList(
             code=code,
@@ -294,6 +311,29 @@ class MainBoardService:
             counts=counts.get(quotation.id, {}),
             warnings=quotation.warnings,
         )
+
+    async def _store_stock(self, detail: QuotationDetail) -> None:
+        """Store the stock of every item of a list just built, so the board sorts by it.
+
+        When the warehouse does not answer it stays unread: the board reads it page by page.
+        """
+
+        quotation = detail.quotation
+        warehouses = pricing.stock_warehouses(quotation.price_list_id, quotation.cost_centers)
+        skus = [line.sku for line in detail.lines if not line.is_local]
+        try:
+            found = await self.insights.stock(skus, warehouses)
+        except DependencyUnavailableError as exc:
+            logger.warning("quotations: stock of list %s not read: %s", quotation.id, exc)
+            return
+        stock: dict[str, tuple[Decimal, Decimal | None]] = {}
+        for row in found:
+            on_hand, available = stock.get(row.sku, (Decimal(0), Decimal(0)))
+            stock[row.sku] = (
+                on_hand + row.on_hand,
+                None if available is None or row.available is None else available + row.available,
+            )
+        await self.repository.set_stock(quotation.id, stock)
 
     def _checked(self, filters: BoardFilter) -> BoardFilter:
         if filters.chip is not None and filters.chip not in board.CHIPS:
@@ -310,8 +350,9 @@ class MainBoardService:
     ) -> BoardResult:
         """One page of the board and the stock of its rows.
 
-        The stock is a convenience: when the warehouse does not answer, the page comes
-        without it.
+        The stock is the one the sync stored; rows it did not read (a list not synced since
+        the stock is stored) are read from the warehouse. That read is a convenience: when the
+        warehouse does not answer, those rows come without it.
         """
 
         await self._require(principal)
@@ -322,11 +363,18 @@ class MainBoardService:
         by_id = {item.id: item for item in current.values()}
         rows, total, counts = await self.repository.rows(list(by_id), filters, page, size)
         result = BoardPage(tuple(rows), total, page, size, counts)
-        try:
-            stock = await self._stock(rows, by_id)
-        except DependencyUnavailableError as exc:
-            logger.warning("quotations: stock of the board not read: %s", exc)
-            stock = None
+        stock = {
+            (row.quotation_id, row.line.sku): StockTotal(row.stock_on_hand, row.stock_available, 0)
+            for row in rows
+            if row.stock_on_hand is not None and row.stock_on_hand > 0
+        }
+        unread = [row for row in rows if row.stock_on_hand is None]
+        if unread:
+            try:
+                stock.update(await self._stock(unread, by_id))
+            except DependencyUnavailableError as exc:
+                logger.warning("quotations: stock of the board not read: %s", exc)
+                return BoardResult(result, stock, stock_read=False)
         return BoardResult(result, stock)
 
     async def _stock(
@@ -382,12 +430,12 @@ class MainBoardService:
         return groups
 
     async def _version(self, quotation_id: UUID) -> int:
-        detail = await self.quotations.repository.get(quotation_id)
+        detail = await self.quotations.repository.get_lines(quotation_id, ())
         if detail is None:
             raise NotFoundError("Una lista del tablero ya no existe: recárgalo")
         return detail.quotation.version
 
-    async def _each(self, quotation_id: UUID, action) -> tuple[Skipped, ...]:
+    async def _each(self, quotation_id: UUID, action):
         """Run an edit at the update's current version; once more if it moved meanwhile."""
 
         for attempt in range(2):
@@ -396,43 +444,60 @@ class MainBoardService:
             except ConflictError:
                 if attempt == 1:
                     raise
-        return ()  # pragma: no cover - the loop returns or raises
+        return None  # pragma: no cover - the loop returns or raises
 
-    async def set_prices(
-        self, principal: Principal, changes: Sequence[PriceInput]
-    ) -> tuple[int, tuple[Skipped, ...]]:
+    @staticmethod
+    def _rows(detail: QuotationDetail, skus: Sequence[str]) -> list[BoardRow]:
+        quotation = detail.quotation
+        wanted = set(skus)
+        return [
+            BoardRow(
+                quotation.id,
+                quotation.version,
+                quotation.price_list_id or "",
+                quotation.price_list_name,
+                line,
+            )
+            for line in detail.lines
+            if line.sku in wanted
+        ]
+
+    async def set_prices(self, principal: Principal, changes: Sequence[PriceInput]) -> BoardEdit:
         """Write or clear new prices on rows of any list.
 
-        Returns:
-            tuple[int, tuple[Skipped, ...]]: Rows written and the ones that could not be.
+        A row whose price changed goes straight to ``por_validar`` (when it can: active and
+        with a unit); a cleared one to ``sin_marcar``. Only the rows written are read and
+        written, so a price on list 1 is as quick as one on a small list.
         """
 
         await self._require(principal, manage=True)
         groups = await self._groups([BoardKey(item.quotation_id, item.sku) for item in changes])
         prices = {(item.quotation_id, item.sku): item.new_price for item in changes}
         skipped: list[Skipped] = []
+        rows: list[BoardRow] = []
         written = 0
         for quotation_id, skus in groups.items():
             lines = [LineChange(sku, prices[(quotation_id, sku)]) for sku in skus]
-
-            async def run(version: int, lines=lines, quotation_id=quotation_id):
-                _, missed = await self.quotations.update_lines(
-                    principal, quotation_id, version, lines
-                )
-                return missed
-
-            try:
-                missed = await self._each(quotation_id, run)
-            except InvalidInputError as exc:
-                skipped += [Skipped(sku, str(exc)) for sku in skus]
-                continue
+            saved = None
+            for attempt in range(2):
+                try:
+                    saved, missed = await self.quotations.price_rows(
+                        principal, quotation_id, lines, ready=True
+                    )
+                    break
+                except InvalidInputError as exc:
+                    missed = tuple(Skipped(sku, str(exc)) for sku in skus)
+                    break
+                except ConflictError:
+                    if attempt == 1:
+                        raise
             skipped += missed
-            written += len(skus) - len(missed)
-        return written, tuple(skipped)
+            if saved is not None:
+                written += len(skus) - len(missed)
+                rows += self._rows(saved, skus)
+        return BoardEdit(written, tuple(skipped), tuple(rows))
 
-    async def apply(
-        self, principal: Principal, keys: Sequence[BoardKey], mode: str
-    ) -> tuple[int, tuple[Skipped, ...]]:
+    async def apply(self, principal: Principal, keys: Sequence[BoardKey], mode: str) -> BoardEdit:
         """Price rows at their optimal or minimum price, or clear their new price."""
 
         if mode not in APPLY_MODES:
@@ -442,7 +507,7 @@ class MainBoardService:
         changes: list[PriceInput] = []
         skipped: list[Skipped] = []
         for quotation_id, skus in groups.items():
-            detail = await self.quotations.repository.get(quotation_id)
+            detail = await self.quotations.repository.get_lines(quotation_id, skus)
             lines = {line.sku: line for line in detail.lines} if detail else {}
             for sku in skus:
                 line = lines.get(sku)
@@ -458,33 +523,35 @@ class MainBoardService:
                     continue
                 changes.append(PriceInput(quotation_id, sku, price.to_integral_value()))
         if not changes:
-            return 0, tuple(skipped)
-        written, missed = await self.set_prices(principal, changes)
-        return written, (*skipped, *missed)
+            return BoardEdit(0, tuple(skipped))
+        edit = await self.set_prices(principal, changes)
+        return replace(edit, skipped=(*skipped, *edit.skipped))
 
-    async def mark(
-        self, principal: Principal, keys: Sequence[BoardKey], status: str
-    ) -> tuple[int, tuple[Skipped, ...]]:
-        """Set the review of rows of any list (see :meth:`ListReviewService.mark`)."""
+    async def mark(self, principal: Principal, keys: Sequence[BoardKey], status: str) -> BoardEdit:
+        """Set the review of rows of any list (see :meth:`ListReviewService.mark`); only those
+        rows are read and written."""
 
         await self._require(principal, manage=True)
         groups = await self._groups(keys)
         skipped: list[Skipped] = []
+        rows: list[BoardRow] = []
         marked = 0
         for quotation_id, skus in groups.items():
 
             async def run(version: int, skus=skus, quotation_id=quotation_id):
-                _, missed = await self.review.mark(principal, quotation_id, version, skus, status)
-                return missed
+                return await self.review.mark(
+                    principal, quotation_id, version, skus, status, full=False
+                )
 
             try:
-                missed = await self._each(quotation_id, run)
+                saved, missed = await self._each(quotation_id, run)
             except InvalidInputError as exc:
                 skipped += [Skipped(sku, str(exc).split(": ", 1)[-1]) for sku in skus]
                 continue
             skipped += missed
             marked += len(skus) - len(missed)
-        return marked, tuple(skipped)
+            rows += self._rows(saved, skus)
+        return BoardEdit(marked, tuple(skipped), tuple(rows))
 
     async def note(
         self, principal: Principal, quotation_id: UUID, sku: str, text: str | None
@@ -497,8 +564,9 @@ class MainBoardService:
 
         async def run(version: int):
             nonlocal saved
-            saved = await self.review.set_note(principal, quotation_id, version, sku, text)
-            return ()
+            saved = await self.review.set_note(
+                principal, quotation_id, version, sku, text, full=False
+            )
 
         await self._each(quotation_id, run)
         quotation = saved.quotation  # type: ignore[union-attr]
@@ -512,4 +580,11 @@ class MainBoardService:
         )
 
 
-__all__ = ["APPLY_MODES", "BoardOverview", "BoardResult", "MainBoardService", "PriceInput"]
+__all__ = [
+    "APPLY_MODES",
+    "BoardEdit",
+    "BoardOverview",
+    "BoardResult",
+    "MainBoardService",
+    "PriceInput",
+]

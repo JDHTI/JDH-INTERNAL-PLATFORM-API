@@ -4,9 +4,10 @@ read as one table, filtered, counted, sorted and paged in the database."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, bindparam, case, func, or_, select, update
 
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.board import (
@@ -17,7 +18,7 @@ from app.modules.quotations.domain.board import (
     BoardRow,
 )
 from app.modules.quotations.domain.entities import Quotation
-from app.modules.quotations.domain.vocabulary import TO_VALIDATE, UNMARKED, VALIDATED
+from app.modules.quotations.domain.vocabulary import LOCAL, TO_VALIDATE, UNMARKED, VALIDATED
 from app.modules.quotations.infrastructure.models import QuotationLineModel, QuotationModel
 from app.modules.quotations.infrastructure.repository import _line, _quotation
 
@@ -48,6 +49,7 @@ _SORT_COLUMNS = {
     "margen_actual": (_MARGIN,),
     "precio_nuevo": (L.new_price,),
     "variacion": (L.variation_pct,),
+    "existencia": (L.stock_on_hand,),
 }
 
 
@@ -164,6 +166,8 @@ class SqlAlchemyBoardRepository:
                 price_list_id=list_id or "",
                 price_list_name=list_name,
                 line=_line(line),
+                stock_on_hand=line.stock_on_hand,
+                stock_available=line.stock_available,
             )
             for line, quotation_id, version, list_id, list_name in found
         ]
@@ -212,6 +216,36 @@ class SqlAlchemyBoardRepository:
         for quotation_id, state, count in found:
             result.setdefault(quotation_id, {})[str(state)] = int(count)
         return result
+
+    async def set_stock(
+        self, quotation_id: UUID, stock: dict[str, tuple[Decimal, Decimal | None]]
+    ) -> None:
+        """Store the stock the sync read for an update: ``(on hand, available)`` by SKU; its
+        other SIESA items have none (0)."""
+
+        table = L.__table__
+        async with self.database.session_factory() as session, session.begin():
+            await session.execute(
+                update(table)
+                .where(table.c.quotation_id == quotation_id, table.c.origin != LOCAL)
+                .values(stock_on_hand=0, stock_available=0)
+            )
+            if stock:
+                await session.execute(
+                    update(table).where(
+                        table.c.quotation_id == bindparam("owner_id"),
+                        table.c.sku == bindparam("item_sku"),
+                    ),
+                    [
+                        {
+                            "owner_id": quotation_id,
+                            "item_sku": sku,
+                            "stock_on_hand": on_hand,
+                            "stock_available": available,
+                        }
+                        for sku, (on_hand, available) in stock.items()
+                    ],
+                )
 
     async def options(self, quotation_ids: Sequence[UUID]) -> tuple[list[str], list[str]]:
         """The suppliers and categories of the board's rows, sorted."""

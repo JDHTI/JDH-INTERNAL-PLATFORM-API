@@ -320,6 +320,8 @@ class FakeRepository:
         self.items: dict[UUID, QuotationDetail] = {}
         self.category_writes: list[dict[UUID, str]] = []
         self.loads_made: list[PriceListLoad] = []
+        # Reads of a whole quotation with every line (``get``).
+        self.full_reads = 0
 
     async def create(self, quotation, lines):
         detail = QuotationDetail(quotation, tuple(sorted(lines, key=lambda item: item.position)))
@@ -327,7 +329,17 @@ class FakeRepository:
         return detail
 
     async def get(self, quotation_id):
+        self.full_reads += 1
         return self.items.get(quotation_id)
+
+    async def get_lines(self, quotation_id, skus):
+        detail = self.items.get(quotation_id)
+        if detail is None:
+            return None
+        wanted = set(skus)
+        return QuotationDetail(
+            detail.quotation, tuple(line for line in detail.lines if line.sku in wanted)
+        )
 
     async def set_categories(self, quotation_id, categories):
         self.category_writes.append(dict(categories))
@@ -389,6 +401,17 @@ class FakeRepository:
         stored = tuple(sorted((*stored, *inserted), key=lambda line: line.position))
         self.items[quotation.id] = QuotationDetail(quotation, stored)
         return self.items[quotation.id]
+
+    async def write(
+        self,
+        quotation,
+        lines,
+        expected_version,
+        replace_lines=False,
+        inserted=(),
+        removed=(),
+    ):
+        await self.save(quotation, lines, expected_version, replace_lines, inserted, removed)
 
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
