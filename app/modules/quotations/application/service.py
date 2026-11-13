@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.errors import (
@@ -61,6 +62,7 @@ from app.modules.quotations.domain.ports import (
     QuotationRepository,
     SalesScope,
     SalesScopeResolver,
+    SupportRequestLinks,
     SupportSource,
     WarehouseSource,
 )
@@ -252,6 +254,8 @@ class Permissions:
     can_validate: bool = False
     # ``all``, ``team``, ``mine`` or ``none``; ``None`` when no scope resolver is wired.
     sales_scope: str | None = None
+    # May ask an internal support from a customer quotation (quotes and does not review).
+    can_request_support: bool = False
 
 
 @dataclass(frozen=True)
@@ -318,6 +322,7 @@ class QuotationService:
         main_lists: Sequence[str] = (),
         main_managers: ManagerPolicy | None = None,
         main_approvers: ManagerPolicy | None = None,
+        support_requests: SupportRequestLinks | None = None,
     ) -> None:
         """Create the service.
 
@@ -347,8 +352,12 @@ class QuotationService:
             main_managers (ManagerPolicy | None): Who updates the main lists.
             main_approvers (ManagerPolicy | None): Who validates their items (BI's analysts
                 and leader).
+            support_requests (SupportRequestLinks | None): Internal support requests asked
+                from a customer quotation (supports module): who reviews them and the latest
+                one of each SKU. Without it nobody asks from the quoter.
         """
 
+        self.support_requests = support_requests
         self.list_managers = list_managers
         self.list_approvers = list_approvers
         self.main_managers = main_managers
@@ -515,12 +524,35 @@ class QuotationService:
                 sellers = []
             seller = sellers[0] if sellers else None
         scope = await self._scope(principal) if kind == vocabulary.QUOTATION else None
+        can_request = (
+            kind == vocabulary.QUOTATION
+            and can_manage
+            and self.support_requests is not None
+            and not await self.support_requests.is_reviewer(principal)
+        )
         return Permissions(
             can_manage,
             seller,
             await self.can_validate(principal, kind),
             scope.scope if scope is not None else None,
+            can_request,
         )
+
+    async def support_requests_for(self, detail: QuotationDetail) -> Mapping[str, Any]:
+        """The latest internal support request of each SKU of a customer quotation.
+
+        Never fails the quotation: when the supports side cannot answer, no request shows.
+        """
+
+        if self.support_requests is None or detail.quotation.kind != vocabulary.QUOTATION:
+            return {}
+        try:
+            return await self.support_requests.latest_for(detail.quotation.id)
+        except Exception as exc:  # noqa: BLE001 - the request status is a convenience
+            logger.warning(
+                "quotations: support requests of %s not read: %s", detail.quotation.id, exc
+            )
+            return {}
 
     def rule_catalog(self) -> tuple[Section, ...]:
         return catalog(self.policy)

@@ -68,6 +68,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
+| bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza y no decide los pide |
 | bi | `casos-especiales` | casos especiales | crear, editar |
 | bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 

@@ -149,6 +149,8 @@ class Support:
     # What wrote this version (``vocabulary.ORIGINS``) and its bulk load, if any.
     last_origin: str | None = None
     last_load_id: UUID | None = None
+    # The internal support request it was born from: a bulk load never closes it.
+    internal_request_id: UUID | None = None
 
 
 @dataclass(frozen=True)

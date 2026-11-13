@@ -50,6 +50,7 @@ def test_fixed_paths_are_not_taken_for_an_id(client) -> None:
         "can_manage": True,
         "can_validate": False,
         "sales_scope": None,
+        "can_request_support": False,
         "seller_linked": True,
         "seller": {"code": "0051", "name": "PEREZ ANA", "email": MANAGER},
     }

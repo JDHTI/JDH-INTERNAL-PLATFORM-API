@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import date
 from decimal import Decimal
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.identity.domain.principal import Principal
@@ -237,3 +237,24 @@ class LinesWriter(Protocol):
     """Turns every line of a quotation, with its costs, into a workbook for BI."""
 
     def write(self, detail: QuotationDetail, center_names: Mapping[str, str | None]) -> bytes: ...
+
+
+class SupportRequestRef(Protocol):
+    """The latest internal support request of a SKU in a quotation."""
+
+    id: Any
+    status: str
+    decision: str | None
+    approved_margin_pct: Any
+
+
+class SupportRequestLinks(Protocol):
+    """Internal support requests asked from a quotation (supports module)."""
+
+    async def is_reviewer(self, principal: Principal) -> bool:
+        """Whether the caller decides them (BI or a designated reviewer)."""
+        ...
+
+    async def latest_for(self, quotation_id: Any) -> Mapping[str, SupportRequestRef]:
+        """The latest request of each SKU of the quotation."""
+        ...

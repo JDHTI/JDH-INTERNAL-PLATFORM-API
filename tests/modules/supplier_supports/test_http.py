@@ -35,6 +35,13 @@ class AllowAll:
         return None
 
 
+class NoInternalRequests:
+    """The internal requests side, out of these tests' scope."""
+
+    async def permissions(self, principal):
+        return {"can_review_internal": False, "can_request_internal": False}
+
+
 @pytest.fixture
 def client(service):
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
@@ -46,6 +53,7 @@ def client(service):
         container.v1_container.supplier_support_request_service.override(
             SupportRequestService(None, service.managers, service.managers, service.calendar)
         ),
+        container.v1_container.internal_support_request_service.override(NoInternalRequests()),
         TestClient(app) as test_client,
     ):
         yield test_client
@@ -265,6 +273,8 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_request": True,
         "can_review": True,
         "can_read": True,
+        "can_review_internal": False,
+        "can_request_internal": False,
     }
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
@@ -274,4 +284,6 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_request": False,
         "can_review": False,
         "can_read": False,
+        "can_review_internal": False,
+        "can_request_internal": False,
     }

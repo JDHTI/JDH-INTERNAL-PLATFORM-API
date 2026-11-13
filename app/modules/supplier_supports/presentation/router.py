@@ -16,6 +16,7 @@ from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.internal_requests import InternalRequestService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import (
     MAX_BATCH,
@@ -35,6 +36,7 @@ _READ_GATE = Depends(require_permission("apoyos", "solicitudes-apoyos"))
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])
 _principal = Depends(get_current_principal)
 _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
+_internal = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -437,10 +439,13 @@ async def search_fields(
 async def permissions(
     principal: Principal = _principal,
     service: SupportRequestService = _requests,
+    internal: InternalRequestService = _internal,
 ) -> dict[str, bool]:
-    """Tell the UI whether to offer write actions (create, edit, switch, void)."""
+    """Tell the UI whether to offer write actions (create, edit, switch, void), and the
+    internal support requests: ``can_review_internal`` (BI or a designated reviewer) and
+    ``can_request_internal`` (whoever quotes and does not review: "my requests")."""
 
-    return await service.permissions(principal)
+    return {**await service.permissions(principal), **await internal.permissions(principal)}
 
 
 @router.get("/catalogs", dependencies=[_READ_GATE], summary="Vocabularies and scope values in use")

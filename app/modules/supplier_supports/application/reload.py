@@ -145,6 +145,8 @@ class SupportReloadService:
         stored = await self.supports.repository.live_for_suppliers(sorted(supplier_ids, key=str))
         by_key: dict[tuple[Any, ...], Support] = {}
         for support in sorted(stored, key=lambda item: (item.version, item.updated_at)):
+            if support.internal_request_id is not None:
+                continue  # an internal request's support is never matched by a file
             by_key[support_key(support.data)] = support
 
         reports = {table.label: TableReport(table.label) for table in tables}
@@ -193,7 +195,7 @@ class SupportReloadService:
         missing = 0
         for support in stored:
             report = reports.get(support.data.source or "")
-            if report is None or support.id in matched:
+            if report is None or support.id in matched or support.internal_request_id is not None:
                 continue
             if support.data.valid_to is not None and support.data.valid_to < today:
                 continue

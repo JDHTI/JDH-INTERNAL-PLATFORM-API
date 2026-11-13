@@ -310,6 +310,8 @@ class SupportBulkService:
         )
         by_key: dict[tuple[Any, ...], Support] = {}
         for support in sorted(stored, key=lambda item: (item.version, item.updated_at)):
+            if support.internal_request_id is not None:
+                continue  # an internal request's support is never matched by a file
             by_key[support_key(support.data)] = support
         actions: dict[int, tuple[str, Support | None, SupportData]] = {}
         for number, item in accepted.items():
@@ -339,6 +341,8 @@ class SupportBulkService:
             support
             for support in stored
             if support.id not in matched
+            # Supports born from an internal request never come in a supplier's file.
+            and support.internal_request_id is None
             and (support.data.commercial_supplier_id, support.data.kind) in classes
             and (support.data.valid_to is None or support.data.valid_to >= today)
         ]

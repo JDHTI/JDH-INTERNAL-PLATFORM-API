@@ -184,6 +184,10 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/dwh-publish/failed` | `read` |  |
 | `POST` | `/v1/dwh-publish/reconcile` | `relaxed` |  |
 | `POST` | `/v1/dwh-publish/retry` | `relaxed` |  |
+| `GET` | `/v1/internal-support-requests` | `read` |  |
+| `GET` | `/v1/internal-support-requests/{request_id}` | `read` |  |
+| `POST` | `/v1/internal-support-requests/{request_id}/approve` | `relaxed` |  |
+| `POST` | `/v1/internal-support-requests/{request_id}/reject` | `relaxed` |  |
 | `GET` | `/v1/jobs` | `read` |  |
 | `GET` | `/v1/jobs/runs` | `read` |  |
 | `POST` | `/v1/jobs/{key}/run` | `strict` | Lanza una sincronización de maestros contra el datawarehouse |
@@ -332,6 +336,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/support-requests` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/uploaded` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |
 | `GET` | `/v1/roles` | `read` |  |

@@ -122,6 +122,7 @@ def _support(model: SupplierSupportModel, tiers: Sequence[SupplierSupportTierMod
         updated_at=model.updated_at,
         last_origin=model.last_origin,
         last_load_id=model.last_load_id,
+        internal_request_id=model.internal_request_id,
     )
 
 
@@ -889,4 +890,7 @@ class SqlAlchemySupportRepository:
         return result
 
 
-__all__ = ["SqlAlchemySupportRepository"]
+# Other repositories of the module that create supports in their own transaction.
+new_support_model = _new_model
+
+__all__ = ["SqlAlchemySupportRepository", "new_support_model"]
