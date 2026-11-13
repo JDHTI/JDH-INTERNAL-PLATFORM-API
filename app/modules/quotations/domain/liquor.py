@@ -34,7 +34,7 @@ STATUS_LABELS = {
     PENDING: "Pendiente de validación",
     UPLOAD_PENDING: "Pendiente de carga",
     UPLOADED: "Cargada",
-    RETURNED: "Devuelta",
+    RETURNED: "Anulada",
 }
 # The general list: its value is the national reference.
 NATIONAL_REFERENCE = "1"

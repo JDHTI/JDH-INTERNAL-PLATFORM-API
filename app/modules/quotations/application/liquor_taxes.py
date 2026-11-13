@@ -4,9 +4,10 @@
 The screen lists every active product with a liquor tax key, the value each regional
 carries, every distinct value with its lists and the margin master's values, plus the
 liquors of a liquor tax group that have no key. A bulk change sets the national and Coast
-value of some SKUs; who validates the main lists validates it, which fixes the prices it
-writes (every active list where the SKU has a price), downloads SIESA's two pages (prices
-and value taxes), loads them and marks it loaded; then the margin master takes the values.
+value of some SKUs and goes straight to SIESA, with no validation: only the collaborators
+who manage the liquor tax (``impuesto-licor``) make it. It fixes at once the prices it writes
+(every active list where the SKU has a price), so SIESA's two pages (prices and value taxes)
+download right away; once loaded it is marked so, and the margin master takes the values.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from app.modules.quotations.domain.liquor import (
     LiquorTaxChange,
     LiquorTaxUpdate,
 )
-from app.modules.quotations.domain.ports import Calendar, ExportWriter
+from app.modules.quotations.domain.ports import Calendar, ExportWriter, ManagerPolicy
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _STEP = Decimal("0.0001")
@@ -66,6 +67,8 @@ class LiquorOverview:
     summaries: tuple[LiquorSummary, ...]
     suspects: tuple[LiquorSuspect, ...]
     coast_lists: tuple[str, ...]
+    # The caller is one of the collaborators who change the liquor tax.
+    can_manage: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,11 +91,14 @@ class LiquorTaxService:
         workbook: ExportWriter,
         flat_file: ExportWriter,
         coast_lists: Sequence[str] = (),
+        managers: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
         Args:
-            quotations (QuotationService): Who manages and validates the main lists.
+            quotations (QuotationService): Who reads the main lists.
+            managers (ManagerPolicy | None): The collaborators who change the liquor tax and
+                generate its files (``impuesto-licor``); without one only administrators.
             source (LiquorSource): The liquors and their prices in the warehouse.
             masters (LiquorMasters): The margin master (reads and the values written).
             repository (LiquorTaxRepository): The bulk changes.
@@ -103,6 +109,7 @@ class LiquorTaxService:
         """
 
         self.quotations = quotations
+        self.managers = managers
         self.source = source
         self.masters = masters
         self.repository = repository
@@ -111,16 +118,22 @@ class LiquorTaxService:
         self.flat_file = flat_file
         self.coast_lists = liquor.regional_lists(coast_lists)
 
+    async def can_manage(self, principal: Principal) -> bool:
+        """Whether the caller is one of the collaborators who manage the liquor tax
+        (``manage`` on ``impuesto-licor``); without a policy only administrators are."""
+
+        if principal.is_platform_admin:
+            return True
+        return self.managers is not None and await self.managers.is_manager(principal)
+
     async def _require(self, principal: Principal, action: str) -> None:
-        kind = vocabulary.MAIN_LIST
-        if action == "validate":
-            allowed = await self.quotations.can_validate(principal, kind)
-            message = "Solo quien valida las listas principales valida y carga el impuesto"
-        elif action == "manage":
-            allowed = await self.quotations.can_manage(principal, kind)
-            message = "No tienes permiso para cambiar el impuesto licor"
+        if action == "manage":
+            allowed = await self.can_manage(principal)
+            message = "Solo los colaboradores del impuesto licor lo cambian y generan sus archivos"
         else:
-            allowed = await self.quotations.can_read(principal, kind)
+            allowed = await self.quotations.can_read(
+                principal, vocabulary.MAIN_LIST
+            ) or await self.can_manage(principal)
             message = "No tienes permiso para consultar el impuesto licor"
         if not allowed:
             raise ForbiddenError(message)
@@ -138,19 +151,36 @@ class LiquorTaxService:
 
         await self._require(principal, "read")
         summaries, suspects = await asyncio.gather(self._summaries(), self.source.liquor_suspects())
-        return LiquorOverview(tuple(summaries), tuple(suspects), tuple(sorted(self.coast_lists)))
+        return LiquorOverview(
+            tuple(summaries),
+            tuple(suspects),
+            tuple(sorted(self.coast_lists)),
+            await self.can_manage(principal),
+        )
 
     async def create(
-        self, principal: Principal, changes: Sequence[ChangeInput], note: str | None
+        self,
+        principal: Principal,
+        changes: Sequence[ChangeInput],
+        note: str | None,
+        activation_date: date | None = None,
     ) -> LiquorTaxUpdate:
-        """Propose new national and Coast values for some liquors; it waits for validation.
+        """New national and Coast values for some liquors, with their files ready at once.
+
+        There is no validation: the collaborators who manage the liquor tax change it. The
+        prices it writes are read now from every active list where each SKU has a price and
+        fixed in the change, so SIESA's two pages can be downloaded right away.
 
         Raises:
-            InvalidInputError: No changes, too many, a repeated or unknown SKU, or a value
-                that is not a number from 0.
+            InvalidInputError: No changes, too many, a repeated or unknown SKU, a value that is
+                not a number from 0, a date in the past, or no list prices any of the SKUs.
         """
 
         await self._require(principal, "manage")
+        today = self.calendar.today()
+        activation = activation_date or today + timedelta(days=1)
+        if activation < today:
+            raise InvalidInputError("La fecha de activación no puede ser anterior a hoy")
         if not changes:
             raise InvalidInputError("Elige los productos a cambiar")
         if len(changes) > liquor.MAX_CHANGES:
@@ -185,14 +215,19 @@ class LiquorTaxService:
         text = " ".join((note or "").split()) or None
         if text is not None and len(text) > liquor.NOTE_LENGTH:
             raise InvalidInputError(f"La nota admite máximo {liquor.NOTE_LENGTH} caracteres")
+        products = {product.sku: product for product in await self.source.liquor_products(skus)}
+        export = liquor.export_rows(products, rows, self.coast_lists)
+        if not export:
+            raise InvalidInputError("Ninguna lista activa tiene precio para estos productos")
+        counts = liquor.list_count(export)
         item = LiquorTaxUpdate(
             id=uuid4(),
-            status=liquor.PENDING,
-            changes=tuple(rows),
-            export_rows=(),
+            status=liquor.UPLOAD_PENDING,
+            changes=tuple(replace(change, lists=counts.get(change.sku, 0)) for change in rows),
+            export_rows=tuple(export),
             note=text,
             review_note=None,
-            activation_date=None,
+            activation_date=activation,
             created_by=principal.email,
             created_at=datetime.now(UTC),
         )
@@ -218,67 +253,29 @@ class LiquorTaxService:
                 f"El cambio está «{liquor.STATUS_LABELS.get(item.status, item.status)}»"
             )
 
-    async def validate(
-        self, principal: Principal, update_id: UUID, version: int, activation_date: date | None
-    ) -> LiquorTaxUpdate:
-        """Accept the change: the prices it writes are read from the lists now and fixed.
-
-        Raises:
-            ConflictError: Stale version, or not pending validation.
-            InvalidInputError: A date in the past, or no list prices any of its SKUs.
-        """
-
-        item = await self.get(principal, update_id)
-        await self._require(principal, "validate")
-        self._check(item, version, liquor.PENDING)
-        today = self.calendar.today()
-        activation = activation_date or today + timedelta(days=1)
-        if activation < today:
-            raise InvalidInputError("La fecha de activación no puede ser anterior a hoy")
-        skus = [change.sku for change in item.changes]
-        products = {product.sku: product for product in await self.source.liquor_products(skus)}
-        rows = liquor.export_rows(products, item.changes, self.coast_lists)
-        if not rows:
-            raise InvalidInputError("Ninguna lista activa tiene precio para estos productos")
-        counts = liquor.list_count(rows)
-        changes = tuple(replace(change, lists=counts.get(change.sku, 0)) for change in item.changes)
-        now = datetime.now(UTC)
-        validated = replace(
-            item,
-            status=liquor.UPLOAD_PENDING,
-            changes=changes,
-            export_rows=tuple(rows),
-            activation_date=activation,
-            validated_by=principal.email,
-            validated_at=now,
-            version=item.version + 1,
-        )
-        return await self.repository.save(validated, version)
-
-    async def return_(
+    async def cancel(
         self, principal: Principal, update_id: UUID, version: int, note: str | None
     ) -> LiquorTaxUpdate:
-        """Turn the change down (who validates, with a reason) or withdraw it (its author)."""
+        """Cancel a change that was not loaded in SIESA (its files must not be loaded)."""
 
         item = await self.get(principal, update_id)
-        self._check(item, version, liquor.PENDING)
-        validator = await self.quotations.can_validate(principal, vocabulary.MAIN_LIST)
-        author = item.created_by == principal.email
-        if not validator and not author:
-            raise ForbiddenError("Solo quien valida o quien lo propuso retira el cambio")
+        await self._require(principal, "manage")
+        self._check(item, version, liquor.UPLOAD_PENDING)
         text = " ".join((note or "").split()) or None
-        if not author and text is None:
-            raise InvalidInputError("Escribe por qué devuelves el cambio")
-        returned = replace(item, status=liquor.RETURNED, review_note=text, version=item.version + 1)
-        return await self.repository.save(returned, version)
+        if text is not None and len(text) > liquor.NOTE_LENGTH:
+            raise InvalidInputError(f"El motivo admite máximo {liquor.NOTE_LENGTH} caracteres")
+        cancelled = replace(
+            item, status=liquor.RETURNED, review_note=text, version=item.version + 1
+        )
+        return await self.repository.save(cancelled, version)
 
     async def file(self, principal: Principal, update_id: UUID, fmt: str) -> ExportFile:
-        """SIESA's two pages of a validated change: workbook (``xlsx``) or file (``txt``)."""
+        """SIESA's two pages of a change: workbook (``xlsx``) or import file (``txt``)."""
 
         item = await self.get(principal, update_id)
-        await self._require(principal, "validate")
+        await self._require(principal, "manage")
         if item.status not in (liquor.UPLOAD_PENDING, liquor.UPLOADED) or not item.activation_date:
-            raise ConflictError("Los archivos se generan cuando el cambio está validado")
+            raise ConflictError("El cambio está anulado: sus archivos ya no se cargan")
         export = liquor.to_export(item.export_rows, item.activation_date)
         stamp = item.activation_date.strftime("%Y%m%d")
         if fmt == "xlsx":
@@ -301,7 +298,7 @@ class LiquorTaxService:
         """The files were loaded in SIESA: the margin master takes the new values."""
 
         item = await self.get(principal, update_id)
-        await self._require(principal, "validate")
+        await self._require(principal, "manage")
         self._check(item, version, liquor.UPLOAD_PENDING)
         now = datetime.now(UTC)
         uploaded = await self.repository.save(

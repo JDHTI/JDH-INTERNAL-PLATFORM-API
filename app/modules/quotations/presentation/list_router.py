@@ -37,7 +37,7 @@ from app.modules.quotations.presentation.router import (
 
 router = APIRouter()
 _LIST_GATE = Depends(require_permission("actualizacion-listas", "listas-principales"))
-_MAIN_GATE = Depends(require_permission("listas-principales"))
+_MAIN_GATE = Depends(require_permission("listas-principales", "impuesto-licor"))
 _review = Depends(Provide[ApplicationContainer.v1_container.list_review_service])
 _liquor_service = Depends(Provide[ApplicationContainer.v1_container.liquor_tax_service])
 _principal = Depends(get_current_principal)
@@ -445,6 +445,8 @@ class LiquorOverviewResponse(BaseModel):
     items: list[LiquorResponse]
     suspects: list[LiquorSuspectResponse]
     coast_lists: list[str]
+    # The caller changes the liquor tax and generates its files (``impuesto-licor: manage``).
+    can_manage: bool = False
 
 
 class LiquorChangeRequest(BaseModel):
@@ -456,14 +458,11 @@ class LiquorChangeRequest(BaseModel):
 class LiquorUpdateRequest(BaseModel):
     changes: list[LiquorChangeRequest] = Field(min_length=1, max_length=liquor.MAX_CHANGES)
     note: str | None = Field(default=None, max_length=2000)
-
-
-class LiquorValidateRequest(BaseModel):
-    version: int = Field(ge=1)
+    # When SIESA activates the files (default tomorrow); never in the past.
     activation_date: date | None = None
 
 
-class LiquorReturnRequest(BaseModel):
+class LiquorCancelRequest(BaseModel):
     version: int = Field(ge=1)
     note: str | None = Field(default=None, max_length=2000)
 
@@ -590,6 +589,7 @@ async def liquor_taxes(
             for item in result.suspects
         ],
         coast_lists=list(result.coast_lists),
+        can_manage=result.can_manage,
     )
 
 
@@ -612,7 +612,7 @@ async def liquor_updates(
     dependencies=[_MAIN_GATE],
     response_model=LiquorUpdateResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Propose new liquor tax values",
+    summary="Change the liquor tax and generate its SIESA files",
 )
 @inject
 async def create_liquor_update(
@@ -620,51 +620,33 @@ async def create_liquor_update(
     principal: Principal = _principal,
     service: LiquorTaxService = _liquor_service,
 ) -> LiquorUpdateResponse:
-    """New Nacional and Costa values per SKU; it waits for validation."""
+    """New Nacional and Costa values per SKU, with no validation: the prices of every active
+    list are fixed now and the files download at once. Only ``impuesto-licor: manage``."""
 
     return _liquor_update(
         await service.create(
             principal,
             [ChangeInput(item.sku, item.national, item.coast) for item in body.changes],
             body.note,
+            body.activation_date,
         )
     )
 
 
 @router.post(
-    "/liquor-taxes/updates/{update_id}/validate",
+    "/liquor-taxes/updates/{update_id}/cancel",
     dependencies=[_MAIN_GATE],
     response_model=LiquorUpdateResponse,
-    summary="Validate a liquor tax change",
+    summary="Cancel a liquor tax change not loaded in SIESA",
 )
 @inject
-async def validate_liquor_update(
+async def cancel_liquor_update(
     update_id: UUID,
-    body: LiquorValidateRequest,
+    body: LiquorCancelRequest,
     principal: Principal = _principal,
     service: LiquorTaxService = _liquor_service,
 ) -> LiquorUpdateResponse:
-    """Reads the prices it writes from every active list and fixes them."""
-
-    return _liquor_update(
-        await service.validate(principal, update_id, body.version, body.activation_date)
-    )
-
-
-@router.post(
-    "/liquor-taxes/updates/{update_id}/return",
-    dependencies=[_MAIN_GATE],
-    response_model=LiquorUpdateResponse,
-    summary="Turn down or withdraw a liquor tax change",
-)
-@inject
-async def return_liquor_update(
-    update_id: UUID,
-    body: LiquorReturnRequest,
-    principal: Principal = _principal,
-    service: LiquorTaxService = _liquor_service,
-) -> LiquorUpdateResponse:
-    return _liquor_update(await service.return_(principal, update_id, body.version, body.note))
+    return _liquor_update(await service.cancel(principal, update_id, body.version, body.note))
 
 
 @router.post(

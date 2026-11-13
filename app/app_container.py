@@ -45,6 +45,7 @@ WIRED_MODULES = (
     "app.modules.order_validation.presentation.router",
     "app.modules.quotations.presentation.router",
     "app.modules.quotations.presentation.list_router",
+    "app.modules.quotations.presentation.board_router",
     "app.modules.dwh_monitoring.presentation.router",
     "app.modules.app_monitoring.presentation.router",
     "app.modules.directory.presentation.router",

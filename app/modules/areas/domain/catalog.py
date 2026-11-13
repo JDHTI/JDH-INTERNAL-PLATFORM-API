@@ -95,7 +95,16 @@ MODULES: tuple[Module, ...] = (
         "validacion-listas",
         "Validación de listas principales",
         ("bi",),
-        "Valida los ítems de las listas principales y el impuesto licor, y los carga en SIESA",
+        "Valida los ítems de las listas principales y los carga en SIESA",
+        locked=True,
+    ),
+    # A permission without a screen of its own: ``manage`` changes the liquor tax of every
+    # list and generates its SIESA files at once, with no validation (a few collaborators).
+    Module(
+        "impuesto-licor",
+        "Impuesto licor",
+        ("bi",),
+        "Cambia el impuesto licor de todas las listas y genera su plano para SIESA",
         locked=True,
     ),
     Module(

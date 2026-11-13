@@ -14,9 +14,11 @@ from app.modules.quotations.domain.liquor import LiquorListPrice, LiquorProduct,
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
 from tests.modules.quotations.conftest import MAIN_APPROVER, MAIN_MANAGER, product
-from tests.modules.supplier_supports.conftest import TODAY, FixedCalendar, person
+from tests.modules.supplier_supports.conftest import TODAY, FakeManagers, FixedCalendar, person
 
 COAST = ("004", "11N")
+# One of the few collaborators who manage the liquor tax (``impuesto-licor``).
+LIQUOR_MANAGER = "impuestos.bi@jdh.com.co"
 
 
 def _price(code: str, tax: str | None, price: str = "50000", active: bool = True):
@@ -113,6 +115,7 @@ def taxes(service, masters_liquor) -> LiquorTaxService:
         workbook=PriceListWorkbookWriter(),
         flat_file=SiesaPriceFileWriter(),
         coast_lists=COAST,
+        managers=FakeManagers([LIQUOR_MANAGER]),
     )
 
 
@@ -134,71 +137,72 @@ async def test_the_screen_shows_each_regional_and_what_does_not_add_up(taxes) ->
     assert overview.coast_lists == ("004", "11N")
 
 
-async def test_a_bulk_change_writes_every_active_list_with_its_regional(
+async def test_a_bulk_change_has_its_files_at_once_with_each_regional(
     taxes, masters_liquor
 ) -> None:
-    collaborator = person(MAIN_MANAGER)
-    analyst = person(MAIN_APPROVER)
-    proposed = await taxes.create(
-        collaborator, [ChangeInput("18973", "4200", "4300")], "Alza de licores 2027"
-    )
-    assert proposed.status == "pendiente_validacion"
-    assert proposed.changes[0].previous_national == Decimal(4036)
-    with pytest.raises(ForbiddenError):
-        await taxes.validate(collaborator, proposed.id, proposed.version, None)
+    owner = person(LIQUOR_MANAGER)
+    activation = TODAY + timedelta(days=1)
 
-    validated = await taxes.validate(
-        analyst, proposed.id, proposed.version, TODAY + timedelta(days=1)
+    change = await taxes.create(
+        owner, [ChangeInput("18973", "4200", "4300")], "Alza de licores 2027", activation
     )
 
-    rows = {row["price_list_id"]: row for row in validated.export_rows}
+    # No validation: the prices are fixed now and the files are ready.
+    assert change.status == "pendiente_carga" and change.activation_date == activation
+    assert change.changes[0].previous_national == Decimal(4036)
+    rows = {row["price_list_id"]: row for row in change.export_rows}
     # Every active list that prices it, the inactive one left out.
     assert set(rows) == {"1", "004", "11N", "77X", "88Z"}
     assert rows["004"]["amount"] == "4300.0000" and rows["1"]["amount"] == "4200.0000"
     assert rows["88Z"]["amount"] == "4200.0000" and rows["1"]["price"] == "50000"
-    assert validated.changes[0].lists == 5
-    flat = await taxes.file(analyst, proposed.id, "txt")
+    assert change.changes[0].lists == 5
+    flat = await taxes.file(owner, change.id, "txt")
     text = flat.content.decode("ascii").splitlines()
     # Each price (0126) followed by its tax (0127): SIESA's two pages.
     kinds = [line[7:11] for line in text]
     assert kinds.count("0126") == 5 and kinds.count("0127") == 5
     assert kinds[1:3] == ["0126", "0127"]
-    workbook = await taxes.file(analyst, proposed.id, "xlsx")
+    workbook = await taxes.file(owner, change.id, "xlsx")
     assert workbook.content[:2] == b"PK"
 
-    uploaded = await taxes.mark_uploaded(analyst, proposed.id, validated.version)
+    uploaded = await taxes.mark_uploaded(owner, change.id, change.version)
 
     assert uploaded.status == "cargada"
     assert masters_liquor.written == [{"18973": (Decimal(4200), Decimal(4300), "0509")}]
 
 
-async def test_a_bulk_change_is_checked(taxes) -> None:
-    collaborator = person(MAIN_MANAGER)
+async def test_only_the_liquor_tax_collaborators_change_it(taxes) -> None:
+    owner = person(LIQUOR_MANAGER)
+    # Editing the main lists, or validating them, is not enough.
+    for other in (person(MAIN_MANAGER), person(MAIN_APPROVER)):
+        with pytest.raises(ForbiddenError, match="colaboradores del impuesto licor"):
+            await taxes.create(other, [ChangeInput("18973", "1", "1")], None)
+    assert (await taxes.overview(person(MAIN_MANAGER))).can_manage is False
+    assert (await taxes.overview(owner)).can_manage is True
 
     with pytest.raises(InvalidInputError, match="no tiene llave"):
-        await taxes.create(collaborator, [ChangeInput("2537", "1", "1")], None)
+        await taxes.create(owner, [ChangeInput("2537", "1", "1")], None)
     with pytest.raises(InvalidInputError, match="repetidos"):
         await taxes.create(
-            collaborator, [ChangeInput("18973", "1", "1"), ChangeInput("18973", "2", "2")], None
+            owner, [ChangeInput("18973", "1", "1"), ChangeInput("18973", "2", "2")], None
         )
     with pytest.raises(InvalidInputError, match="de 0 en adelante"):
-        await taxes.create(collaborator, [ChangeInput("18973", "-1", "1")], None)
-    with pytest.raises(ForbiddenError):
-        await taxes.create(person("otro@jdh.com.co"), [ChangeInput("18973", "1", "1")], None)
+        await taxes.create(owner, [ChangeInput("18973", "-1", "1")], None)
+    with pytest.raises(InvalidInputError, match="anterior a hoy"):
+        await taxes.create(owner, [ChangeInput("18973", "1", "1")], None, TODAY - timedelta(days=1))
 
 
-async def test_a_bulk_change_can_be_turned_down(taxes) -> None:
-    collaborator = person(MAIN_MANAGER)
-    analyst = person(MAIN_APPROVER)
-    proposed = await taxes.create(collaborator, [ChangeInput("26278", "42451", "42451")], None)
+async def test_a_change_not_loaded_can_be_cancelled(taxes) -> None:
+    owner = person(LIQUOR_MANAGER)
+    change = await taxes.create(owner, [ChangeInput("26278", "42451", "42451")], None)
 
-    with pytest.raises(InvalidInputError, match="por qué"):
-        await taxes.return_(analyst, proposed.id, proposed.version, None)
-    returned = await taxes.return_(analyst, proposed.id, proposed.version, "Valor sin soporte")
+    cancelled = await taxes.cancel(owner, change.id, change.version, "Valor sin soporte")
 
-    assert returned.status == "devuelta" and returned.review_note == "Valor sin soporte"
+    assert cancelled.status == "devuelta" and cancelled.review_note == "Valor sin soporte"
     with pytest.raises(ConflictError):
-        await taxes.validate(analyst, proposed.id, returned.version, None)
+        await taxes.file(owner, change.id, "txt")
+    with pytest.raises(ConflictError):
+        await taxes.mark_uploaded(owner, change.id, cancelled.version)
 
 
 def test_a_zero_tax_writes_the_price_without_a_tax_record() -> None:
