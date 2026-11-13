@@ -3,9 +3,34 @@
 Módulo de BI, **bloqueado a BI**, para las listas que manejan los colaboradores de BI: las
 generales, las mayoristas y la de Market. Tiene dos partes:
 
-- **Actualizaciones** de esas listas, con el mismo motor, revisión por ítem y staging de
-  [Actualización de listas](actualizacion-listas.md) (`kind = 'principal'`).
+- **Un tablero con las 14 listas juntas**: una sola tabla, una fila por referencia y lista, que se
+  filtra por una o varias listas cuando hace falta. Usa el motor, la revisión por ítem y el staging
+  de [Actualización de listas](actualizacion-listas.md) (`kind = 'principal'`).
 - **Impuesto licor** de todas las listas: revisión y cambio masivo.
+
+## El tablero
+
+Por debajo, cada lista principal tiene **una** actualización vigente (la última creada): de ahí
+salen su costo, sus apoyos, su staging y sus archivos. El tablero arma o refresca cada lista por
+separado (la lista 1 sola tiene unas 7.600 referencias) y lee las líneas de todas juntas: unas
+50 mil filas, filtradas, contadas, ordenadas y paginadas en la base (`board_repository.py`).
+
+- **Armar o refrescar** (`POST /main/lists/{código}/build`): la primera vez crea la actualización de
+  la lista; después la refresca con SIESA conservando precios nuevos, estados y observaciones por
+  SKU. La UI arma «las que faltan» una tras otra, mostrando el avance.
+- **Filtros:** listas (ninguna es todas), texto (SKU o descripción), proveedores, categorías y un
+  chip: revisión (`sin_marcar`, `por_validar`, `validada`, `cargada`) o margen (`alza`, `objetivo`,
+  `encima`, `alerta`, con ±0,5 puntos). Cada chip trae cuántas filas mostraría con los demás
+  filtros; `todos`, el total.
+- **Acciones sobre filas de cualquier lista:** precio nuevo por fila, precio óptimo, mínimo o
+  limpiar sobre la selección, marcar por validar, validar (quien valida) y desmarcar, y la
+  observación. Cada una va a la actualización de su lista, en la versión vigente; si otra persona
+  la cambió en el mismo momento, se intenta una vez más.
+- **Compartido:** cualquiera con `manage` en el módulo edita todas las listas, aunque las haya
+  armado otra persona; cualquiera con `read` las ve todas.
+- **Existencias:** cada página trae la existencia de sus filas en las bodegas de su lista (una
+  lectura del DWH por lista de la página). Si el DWH no responde, la página sale sin ellas
+  (`stock_read: false`).
 
 ## Datos generales
 
@@ -88,6 +113,14 @@ La revisión por ítem, el staging y las cargas son los de
 
 | Endpoint | Qué hace |
 | --- | --- |
+| `GET /main` | las 14 listas, armadas o no, con sus conteos, y los proveedores y categorías para filtrar |
+| `POST /main/lists/{código}/build` | arma o refresca una lista |
+| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip |
+| `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
+| `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos; `null` lo borra |
+| `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas |
+| `PUT /main/review` `{keys, status}` | marca las filas |
+| `PUT /main/note` `{quotation_id, sku, note}` | la observación de una fila |
 | `GET /liquor-taxes` | la pantalla: licores, valores por lista, licores sin llave, listas de la Costa |
 | `GET /liquor-taxes/updates` | cambios, el más nuevo primero |
 | `POST /liquor-taxes/updates` `{changes: [{sku, national, coast}], note}` | propone un cambio |
@@ -98,5 +131,6 @@ La revisión por ítem, el staging y las cargas son los de
 
 ## UI
 
-Ruta `/bi/listas-principales`, con las pestañas Actualizaciones, Por cargar e Impuesto licor. Usa
-los componentes de Actualización de listas con `QuotationKindProvider kind="principal"`.
+Ruta `/bi/listas-principales`, con las vistas Listas (el tablero), Por cargar e Impuesto licor.
+El tablero es `main-lists-board.tsx`; el detalle del ítem y los chips son los de Actualización de
+listas. `?lista=10U&q=2537` abre el tablero ya filtrado (así enlaza «Por cargar»).

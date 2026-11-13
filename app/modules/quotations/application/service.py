@@ -354,7 +354,10 @@ class QuotationService:
         self.main_managers = main_managers
         self.main_approvers = main_approvers
         self.list_max_lines = LIST_MAX_LINES
-        self.main_lists = frozenset(code.strip() for code in main_lists if code.strip())
+        self.main_list_order = tuple(
+            dict.fromkeys(code.strip() for code in main_lists if code.strip())
+        )
+        self.main_lists = frozenset(self.main_list_order)
         self.repository = repository
         self.offer_writer = offer_writer
         self.lines_writer = lines_writer
@@ -414,6 +417,11 @@ class QuotationService:
         self, principal: Principal, quotation: Quotation, action: str
     ) -> None:
         if quotation.created_by_id == principal.user_id or await self.can_validate(
+            principal, quotation.kind
+        ):
+            return
+        # The main lists are one shared board: whoever manages the module edits every list.
+        if quotation.kind == vocabulary.MAIN_LIST and await self.can_manage(
             principal, quotation.kind
         ):
             return
@@ -529,6 +537,11 @@ class QuotationService:
         """Outside validation, each person reaches only the quotations they created."""
 
         if quotation.created_by_id == principal.user_id or await self._sees_all(
+            principal, quotation.kind
+        ):
+            return
+        # The main lists are one shared board: whoever reads the module sees every list.
+        if quotation.kind == vocabulary.MAIN_LIST and await self.can_read(
             principal, quotation.kind
         ):
             return
@@ -983,7 +996,7 @@ class QuotationService:
         if not text:
             if kind != vocabulary.MAIN_LIST:
                 return []
-            found = [await self.warehouse.price_list(code) for code in sorted(self.main_lists)]
+            found = [await self.warehouse.price_list(code) for code in self.main_list_order]
             return [info for info in found if info is not None]
         return await self.warehouse.price_lists(text[:80])
 

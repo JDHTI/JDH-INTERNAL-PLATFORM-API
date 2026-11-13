@@ -143,8 +143,10 @@ from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
 from app.modules.quotations.application.liquor_taxes import LiquorTaxService
 from app.modules.quotations.application.list_review import ListReviewService
+from app.modules.quotations.application.main_board import MainBoardService
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import QuotationPolicy
+from app.modules.quotations.infrastructure.board_repository import SqlAlchemyBoardRepository
 from app.modules.quotations.infrastructure.dwh_insights import WarehouseInsightSource
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
 from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
@@ -794,6 +796,13 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         workbook=quotation_workbook_writer,
         flat_file=quotation_flat_file_writer,
+    )
+    main_board_service = providers.Factory(
+        MainBoardService,
+        quotations=quotation_service,
+        review=list_review_service,
+        repository=providers.Factory(SqlAlchemyBoardRepository, database=database),
+        insights=quotation_insight_source,
     )
     liquor_tax_service = providers.Factory(
         LiquorTaxService,

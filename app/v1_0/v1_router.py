@@ -36,6 +36,7 @@ from app.modules.pqrsf.presentation.supplier_messages_router import (
 )
 from app.modules.pqrsf.presentation.tracking_router import router as pqrsf_tracking_router
 from app.modules.projects.presentation.router import area_router as area_projects_router
+from app.modules.quotations.presentation.board_router import router as main_board_router
 from app.modules.quotations.presentation.list_router import (
     router as price_list_updates_router,
 )
@@ -101,6 +102,10 @@ v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]
 )
 v1_router.include_router(quotations_router, prefix="/quotations", tags=["quotations"])
+# The board goes first: its fixed paths (/main/...) must win over /{quotation_id}/....
+v1_router.include_router(
+    main_board_router, prefix="/price-list-updates", tags=["price-list-updates"]
+)
 v1_router.include_router(
     price_list_updates_router, prefix="/price-list-updates", tags=["price-list-updates"]
 )
