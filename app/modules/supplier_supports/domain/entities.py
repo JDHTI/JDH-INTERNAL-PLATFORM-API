@@ -64,6 +64,8 @@ class SupportData:
     target_margin_pct: Decimal | None = None
     min_margin_pct: Decimal | None = None
     list_margin_pct: Decimal | None = None
+    # Margin the product may drop to on top of the supplier's support ("margen apoyado").
+    supported_margin_pct: Decimal | None = None
     pack_factor: Decimal | None = None
     reference_cost: Decimal | None = None
     reference_list_price: Decimal | None = None
@@ -180,6 +182,16 @@ class Derived:
     # Which cost the figures use: ``dwh`` (the quoter's rule) or ``referencia`` (the one
     # stored with the support); ``None`` when there is none.
     cost_basis: str | None = None
+    # The product's general margin (margin master) and the margin the supplier's money leaves
+    # at the list price (cost at that margin).
+    product_margin_pct: Decimal | None = None
+    recomposed_list_margin: Decimal | None = None
+    # How far the margin may drop on top of the support, the price it gives (net cost at that
+    # margin) and the client's discount below the list price.
+    supported_margin_pct: Decimal | None = None
+    supported_price: Decimal | None = None
+    supported_price_per: MoneyPair = field(default_factory=MoneyPair)
+    customer_discount_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +228,8 @@ class SupportRow:
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
     dwh_cost: SupportCost | None = None
+    # The product's general margin in the margin master (``products.margin_list``).
+    product_margin: Decimal | None = None
 
 
 @dataclass(frozen=True)

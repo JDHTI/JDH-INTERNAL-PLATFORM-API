@@ -123,6 +123,22 @@ async def test_an_unknown_type_lists_the_labels(bulk, manager) -> None:
     assert "% sobre costo" in report.errors[0].message
 
 
+async def test_the_supported_margin_column_and_the_minimum_margin_type(bulk, repo, manager) -> None:
+    header = "Fecha Inicio,NIT Cliente,SKU JDH,Tipo de apoyo,Valor apoyo,Margen apoyado\n"
+    rows = (
+        "01/10/2026,800116299,1128,% sobre costo,10%,12%\n"
+        "01/10/2026,800116299,8749,Margen mínimo,,6%\n"
+    )
+
+    report = await load(bulk, manager, header + rows, supplier_code="233", apply=True)
+
+    assert report.errors == [] and report.to_create == 2
+    saved = {item.data.product_sku: item.data for item in repo.items.values()}
+    assert saved["1128"].supported_margin_pct == Decimal("0.12")
+    assert saved["8749"].kind == "excepcion_margen"
+    assert saved["8749"].min_margin_pct == Decimal("0.06")
+
+
 def test_big_loads_wait_for_the_dwh_quiet_hours() -> None:
     zone = ZoneInfo("America/Bogota")
     hours = QuietHours(start=time(18), end=time(3), zone=zone, defer_over=5000)

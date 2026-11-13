@@ -81,6 +81,7 @@ _SCALES = {
             "target_margin_pct",
             "min_margin_pct",
             "list_margin_pct",
+            "supported_margin_pct",
         ),
         Decimal("0.000001"),
     ),
@@ -115,6 +116,7 @@ EDITABLE_FIELDS = frozenset(
         "target_margin_pct",
         "min_margin_pct",
         "list_margin_pct",
+        "supported_margin_pct",
         "pack_factor",
         "reference_cost",
         "reference_list_price",
@@ -289,7 +291,7 @@ class SupplierSupportService:
                 )
         elif data.supplier_value is not None and data.supplier_value < 0:
             raise FieldError("El valor del proveedor no puede ser negativo", "supplier_value")
-        for name in ("target_margin_pct", "list_margin_pct"):
+        for name in ("target_margin_pct", "list_margin_pct", "supported_margin_pct"):
             value = getattr(data, name)
             if value is not None and not Decimal(0) <= value < Decimal(1):
                 raise FieldError(f"{name} debe estar entre 0 y 1", name)
@@ -473,7 +475,11 @@ class SupplierSupportService:
             state="anulado" if voided else ("inactivo" if not data.is_enabled else validity),
             needs_review=data.status == "pendiente_revision",
             has_conflicts=bool(row.conflicts),
-            derived=derive(data, row.dwh_cost.unit_cost if row.dwh_cost else None),
+            derived=derive(
+                data,
+                row.dwh_cost.unit_cost if row.dwh_cost else None,
+                row.product_margin,
+            ),
             conflicts=row.conflicts,
             attachment_count=row.attachment_count,
             dwh_cost=row.dwh_cost,

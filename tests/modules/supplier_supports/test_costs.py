@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -101,6 +102,29 @@ def test_the_figures_use_the_dwh_cost_in_the_supports_unit() -> None:
     # Unknown unit: the DWH cost cannot be placed, the reference stays.
     assert dwh_cost_in_unit(D("100"), None, D("12")) is None
     assert dwh_cost_in_unit(D("100"), "caja", None) is None
+
+
+def test_the_supported_margin_sits_on_the_recomposed_margin() -> None:
+    # 10 % over cost; the product's general margin (margin master) is 20 %.
+    data = SupportData(
+        kind="tactico_cliente",
+        calc_method="pct_costo",
+        supplier_value=D("0.10"),
+        value_unit="unidad",
+        supported_margin_pct=D("0.12"),
+    )
+
+    derived = derive(data, dwh_unit_cost=D("80"), product_margin=D("0.20"))
+
+    assert derived.list_price.unit == D("100")  # 80 / (1 - 20 %)
+    assert derived.net_cost == D("72.00")  # 80 - 10 % of 80
+    assert derived.recomposed_list_margin == D("0.28")  # 1 - 72 / 100
+    assert derived.supported_price.quantize(D("0.01")) == D("81.82")  # 72 / (1 - 12 %)
+    assert derived.customer_discount_pct.quantize(D("0.0001")) == D("0.1818")
+    assert derived.product_margin_pct == D("0.20") and derived.supported_margin_pct == D("0.12")
+    # Without a supported margin the price stays at the product's margin over the net cost.
+    plain = derive(replace(data, supported_margin_pct=None), D("80"), D("0.20"))
+    assert plain.supported_price is None and plain.suggested_price == D("90")
 
 
 def test_a_sku_that_is_the_box_is_not_multiplied_again() -> None:

@@ -362,6 +362,7 @@ def _base() -> Select[Any]:
             CommercialSupplierModel.name,
             ProductModel.description,
             ProductModel.brand,
+            ProductModel.margin_list,
         )
         .select_from(S)
         .outerjoin(CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id)
@@ -466,7 +467,7 @@ class SqlAlchemySupportRepository:
             result = (await session.execute(_base().where(S.id == support_id))).first()
             if result is None:
                 return None
-            model, code, name, description, brand = result
+            model, code, name, description, brand, margin = result
             tiers = (await self._tiers(session, [support_id])).get(support_id, [])
             conflicts = await self._conflict_ids(session, [support_id])
             attachments = await self._attachment_counts(session, [support_id])
@@ -480,6 +481,7 @@ class SqlAlchemySupportRepository:
                 conflicts=tuple(conflicts.get(support_id, ())),
                 attachment_count=attachments.get(support_id, 0),
                 dwh_cost=costs.get(support_id),
+                product_margin=margin,
             )
 
     async def update(
@@ -787,8 +789,9 @@ class SqlAlchemySupportRepository:
                     conflicts=tuple(conflicts.get(model.id, ())),
                     attachment_count=attachments.get(model.id, 0),
                     dwh_cost=costs.get(model.id),
+                    product_margin=margin,
                 )
-                for model, code, name, description, brand in rows
+                for model, code, name, description, brand, margin in rows
             ],
             int(total),
         )

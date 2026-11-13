@@ -106,6 +106,8 @@ class _SupportFields(BaseModel):
     target_margin_pct: Decimal | None = None
     min_margin_pct: Decimal | None = None
     list_margin_pct: Decimal | None = None
+    # Margin the product may drop to on top of the supplier's support ("margen apoyado").
+    supported_margin_pct: Decimal | None = None
     pack_factor: Decimal | None = None
     reference_cost: Decimal | None = None
     reference_list_price: Decimal | None = None
@@ -193,6 +195,16 @@ class DerivedResponse(BaseModel):
     suggested_price_per: MoneyPairResponse
     # Which cost the figures use: "dwh" (quoter's rule) or "referencia" (stored); null = none.
     cost_basis: Literal["dwh", "referencia"] | None
+    # The product's general margin (margin master) and the margin the supplier's money leaves
+    # at the list price (cost at the product's margin).
+    product_margin_pct: Decimal | None
+    recomposed_list_margin: Decimal | None
+    # Margen apoyado: how far the margin may drop on top of the support; the supported price
+    # is the net cost at that margin and the client's discount is below the list price.
+    supported_margin_pct: Decimal | None
+    supported_price: Decimal | None
+    supported_price_per: MoneyPairResponse
+    customer_discount_pct: Decimal | None
 
 
 class DwhCostResponse(BaseModel):

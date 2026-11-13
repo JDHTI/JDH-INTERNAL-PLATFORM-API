@@ -215,6 +215,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("apoyo jdh", "% jdh", "descuento jdh", "% dcto jdh"),
         help="Descuento que pone JDH, aparte del proveedor. Si se deja vacío al actualizar, "
         "se conserva el aprobado.",
+    ),
+    FieldSpec(
+        "supported_margin_pct",
+        "Margen apoyado",
+        GROUP_BENEFIT,
+        FRACTION,
+        ("margen autorizado", "margen minimo apoyado", "margen apoyado autorizado"),
+        help="Hasta qué margen se autoriza bajar el producto sobre el margen que deja "
+        "el apoyo del proveedor (base: margen general del producto en el maestro de "
+        "márgenes). Con Tipo de apoyo = Margen mínimo es ese margen.",
         core=True,
     ),
     FieldSpec(
@@ -225,7 +235,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("unidad del costo", "unidad", "unidad costo", "costo por"),
         vocabulary.VALUE_UNITS,
         "Si el valor en pesos está por caja o por unidad. Vacío = se infiere del DWH.",
-        core=True,
     ),
     FieldSpec(
         "target_margin_pct",
@@ -234,7 +243,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         FRACTION,
         ("margen objetivo", "margen optimo", "% margen optimo", "% margen garantizado"),
         help="Obligatorio con precio apoyado sin IVA.",
-        core=True,
     ),
     FieldSpec(
         "min_margin_pct",
@@ -243,7 +251,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         FRACTION,
         ("margen minimo autorizado", "margen min pedido autorizado"),
         help="Solo con Tipo de apoyo = Margen mínimo: el margen de pedido autorizado.",
-        core=True,
     ),
     FieldSpec("list_margin_pct", "Margen Lista", GROUP_BENEFIT, FRACTION, ("margen lista 1",)),
     FieldSpec(
