@@ -814,6 +814,13 @@ class V1Container(containers.DeclarativeContainer):
         workbook=quotation_workbook_writer,
         flat_file=quotation_flat_file_writer,
         coast_lists=config.quotations.coast_lists,
+        # The few collaborators who change the liquor tax: ``manage`` on ``impuesto-licor``.
+        managers=providers.Factory(
+            PermissionPolicy,
+            areas=area_service,
+            area_slug=config.quotations.approver_area_slug,
+            module="impuesto-licor",
+        ),
     )
     # --- Data warehouse monitoring (TI → Monitoreo → Datawarehouse) ---
     # Same DWH connection as the masters; only TI members and admins see it.

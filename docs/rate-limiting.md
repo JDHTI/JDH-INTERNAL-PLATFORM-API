@@ -286,10 +286,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/price-list-updates/liquor-taxes` | `read` |  |
 | `GET` | `/v1/price-list-updates/liquor-taxes/updates` | `read` |  |
 | `POST` | `/v1/price-list-updates/liquor-taxes/updates` | `relaxed` |  |
+| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/cancel` | `relaxed` |  |
 | `GET` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/file.{fmt}` | `read` |  |
-| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/return` | `relaxed` |  |
 | `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/uploaded` | `relaxed` |  |
-| `POST` | `/v1/price-list-updates/liquor-taxes/updates/{update_id}/validate` | `relaxed` |  |
 | `GET` | `/v1/price-list-updates/loads` | `read` |  |
 | `GET` | `/v1/price-list-updates/main` | `read` |  |
 | `POST` | `/v1/price-list-updates/main/apply` | `relaxed` |  |

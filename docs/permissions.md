@@ -62,8 +62,9 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
 | bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, staging y cargas | crear y editar actualizaciones de cualquier lista **salvo las principales** y marcar ítems «Por validar». Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar ítems, descargar el staging y marcarlo cargado |
-| bi (bloqueado) | `listas-principales` | actualizaciones de las listas principales (`LIST_UPDATES_MAIN_LISTS`), staging, cargas e impuesto licor | crear y editar actualizaciones de esas listas, marcar ítems «Por validar» y proponer cambios del impuesto licor |
-| bi (bloqueado) | `validacion-listas` | — (no tiene pantalla) | validar los ítems de las listas principales y los cambios del impuesto licor, descargar sus archivos y marcarlos cargados (analistas y líder de BI) |
+| bi (bloqueado) | `listas-principales` | el tablero de las listas principales (`LIST_UPDATES_MAIN_LISTS`), staging, cargas e impuesto licor | armar y refrescar las listas, poner precios en cualquiera de ellas y marcar ítems «Por validar» |
+| bi (bloqueado) | `validacion-listas` | — (no tiene pantalla) | validar los ítems de las listas principales, descargar el staging y marcarlo cargado (analistas y líder de BI) |
+| bi (bloqueado) | `impuesto-licor` | — (no tiene pantalla; también abre la vista del impuesto) | cambiar el impuesto licor de todas las listas y generar su plano de inmediato, sin validación; marcarlo cargado o anularlo (colaboradores puntuales) |
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
@@ -80,8 +81,8 @@ impuesto licor) lo abren `actualizacion-listas` y `listas-principales`.
 
 **Módulo bloqueado** (`locked=True` en el catálogo): solo se enciende en sus áreas por defecto. El
 panel no lo deja encender en otra (`set_area_module` responde 422) y una fila guardada en otra área
-no cuenta. `listas-principales` y `validacion-listas` están bloqueados a BI, así que un comercial
-nunca los recibe, aunque tenga `actualizacion-listas`.
+no cuenta. `listas-principales`, `validacion-listas` e `impuesto-licor` están bloqueados a BI, así
+que un comercial nunca los recibe, aunque tenga `actualizacion-listas`.
 
 **Agregar un módulo** sigue la skill del proyecto
 [`modulo-con-permisos`](../.claude/skills/modulo-con-permisos/SKILL.md): catálogo, gate, política,

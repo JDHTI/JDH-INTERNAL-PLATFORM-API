@@ -37,7 +37,8 @@ separado (la lista 1 sola tiene unas 7.600 referencias) y lee las líneas de tod
 | | |
 | --- | --- |
 | Módulo del catálogo | `listas-principales`, bloqueado a `bi` (`locked=True`: el panel no lo enciende en otra área) |
-| Validación | `validacion-listas`, también bloqueado a `bi`, sin pantalla propia: su `manage` valida y carga |
+| Validación | `validacion-listas`, también bloqueado a `bi`, sin pantalla propia: su `manage` valida y carga los ítems |
+| Impuesto licor | `impuesto-licor`, también bloqueado a `bi`, sin pantalla propia: su `manage` cambia el impuesto y genera el plano, sin validación |
 | Listas | `LIST_UPDATES_MAIN_LISTS` = `1,001,002,003,004,005,009,1M,10T,10U,11N,10N,1DR,35P` (códigos exactos de SIESA) |
 | Regional del impuesto licor | `LIQUOR_TAX_COAST_LISTS` = `004,11N,22N,36J,46V` pagan el valor Costa; el resto, el Nacional |
 | Migración | `0059_main_lists_review` |
@@ -54,9 +55,10 @@ separado (la lista 1 sola tiene unas 7.600 referencias) y lee las líneas de tod
 
 | Acción | Quién |
 | --- | --- |
-| Ver las actualizaciones, el staging, las cargas y el impuesto licor | `listas-principales: read` (solo las propias), y quien valida (todas) |
-| Crear y editar actualizaciones, marcar «Por validar», escribir observaciones, proponer un cambio del impuesto licor | `listas-principales: manage` (los colaboradores de BI) |
-| Validar ítems y cambios del impuesto, descargar sus archivos y marcarlos cargados | `validacion-listas: manage` (analistas y líder de BI) y los administradores |
+| Ver el tablero, el staging, las cargas y el impuesto licor | `listas-principales: read` (todas las listas) |
+| Armar y refrescar listas, poner precios, marcar «Por validar», escribir observaciones | `listas-principales: manage` (los colaboradores de BI) |
+| Validar ítems, descargar el staging y marcarlo cargado | `validacion-listas: manage` (analistas y líder de BI) y los administradores |
+| Cambiar el impuesto licor, descargar sus archivos, marcarlo cargado o anularlo | `impuesto-licor: manage` (los colaboradores puntuales que lo administran) y los administradores |
 
 `actualizacion-listas` nunca abre estas listas, ni para quien valida allá: responde 403. Al revés,
 `listas-principales` no toma una lista que no sea principal (422). Como los dos módulos nuevos
@@ -88,26 +90,30 @@ licores (`0503`, `0507`, `0509`) sin la llave de la clase 99. Eran 12 del grupo 
 
 ### Cambio masivo
 
-1. Un colaborador propone los valores Nacional y Costa de uno o más licores
-   (`POST /liquor-taxes/updates`). Queda `pendiente_validacion`.
-2. Quien valida lo valida con una fecha de activación (`.../validate`). En ese momento se leen los
-   precios vigentes de **todas las listas activas** donde el licor tiene precio (fila de la unidad
-   de inventario) y se fijan en el cambio (`export_rows`). Unas 2.000 filas para todos los licores.
-3. Descarga los archivos (`.../file.xlsx` o `.../file.txt`) con **las dos páginas de SIESA**:
+**No pasa por validación.** Lo administran unos colaboradores puntuales (`impuesto-licor: manage`),
+y el plano sale de inmediato:
+
+1. El colaborador escribe los valores Nacional y Costa de uno o más licores y la fecha de activación
+   (`POST /liquor-taxes/updates`, mañana si no la da). En ese momento se leen los precios vigentes
+   de **todas las listas activas** donde el licor tiene precio (fila de la unidad de inventario) y
+   se fijan en el cambio (`export_rows`): unas 2.000 filas para todos los licores. Queda
+   `pendiente_carga`.
+2. Descarga los archivos (`.../file.xlsx` o `.../file.txt`) con **las dos páginas de SIESA**:
    - `Precios` / `0126`: el precio de cada lista, igual al que tiene, en su unidad;
    - `Impuestos en valor` / `0127`: el valor nuevo, Costa para las listas de la Costa y Nacional
      para el resto, justo después de su precio.
 
    Un valor de 0 escribe el precio sin registro de impuesto.
-4. Carga los archivos en SIESA y marca el cambio cargado (`.../uploaded`). El **maestro de
+3. Carga los archivos en SIESA y marca el cambio cargado (`.../uploaded`). El **maestro de
    márgenes** toma los valores nuevos (impuesto licor Nacional, Costa y grupo).
 
-Quien valida puede devolver el cambio con un motivo, y quien lo propuso puede retirarlo
-(`.../return`): queda `devuelta`.
+Un cambio que no se cargó se puede anular (`.../cancel`, con un motivo opcional): queda `devuelta`
+(«Anulada») y sus archivos ya no se descargan.
 
 ## Endpoints
 
-Todos bajo `/api/v1/price-list-updates`, con el gate `listas-principales` para el impuesto licor.
+Todos bajo `/api/v1/price-list-updates`. El impuesto licor lo abren `listas-principales` o
+`impuesto-licor`; sus escrituras piden `impuesto-licor: manage`.
 La revisión por ítem, el staging y las cargas son los de
 [Actualización de listas](actualizacion-listas.md#api) con `kind=principal`.
 
@@ -123,9 +129,8 @@ La revisión por ítem, el staging y las cargas son los de
 | `PUT /main/note` `{quotation_id, sku, note}` | la observación de una fila |
 | `GET /liquor-taxes` | la pantalla: licores, valores por lista, licores sin llave, listas de la Costa |
 | `GET /liquor-taxes/updates` | cambios, el más nuevo primero |
-| `POST /liquor-taxes/updates` `{changes: [{sku, national, coast}], note}` | propone un cambio |
-| `POST /liquor-taxes/updates/{id}/validate` `{version, activation_date}` | valida y fija los precios |
-| `POST /liquor-taxes/updates/{id}/return` `{version, note}` | devuelve o retira |
+| `POST /liquor-taxes/updates` `{changes: [{sku, national, coast}], note, activation_date}` | cambia el impuesto y fija los precios: los archivos quedan listos |
+| `POST /liquor-taxes/updates/{id}/cancel` `{version, note}` | anula un cambio no cargado |
 | `GET /liquor-taxes/updates/{id}/file.xlsx\|txt` | los archivos de SIESA |
 | `POST /liquor-taxes/updates/{id}/uploaded` `{version}` | marca cargado y escribe el maestro de márgenes |
 
