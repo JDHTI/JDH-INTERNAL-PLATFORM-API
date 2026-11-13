@@ -354,6 +354,9 @@ class QuotationService:
         self.main_managers = main_managers
         self.main_approvers = main_approvers
         self.list_max_lines = LIST_MAX_LINES
+        # Seconds the last sales of a list update may take; ``None`` is the warehouse's own
+        # limit. The background sync of the main lists raises it: list 1 and 1M took 32 to 33 s.
+        self.list_sales_timeout: float | None = None
         self.main_list_order = tuple(
             dict.fromkeys(code.strip() for code in main_lists if code.strip())
         )
@@ -1039,7 +1042,10 @@ class QuotationService:
             return {}, True
         try:
             sales = await self.warehouse.list_last_sales(
-                skus, vocabulary.LIST_UPDATE_WINDOW, audience.sale_keys
+                skus,
+                vocabulary.LIST_UPDATE_WINDOW,
+                audience.sale_keys,
+                timeout=self.list_sales_timeout,
             )
         except DependencyUnavailableError as exc:
             logger.warning("quotations: last sales of a list not read: %s", exc)
