@@ -17,6 +17,7 @@ ALL_JOBS = IDENTITY_JOBS | {
     "commercial-sync-products",
     "commercial-sync-supply",
     "supplier-supports-costs",
+    "main-lists-sync",
 }
 
 
@@ -36,6 +37,7 @@ async def test_the_first_poll_dispatches_every_mapped_job_once(make_service, run
         "commercial-sync-products",
         "commercial-sync-supply",
         "supplier-supports-costs",
+        "main-lists-sync",
     ]
     assert all(run.trigger is Trigger.DWH for run in runs.items.values())
     assert watermarks.states["identidad"].dispatched_datos_listos == READY
@@ -73,7 +75,7 @@ async def test_reloading_or_failed_sequences_are_saved_but_not_dispatched(
 
     await make_service().poll_dwh()
 
-    assert _jobs(runs) == {"commercial-sync-supply", "supplier-supports-costs"}
+    assert _jobs(runs) == {"commercial-sync-supply", "supplier-supports-costs", "main-lists-sync"}
     assert watermarks.states["identidad"].en_curso is True
     assert watermarks.states["identidad"].dispatched_datos_listos is None
 
@@ -178,7 +180,7 @@ async def test_recover_overview_and_history(make_service, runs):
     service = make_service()
     await service.poll_dwh()
 
-    assert await service.recover_stale_runs() == 6
+    assert await service.recover_stale_runs() == 7
     settings, status, items = await service.overview()
     history = await service.history("masters-warm-identity", 10)
 

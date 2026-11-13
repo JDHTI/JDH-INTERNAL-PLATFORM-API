@@ -9,13 +9,14 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.jobs.domain.entities import JobRun
 from app.modules.quotations.application.main_board import MainBoardService, PriceInput
 from app.modules.quotations.application.service import Skipped
 from app.modules.quotations.domain.board import MAX_KEYS, MAX_PAGE_SIZE, BoardFilter, BoardKey
@@ -51,10 +52,35 @@ class BoardListResponse(BaseModel):
     warnings: list[WarningResponse]
 
 
+class SyncListResponse(BaseModel):
+    code: str
+    status: Literal["ok", "error"]
+    line_count: int | None = None
+    error: str | None = None
+
+
+class SyncResponse(BaseModel):
+    """The latest sync of the main lists (background job ``main-lists-sync``)."""
+
+    id: UUID
+    status: Literal["queued", "running", "success", "partial", "failed"]
+    # ``dwh`` (the day's supply load), ``scheduled`` (daily fallback), ``manual`` or ``startup``.
+    trigger: str
+    triggered_by: str | None
+    queued_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error: str | None
+    lists: list[SyncListResponse]
+
+
 class BoardOverviewResponse(BaseModel):
     lists: list[BoardListResponse]
     suppliers: list[str]
     categories: list[str]
+    sync: SyncResponse | None = None
+    # False when the background worker is off: the sync cannot run.
+    sync_enabled: bool = False
 
 
 class BoardRowResponse(LineResponse):
@@ -172,37 +198,52 @@ async def overview(
         ],
         suppliers=list(result.suppliers),
         categories=list(result.categories),
+        sync=_sync(result.sync),
+        sync_enabled=result.sync_enabled,
+    )
+
+
+def _sync(run: JobRun | None) -> SyncResponse | None:
+    if run is None:
+        return None
+    return SyncResponse(
+        id=run.id,
+        status=run.status.value,  # type: ignore[arg-type]
+        trigger=run.trigger.value,
+        triggered_by=run.triggered_by,
+        queued_at=run.queued_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        error=run.error,
+        lists=[
+            SyncListResponse(
+                code=str(item.get("code", "")),
+                status="ok" if item.get("status") == "ok" else "error",
+                line_count=item.get("line_count"),
+                error=item.get("error"),
+            )
+            for item in (run.detail or {}).get("lists", [])
+        ],
     )
 
 
 @router.post(
-    "/main/lists/{code}/build",
+    "/main/sync",
     dependencies=[_GATE],
-    response_model=BoardListResponse,
-    summary="Build or refresh a main list on the board",
+    response_model=SyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Sync every main list with the day's loads",
 )
 @inject
-async def build(
-    code: str,
+async def sync(
     principal: Principal = _principal,
     service: MainBoardService = _service,
-) -> BoardListResponse:
-    """Reads the list from the warehouse: its first build, or a refresh that keeps the new
-    prices, reviews and notes by SKU."""
+) -> SyncResponse:
+    """Queues the background job that builds or refreshes the 14 lists (new prices, reviews
+    and notes kept). It also runs by itself when the DWH finishes the supply load. 409 when
+    the worker is off or a sync is already queued or running."""
 
-    item = await service.build(principal, code)
-    return BoardListResponse(
-        code=item.code,
-        name=item.name,
-        quotation_id=item.quotation_id,
-        built_at=item.built_at,
-        line_count=item.line_count,
-        counts=item.counts,
-        warnings=[
-            WarningResponse(code=code, label=WARNING_LABELS.get(code, code))
-            for code in item.warnings
-        ],
-    )
+    return _sync(await service.sync(principal))  # type: ignore[return-value]
 
 
 @router.get(

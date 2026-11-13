@@ -11,20 +11,33 @@ generales, las mayoristas y la de Market. Tiene dos partes:
 ## El tablero
 
 Por debajo, cada lista principal tiene **una** actualización vigente (la última creada): de ahí
-salen su costo, sus apoyos, su staging y sus archivos. El tablero arma o refresca cada lista por
-separado (la lista 1 sola tiene unas 7.600 referencias) y lee las líneas de todas juntas: unas
+salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refresca por separado
+(la lista 1 sola tiene unas 7.600 referencias) y el tablero lee las líneas de todas juntas: unas
 50 mil filas, filtradas, contadas, ordenadas y paginadas en la base (`board_repository.py`).
 
-- **Armar o refrescar** (`POST /main/lists/{código}/build`): la primera vez crea la actualización de
-  la lista; después la refresca con SIESA conservando precios nuevos, estados y observaciones por
-  SKU. La UI arma «las que faltan» una tras otra, mostrando el avance.
+- **Sincronización** (tarea `main-lists-sync`, `MainBoardService.sync_all`): arma las 14 listas una
+  tras otra. La primera vez crea la actualización de cada lista; después la refresca con SIESA
+  conservando precios nuevos, estados y observaciones por SKU. Una lista que falla no detiene las
+  demás: el resultado de la corrida dice cuáles fallaron y por qué. Corre:
+  - **sola**, tras la carga de `abastecimiento` del DWH (lunes a viernes);
+  - **a mano**, con «Armar lista general» (la primera vez) o «Sincronizar con la carga del día»
+    (`POST /main/sync`, `manage`). Responde 202 con la corrida en cola; 409 si ya hay una en cola o
+    en curso, o si las tareas están apagadas (`JOBS_ENABLED`).
+
+  Es una tarea porque no cabe en una petición: la lista 1 y la 1M tardan más de 30 s solo en leer
+  sus últimas ventas (31,7 s y 33 s medidos el 2026-11-13). Dentro de la tarea esa lectura tiene
+  180 s. La corrida la hace el usuario de sistema «Sincronización de listas».
+- **Apoyos de listas con muchos clientes:** la lista 1 tiene 22.397 NITs, más que el máximo de
+  parámetros de una consulta de PostgreSQL (32.767 entre todos). Por encima de 2.000 NITs, los
+  apoyos por cliente se filtran en Python en lugar de en la consulta, y los clientes se leen en
+  bloques de 5.000.
 - **Filtros:** listas (ninguna es todas), texto (SKU o descripción), proveedores, categorías y un
   chip: revisión (`sin_marcar`, `por_validar`, `validada`, `cargada`) o margen (`alza`, `objetivo`,
   `encima`, `alerta`, con ±0,5 puntos). Cada chip trae cuántas filas mostraría con los demás
   filtros; `todos`, el total.
 - **Acciones sobre filas de cualquier lista:** precio nuevo por fila, precio óptimo, mínimo o
-  limpiar sobre la selección, marcar por validar, validar (quien valida) y desmarcar, y la
-  observación. Cada una va a la actualización de su lista, en la versión vigente; si otra persona
+  limpiar sobre la selección, el estado de revisión (en la UI se cambia fila por fila, en el chip
+  de cada una o en su detalle) y la observación. Cada una va a la actualización de su lista, en la versión vigente; si otra persona
   la cambió en el mismo momento, se intenta una vez más.
 - **Compartido:** cualquiera con `manage` en el módulo edita todas las listas, aunque las haya
   armado otra persona; cualquiera con `read` las ve todas.
@@ -56,7 +69,7 @@ separado (la lista 1 sola tiene unas 7.600 referencias) y lee las líneas de tod
 | Acción | Quién |
 | --- | --- |
 | Ver el tablero, el staging, las cargas y el impuesto licor | `listas-principales: read` (todas las listas) |
-| Armar y refrescar listas, poner precios, marcar «Por validar», escribir observaciones | `listas-principales: manage` (los colaboradores de BI) |
+| Sincronizar las listas, poner precios, marcar «Por validar», escribir observaciones | `listas-principales: manage` (los colaboradores de BI) |
 | Validar ítems, descargar el staging y marcarlo cargado | `validacion-listas: manage` (analistas y líder de BI) y los administradores |
 | Cambiar el impuesto licor, descargar sus archivos, marcarlo cargado o anularlo | `impuesto-licor: manage` (los colaboradores puntuales que lo administran) y los administradores |
 
@@ -119,8 +132,8 @@ La revisión por ítem, el staging y las cargas son los de
 
 | Endpoint | Qué hace |
 | --- | --- |
-| `GET /main` | las 14 listas, armadas o no, con sus conteos, y los proveedores y categorías para filtrar |
-| `POST /main/lists/{código}/build` | arma o refresca una lista |
+| `GET /main` | las 14 listas, armadas o no, con sus conteos, los proveedores y categorías para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
+| `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
 | `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
 | `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos; `null` lo borra |

@@ -293,11 +293,11 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/price-list-updates/main` | `read` |  |
 | `POST` | `/v1/price-list-updates/main/apply` | `relaxed` |  |
 | `GET` | `/v1/price-list-updates/main/keys` | `read` |  |
-| `POST` | `/v1/price-list-updates/main/lists/{code}/build` | `relaxed` |  |
 | `PUT` | `/v1/price-list-updates/main/note` | `relaxed` |  |
 | `PUT` | `/v1/price-list-updates/main/prices` | `relaxed` |  |
 | `PUT` | `/v1/price-list-updates/main/review` | `relaxed` |  |
 | `GET` | `/v1/price-list-updates/main/rows` | `read` |  |
+| `POST` | `/v1/price-list-updates/main/sync` | `relaxed` |  |
 | `GET` | `/v1/price-list-updates/staging` | `read` |  |
 | `GET` | `/v1/price-list-updates/staging/{price_list_id}/file.{fmt}` | `read` |  |
 | `POST` | `/v1/price-list-updates/staging/{price_list_id}/loads` | `relaxed` |  |
