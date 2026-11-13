@@ -29,6 +29,7 @@ se recupera sola. Para eso está el respaldo diario.
 | `masters-warm-products` | `reporte_ventas` | Lee del DWH el maestro de productos para la caché |
 | `commercial-sync-products` | `reporte_ventas` | Maestros comerciales: proveedores comerciales y productos |
 | `commercial-sync-supply` | `abastecimiento` | Costo unitario promedio y el puente producto-proveedor |
+| `main-lists-sync` | `abastecimiento` | Arma o refresca las 14 listas principales con SIESA, conservando precios nuevos, estados y observaciones (`docs/listas-principales.md`). También la encola el tablero con `POST /price-list-updates/main/sync` (`manage` del módulo, no solo admin). Va después de los costos |
 
 El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada uno en
 `infrastructure/handlers.py`.

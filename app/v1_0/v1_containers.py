@@ -797,13 +797,6 @@ class V1Container(containers.DeclarativeContainer):
         workbook=quotation_workbook_writer,
         flat_file=quotation_flat_file_writer,
     )
-    main_board_service = providers.Factory(
-        MainBoardService,
-        quotations=quotation_service,
-        review=list_review_service,
-        repository=providers.Factory(SqlAlchemyBoardRepository, database=database),
-        insights=quotation_insight_source,
-    )
     liquor_tax_service = providers.Factory(
         LiquorTaxService,
         quotations=quotation_service,
@@ -861,12 +854,6 @@ class V1Container(containers.DeclarativeContainer):
         repository=providers.Factory(SqlAlchemyCostRepository, database=database),
         warehouse=supplier_support_cost_source,
     )
-    job_handlers = providers.Singleton(
-        build_job_handlers,
-        masters=master_service.provider,
-        commercial_sync=master_sync_service.provider,
-        support_costs=supplier_support_cost_service.provider,
-    )
     # The worker and the API share the last poll result and the queue of runs.
     job_poll_status = providers.Singleton(PollStatus)
     job_request = providers.Singleton(RunRequest)
@@ -876,6 +863,24 @@ class V1Container(containers.DeclarativeContainer):
         poll_seconds=config.jobs.poll_seconds,
         fallback_at=config.jobs.fallback_at,
         timezone=config.jobs.timezone,
+    )
+    # The board of Listas principales; its sync is the background job ``main-lists-sync``.
+    main_board_service = providers.Factory(
+        MainBoardService,
+        quotations=quotation_service,
+        review=list_review_service,
+        repository=providers.Factory(SqlAlchemyBoardRepository, database=database),
+        insights=quotation_insight_source,
+        runs=job_run_repository,
+        jobs_enabled=config.jobs.enabled,
+        request_run=job_request.provided.set,
+    )
+    job_handlers = providers.Singleton(
+        build_job_handlers,
+        masters=master_service.provider,
+        commercial_sync=master_sync_service.provider,
+        support_costs=supplier_support_cost_service.provider,
+        main_lists=main_board_service.provider,
     )
     job_service = providers.Factory(
         JobService,

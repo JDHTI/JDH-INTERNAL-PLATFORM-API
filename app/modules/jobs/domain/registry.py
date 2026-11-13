@@ -106,6 +106,15 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
+    # After the supply load: the price lists and the inventory are the day's.
+    JobDefinition(
+        "main-lists-sync",
+        "Listas principales: sincronizar",
+        "Arma o refresca las 14 listas principales con las listas, el inventario y las ventas "
+        "del día; conserva precios nuevos, estados y observaciones",
+        "abastecimiento",
+        MONDAY_TO_FRIDAY,
+    ),
 )
 JOBS_BY_KEY = {job.key: job for job in JOBS}
 

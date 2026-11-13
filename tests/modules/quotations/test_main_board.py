@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
-from app.core.errors import ForbiddenError, InvalidInputError
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
+from app.modules.jobs.domain.entities import JobRun
+from app.modules.jobs.domain.registry import OPEN_STATUSES, RunStatus
 from app.modules.quotations.application.main_board import MainBoardService, PriceInput
 from app.modules.quotations.domain.board import BoardFilter, BoardKey, BoardRow
 from app.modules.quotations.domain.entities import ItemInfo, ListItem, PriceListInfo
@@ -240,6 +243,56 @@ async def test_the_board_is_shared_by_every_collaborator(board, service, collabo
         other, [BoardKey(row.quotation_id, row.line.sku) for row in rows], "limpiar"
     )
     assert cleared == 2
+
+
+class FakeRuns:
+    def __init__(self) -> None:
+        self.runs: list[JobRun] = []
+
+    async def queue(self, job, trigger, now, *, triggered_by=None):
+        if any(run.job == job and run.status in OPEN_STATUSES for run in self.runs):
+            raise ConflictError("abierta")
+        run = JobRun(uuid4(), job, trigger, RunStatus.QUEUED, now, triggered_by=triggered_by)
+        self.runs.append(run)
+        return run
+
+    async def latest(self, job):
+        return next((run for run in reversed(self.runs) if run.job == job), None)
+
+
+async def test_the_sync_is_a_background_job(board, collaborator) -> None:
+    requested: list = []
+    board.runs, board.request_run, board.jobs_enabled = FakeRuns(), requested.append, True
+
+    run = await board.sync(collaborator)
+
+    assert run.job == "main-lists-sync" and run.triggered_by == MAIN_MANAGER
+    assert requested == [run.id]
+    with pytest.raises(ConflictError, match="en cola o en curso"):
+        await board.sync(collaborator)
+    assert (await board.overview(collaborator)).sync == run
+    board.jobs_enabled = False
+    with pytest.raises(ConflictError, match="JOBS_ENABLED"):
+        await board.sync(collaborator)
+    with pytest.raises(ForbiddenError):
+        await board.sync(person("otro@jdh.com.co"))
+
+
+async def test_the_job_builds_every_list_and_one_failure_does_not_stop_it(
+    board, service, warehouse
+) -> None:
+    # Only 001 and 002 have prices in the fake warehouse; the other main lists do not exist.
+    result = await board.sync_all()
+
+    by_code = {item["code"]: item for item in result["lists"]}
+    assert by_code["001"]["status"] == "ok" and by_code["002"]["line_count"] == 2
+    assert by_code["003"]["status"] == "error" and "003" in by_code["003"]["error"]
+    assert any(error.startswith("003:") for error in result["errors"])
+    # The last sales may take longer in the background.
+    assert service.list_sales_timeout == 180.0
+    current = await board.repository.current_updates("principal")
+    assert {item.price_list_id for item in current} == {"001", "002"}
+    assert all(item.created_by == "sincronizacion.listas@plataforma.jdh" for item in current)
 
 
 async def test_select_every_row_of_a_filter(board, collaborator) -> None:

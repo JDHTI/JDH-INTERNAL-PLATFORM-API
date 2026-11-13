@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.errors import (
@@ -24,6 +25,8 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.modules.identity.domain.principal import Principal
+from app.modules.jobs.domain.entities import JobRun
+from app.modules.jobs.domain.registry import Trigger
 from app.modules.quotations.application.list_review import ListReviewService, StockTotal
 from app.modules.quotations.application.service import LineChange, QuotationService, Skipped
 from app.modules.quotations.domain import board, pricing, vocabulary
@@ -40,6 +43,29 @@ from app.modules.quotations.domain.ports import InsightSource
 logger = logging.getLogger(__name__)
 KIND = vocabulary.MAIN_LIST
 APPLY_MODES = ("optimo", "minimo", "limpiar")
+# The background job that builds or refreshes every main list (``app.modules.jobs``).
+SYNC_JOB = "main-lists-sync"
+# The last sales of list 1 (company) and 1M (735 branches) took 32 and 33 s on 2026-11-13:
+# in the background they may take this long.
+SYNC_SALES_TIMEOUT = 180.0
+# Who builds the lists in the background: the platform itself.
+SYSTEM = Principal(
+    user_id=UUID("00000000-0000-0000-0000-00000000a5c1"),
+    email="sincronizacion.listas@plataforma.jdh",
+    display_name="Sincronización de listas",
+    is_platform_admin=True,
+    role="admin",
+)
+
+
+class SyncRuns(Protocol):
+    """The runs of the background jobs (``app.modules.jobs``)."""
+
+    async def queue(
+        self, job: str, trigger: Trigger, now: datetime, *, triggered_by: str | None = None
+    ) -> JobRun: ...
+
+    async def latest(self, job: str) -> JobRun | None: ...
 
 
 class BoardRepository(Protocol):
@@ -61,6 +87,9 @@ class BoardOverview:
     lists: tuple[BoardList, ...]
     suppliers: tuple[str, ...]
     categories: tuple[str, ...]
+    # The latest sync (job ``main-lists-sync``) and whether the worker runs at all.
+    sync: JobRun | None = None
+    sync_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,6 +115,10 @@ class MainBoardService:
         review: ListReviewService,
         repository: BoardRepository,
         insights: InsightSource,
+        runs: SyncRuns | None = None,
+        jobs_enabled: bool = False,
+        request_run: Callable[[UUID], None] | None = None,
+        sales_timeout: float = SYNC_SALES_TIMEOUT,
     ) -> None:
         """Create the service.
 
@@ -94,12 +127,21 @@ class MainBoardService:
             review (ListReviewService): Review and notes of the items.
             repository (BoardRepository): The board's reads.
             insights (InsightSource): Stock of the page's rows.
+            runs (SyncRuns | None): The background jobs' runs (the sync is job
+                ``main-lists-sync``).
+            jobs_enabled (bool): Whether the background worker runs (``JOBS_ENABLED``).
+            request_run (Callable[[UUID], None] | None): Hands a queued run to the worker.
+            sales_timeout (float): Seconds the last sales of one list may take in the sync.
         """
 
         self.quotations = quotations
         self.review = review
         self.repository = repository
         self.insights = insights
+        self.runs = runs
+        self.jobs_enabled = jobs_enabled
+        self.request_run = request_run
+        self.sales_timeout = sales_timeout
 
     @property
     def codes(self) -> tuple[str, ...]:
@@ -162,7 +204,67 @@ class MainBoardService:
                 )
             )
         suppliers, categories = await self.repository.options(ids)
-        return BoardOverview(tuple(lists), tuple(suppliers), tuple(categories))
+        latest = await self.runs.latest(SYNC_JOB) if self.runs is not None else None
+        return BoardOverview(
+            tuple(lists), tuple(suppliers), tuple(categories), latest, self.jobs_enabled
+        )
+
+    async def sync(self, principal: Principal) -> JobRun:
+        """Queue the sync of every main list with the day's loads (job ``main-lists-sync``).
+
+        It runs in the background worker: list 1 alone reads 45 thousand branches and a year
+        of the company's sales, far more than one request may wait. The worker also runs it
+        by itself when the DWH finishes the supply load.
+
+        Raises:
+            ConflictError: The worker is off, or a sync is already queued or running.
+        """
+
+        await self._require(principal, manage=True)
+        if self.runs is None or self.request_run is None or not self.jobs_enabled:
+            raise ConflictError(
+                "La sincronización corre en las tareas en segundo plano y están apagadas "
+                "(JOBS_ENABLED): pide a TI que las encienda"
+            )
+        try:
+            run = await self.runs.queue(
+                SYNC_JOB, Trigger.MANUAL, datetime.now(UTC), triggered_by=principal.email
+            )
+        except ConflictError as exc:
+            raise ConflictError("Ya hay una sincronización en cola o en curso") from exc
+        self.request_run(run.id)
+        return run
+
+    async def sync_all(self) -> dict[str, Any]:
+        """Build or refresh every main list, one after another (the job's work).
+
+        A list that fails does not stop the others: it is reported in ``errors`` and the run
+        ends ``partial``. The last sales may take :data:`SYNC_SALES_TIMEOUT`.
+        """
+
+        self.quotations.list_sales_timeout = self.sales_timeout
+        lists: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for code in self.codes:
+            started = datetime.now(UTC)
+            try:
+                built = await self.build(SYSTEM, code)
+            except Exception as exc:  # noqa: BLE001 - one list never stops the others
+                logger.exception("quotations: main list %s not synced", code)
+                message = str(exc) or type(exc).__name__
+                lists.append({"code": code, "status": "error", "error": message[:300]})
+                errors.append(f"{code}: {message[:200]}")
+                continue
+            lists.append(
+                {
+                    "code": code,
+                    "status": "ok",
+                    "line_count": built.line_count,
+                    "warnings": list(built.warnings),
+                    "seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
+                }
+            )
+        return {"lists": lists, "errors": errors}
 
     async def build(self, principal: Principal, code: str) -> BoardList:
         """Build a main list's update, or refresh the one it has (new prices kept by SKU).

@@ -20,6 +20,8 @@ S = SupplierSupportModel
 # `source` of the supports imported from the workbook's `Condiciones Especiales` table.
 SPECIAL_CONDITIONS_SOURCE = "Condiciones Especiales%"
 _CHUNK = 5000
+# More NITs than this are not sent as parameters: customer supports are filtered in Python.
+_MAX_NITS = 2000
 
 
 class SqlAlchemyAgreementSource:
@@ -46,7 +48,11 @@ class SqlAlchemyAgreementSource:
 
         if not supplier_codes and not skus:
             return []
-        customer = or_(S.customer_nit.is_(None), S.customer_nit.in_(list(nits)))
+        # A price list of thousands of customers (list 1: 22 thousand NITs) would pass
+        # PostgreSQL's 32,767 parameters per query: its customer supports are filtered here.
+        many = len(nits) > _MAX_NITS
+        wanted = set(nits)
+        customer = [] if many else [or_(S.customer_nit.is_(None), S.customer_nit.in_(list(nits)))]
         product = or_(S.product_sku.is_(None), S.product_sku.in_(list(skus)))
         query = (
             select(S, CommercialSupplierModel.code)
@@ -59,7 +65,7 @@ class SqlAlchemyAgreementSource:
                 # The special conditions of the workbook stay documented, not applied: some
                 # cannot be automated (docs/condiciones-especiales.md).
                 or_(S.source.is_(None), ~S.source.ilike(SPECIAL_CONDITIONS_SOURCE)),
-                customer,
+                *customer,
                 or_(
                     and_(CommercialSupplierModel.code.in_(list(supplier_codes)), product),
                     and_(S.commercial_supplier_id.is_(None), S.product_sku.in_(list(skus))),
@@ -93,6 +99,7 @@ class SqlAlchemyAgreementSource:
                 valid_to=model.valid_to,
             )
             for model, code in rows
+            if not many or model.customer_nit is None or model.customer_nit in wanted
         ]
 
     async def products(self, skus: Sequence[str]) -> dict[str, ProductInfo]:
@@ -125,17 +132,21 @@ class SqlAlchemyAgreementSource:
 
         if not nits:
             return {}
+        unique = list(dict.fromkeys(nits))
+        rows = []
         async with self.database.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(
-                        CustomerModel.nit,
-                        CustomerModel.channel,
-                        CustomerModel.business_unit,
-                        CustomerModel.billing_center,
-                    ).where(CustomerModel.nit.in_(list(nits)))
-                )
-            ).all()
+            # In chunks: a price list can have tens of thousands of customers.
+            for start in range(0, len(unique), _CHUNK):
+                rows += (
+                    await session.execute(
+                        select(
+                            CustomerModel.nit,
+                            CustomerModel.channel,
+                            CustomerModel.business_unit,
+                            CustomerModel.billing_center,
+                        ).where(CustomerModel.nit.in_(unique[start : start + _CHUNK]))
+                    )
+                ).all()
         merged: dict[str, tuple[set[str], set[str], set[str]]] = {}
         for nit, channel, unit, regional in rows:
             channels, units, regionals = merged.setdefault(nit, (set(), set(), set()))
