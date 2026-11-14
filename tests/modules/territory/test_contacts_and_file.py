@@ -98,6 +98,23 @@ def test_the_workbook_brings_every_zone_sheet_and_skips_the_summary_ones() -> No
     assert (belen.rows, belen.with_location, belen.without_location) == (2, 1, 1)
 
 
+def test_no_data_markers_are_empty_and_real_notes_stay() -> None:
+    content = workbook(
+        {
+            "Itagüí": [
+                row("ITG-1", "Uno", **{"Observación": "no_determinado", "Correo": "-"}),
+                row("ITG-2", "Dos", **{"Observación": "No determinado", "Sector": "N/A"}),
+                row("ITG-3", "Tres", **{"Observación": "posible_cierre_no_confirmado"}),
+            ]
+        }
+    )
+
+    rows = reader.read(content).rows
+
+    assert [r.observation for r in rows] == [None, None, "posible_cierre_no_confirmado"]
+    assert rows[0].email_raw is None and rows[1].sector is None
+
+
 def test_latitude_and_longitude_columns_win_over_the_link() -> None:
     header = [*HEADER, "Latitud", "Longitud"]
     content = workbook(

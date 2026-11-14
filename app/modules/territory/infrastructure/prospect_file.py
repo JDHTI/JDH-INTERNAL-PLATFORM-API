@@ -83,6 +83,26 @@ _AREA_STATUS = {
     "por ubicar": "unlocated",
 }
 _YES = frozenset({"si", "s", "x", "yes", "true", "1", "verdadero"})
+# Markers the agents write instead of leaving a cell empty (``no_determinado``), compared
+# without accents and with ``_`` as a space. Real notes such as ``posible_cierre_no_confirmado``
+# are kept.
+_NO_DATA = frozenset(
+    {
+        "no determinado",
+        "sin determinar",
+        "sin dato",
+        "sin datos",
+        "sin informacion",
+        "n/a",
+        "n.a.",
+        "na",
+        "ninguno",
+        "null",
+        "none",
+        "-",
+        "--",
+    }
+)
 
 
 def normalize(value: Any) -> str:
@@ -94,11 +114,15 @@ def normalize(value: Any) -> str:
 
 
 def _text(value: Any) -> str | None:
+    """The cell as text; empty, or a "no data" marker of the agents, is ``None``."""
+
     if value is None:
         return None
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     text = str(value).strip()
+    if normalize(text).replace("_", " ") in _NO_DATA:
+        return None
     return text or None
 
 
