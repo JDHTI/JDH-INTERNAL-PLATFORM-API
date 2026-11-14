@@ -204,6 +204,16 @@ from app.modules.supplier_supports.infrastructure.requests_repository import (
 from app.modules.supplier_supports.infrastructure.special_cases_repository import (
     SqlAlchemySpecialCaseRepository,
 )
+from app.modules.territory.application.prospects import ProspectService
+from app.modules.territory.application.routes import RouteService
+from app.modules.territory.application.zones import ZoneService
+from app.modules.territory.infrastructure.openrouteservice import OpenRouteServiceRouter
+from app.modules.territory.infrastructure.prospect_file import SpreadsheetProspectReader
+from app.modules.territory.infrastructure.prospect_repository import (
+    SqlAlchemyProspectRepository,
+)
+from app.modules.territory.infrastructure.route_repository import SqlAlchemyRouteRepository
+from app.modules.territory.infrastructure.zone_repository import SqlAlchemyZoneRepository
 
 
 class V1Container(containers.DeclarativeContainer):
@@ -773,6 +783,45 @@ class V1Container(containers.DeclarativeContainer):
         # BI sees every customer; in Comercial only its leader or responsible does.
         all_area_slugs=providers.List(config.quotations.approver_area_slug),
         leader_area_slugs=providers.List(config.quotations.manager_area_slug),
+    )
+    # --- Commercial map (prospects on the map, zones, visit routes) ---
+    # ``manage`` in any area where the module is on (Comercial by default).
+    territory_manager_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug=None, module="mapa-comercial"
+    )
+    territory_prospect_repository = providers.Factory(
+        SqlAlchemyProspectRepository, database=database
+    )
+    territory_zone_repository = providers.Factory(SqlAlchemyZoneRepository, database=database)
+    territory_route_repository = providers.Factory(SqlAlchemyRouteRepository, database=database)
+    territory_reader = providers.Singleton(SpreadsheetProspectReader)
+    # One HTTP client for the process; closed in the lifespan.
+    territory_routing = providers.Singleton(
+        OpenRouteServiceRouter,
+        api_key=config.territory.routing_api_key,
+        directions_url=config.territory.routing_directions_url,
+        optimization_url=config.territory.routing_optimization_url,
+        timeout_seconds=config.territory.routing_timeout,
+        provider=config.territory.routing_provider,
+    )
+    territory_prospect_service = providers.Factory(
+        ProspectService,
+        repository=territory_prospect_repository,
+        reader=territory_reader,
+        managers=territory_manager_policy,
+        max_upload_bytes=config.territory.max_upload_bytes,
+    )
+    territory_zone_service = providers.Factory(
+        ZoneService, repository=territory_zone_repository, managers=territory_manager_policy
+    )
+    territory_route_service = providers.Factory(
+        RouteService,
+        routes=territory_route_repository,
+        prospects=territory_prospect_repository,
+        routing=territory_routing,
+        users=user_directory,
+        managers=territory_manager_policy,
+        max_stops=config.territory.routing_max_stops,
     )
     # --- Internal support requests (asked from a customer quotation, decided by BI) ---
     internal_support_request_repository = providers.Factory(

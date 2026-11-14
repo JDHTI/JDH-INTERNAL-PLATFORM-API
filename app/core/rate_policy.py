@@ -69,6 +69,24 @@ RULES: tuple[Rule, ...] = (
         STRICT,
         "Lanza una sincronización de maestros contra el datawarehouse",
     ),
+    Rule(
+        "POST",
+        "/v1/territory/routes",
+        STRICT,
+        "Consume la cuota diaria del servicio de ruteo (openrouteservice)",
+    ),
+    Rule(
+        "POST",
+        "/v1/territory/routes/{route_id}/compute",
+        STRICT,
+        "Consume la cuota diaria del servicio de ruteo (openrouteservice)",
+    ),
+    Rule(
+        "POST",
+        "/v1/territory/prospects/import",
+        STRICT,
+        "Lee un Excel de miles de prospectos y los escribe en una transacción",
+    ),
 )
 
 

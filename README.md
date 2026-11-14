@@ -66,6 +66,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   ver [`docs/listas-principales.md`](docs/listas-principales.md). Desde una cotización de cliente
   se piden apoyos internos (margen apoyado) que BI o un aprobador designado decide; ver
   [`docs/apoyos-internos.md`](docs/apoyos-internos.md).
+- El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
+  archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
+  calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).
 - El directorio de empleados vive en `/api/v1/directory` (lectura para toda persona
   autenticada) y `/api/v1/directory/admin` (administradores): copia nocturna de Entra
   que además crea los usuarios de la plataforma; ver [`docs/directory.md`](docs/directory.md).

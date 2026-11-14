@@ -2,7 +2,9 @@ name: internal-platform
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 16 with PostGIS (the commercial map, 0063). Same major version and the same
+    # Alpine base as postgres:16-alpine, so an existing data volume opens as it is.
+    image: postgis/postgis:16-3.5-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -11,6 +13,7 @@ services:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/10_postgis.sh:/docker-entrypoint-initdb.d/10_postgis.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -212,6 +215,11 @@ services:
       QUOTATIONS_MAX_LINES: ${QUOTATIONS_MAX_LINES:-3000}
       QUOTATIONS_DWH_TIMEOUT_SECONDS: ${QUOTATIONS_DWH_TIMEOUT_SECONDS:-30}
       QUOTATIONS_SIESA_COMPANY: ${QUOTATIONS_SIESA_COMPANY:-001}
+      TERRITORY_MAX_UPLOAD_MB: ${TERRITORY_MAX_UPLOAD_MB:-10}
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-openrouteservice}
+      ROUTING_API_KEY: ${ROUTING_API_KEY:-}
+      ROUTING_TIMEOUT_SECONDS: ${ROUTING_TIMEOUT_SECONDS:-20}
+      ROUTING_MAX_STOPS: ${ROUTING_MAX_STOPS:-48}
       # Data warehouse monitoring: copies the monitoreo schema over the DWH_* connection.
       DWH_MONITORING_SYNC_ENABLED: ${DWH_MONITORING_SYNC_ENABLED:-false}
       DWH_MONITORING_SYNC_INTERVAL_SECONDS: ${DWH_MONITORING_SYNC_INTERVAL_SECONDS:-600}

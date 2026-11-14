@@ -33,7 +33,13 @@ _ENVIRONMENT_DEPENDENT_INDEXES = frozenset(
 )
 
 
+# Tables the PostGIS extension creates (0063): they belong to the extension, not to a model.
+_EXTENSION_TABLES = frozenset({"spatial_ref_sys"})
+
+
 def include_object(object_, name, type_, reflected, compare_to) -> bool:  # noqa: ANN001
+    if type_ == "table" and reflected and name in _EXTENSION_TABLES:
+        return False
     return not (type_ == "index" and reflected and name in _ENVIRONMENT_DEPENDENT_INDEXES)
 
 

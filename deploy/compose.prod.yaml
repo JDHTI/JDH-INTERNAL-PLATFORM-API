@@ -42,7 +42,9 @@ x-api: &api
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # PostgreSQL 16 with PostGIS (the commercial map, 0063). Same major version and the same
+    # Alpine base as postgres:16-alpine, so the existing data volume opens as it is.
+    image: postgis/postgis:16-3.5-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-platform}
@@ -50,6 +52,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-internal_platform}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/10_postgis.sh:/docker-entrypoint-initdb.d/10_postgis.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s

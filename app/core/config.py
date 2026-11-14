@@ -241,6 +241,20 @@ class Settings(BaseSettings):
     # it on 2026-11-12. The operation center cannot tell it: list 009 pays the national one.
     LIQUOR_TAX_COAST_LISTS: str = "004,11N,22N,36J,46V"
 
+    # Commercial map (mapa-comercial): the monthly prospects workbook and road routing through
+    # openrouteservice (HeiGIT's free plan: 2,000 routes a day, 50 points each, no card). An
+    # empty key, or ROUTING_PROVIDER=none, saves routes in straight lines.
+    TERRITORY_MAX_UPLOAD_MB: int = 10
+    ROUTING_PROVIDER: str = "openrouteservice"
+    ROUTING_API_KEY: SecretStr = SecretStr("")
+    ROUTING_DIRECTIONS_URL: str = (
+        "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson"
+    )
+    ROUTING_OPTIMIZATION_URL: str = "https://api.heigit.org/vroom/v0"
+    ROUTING_TIMEOUT_SECONDS: float = 20.0
+    # Stops per route: the origin plus these must fit the plan's 50 points.
+    ROUTING_MAX_STOPS: int = 48
+
     # Microsoft Graph mail (application permissions, no mailbox passwords). The
     # app registration is separate from the SSO one; scope it to the mailboxes
     # with an Exchange Application Access Policy.
@@ -680,6 +694,15 @@ class Settings(BaseSettings):
                 "coast_lists": tuple(
                     code.strip() for code in self.LIQUOR_TAX_COAST_LISTS.split(",") if code.strip()
                 ),
+            },
+            "territory": {
+                "max_upload_bytes": self.TERRITORY_MAX_UPLOAD_MB * 1024 * 1024,
+                "routing_provider": self.ROUTING_PROVIDER,
+                "routing_api_key": self.ROUTING_API_KEY.get_secret_value(),
+                "routing_directions_url": self.ROUTING_DIRECTIONS_URL,
+                "routing_optimization_url": self.ROUTING_OPTIMIZATION_URL,
+                "routing_timeout": self.ROUTING_TIMEOUT_SECONDS,
+                "routing_max_stops": max(2, min(self.ROUTING_MAX_STOPS, 48)),
             },
             "dwh_monitoring": {
                 "sync_enabled": self.DWH_MONITORING_SYNC_ENABLED,
