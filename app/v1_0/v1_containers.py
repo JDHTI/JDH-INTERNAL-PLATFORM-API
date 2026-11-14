@@ -166,6 +166,10 @@ from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
 from app.modules.supplier_supports.application.bulk import QuietHours, SupportBulkService
 from app.modules.supplier_supports.application.costs import SupportCostService
+from app.modules.supplier_supports.application.internal_requests import (
+    InternalRequestLinks,
+    InternalRequestService,
+)
 from app.modules.supplier_supports.application.profiles import SupportProfileService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
@@ -181,6 +185,9 @@ from app.modules.supplier_supports.infrastructure.costs import (
 from app.modules.supplier_supports.infrastructure.document_store import (
     DocumentManagerSupportStore,
 )
+from app.modules.supplier_supports.infrastructure.internal_requests_repository import (
+    SqlAlchemyInternalRequestRepository,
+)
 from app.modules.supplier_supports.infrastructure.profiles_repository import (
     SqlAlchemyProfileRepository,
 )
@@ -189,6 +196,7 @@ from app.modules.supplier_supports.infrastructure.publication import (
     SupportTopic,
     build_topics,
 )
+from app.modules.supplier_supports.infrastructure.quotation_access import QuoterAccess
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
 from app.modules.supplier_supports.infrastructure.requests_repository import (
     SqlAlchemySupportRequestRepository,
@@ -766,8 +774,23 @@ class V1Container(containers.DeclarativeContainer):
         all_area_slugs=providers.List(config.quotations.approver_area_slug),
         leader_area_slugs=providers.List(config.quotations.manager_area_slug),
     )
+    # --- Internal support requests (asked from a customer quotation, decided by BI) ---
+    internal_support_request_repository = providers.Factory(
+        SqlAlchemyInternalRequestRepository, database=database
+    )
+    # Designated reviewers: ``manage`` on the permission in any area where it is on.
+    internal_support_designated_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug=None, module="aprobacion-apoyos-internos"
+    )
+    internal_support_request_links = providers.Factory(
+        InternalRequestLinks,
+        repository=internal_support_request_repository,
+        managers=supplier_support_manager_policy,
+        designated=internal_support_designated_policy,
+    )
     quotation_service = providers.Factory(
         QuotationService,
+        support_requests=internal_support_request_links,
         sales=sales_scope_service,
         repository=quotation_repository,
         warehouse=quotation_warehouse_source,
@@ -787,6 +810,14 @@ class V1Container(containers.DeclarativeContainer):
         main_lists=config.quotations.main_lists,
         main_managers=main_list_manager_policy,
         main_approvers=main_list_approver_policy,
+    )
+    internal_support_request_service = providers.Factory(
+        InternalRequestService,
+        repository=internal_support_request_repository,
+        links=internal_support_request_links,
+        quotations=providers.Factory(QuoterAccess, quotations=quotation_service),
+        masters=master_lookup,
+        calendar=pqrsf_calendar,
     )
     list_review_service = providers.Factory(
         ListReviewService,

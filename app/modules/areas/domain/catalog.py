@@ -120,6 +120,15 @@ MODULES: tuple[Module, ...] = (
         ("comercial", "bi"),
         "Solicitudes de apoyo a BI",
     ),
+    # A permission without a screen of its own: ``manage`` approves or rejects the internal
+    # support requests asked from a customer quotation (BI's supports managers decide too).
+    # Turn it on in another area to designate reviewers there.
+    Module(
+        "aprobacion-apoyos-internos",
+        "Aprobación de apoyos internos",
+        ("bi",),
+        "Aprueba o rechaza los apoyos internos pedidos desde la cotización",
+    ),
     Module("casos-especiales", "Casos especiales", ("bi",), "Condiciones especiales"),
     Module(
         MASTERS_MODULE,

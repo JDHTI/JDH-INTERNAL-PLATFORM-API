@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -82,6 +83,8 @@ class PermissionsResponse(BaseModel):
     # Customers the caller works on: all, team (supervisor), mine (salesperson) or none.
     # The server applies it to customers, quotations and their creation.
     sales_scope: Literal["all", "team", "mine", "none"] | None = None
+    # May ask an internal support from a customer quotation (quotes and does not review).
+    can_request_support: bool = False
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -357,6 +360,15 @@ class SupportOptionResponse(BaseModel):
     valid_to: date | None
 
 
+class SupportRequestRefResponse(BaseModel):
+    """The latest internal support request of the SKU in this quotation."""
+
+    id: UUID
+    status: Literal["pendiente", "aprobada", "rechazada"]
+    decision: Literal["persistente", "unica_vez"] | None
+    approved_margin_pct: Decimal | None
+
+
 class LineResponse(BaseModel):
     """One SKU: what was last sold, at what cost and margin, and the advisor's price."""
 
@@ -440,6 +452,8 @@ class LineResponse(BaseModel):
     note: str | None = None
     load_id: UUID | None = None
     loaded: bool = False
+    # A customer quotation: the latest internal support request of the SKU, if any.
+    support_request: SupportRequestRefResponse | None = None
 
 
 class SellerContactResponse(BaseModel):
@@ -595,7 +609,18 @@ def _support(item: AppliedSupport | None) -> SupportResponse | None:
     )
 
 
-def _line(line: QuotationLine, scope: str) -> LineResponse:
+def _request_ref(item: Any) -> SupportRequestRefResponse | None:
+    if item is None:
+        return None
+    return SupportRequestRefResponse(
+        id=item.id,
+        status=item.status,
+        decision=item.decision,
+        approved_margin_pct=item.approved_margin_pct,
+    )
+
+
+def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
     return LineResponse(
         id=line.id,
         position=line.position,
@@ -689,6 +714,7 @@ def _line(line: QuotationLine, scope: str) -> LineResponse:
         note=line.note,
         load_id=line.load_id,
         loaded=line.load_id is not None,
+        support_request=_request_ref(request),
     )
 
 
@@ -755,7 +781,9 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
     }
 
 
-def _detail(detail: QuotationDetail) -> QuotationResponse:
+def _detail(
+    detail: QuotationDetail, requests: Mapping[str, Any] | None = None
+) -> QuotationResponse:
     quotation = detail.quotation
     return QuotationResponse(
         **_summary_values(quotation),  # type: ignore[arg-type]
@@ -796,8 +824,17 @@ def _detail(detail: QuotationDetail) -> QuotationResponse:
         include_variation=quotation.include_variation,
         seller_contact=_seller(quotation.seller_contact),
         offer_summary=_summary(detail),
-        lines=[_line(line, quotation.offer_scope) for line in detail.lines],
+        lines=[
+            _line(line, quotation.offer_scope, (requests or {}).get(line.sku))
+            for line in detail.lines
+        ],
     )
+
+
+async def _respond(service: QuotationService, detail: QuotationDetail) -> QuotationResponse:
+    """The quotation with the internal support request of each line."""
+
+    return _detail(detail, await service.support_requests_for(detail))
 
 
 @router.get("/permissions", response_model=PermissionsResponse, summary="What the caller may do")
@@ -816,6 +853,7 @@ async def permissions(
         can_manage=result.can_manage,
         can_validate=result.can_validate,
         sales_scope=result.sales_scope,  # type: ignore[arg-type]
+        can_request_support=result.can_request_support,
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller
@@ -916,7 +954,8 @@ async def create_quotation(
     center; the sales scope does not apply to it."""
 
     temporary = body.temporary_customer
-    return _detail(
+    return await _respond(
+        service,
         await service.create(
             principal,
             body.customer_nit,
@@ -932,7 +971,7 @@ async def create_quotation(
             else None,
             billing_center_code=body.billing_center_code,
             with_history=body.with_history,
-        )
+        ),
     )
 
 
@@ -1054,13 +1093,14 @@ async def create_list_update(
     quoter's cost, target, rule and states, the last sale to the customer (or the list's
     customers) and every support of the list's customers. No offer and no quantities."""
 
-    return _detail(
+    return await _respond(
+        service,
         await service.create_list_update(
             principal,
             customer_nit=body.customer_nit,
             price_list_id=body.price_list_id,
             kind=body.kind,
-        )
+        ),
     )
 
 
@@ -1104,7 +1144,7 @@ async def get_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    return _detail(await service.get(principal, quotation_id))
+    return await _respond(service, await service.get(principal, quotation_id))
 
 
 @router.put(
@@ -1127,7 +1167,7 @@ async def update_lines(
 
     changes = [item.change() for item in body.lines]
     detail, skipped = await service.update_lines(principal, quotation_id, body.version, changes)
-    response = _detail(detail)
+    response = await _respond(service, detail)
     response.skipped = [_skipped(item) for item in skipped]
     return response
 
@@ -1156,7 +1196,7 @@ async def add_lines(
 
     values = [*body.skus, *([body.text] if body.text else [])]
     detail, result = await service.add_lines(principal, quotation_id, body.version, values)
-    response = _detail(detail)
+    response = await _respond(service, detail)
     response.import_result = ImportResultResponse(
         added=list(result.added),
         revalidated=list(result.revalidated),
@@ -1185,7 +1225,8 @@ async def add_local_line(
     and it never reaches the workbook or the SIESA files. 422 on an invalid field; 409 when
     the quotation changed since it was read or awaits validation."""
 
-    return _detail(
+    return await _respond(
+        service,
         await service.add_local_line(
             principal,
             quotation_id,
@@ -1194,7 +1235,7 @@ async def add_local_line(
             supplier_name=body.supplier_name,
             price=body.price,
             vat_pct=body.vat_pct,
-        )
+        ),
     )
 
 
@@ -1214,7 +1255,8 @@ async def update_offer(
     """Validity, conditions, seller, quantities and which lines the offer carries. Only the
     keys sent change. Any status; never changes it. 409 on a stale version."""
 
-    return _detail(
+    return await _respond(
+        service,
         await service.update_offer(
             principal,
             quotation_id,
@@ -1225,7 +1267,7 @@ async def update_offer(
             quote_quantities=body.quote_quantities,
             offer_scope=body.offer_scope,
             include_variation=body.include_variation,
-        )
+        ),
     )
 
 
@@ -1268,7 +1310,7 @@ async def remove_line(
     """SKUs the advisor added, local products, or SKUs inactive in SIESA; an active
     sales-window SKU stays (leave its new price empty)."""
 
-    return _detail(await service.remove_line(principal, quotation_id, version, sku))
+    return await _respond(service, await service.remove_line(principal, quotation_id, version, sku))
 
 
 @router.post(
@@ -1286,7 +1328,7 @@ async def refresh_quotation(
 ) -> QuotationResponse:
     """Last sales, cost and supports as they are now; new prices are kept by SKU."""
 
-    return _detail(await service.refresh(principal, quotation_id, body.version))
+    return await _respond(service, await service.refresh(principal, quotation_id, body.version))
 
 
 @router.post(
@@ -1307,7 +1349,8 @@ async def confirm_quotation(
     list; ``creacion`` creates a list whose code the validator gives (list 1 and temporary
     customers always go by creation). The quotation is ``pendiente_validacion``."""
 
-    return _detail(
+    return await _respond(
+        service,
         await service.confirm(
             principal,
             quotation_id,
@@ -1315,7 +1358,7 @@ async def confirm_quotation(
             list_action=body.list_action,
             new_list_name=body.new_list_name,
             activation_date=body.activation_date,
-        )
+        ),
     )
 
 
@@ -1335,7 +1378,9 @@ async def return_quotation(
     """A pending quotation goes back to draft: the approver rejects it (``note`` required) or
     an advisor withdraws it."""
 
-    return _detail(await service.return_to_draft(principal, quotation_id, body.version, body.note))
+    return await _respond(
+        service, await service.return_to_draft(principal, quotation_id, body.version, body.note)
+    )
 
 
 @router.post(
@@ -1355,14 +1400,15 @@ async def validate_quotation(
     ``creacion`` the code of the new list is required (1 to 3 letters or digits, free in
     SIESA); ``new_list_name`` may change its description."""
 
-    return _detail(
+    return await _respond(
+        service,
         await service.validate(
             principal,
             quotation_id,
             body.version,
             price_list_id=body.price_list_id,
             new_list_name=body.new_list_name,
-        )
+        ),
     )
 
 
@@ -1382,7 +1428,9 @@ async def mark_uploaded(
     """Approvers only, from ``pendiente_carga``: the quotation is ``cargada`` and records who
     and when (``uploaded_by``, ``uploaded_at``)."""
 
-    return _detail(await service.mark_uploaded(principal, quotation_id, body.version))
+    return await _respond(
+        service, await service.mark_uploaded(principal, quotation_id, body.version)
+    )
 
 
 class CenterComparisonResponse(BaseModel):
@@ -1432,8 +1480,8 @@ async def set_billing_center(
     keeping new prices, quantities and local products; back to draft. Same rules as
     ``/refresh``. 422 on an unknown center or on Nacional with centers."""
 
-    return _detail(
-        await service.set_billing_center(principal, quotation_id, body.version, body.codes)
+    return await _respond(
+        service, await service.set_billing_center(principal, quotation_id, body.version, body.codes)
     )
 
 

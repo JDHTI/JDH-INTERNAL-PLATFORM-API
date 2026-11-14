@@ -47,6 +47,9 @@ from app.modules.supplier_supports.presentation.attachments_router import (
     router as supports_attachments_router,
 )
 from app.modules.supplier_supports.presentation.bulk_router import router as supports_bulk_router
+from app.modules.supplier_supports.presentation.internal_requests_router import (
+    router as internal_support_requests_router,
+)
 from app.modules.supplier_supports.presentation.profiles_router import (
     router as support_profiles_router,
 )
@@ -89,6 +92,7 @@ v1_router.include_router(
     supports_attachments_router, prefix="/supplier-supports", tags=["supplier-supports"]
 )
 v1_router.include_router(support_requests_router, tags=["supplier-support-requests"])
+v1_router.include_router(internal_support_requests_router, tags=["internal-support-requests"])
 v1_router.include_router(supports_router, prefix="/supplier-supports", tags=["supplier-supports"])
 v1_router.include_router(
     support_profiles_router,

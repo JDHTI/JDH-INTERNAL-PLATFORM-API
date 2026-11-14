@@ -73,7 +73,12 @@ ORIGINS = (
     "vencimiento",  # closed by a bulk load that no longer brings it
     "aprobacion_jdh",  # a JDH contribution request was approved
     "cancelacion_jdh",  # the JDH contribution was cancelled
+    "solicitud_interna",  # approved internal support request from a quotation
 )
+
+# Internal support requests (from a customer quotation).
+INTERNAL_STATUSES = ("pendiente", "aprobada", "rechazada")
+INTERNAL_DECISIONS = ("persistente", "unica_vez")
 
 SPECIAL_CASE_STATUSES = ("pendiente", "en_analisis", "programado", "implementado", "descartado")
 SPECIAL_CASE_PRIORITIES = ("baja", "media", "alta")

@@ -18,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -196,6 +197,10 @@ class SupplierSupportModel(Base):
         UUID(as_uuid=True), ForeignKey("supplier_support_loads.id", ondelete="SET NULL")
     )
     last_origin: Mapped[str | None] = mapped_column(String(20))
+    # The internal support request it was born from (a bulk load never closes those).
+    internal_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("internal_support_requests.id", ondelete="SET NULL")
+    )
 
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
     updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
@@ -437,3 +442,101 @@ class SupportJdhEventModel(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class InternalSupportRequestModel(Base):
+    """A supported margin asked from a customer quotation, decided by BI or a reviewer."""
+
+    __tablename__ = "internal_support_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pendiente', 'aprobada', 'rechazada')",
+            name="ck_internal_support_requests_status",
+        ),
+        CheckConstraint(
+            "decision IS NULL OR decision IN ('persistente', 'unica_vez')",
+            name="ck_internal_support_requests_decision",
+        ),
+        CheckConstraint(
+            "valid_from IS NULL OR valid_to IS NULL OR valid_to >= valid_from",
+            name="ck_internal_support_requests_validity",
+        ),
+        Index("ix_internal_support_requests_status_created", "status", "created_at"),
+        Index("ix_internal_support_requests_owner_created", "requested_by_id", "created_at"),
+        Index("ix_internal_support_requests_quotation", "quotation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        unique=True,
+        server_default=text("nextval('internal_support_request_number_seq')"),
+    )
+    status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="pendiente")
+    decision: Mapped[str | None] = mapped_column(String(12))
+    quotation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="SET NULL")
+    )
+    quotation_label: Mapped[str | None] = mapped_column(Text)
+    customer_nit: Mapped[str] = mapped_column(Text, nullable=False)
+    customer_name: Mapped[str | None] = mapped_column(Text)
+    commercial_supplier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("commercial_suppliers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    supplier_code: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier_name: Mapped[str | None] = mapped_column(Text)
+    requested_for: Mapped[date] = mapped_column(Date, nullable=False)
+    agreed_with: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_by_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    valid_from: Mapped[date | None] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date)
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class InternalSupportRequestItemModel(Base):
+    """One SKU of an internal support request, with the snapshot of the quotation line."""
+
+    __tablename__ = "internal_support_request_items"
+    __table_args__ = (
+        UniqueConstraint("request_id", "sku", name="uq_internal_support_request_items_sku"),
+        CheckConstraint(
+            "requested_margin_pct >= 0 AND requested_margin_pct < 1",
+            name="ck_internal_support_request_items_requested",
+        ),
+        CheckConstraint(
+            "approved_margin_pct IS NULL OR (approved_margin_pct >= 0 AND approved_margin_pct < 1)",
+            name="ck_internal_support_request_items_approved",
+        ),
+        Index("ix_internal_support_request_items_request", "request_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("internal_support_requests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(Text)
+    cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    quoted_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    requested_margin_pct: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
+    approved_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    support_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="SET NULL")
+    )
