@@ -241,10 +241,21 @@ En el servidor corre dentro del contenedor:
 
 Fuentes abiertas:
 
-- Municipios: DANE, Marco Geoestadístico Nacional (geoportal.dane.gov.co).
-- Comunas y barrios de Medellín: GeoMedellín (Alcaldía de Medellín).
+- **Comunas y corregimientos de Medellín, y municipios del Valle de Aburrá: OpenStreetMap.**
+  `scripts/fetch-osm-zones.py <carpeta>` los baja de Nominatim y deja dos GeoJSON listos para
+  el comando de arriba. Su encabezado trae los comandos de carga (`--level commune` y
+  `--level municipality`, con `--code-property osm_id`). Son 16 comunas, 5 corregimientos y
+  10 municipios.
+- Barrios de Medellín: GeoMedellín (Alcaldía). OpenStreetMap no los tiene completos. El
+  servidor de mapas de la Alcaldía (`medellin.gov.co/servidormapas`) respondía 503 el
+  2026-11-14; la capa es `Limite Barrio_Vereda Catastral`.
+- Municipios de todo el país: DANE, Marco Geoestadístico Nacional (geoportal.dane.gov.co).
 - No hay fuente abierta confirmada para barrios de Envigado, Sabaneta, Bello e Itagüí: se dibujan
   como zonas comerciales o quedan a nivel municipio.
+
+Una zona oficial es de referencia: se pinta su contorno, cuenta los prospectos que caen dentro
+y filtra el mapa (`zone_id`), pero no asigna prospectos. Para segmentar con ella se adopta como
+zona comercial (`POST /zones/adopt`).
 
 ## Configuración
 
