@@ -123,6 +123,11 @@ class FakeProspects:
     def __init__(self) -> None:
         self.items: dict[UUID, Prospect] = {}
         self.loads_made: list[ProspectLoad] = []
+        # Official municipality of a point, by latitude rounded to 2 decimals.
+        self.municipality_at: dict[float, str] = {}
+
+    async def municipalities(self, points: Sequence[Point]) -> list[str | None]:
+        return [self.municipality_at.get(round(point.latitude, 2)) for point in points]
 
     def by_external(self, external_id: str) -> Prospect | None:
         return next((p for p in self.items.values() if p.data.external_id == external_id), None)

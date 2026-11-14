@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, case, func, insert, or_, select, update
+from sqlalchemy import ColumnElement, Select, case, func, insert, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased
 
@@ -461,6 +461,43 @@ class SqlAlchemyProspectRepository:
                     await geo.place_prospects(session, P.id == prospect_id)
                 await session.commit()
         return await self.get(prospect_id)
+
+    async def municipalities(self, points: Sequence[Point]) -> list[str | None]:
+        """The official municipality each point falls in.
+
+        Args:
+            points (Sequence[Point]): Points to place.
+
+        Returns:
+            list[str | None]: Municipality names in the same order; ``None`` outside every
+            loaded municipality (or when none is loaded).
+        """
+
+        if not points:
+            return []
+        statement = text(
+            """
+            SELECT t.idx, (
+                SELECT z.name FROM geo_zones z
+                WHERE z.layer = 'official' AND z.level = 'municipality'
+                  AND ST_Covers(z.geom, ST_SetSRID(ST_MakePoint(t.lon, t.lat), 4326))
+                ORDER BY ST_Area(z.geom)
+                LIMIT 1
+            ) AS name
+            FROM unnest(CAST(:lons AS double precision[]), CAST(:lats AS double precision[]))
+                 WITH ORDINALITY AS t(lon, lat, idx)
+            """
+        )
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                statement,
+                {
+                    "lons": [point.longitude for point in points],
+                    "lats": [point.latitude for point in points],
+                },
+            )
+            names = {row.idx: row.name for row in rows}
+        return [names.get(index) for index in range(1, len(points) + 1)]
 
     async def loads(self, limit: int) -> list[ProspectLoad]:
         """The latest loads, newest first.

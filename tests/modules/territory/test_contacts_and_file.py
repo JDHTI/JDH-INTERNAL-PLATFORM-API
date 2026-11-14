@@ -13,6 +13,7 @@ from app.modules.territory.domain.contacts import (
     parse_emails,
     parse_phones,
 )
+from app.modules.territory.domain.places import municipality_in_address
 from app.modules.territory.infrastructure.prospect_file import SpreadsheetProspectReader
 from tests.modules.territory.conftest import HEADER, row, workbook
 
@@ -113,6 +114,43 @@ def test_no_data_markers_are_empty_and_real_notes_stay() -> None:
 
     assert [r.observation for r in rows] == [None, None, "posible_cierre_no_confirmado"]
     assert rows[0].email_raw is None and rows[1].sector is None
+
+
+def test_a_por_ubicar_row_ignores_the_point_of_its_link() -> None:
+    content = workbook(
+        {
+            "Centro": [
+                row("C-1", "Al Carbón", 6.2482, -75.5699, **{"Ubicación": "Por ubicar"}),
+                row("C-2", "Bar", 6.25, -75.57, **{"Ubicación": "Dentro del área"}),
+            ]
+        }
+    )
+
+    parsed = reader.read(content)
+
+    first, second = parsed.rows
+    assert first.location is None and first.location_quality == "missing"
+    assert second.location is not None
+    (warning,) = parsed.warnings
+    assert (warning.sheet, warning.row_number, warning.field) == ("Centro", 2, "Ubicación")
+    assert parsed.positions == [("Centro", 2), ("Centro", 3)]
+    assert parsed.sheets[0].with_location == 1
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("Dg 55 38-55 Bello", "Bello"),
+        ("Calle 53 50-58, Bello, Antioquia", "Bello"),
+        ("CR 50A N 80 -29 Itagui", "Itagüí"),
+        ("Cra 43A #1-50 La Estrella.", "La Estrella"),
+        ("Carrera 80 #34-10 Bello Horizonte", None),
+        ("Calle 10 Sur # 50FF-120", None),
+        (None, None),
+    ],
+)
+def test_the_municipality_an_address_ends_with(address, expected) -> None:
+    assert municipality_in_address(address) == expected
 
 
 def test_latitude_and_longitude_columns_win_over_the_link() -> None:

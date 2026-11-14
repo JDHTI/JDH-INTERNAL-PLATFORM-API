@@ -189,6 +189,10 @@ class ParsedFile:
     errors: list[RowIssue]
     # Non-empty rows of the prospect sheets, with or without problems.
     rows_read: int = 0
+    # ``(sheet, row number)`` of each of ``rows``, in the same order.
+    positions: list[tuple[str, int]] = field(default_factory=list)
+    # Rows loaded without their point, and why (the file says they are not located).
+    warnings: list[RowIssue] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -215,6 +219,11 @@ class ImportReport:
     sheets: list[SheetSummary]
     errors: list[RowIssue]
     errors_truncated: bool
+    # Points of the file left out: the file says "Por ubicar", or the address names another
+    # municipality than the one the point falls in. Those prospects load without location.
+    discarded_points: int = 0
+    warnings: list[RowIssue] = field(default_factory=list)
+    warnings_truncated: bool = False
 
 
 @dataclass(frozen=True)

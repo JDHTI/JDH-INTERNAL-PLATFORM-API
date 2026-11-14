@@ -63,6 +63,41 @@ async def test_a_point_moved_by_hand_survives_the_next_load(prospect_service, pr
     assert prospects.items[deli.id].data.location == Point(latitude=6.21, longitude=-75.59)
 
 
+async def test_a_point_in_another_municipality_than_the_address_is_left_out(
+    prospect_service, prospects
+) -> None:
+    prospects.municipality_at = {6.25: "Medellín", 6.32: "Bello"}
+    content = workbook(
+        {
+            "Centro": [
+                row("C-1", "Distripollo", 6.25, -75.57, **{"Dirección": "Calle 53 50-58 Bello"}),
+                row("C-2", "Chicago", 6.32, -75.56, **{"Dirección": "Cl 40 # 50-10, Bello"}),
+                row("C-3", "Bar", 6.25, -75.57, **{"Dirección": "Carrera 50 #50-10"}),
+                row("C-4", "Lejano", 6.40, -75.50, **{"Dirección": "Calle 1 Bello"}),
+                # It ends with the metropolitan Medellín but names Bello, where the point is.
+                row(
+                    "C-5",
+                    "Google",
+                    6.32,
+                    -75.56,
+                    **{"Dirección": "Cl. 64 #45a-30, Bello, Medellín"},
+                ),
+            ]
+        }
+    )
+
+    report = await prospect_service.load(person(MANAGER), "p.xlsx", content, apply=True)
+
+    assert report.discarded_points == 1 and report.with_location == 4
+    (warning,) = report.warnings
+    assert (warning.sheet, warning.row_number, warning.field) == ("Centro", 2, "Dirección")
+    assert "dice Bello pero el punto cae en Medellín" in warning.message
+    assert prospects.by_external("C-1").data.location is None
+    # Same municipality, no municipality in the address, or no layer there: kept.
+    assert all(prospects.by_external(key).data.location for key in ("C-2", "C-3", "C-4", "C-5"))
+    assert report.sheets[0].with_location == 4
+
+
 async def test_row_errors_block_the_load(prospect_service, prospects) -> None:
     content = workbook({"Belén": [row("BEL-1", "Uno"), row("BEL-1", "Otra vez")]})
 

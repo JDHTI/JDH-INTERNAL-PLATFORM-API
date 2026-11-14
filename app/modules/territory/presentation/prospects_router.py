@@ -181,6 +181,11 @@ class ImportResponse(BaseModel):
     sheets: list[SheetResponse]
     errors: list[RowIssueResponse]
     errors_truncated: bool
+    # Points left out (the file says "Por ubicar", or the address names another municipality):
+    # those prospects load without location. ``warnings`` says which and why.
+    discarded_points: int
+    warnings: list[RowIssueResponse]
+    warnings_truncated: bool
 
 
 class LoadResponse(BaseModel):

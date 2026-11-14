@@ -11,23 +11,53 @@ from app.modules.territory.domain.entities import (
     ImportReport,
     LoadCounts,
     MapPoint,
+    ParsedFile,
     Point,
     Prospect,
     ProspectChange,
+    ProspectData,
     ProspectFacets,
     ProspectFilters,
     ProspectLoad,
     ProspectPage,
+    RowIssue,
+    SheetSummary,
 )
+from app.modules.territory.domain.places import fold, mentions, municipality_in_address
 from app.modules.territory.domain.ports import (
     ManagerPolicy,
     ProspectFileReader,
     ProspectRepository,
 )
-from app.modules.territory.domain.vocabulary import MANUAL, VISIT_STATUSES, in_colombia
+from app.modules.territory.domain.vocabulary import (
+    MANUAL,
+    MISSING,
+    VISIT_STATUSES,
+    in_colombia,
+)
 
 MAX_ERRORS = 200
 _EXTENSIONS = (".xlsx", ".xlsm")
+
+
+def _sheets(parsed: ParsedFile, rows: list[ProspectData]) -> list[SheetSummary]:
+    """Per-sheet counts after the points the load leaves out."""
+
+    summaries = []
+    for sheet in parsed.sheets:
+        in_sheet = [
+            row for row, (name, _) in zip(rows, parsed.positions, strict=True) if name == sheet.name
+        ]
+        located = sum(1 for row in in_sheet if row.location is not None)
+        summaries.append(
+            SheetSummary(
+                name=sheet.name,
+                rows=len(in_sheet),
+                with_location=located,
+                without_location=len(in_sheet) - located,
+            )
+        )
+    return summaries
 
 
 class ProspectService:
@@ -206,9 +236,11 @@ class ProspectService:
                 "Formato no soportado: sube el archivo de prospectos en Excel (.xlsx)"
             )
         parsed = self.reader.read(content)
-        stored = await self.repository.stored([row.external_id for row in parsed.rows])
+        rows, mismatches = await self._check_municipalities(parsed)
+        warnings = parsed.warnings + mismatches
+        stored = await self.repository.stored([row.external_id for row in rows])
         created = updated = unchanged = 0
-        for row in parsed.rows:
+        for row in rows:
             current = stored.get(row.external_id)
             if current is None:
                 created += 1
@@ -225,27 +257,69 @@ class ProspectService:
         if apply and not blocked:
             load_id = await self.repository.apply_load(
                 file_name,
-                parsed.rows,
+                rows,
                 LoadCounts(created=created, updated=updated, unchanged=unchanged),
                 principal.user_id,
                 principal.email,
             )
-        located = sum(1 for row in parsed.rows if row.location is not None)
+        located = sum(1 for row in rows if row.location is not None)
         return ImportReport(
             applied=load_id is not None,
             blocked=blocked,
             load_id=load_id,
             rows_read=parsed.rows_read,
             with_location=located,
-            without_location=len(parsed.rows) - located,
-            approximate=sum(1 for row in parsed.rows if row.location_quality == "approximate"),
+            without_location=len(rows) - located,
+            approximate=sum(1 for row in rows if row.location_quality == "approximate"),
             to_create=created,
             to_update=updated,
             unchanged=unchanged,
-            sheets=parsed.sheets,
+            sheets=_sheets(parsed, rows),
             errors=parsed.errors[:MAX_ERRORS],
             errors_truncated=len(parsed.errors) > MAX_ERRORS,
+            discarded_points=len(warnings),
+            warnings=warnings[:MAX_ERRORS],
+            warnings_truncated=len(warnings) > MAX_ERRORS,
         )
+
+    async def _check_municipalities(
+        self, parsed: ParsedFile
+    ) -> tuple[list[ProspectData], list[RowIssue]]:
+        """Drop the points that fall in another municipality than the address names.
+
+        An agent may geocode a Bello address with Medellín's street grid. Only checked when the
+        official municipalities are loaded and the address ends with one of them.
+        """
+
+        rows = list(parsed.rows)
+        candidates = [
+            (index, named)
+            for index, row in enumerate(rows)
+            if row.location is not None and (named := municipality_in_address(row.address))
+        ]
+        if not candidates:
+            return rows, []
+        found = await self.repository.municipalities(
+            [rows[index].location for index, _ in candidates]  # type: ignore[misc]
+        )
+        warnings = []
+        for (index, named), actual in zip(candidates, found, strict=True):
+            row = rows[index]
+            # Consistent when the address also names where the point is ("Envigado - Caldas").
+            if actual is None or fold(actual) == fold(named) or mentions(row.address, actual):
+                continue
+            rows[index] = replace(row, location=None, location_quality=MISSING)
+            sheet, row_number = parsed.positions[index]
+            warnings.append(
+                RowIssue(
+                    sheet,
+                    row_number,
+                    "Dirección",
+                    f"{row.external_id}: la dirección dice {named} pero el punto cae en "
+                    f"{actual}; queda por ubicar",
+                )
+            )
+        return rows, warnings
 
     async def loads(self, principal: Principal, limit: int = 20) -> list[ProspectLoad]:
         """The latest loads (``manage``).

@@ -167,6 +167,17 @@ class ProspectRepository(Protocol):
         """
         ...
 
+    async def municipalities(self, points: Sequence[Point]) -> list[str | None]:
+        """The official municipality each point falls in.
+
+        Args:
+            points (Sequence[Point]): Points to place.
+
+        Returns:
+            list[str | None]: Names in the same order; ``None`` outside every loaded one.
+        """
+        ...
+
     async def loads(self, limit: int) -> list[ProspectLoad]:
         """The latest loads, newest first.
 

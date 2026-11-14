@@ -193,6 +193,7 @@ class SpreadsheetProspectReader:
     def _read(self, book: openpyxl.Workbook) -> ParsedFile:
         rows: list[tuple[str, int, ProspectData]] = []
         errors: list[RowIssue] = []
+        warnings: list[RowIssue] = []
         sheets: list[str] = []
         read = [0]
         for sheet in book.worksheets:
@@ -202,7 +203,7 @@ class SpreadsheetProspectReader:
             if header is None:
                 continue
             sheets.append(sheet.title)
-            rows.extend(self._sheet_rows(sheet, *header, errors, read))
+            rows.extend(self._sheet_rows(sheet, *header, errors, read, warnings))
             if read[0] > MAX_ROWS:
                 raise InvalidInputError(f"El archivo supera el máximo de {MAX_ROWS} prospectos")
         if not sheets:
@@ -226,7 +227,14 @@ class SpreadsheetProspectReader:
                     without_location=len(in_sheet) - located,
                 )
             )
-        return ParsedFile(rows=data, sheets=summaries, errors=errors, rows_read=read[0])
+        return ParsedFile(
+            rows=data,
+            sheets=summaries,
+            errors=errors,
+            rows_read=read[0],
+            positions=[(sheet, row_number) for sheet, row_number, _ in rows],
+            warnings=warnings,
+        )
 
     def _sheet_rows(
         self,
@@ -235,6 +243,7 @@ class SpreadsheetProspectReader:
         columns: dict[str, int],
         errors: list[RowIssue],
         read: list[int],
+        warnings: list[RowIssue],
     ) -> list[tuple[str, int, ProspectData]]:
         found: list[tuple[str, int, ProspectData]] = []
         for cells in sheet.iter_rows(min_row=header_row + 1):
@@ -263,6 +272,19 @@ class SpreadsheetProspectReader:
             if problems:
                 errors.extend(problems)
                 continue
+            area_status = _AREA_STATUS.get(normalize(value("area_status")))
+            if location is not None and area_status == "unlocated":
+                # The agent says it could not place it: its link is a guess, often wrong.
+                warnings.append(
+                    RowIssue(
+                        sheet.title,
+                        row_number,
+                        "Ubicación",
+                        f"{external_id}: el archivo lo marca «Por ubicar»; se ignora el punto "
+                        "del enlace y queda por ubicar",
+                    )
+                )
+                location = None
             phone_raw, email_raw = _text(value("phone")), _text(value("email"))
             website_cell = cell("website")
             website = clean_website(
@@ -279,7 +301,7 @@ class SpreadsheetProspectReader:
                 last_purchase_month=_month(value("last_purchase")),
                 address=_text(value("address")),
                 sector=_text(value("sector")),
-                area_status=_AREA_STATUS.get(normalize(value("area_status"))),
+                area_status=area_status,
                 phone_raw=phone_raw,
                 email_raw=email_raw,
                 phones=tuple(parse_phones(phone_raw)),

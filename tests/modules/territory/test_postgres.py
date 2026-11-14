@@ -173,6 +173,10 @@ async def test_an_official_zone_counts_and_filters_the_prospects_inside(database
 
     (zone,) = await zones.list("official", "commune", True)
     assert zone.prospect_count == 2
+    bello = OfficialZoneData("municipality", "Bello", "B", square(-75.6, 6.3, 0.05))
+    await zones.upsert_official([bello], "OSM")
+    found = await prospects.municipalities([Point(6.32, -75.57), Point(6.2, -75.57)])
+    assert found == ["Bello", None]
 
     inside = await prospects.map_points(ProspectFilters(zone_id=zone.id))
     assert sorted(p.external_id for p in inside) == ["A", "B"]

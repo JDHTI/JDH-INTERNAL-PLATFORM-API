@@ -59,6 +59,21 @@ Reglas de la carga:
 - Conserva lo que se hizo a mano: una ubicación corregida (`manual`) y el estado de visita no se
   pisan.
 - Una coordenada fuera de Colombia es error de fila.
+- **Puntos que no se creen:** el prospecto entra sin ubicación (queda en «Por ubicar» para
+  ponerlo a mano) cuando:
+  - el archivo lo marca `Por ubicar` aunque el enlace traiga coordenada (el agente no lo
+    ubicó; el enlace suele ser un intento fallido), o
+  - la dirección termina en un municipio del Valle de Aburrá distinto del municipio oficial
+    donde cae el punto (p. ej. `Calle 53 50-58 Bello` con el punto en el centro de Medellín: el
+    agente usó la nomenclatura de Medellín). Solo cuenta el municipio al final de la dirección:
+    `Bello Horizonte` es un barrio de Medellín. Si la dirección nombra también el municipio
+    donde cae el punto (`Envigado - Caldas`, `…, Itagüí, Medellín`), se respeta. Requiere los
+    municipios oficiales cargados. El nombre comercial no cuenta (`… Cocina Mexicana Bello`).
+
+  En el corte de 2026-10: 54 por «Por ubicar» y 2 direcciones de Itagüí geocodificadas en
+  Medellín.
+
+  El reporte lo dice en `discarded_points` y `warnings` (hoja, fila y motivo).
 - Si el mismo punto aparece en 3 o más filas, esas filas quedan con ubicación `approximate`
   (geocodificación a un centroide; en el corte de 2026-10 pasa en Itagüí y Centro).
 - Teléfonos y correos se guardan como vienen (`contact_raw`) y como lista limpia.
@@ -143,9 +158,14 @@ deja `location_quality = manual` y recalcula la zona comercial.
   "to_create": 2155, "to_update": 0, "unchanged": 0,
   "sheets": [{ "name": "Aranjuez", "rows": 53, "with_location": 51, "without_location": 2 }],
   "errors": [{ "sheet": "Centro", "row_number": 14, "field": "ID", "message": "…" }],
-  "errors_truncated": false
+  "errors_truncated": false,
+  "discarded_points": 56,
+  "warnings": [{ "sheet": "Centro", "row_number": 856, "field": "Dirección", "message": "MDE-CEN-0854: la dirección dice Itagüí pero el punto cae en Medellín; queda por ubicar" }],
+  "warnings_truncated": false
 }
 ```
+
+Los avisos no bloquean la carga; los errores sí.
 
 `GET /prospects/loads` (manage) → últimas cargas:
 `[{ id, file_name, rows_read, created, updated, unchanged, loaded_by, loaded_at }]`.
