@@ -129,6 +129,15 @@ async def test_official_zones_adopt_and_bad_shapes(database) -> None:
 
     assert await zones.upsert_official(items, "GeoMedellín") == (2, 0)
     assert await zones.upsert_official(items[:1], "GeoMedellín") == (0, 1)
+    # Past five runs PostgreSQL plans the statement generically: it must still find the index.
+    many = [
+        OfficialZoneData(
+            "neighborhood", f"Barrio {i}", f"B{i}", square(-75.6 + i / 100, 6.3, 0.005)
+        )
+        for i in range(8)
+    ]
+    assert await zones.upsert_official(many, "GeoMedellín") == (8, 0)
+    assert await zones.upsert_official(many, "GeoMedellín") == (0, 8)
     official = await zones.list("official", "commune", False)
     assert [z.name for z in official] == ["Comuna 11", "Comuna 12"]
     assert await zones.official_count([z.id for z in official]) == 2

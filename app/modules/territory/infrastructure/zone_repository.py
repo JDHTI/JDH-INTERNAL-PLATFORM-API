@@ -6,7 +6,17 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, case, delete, func, insert, literal_column, select, update
+from sqlalchemy import (
+    ColumnElement,
+    case,
+    delete,
+    func,
+    insert,
+    literal_column,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -323,7 +333,10 @@ class SqlAlchemyZoneRepository:
                 inserted = await session.scalar(
                     statement.on_conflict_do_update(
                         index_elements=[Z.level, Z.code],
-                        index_where=Z.layer == OFFICIAL,
+                        # A literal, not a bound value: from the sixth run of the prepared
+                        # statement PostgreSQL plans it generically and could no longer match
+                        # the partial unique index.
+                        index_where=text("layer = 'official'"),
                         set_={
                             "name": statement.excluded.name,
                             "geom": statement.excluded.geom,
