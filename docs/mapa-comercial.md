@@ -309,7 +309,33 @@ servidor, antes de fusionar a `master` (cada fusión despliega):
 2. Desplegar normal (`deploy/deploy.sh`): recrea `postgres` con la imagen nueva y `migrate`
    crea la extensión `postgis` y las tablas.
 3. Comprobar: `docker compose -p internal-platform-api exec postgres psql -U platform -d internal_platform -c "SELECT postgis_version()"`.
-4. Poner `ROUTING_API_KEY` en `~/apps/platform/api.env` y reiniciar la API.
+4. Poner `ROUTING_API_KEY` en `~/apps/platform/api.env` y reiniciar la API. Es opcional: sin
+   ella las rutas salen en línea recta. No hay ninguna variable nueva obligatoria; las demás
+   `ROUTING_*` y `TERRITORY_MAX_UPLOAD_MB` tienen valor por defecto.
+5. Cargar las zonas oficiales (una vez; el servidor necesita salida a internet para Nominatim):
+
+   ```bash
+   cd ~/apps/JDH-INTERNAL-PLATFORM-API
+   docker compose -f deploy/compose.prod.yaml --env-file ~/apps/platform/api.env run --rm api sh -c '
+     poetry run python scripts/fetch-osm-zones.py /tmp/zonas &&
+     poetry run python scripts/import-geo-zones.py /tmp/zonas/medellin-comunas.geojson --level commune --name-property name --code-property osm_id --source "OpenStreetMap (ODbL)" --apply &&
+     poetry run python scripts/import-geo-zones.py /tmp/zonas/aburra-municipios.geojson --level municipality --name-property name --code-property osm_id --source "OpenStreetMap (ODbL)" --apply'
+   ```
+
+   Antes de la primera carga de prospectos: con los municipios cargados, la carga detecta
+   direcciones geocodificadas en otro municipio.
+6. Subir el Excel de prospectos desde la UI (Mapa comercial → Importar): simular y aplicar.
+
+Lo demás no lleva pasos manuales:
+
+- `deploy/deploy.sh` recrea `postgres` con la imagen nueva (`up -d --wait` la descarga si falta)
+  y `migrate` aplica `0063`. La imagen pesa unos 300 MB más que `postgres:16-alpine` (724 MB
+  frente a 420 MB sin comprimir); la base crece poco (2,5 MB con los 2.155 prospectos de octubre
+  y las 31 zonas oficiales).
+- `mapa-comercial` viene encendido en `comercial` por el catálogo, sin migración. Lo gestionan
+  el responsable del área, su rol líder y los roles con `*` (la migración `0041` dejó `*` a los
+  roles que existían). Un rol sin `*`
+  necesita que un administrador le dé `read` o `manage` en `/ti/administracion/permisos`.
 
 `deploy/postgres/10_postgis.sh` reemplaza el script de arranque de la imagen: en una base
 nueva solo se crea `postgis` (por la migración), no `topology` ni el geocodificador TIGER, que
@@ -326,8 +352,10 @@ Pruebas contra PostGIS real: `TERRITORY_TEST_DATABASE_URL=postgresql+asyncpg://p
 ## Mapa base (UI)
 
 Un solo archivo `colombia.pmtiles` recortado del build diario de Protomaps, más los glifos de
-Centrale Sans. En desarrollo va en `public/mapas/` de la UI (fuera de git). En producción lo
-sirve Caddy del stack edge en `/mapas/*` (paso manual en el servidor). Atribución
+Centrale Sans, en una carpeta `mapas/` fuera de git. La sirve la propia UI (Next) en
+`/mapas/*`: en desarrollo desde `public/mapas/`; en producción el `deploy/compose.prod.yaml` de
+la UI monta `~/apps/platform/mapas` en `/app/public/mapas`. El Caddy del stack edge no cambia.
+Paso manual: copiar esa carpeta al servidor antes de fusionar la UI. Atribución
 "© OpenStreetMap" visible.
 
 ## Fase 4: clientes actuales
