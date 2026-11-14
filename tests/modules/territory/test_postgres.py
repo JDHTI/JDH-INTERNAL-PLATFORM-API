@@ -154,6 +154,23 @@ async def test_official_zones_adopt_and_bad_shapes(database) -> None:
     assert updated.name == "Moño 2" and len(updated.geometry["coordinates"]) == 1
 
 
+async def test_an_official_zone_counts_and_filters_the_prospects_inside(database) -> None:
+    prospects = SqlAlchemyProspectRepository(database)
+    zones = SqlAlchemyZoneRepository(database)
+    rows = [prospect("A", 6.205, -75.565), prospect("B", 6.21, -75.56), prospect("C", 6.3)]
+    await prospects.apply_load("p.xlsx", rows, LoadCounts(3, 0, 0), None, None)
+    poblado = OfficialZoneData("commune", "El Poblado", "14", square(-75.58, 6.19, 0.03))
+    await zones.upsert_official([poblado], "OSM")
+
+    (zone,) = await zones.list("official", "commune", True)
+    assert zone.prospect_count == 2
+
+    inside = await prospects.map_points(ProspectFilters(zone_id=zone.id))
+    assert sorted(p.external_id for p in inside) == ["A", "B"]
+    # Official zones do not place prospects: only commercial ones do.
+    assert all(p.commercial_zone_id is None for p in inside)
+
+
 async def test_routes_store_the_line_and_record_visits_on_the_prospect(database) -> None:
     prospects = SqlAlchemyProspectRepository(database)
     routes = SqlAlchemyRouteRepository(database)

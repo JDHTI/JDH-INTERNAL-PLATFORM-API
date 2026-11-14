@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, delete, func, insert, literal_column, select, update
+from sqlalchemy import ColumnElement, case, delete, func, insert, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,13 +23,23 @@ _EMPTY_SHAPE = "La zona no tiene un área válida: dibuja al menos un polígono"
 
 
 def _count() -> ColumnElement[int]:
-    return (
+    """Prospects of a zone: the ones placed in it (commercial), or inside it (official)."""
+
+    placed = (
         select(func.count())
         .select_from(P)
         .where(P.commercial_zone_id == Z.id)
         .correlate(Z)
         .scalar_subquery()
     )
+    inside = (
+        select(func.count())
+        .select_from(P)
+        .where(func.ST_Covers(Z.geom, P.location))
+        .correlate(Z)
+        .scalar_subquery()
+    )
+    return case((Z.layer == COMMERCIAL, placed), else_=inside)
 
 
 def _columns(simplify: bool) -> tuple[ColumnElement[Any], ...]:
@@ -57,7 +67,7 @@ def _zone(row: Any) -> Zone:
         parent_id=row.parent_id,
         color=row.color,
         source=row.source,
-        prospect_count=row.prospect_count if row.layer == COMMERCIAL else 0,
+        prospect_count=row.prospect_count or 0,
         geometry=geo.parse_geojson(row.geojson) or {},
     )
 

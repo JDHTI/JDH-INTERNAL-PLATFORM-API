@@ -91,8 +91,9 @@ JSON plano `latitude` y `longitude`.
 
 `GET /prospects/map` → GeoJSON `FeatureCollection` de los prospectos con ubicación.
 
-- Filtros: `source_zone`, `category`, `zone_id` (zona comercial), `former` (bool), `visit_status`,
-  `q` (nombre, dirección o `ID`).
+- Filtros: `source_zone`, `category`, `zone_id`, `former` (bool), `visit_status`, `q` (nombre,
+  dirección o `ID`). `zone_id` acepta una zona comercial (los asignados a ella) o una oficial
+  (los que caen dentro, p. ej. todos los de la comuna El Poblado).
 - Cada `Feature`: `id` = id del prospecto, `geometry` `Point`, `properties`:
   `{ id, external_id, name, category, source_zone, sector, is_former_customer, location_quality,
   commercial_zone_id, visit_status }`.
@@ -154,8 +155,10 @@ deja `location_quality = manual` y recalcula la zona comercial.
 `GET /zones?layer=commercial|official&level=…&simplify=true` → `FeatureCollection`.
 
 - `properties`: `{ id, layer, level, name, code, parent_id, color, source, prospect_count }`.
-- `simplify` (por defecto `true`) devuelve geometría simplificada para pintar. `prospect_count`
-  solo cuenta en la capa comercial.
+- `simplify` (por defecto `true`) devuelve geometría simplificada para pintar.
+- `prospect_count`: en una zona comercial, los prospectos asignados a ella (si dos se solapan,
+  cada prospecto cuenta en la más pequeña); en una oficial, los prospectos que caen dentro del
+  polígono (un prospecto cuenta en su comuna y en su barrio).
 
 `GET /zones/{id}` → `Feature` con geometría completa.
 

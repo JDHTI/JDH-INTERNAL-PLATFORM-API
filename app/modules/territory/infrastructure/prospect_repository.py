@@ -9,6 +9,7 @@ from uuid import UUID
 
 from sqlalchemy import ColumnElement, Select, case, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import aliased
 
 from app.infrastructure.database import Database
 from app.modules.territory.domain.contacts import Phone
@@ -26,7 +27,7 @@ from app.modules.territory.domain.entities import (
     ProspectPage,
     ZoneRef,
 )
-from app.modules.territory.domain.vocabulary import MANUAL, PENDING
+from app.modules.territory.domain.vocabulary import MANUAL, OFFICIAL, PENDING
 from app.modules.territory.infrastructure import geo
 from app.modules.territory.infrastructure.models import GeoZoneModel as Z
 from app.modules.territory.infrastructure.models import ProspectLoadModel as L
@@ -150,7 +151,18 @@ def _conditions(filters: ProspectFilters) -> list[ColumnElement[bool]]:
     if filters.category:
         conditions.append(P.category == filters.category)
     if filters.zone_id:
-        conditions.append(P.commercial_zone_id == filters.zone_id)
+        # A commercial zone holds the prospects placed in it; an official one, the ones inside.
+        official = aliased(Z)
+        inside = (
+            select(official.id)
+            .where(
+                official.id == filters.zone_id,
+                official.layer == OFFICIAL,
+                func.ST_Covers(official.geom, P.location),
+            )
+            .exists()
+        )
+        conditions.append(or_(P.commercial_zone_id == filters.zone_id, inside))
     if filters.former is not None:
         conditions.append(P.is_former_customer.is_(filters.former))
     if filters.visit_status:
