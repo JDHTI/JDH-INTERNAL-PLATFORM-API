@@ -131,6 +131,12 @@ MODULES: tuple[Module, ...] = (
     ),
     Module("casos-especiales", "Casos especiales", ("bi",), "Condiciones especiales"),
     Module(
+        "mapa-comercial",
+        "Mapa comercial",
+        ("comercial",),
+        "Prospectos y clientes por zona, y rutas de visita",
+    ),
+    Module(
         MASTERS_MODULE,
         "Maestros",
         ("bi",),

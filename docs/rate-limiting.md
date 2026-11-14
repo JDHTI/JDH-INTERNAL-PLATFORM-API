@@ -386,6 +386,27 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/supplier-supports/{support_id}/jdh-support` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/{support_id}/requests` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/{support_id}/void` | `relaxed` |  |
+| `GET` | `/v1/territory/permissions` | `read` |  |
+| `GET` | `/v1/territory/prospects` | `read` |  |
+| `GET` | `/v1/territory/prospects/facets` | `read` |  |
+| `POST` | `/v1/territory/prospects/import` | `strict` | Lee un Excel de miles de prospectos y los escribe en una transacción |
+| `GET` | `/v1/territory/prospects/loads` | `read` |  |
+| `GET` | `/v1/territory/prospects/map` | `read` |  |
+| `GET` | `/v1/territory/prospects/{prospect_id}` | `read` |  |
+| `PATCH` | `/v1/territory/prospects/{prospect_id}` | `relaxed` |  |
+| `GET` | `/v1/territory/routes` | `read` |  |
+| `POST` | `/v1/territory/routes` | `strict` | Consume la cuota diaria del servicio de ruteo (openrouteservice) |
+| `DELETE` | `/v1/territory/routes/{route_id}` | `relaxed` |  |
+| `GET` | `/v1/territory/routes/{route_id}` | `read` |  |
+| `PUT` | `/v1/territory/routes/{route_id}` | `relaxed` |  |
+| `POST` | `/v1/territory/routes/{route_id}/compute` | `strict` | Consume la cuota diaria del servicio de ruteo (openrouteservice) |
+| `PATCH` | `/v1/territory/routes/{route_id}/stops/{stop_id}` | `relaxed` |  |
+| `GET` | `/v1/territory/zones` | `read` |  |
+| `POST` | `/v1/territory/zones` | `relaxed` |  |
+| `POST` | `/v1/territory/zones/adopt` | `relaxed` |  |
+| `DELETE` | `/v1/territory/zones/{zone_id}` | `relaxed` |  |
+| `GET` | `/v1/territory/zones/{zone_id}` | `read` |  |
+| `PUT` | `/v1/territory/zones/{zone_id}` | `relaxed` |  |
 | `GET` | `/v1/users` | `read` |  |
 | `GET` | `/v1/users/me` | `read` |  |
 | `GET` | `/v1/users/{user_id}` | `read` |  |

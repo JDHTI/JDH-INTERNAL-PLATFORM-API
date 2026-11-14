@@ -60,6 +60,9 @@ from app.modules.supplier_supports.presentation.router import router as supports
 from app.modules.supplier_supports.presentation.special_cases_router import (
     router as special_cases_router,
 )
+from app.modules.territory.presentation.prospects_router import router as territory_router
+from app.modules.territory.presentation.routes_router import router as territory_routes_router
+from app.modules.territory.presentation.zones_router import router as territory_zones_router
 
 v1_router = APIRouter(prefix="/v1", tags=["v1"])
 v1_router.include_router(identity_router, prefix="", tags=["identity"])
@@ -67,6 +70,9 @@ v1_router.include_router(consumption_router, prefix="", tags=["consumption"])
 v1_router.include_router(areas_router, prefix="/areas", tags=["areas"])
 v1_router.include_router(permissions_router, prefix="/permissions", tags=["permissions"])
 v1_router.include_router(salespeople_router, prefix="/salespeople", tags=["salespeople"])
+v1_router.include_router(territory_router, prefix="/territory", tags=["territory"])
+v1_router.include_router(territory_zones_router, prefix="/territory", tags=["territory"])
+v1_router.include_router(territory_routes_router, prefix="/territory", tags=["territory"])
 v1_router.include_router(area_documents_router, prefix="/areas", tags=["documents"])
 v1_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 v1_router.include_router(area_projects_router, prefix="/areas", tags=["projects"])

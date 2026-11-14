@@ -29,6 +29,7 @@ dependencies = [
     "tzdata (>=2026.4,<2027.0)",
     "openpyxl (>=3.1,<4.0)",
     "pywebpush (>=2.0,<3.0)",
+    "geoalchemy2 (>=0.17,<1.0)",
 ]
 
 [tool.poetry]

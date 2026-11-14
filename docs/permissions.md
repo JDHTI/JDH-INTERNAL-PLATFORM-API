@@ -70,6 +70,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
 | bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza y no decide los pide |
 | bi | `casos-especiales` | casos especiales | crear, editar |
+| comercial | `mapa-comercial` | mapa de prospectos, ficha, zonas, rutas | cargar el archivo mensual, corregir ubicación, marcar visitas, crear y editar zonas y rutas. El responsable de una ruta marca sus visitas sin `manage` |
 | bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 
 `/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador`, `actualizacion-listas` y

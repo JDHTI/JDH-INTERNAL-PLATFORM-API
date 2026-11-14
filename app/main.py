@@ -178,6 +178,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 await mail_worker.stop()
             if mail_worker is not None or notification_worker is not None:
                 await container.v1_container.mail_client().close()
+            # The routing client opens its connections on the first route only.
+            await container.v1_container.territory_routing().close()
             if resources is not None:
                 await shutdown_global_resources(resources)
 
