@@ -257,6 +257,8 @@ class Permissions:
     sales_scope: str | None = None
     # May ask an internal support from a customer quotation (quotes and does not review).
     can_request_support: bool = False
+    # The calculation rules (costs, warehouses, formulas) are BI's; Comercial gets the manual.
+    can_see_rules: bool = False
 
 
 @dataclass(frozen=True)
@@ -546,7 +548,24 @@ class QuotationService:
             await self.can_validate(principal, kind),
             scope.scope if scope is not None else None,
             can_request,
+            await self.can_see_rules(principal),
         )
+
+    async def can_see_rules(self, principal: Principal) -> bool:
+        """BI's members (the quoter's validators and the main lists' area) and admins see
+        the calculation rules; Comercial sees the operating manual."""
+
+        if principal.is_platform_admin:
+            return True
+        for policy in (
+            self.approvers,
+            self.list_approvers,
+            self.main_approvers,
+            self.main_managers,
+        ):
+            if policy is not None and await policy.can_read(principal):
+                return True
+        return False
 
     async def support_requests_for(self, detail: QuotationDetail) -> Mapping[str, Any]:
         """The latest internal support request of each SKU of a customer quotation.

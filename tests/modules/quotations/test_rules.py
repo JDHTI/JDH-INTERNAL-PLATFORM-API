@@ -161,6 +161,12 @@ def test_support_with_money_raises_the_margin_and_its_target_rules() -> None:
     assert priced.compliance == "bajo_minimo"
 
 
+def test_the_line_shows_the_stock_on_hand_and_available() -> None:
+    line = build(cost=cost(inventory="3000", stock=Decimal("120"), available=Decimal("80")))
+
+    assert (line.stock_on_hand, line.stock_available) == (Decimal("120"), Decimal("80"))
+
+
 def test_rules_v2_percent_on_the_list_price_takes_its_absolute_value() -> None:
     # Cost 3.000 at the list margin 20 %: list price 3.750; 10 % of it is 375 off the cost.
     line = build([agreement(calc_method="pct_precio_lista", supplier_value=Decimal("0.10"))])

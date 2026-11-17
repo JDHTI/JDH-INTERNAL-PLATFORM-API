@@ -522,6 +522,7 @@ class SqlAlchemyCommercialMasterRepository:
                         or_(
                             plain(CustomerModel.legal_name).contains(token, autoescape=True),
                             plain(CustomerModel.branch_name).contains(token, autoescape=True),
+                            plain(CustomerModel.business_group).contains(token, autoescape=True),
                         )
                     )
         if nit:

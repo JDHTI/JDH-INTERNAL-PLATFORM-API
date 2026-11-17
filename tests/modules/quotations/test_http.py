@@ -51,11 +51,21 @@ def test_fixed_paths_are_not_taken_for_an_id(client) -> None:
         "can_validate": False,
         "sales_scope": None,
         "can_request_support": False,
+        "can_see_rules": False,
         "seller_linked": True,
         "seller": {"code": "0051", "name": "PEREZ ANA", "email": MANAGER},
     }
+    # Comercial gets the operating manual; the calculation rules are BI's.
+    assert client.get(f"{BASE}/rules").status_code == 403
+    manual = client.get(f"{BASE}/manual").json()
+    assert [section["code"] for section in manual] == ["crear", "lineas", "apoyos", "confirmar"]
+    # No formulas, costs or factors in the manual.
+    assert "costo" not in str(manual).lower() and "1,004" not in str(manual)
+    client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)
     sections = client.get(f"{BASE}/rules").json()
     assert [section["code"] for section in sections] == ["precio", "margen", "regla", "formato"]
+    assert client.get(f"{BASE}/permissions").json()["can_see_rules"] is True
+    client.app.dependency_overrides[get_current_principal] = lambda: person(MANAGER)
     customers = client.get(f"{BASE}/customers", params={"scope": "mine"}).json()
     assert customers["seller_linked"] and [item["nit"] for item in customers["items"]] == [NIT]
     assert customers["items"][0]["is_active"] is True

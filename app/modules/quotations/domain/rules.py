@@ -815,6 +815,8 @@ def build_line(
         min_price=min_price,
         support=support,
         support_candidates=candidates,
+        stock_on_hand=cost.stock if cost else None,
+        stock_available=cost.available if cost else None,
         problems=tuple(dict.fromkeys(problems)),
         origin=origin or (vocabulary.HISTORY if sale is not None else vocabulary.ADDED),
         last_sale_price=money(sale.net_price) if for_list and sale else None,

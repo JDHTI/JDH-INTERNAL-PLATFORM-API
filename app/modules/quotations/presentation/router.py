@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
+from app.core.errors import ForbiddenError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -33,6 +34,7 @@ from app.modules.quotations.domain.entities import (
     SellerContact,
     TemporaryCustomer,
 )
+from app.modules.quotations.domain.manual import MANUAL
 from app.modules.quotations.domain.vocabulary import (
     BASIS_LABELS,
     COMPLIANCE_LABELS,
@@ -85,6 +87,8 @@ class PermissionsResponse(BaseModel):
     sales_scope: Literal["all", "team", "mine", "none"] | None = None
     # May ask an internal support from a customer quotation (quotes and does not review).
     can_request_support: bool = False
+    # BI sees the calculation rules (GET /rules); Comercial the operating manual (GET /manual).
+    can_see_rules: bool = False
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -113,6 +117,7 @@ class CustomerResponse(BaseModel):
     branch_count: int
     active_branch_count: int
     is_active: bool
+    business_group: str | None = None
 
 
 class CustomerPageResponse(BaseModel):
@@ -456,6 +461,9 @@ class LineResponse(BaseModel):
     loaded: bool = False
     # A customer quotation: the latest internal support request of the SKU, if any.
     support_request: SupportRequestRefResponse | None = None
+    # Units on hand and available in the warehouses that cost the line.
+    stock_on_hand: Decimal | None = None
+    stock_available: Decimal | None = None
 
 
 class SellerContactResponse(BaseModel):
@@ -653,6 +661,8 @@ def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
         cost_source=line.cost_source,  # type: ignore[arg-type]
         cost_source_label=COST_SOURCE_LABELS.get(line.cost_source or ""),
         cost_center=line.cost_center,
+        stock_on_hand=line.stock_on_hand,
+        stock_available=line.stock_available,
         increase_cost=line.increase_cost,
         target_margin_pct=line.target_margin_pct,
         margin_basis=line.margin_basis,
@@ -857,6 +867,7 @@ async def permissions(
         can_validate=result.can_validate,
         sales_scope=result.sales_scope,  # type: ignore[arg-type]
         can_request_support=result.can_request_support,
+        can_see_rules=result.can_see_rules,
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller
@@ -872,11 +883,14 @@ async def permissions(
 )
 @inject
 async def quotation_rules(
-    _: Principal = _principal,
+    principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> list[RuleSectionResponse]:
-    """Every rule with the values in force. Open to every user."""
+    """Every calculation rule with the values in force. BI only (``can_see_rules``);
+    Comercial reads ``GET /manual``."""
 
+    if not await service.can_see_rules(principal):
+        raise ForbiddenError("Las reglas de cálculo del cotizador son de BI: consulta el manual")
     return [
         RuleSectionResponse(
             code=section.code,
@@ -893,6 +907,37 @@ async def quotation_rules(
             ],
         )
         for section in service.rule_catalog()
+    ]
+
+
+class ManualStepResponse(BaseModel):
+    title: str
+    text: str
+
+
+class ManualSectionResponse(BaseModel):
+    code: str
+    title: str
+    steps: list[ManualStepResponse]
+
+
+@router.get(
+    "/manual",
+    dependencies=[_READ_GATE],
+    response_model=list[ManualSectionResponse],
+    summary="The quoter's operating manual",
+)
+async def quotation_manual(_: Principal = _principal) -> list[ManualSectionResponse]:
+    """How to use the quoter, for Comercial: steps, columns, supports and validation, without
+    the calculation rules (BI's, ``GET /rules``)."""
+
+    return [
+        ManualSectionResponse(
+            code=section.code,
+            title=section.title,
+            steps=[ManualStepResponse(title=s.title, text=s.text) for s in section.steps],
+        )
+        for section in MANUAL
     ]
 
 
@@ -929,6 +974,7 @@ async def customers(
                 branch_count=item.branch_count,
                 active_branch_count=item.active_branch_count,
                 is_active=item.is_active,
+                business_group=item.business_group,
             )
             for item in result.items
         ],

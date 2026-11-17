@@ -182,6 +182,8 @@ class CostInfo:
     snapshot_date: date | None = None
     # The operation center whose warehouses gave this cost, when the quotation names some.
     center_code: str | None = None
+    # Available units (existence minus committed) in the same warehouses as ``stock``.
+    available: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -480,6 +482,9 @@ class QuotationLine:
     note: str | None = None
     # The load that took the validated price to SIESA; ``None`` while it waits in the staging.
     load_id: UUID | None = None
+    # Units on hand and available in the warehouses that cost the line (as the cost read it).
+    stock_on_hand: Decimal | None = None
+    stock_available: Decimal | None = None
 
     @property
     def is_staged(self) -> bool:
@@ -710,6 +715,8 @@ class CustomerOption:
     salesperson_name: str | None
     branch_count: int
     active_branch_count: int
+    # The business group's name in the customer master (the code is not known).
+    business_group: str | None = None
 
     @property
     def is_active(self) -> bool:

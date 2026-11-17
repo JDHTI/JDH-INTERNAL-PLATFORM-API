@@ -260,14 +260,15 @@ class WarehouseQuotationSource:
             ' SELECT f."producto_key",'
             ' max(round(f."costo_prom_unit_ins"))'
             ' FILTER (WHERE round(f."costo_prom_unit_ins") > 1)'
-            ' AS costo_inv, sum(f."existencia") AS existencia, max(f."foto_at") AS foto'
+            ' AS costo_inv, sum(f."existencia") AS existencia,'
+            ' sum(f."cant_disponible") AS disponible, max(f."foto_at") AS foto'
             f' FROM {self._view("inventario_fecha")} f JOIN prod pr USING ("producto_key")'
             ' WHERE CASE WHEN $5 THEN f."bodega" = ANY($6::text[])'
             " ELSE f.\"bodega\" = CASE WHEN pr.\"linea\" IN ('CONGELADOS', 'REFRIGERADOS')"
             " THEN $4 ELSE $3 END END"
             " GROUP BY 1"
             ') SELECT pr."sku", pr."linea", pr."estado", c.costo_cot, c.costo_descartado,'
-            " i.costo_inv, i.existencia, i.foto"
+            " i.costo_inv, i.existencia, i.disponible, i.foto"
             ' FROM prod pr LEFT JOIN cot_ok c USING ("producto_key")'
             ' LEFT JOIN inv i USING ("producto_key")',
             list(skus),
@@ -289,6 +290,7 @@ class WarehouseQuotationSource:
                 discarded_quote=_decimal(row["costo_descartado"]),
                 inventory_cost=_decimal(row["costo_inv"]),
                 stock=_decimal(row["existencia"]),
+                available=_decimal(row.get("disponible")),
                 product_line=row["linea"],
                 is_active=row["estado"] == "A",
                 snapshot_date=snapshot.date() if isinstance(snapshot, datetime) else snapshot,
