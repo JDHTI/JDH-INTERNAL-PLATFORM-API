@@ -565,6 +565,23 @@ class MasterLookup:
 
         return await self.repository.commercial_suppliers_by_code(list(dict.fromkeys(codes)))
 
+    async def products_by_supplier_sku(
+        self, supplier_id: UUID, supplier_skus: Sequence[str]
+    ) -> dict[str, list[ProductRef]]:
+        """JDH products of a supplier's own SKUs (keys upper-cased)."""
+
+        return await self.repository.products_by_supplier_sku(supplier_id, supplier_skus)
+
+    async def business_group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
+        """Active customers ``(nit, name)`` of each business group."""
+
+        return await self.repository.business_group_members(groups)
+
+    async def business_groups(self, query: str, limit: int = 20) -> list[tuple[str, int]]:
+        """Business groups by name, with their active NITs."""
+
+        return await self.repository.business_groups(query, max(1, min(limit, 50)))
+
     async def commercial_suppliers_by_name(self, query: str) -> list[CommercialSupplier]:
         """Commercial suppliers whose name contains the text."""
 

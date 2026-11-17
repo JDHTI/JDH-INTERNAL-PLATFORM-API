@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from app.core.errors import ApplicationError, UnauthenticatedError
@@ -15,7 +16,9 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _application_error(_: Request, exc: ApplicationError) -> JSONResponse:
         headers = {"WWW-Authenticate": "Bearer"} if isinstance(exc, UnauthenticatedError) else None
         return JSONResponse(
-            status_code=exc.status_code, content={"detail": exc.detail}, headers=headers
+            status_code=exc.status_code,
+            content={**jsonable_encoder(exc.extra), "detail": exc.detail},
+            headers=headers,
         )
 
 

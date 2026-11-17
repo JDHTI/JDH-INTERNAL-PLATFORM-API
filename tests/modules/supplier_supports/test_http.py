@@ -267,6 +267,38 @@ def test_base_search_accepts_client_supplier_and_reference_independently(client,
     assert repo.last_search.state == "inactivo"
 
 
+def test_a_crossing_support_is_a_409_with_the_overlaps_and_can_replace_it(client) -> None:
+    first = client.post(BASE, json=NEW).json()
+
+    crossing = client.post(BASE, json={**NEW, "valid_from": "2026-11-01"})
+    assert crossing.status_code == 409
+    assert [item["id"] for item in crossing.json()["overlaps"]] == [first["id"]]
+
+    replaced = client.post(
+        BASE, json={**NEW, "valid_from": "2026-11-01", "on_overlap": "vencer_anterior"}
+    )
+    assert replaced.status_code == 201
+    assert client.get(f"{BASE}/{first['id']}").json()["valid_to"] == "2026-10-31"
+
+
+def test_mass_void_by_ids_with_the_observation(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+
+    missing = client.post(f"{BASE}/retire", json={"action": "anular", "reason": "Duplicado"})
+    response = client.post(
+        f"{BASE}/retire",
+        json={
+            "action": "anular",
+            "reason": "Duplicado",
+            "items": [{"id": created["id"], "version": 1}],
+        },
+    )
+
+    assert missing.status_code == 422
+    assert response.status_code == 200 and response.json()["voided"] == [created["id"]]
+    assert client.get(f"{BASE}/{created['id']}").json()["void_reason"] == "Duplicado"
+
+
 def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {
         "can_manage": True,

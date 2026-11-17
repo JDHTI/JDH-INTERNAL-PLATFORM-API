@@ -25,6 +25,7 @@ from app.modules.supplier_supports.domain.entities import (
     Trace,
 )
 from app.modules.supplier_supports.domain.filters import SearchSpec
+from app.modules.supplier_supports.domain.overlap import Supersede
 
 
 class SupportRepository(Protocol):
@@ -41,6 +42,7 @@ class SupportRepository(Protocol):
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support: ...
 
     async def create_many(
@@ -49,6 +51,7 @@ class SupportRepository(Protocol):
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> list[Support]: ...
 
     async def get(self, support_id: UUID) -> Support | None: ...
@@ -63,7 +66,18 @@ class SupportRepository(Protocol):
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support: ...
+
+    async def overlapping(self, data: SupportData, exclude: Sequence[UUID] = ()) -> list[Support]:
+        """Live supports of the same class and scope whose validity crosses ``data``'s."""
+        ...
+
+    async def supersede(
+        self, items: Sequence[Supersede], actor: str, now: datetime
+    ) -> list[Support]:
+        """Expire or void several supports in one transaction (all or none)."""
+        ...
 
     async def void(
         self,
@@ -111,6 +125,12 @@ class MasterLookup(Protocol):
     ) -> dict[UUID, tuple[str, str]]: ...
 
     async def customer_names(self, nits: Sequence[str]) -> dict[str, str]: ...
+
+    async def products_by_supplier_sku(
+        self, supplier_id: UUID, supplier_skus: Sequence[str]
+    ) -> dict[str, list[ProductRef]]: ...
+
+    async def business_group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]: ...
 
 
 class AttachmentRepository(Protocol):

@@ -50,6 +50,7 @@ from app.modules.supplier_supports.domain.filters import (
     SearchSpec,
     SortKey,
 )
+from app.modules.supplier_supports.domain.overlap import Supersede, overlaps
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportAttachmentModel,
     SupplierSupportCostModel,
@@ -447,6 +448,76 @@ class SqlAlchemySupportRepository:
             grouped.setdefault(tier.support_id, []).append(tier)
         return grouped
 
+    async def overlapping(self, data: SupportData, exclude: Sequence[UUID] = ()) -> list[Support]:
+        """Live supports that cross ``data`` (same class and scope, validities that overlap)."""
+
+        conditions = [
+            S.status != "anulado",
+            S.is_enabled.is_(True),
+            S.kind == data.kind,
+            _same(S.customer_nit, data.customer_nit),
+        ]
+        if data.commercial_supplier_id is None:
+            conditions.append(S.commercial_supplier_id.is_(None))
+        else:
+            conditions.append(S.commercial_supplier_id == data.commercial_supplier_id)
+        if data.product_sku:
+            conditions.append(S.product_sku == data.product_sku)
+        if exclude:
+            conditions.append(S.id.not_in(list(exclude)))
+        async with self.database.session_factory() as session:
+            models = list((await session.execute(select(S).where(*conditions))).scalars())
+            tiers = await self._tiers(session, [model.id for model in models])
+        supports = [_support(model, tiers.get(model.id, [])) for model in models]
+        return [support for support in supports if overlaps(data, support.data)]
+
+    async def _supersede(
+        self, session: Any, items: Sequence[Supersede], actor: str, now: datetime
+    ) -> list[SupplierSupportModel]:
+        """Expire or void the supports a new one replaces (locked, version-checked)."""
+
+        changed: list[SupplierSupportModel] = []
+        for item in items:
+            model = (
+                await session.execute(select(S).where(S.id == item.support_id).with_for_update())
+            ).scalar_one_or_none()
+            if model is None:
+                raise NotFoundError(f"Apoyo no encontrado: {item.support_id}")
+            if item.version is not None and model.version != item.version:
+                raise ConflictError(
+                    "Un apoyo cambió mientras guardabas; recarga y vuelve a intentarlo"
+                )
+            if model.status == "anulado":
+                raise ConflictError(f"El apoyo {item.support_id} ya está anulado")
+            expires = item.valid_to is not None and (
+                model.valid_from is None or model.valid_from <= item.valid_to
+            )
+            if expires:
+                model.valid_to = item.valid_to
+                line = f"Vencido al {item.valid_to.isoformat()}: {item.reason}"
+                model.notes = f"{model.notes}\n{line}" if model.notes else line
+                _stamp(model, actor, now, Trace("vencimiento"))
+            else:
+                model.status = "anulado"
+                model.void_reason = item.reason
+                model.voided_at = now
+                _stamp(model, actor, now, Trace("anulacion"))
+            changed.append(model)
+        await session.flush()
+        return changed
+
+    async def supersede(
+        self, items: Sequence[Supersede], actor: str, now: datetime
+    ) -> list[Support]:
+        """Expire or void several supports in one transaction (all or none)."""
+
+        async with self.database.session_factory() as session:
+            changed = await self._supersede(session, items, actor, now)
+            await queue_supports(session, changed)
+            await session.commit()
+            tiers = await self._tiers(session, [model.id for model in changed])
+            return [_support(model, tiers.get(model.id, [])) for model in changed]
+
     async def create(
         self,
         support_id: UUID,
@@ -454,20 +525,25 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support:
-        """Insert a support and its tiers, and queue its first version for the DWH."""
+        """Insert a support and its tiers, and queue its first version for the DWH.
+
+        ``supersede`` expires or voids, in the same transaction, the supports it replaces.
+        """
 
         model = _new_model(support_id, data, actor, now, trace or Trace("manual"))
         if data.status == "anulado":
             model.voided_at = now
         tiers = _tier_models(support_id, data.tiers)
         async with self.database.session_factory() as session:
+            replaced = await self._supersede(session, supersede, actor, now)
             session.add(model)
             try:
                 await session.flush()
                 session.add_all(tiers)
                 await session.flush()
-                await queue_supports(session, [model])
+                await queue_supports(session, [*replaced, model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -480,6 +556,7 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> list[Support]:
         """Insert several supports and their tiers in one transaction: all or none."""
 
@@ -492,12 +569,13 @@ class SqlAlchemySupportRepository:
             for support_id, data in items
         ]
         async with self.database.session_factory() as session:
+            replaced = await self._supersede(session, supersede, actor, now)
             session.add_all([model for model, _ in models])
             try:
                 await session.flush()
                 session.add_all([tier for _, tiers in models for tier in tiers])
                 await session.flush()
-                await queue_supports(session, [model for model, _ in models])
+                await queue_supports(session, [*replaced, *(model for model, _ in models)])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -539,6 +617,7 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support:
         """Replace a support's data when its version still matches."""
 
@@ -552,9 +631,10 @@ class SqlAlchemySupportRepository:
                 raise NotFoundError("Apoyo no encontrado")
             if model.version != expected_version:
                 raise ConflictError("El apoyo cambió desde que lo abriste; recárgalo")
+            replaced = await self._supersede(session, supersede, actor, now)
             tiers = await self._replace(session, model, data, actor, now, trace or Trace("edicion"))
             try:
-                await queue_supports(session, [model])
+                await queue_supports(session, [*replaced, model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()

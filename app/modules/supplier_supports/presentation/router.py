@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.core.errors import InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -65,6 +66,7 @@ ValueUnit = Literal["unidad", "caja", "kg"]
 Validity = Literal["vigente", "vencido", "programado"]
 ThresholdType = Literal["unidades", "cajas", "monto_ventas"]
 State = Literal["vigente", "vencido", "programado", "inactivo", "anulado"]
+OnOverlap = Literal["vencer_anterior", "anular_anterior"]
 
 
 class TierBody(BaseModel):
@@ -143,12 +145,64 @@ class SupportCreate(_SupportFields):
     source: str | None = Field(default=None, max_length=300)
     source_key: str | None = Field(default=None, max_length=300)
     tiers: list[TierBody] = Field(default_factory=list, max_length=20)
+    on_overlap: OnOverlap | None = Field(
+        default=None,
+        description="When it crosses a live support of the same class and scope: expire "
+        "(vencer_anterior) or void (anular_anterior) the previous one; without it, a 409 "
+        "lists the supports crossed in `overlaps`",
+    )
+    overlap_reason: str | None = Field(default=None, max_length=500)
 
 
 class SupportBatch(BaseModel):
     """Several new supports validated together."""
 
     items: list[SupportCreate] = Field(min_length=1, max_length=MAX_BATCH)
+    on_overlap: OnOverlap | None = None
+    overlap_reason: str | None = Field(default=None, max_length=500)
+
+
+class RetireItem(BaseModel):
+    """A support chosen in the table, at the version the person saw."""
+
+    id: UUID
+    version: int | None = Field(default=None, ge=1)
+
+
+class RetireFilter(BaseModel):
+    """Every support a search matches (the body of ``/search`` without paging)."""
+
+    match: Literal["all", "any"] = "all"
+    conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    customer_nits: list[str] = Field(default_factory=list, max_length=500)
+    supplier_codes: list[str] = Field(default_factory=list, max_length=500)
+    product_skus: list[str] = Field(default_factory=list, max_length=500)
+    q: str | None = Field(default=None, max_length=100)
+    active_on: date | None = None
+    validity: Validity | None = None
+    state: State | None = None
+    needs_review: bool | None = None
+    has_issues: bool | None = None
+
+
+class SupportRetire(BaseModel):
+    """Void or expire several supports at once, with the observation."""
+
+    action: Literal["anular", "vencer"]
+    reason: str = Field(min_length=3, max_length=500)
+    last_day: date | None = Field(
+        default=None, description="Last day in force of an expiry; default yesterday"
+    )
+    items: list[RetireItem] = Field(default_factory=list, max_length=2000)
+    filter: RetireFilter | None = None
+
+
+class RetireResponse(BaseModel):
+    """What a mass action changed."""
+
+    action: str
+    voided: list[UUID]
+    expired: list[UUID]
 
 
 class SupportPatch(_SupportFields):
@@ -163,6 +217,8 @@ class SupportPatch(_SupportFields):
     # Reversible switch: off = greyed out and out of force, without voiding the support.
     is_enabled: bool = True
     tiers: list[TierBody] | None = Field(default=None, max_length=20)
+    on_overlap: OnOverlap | None = None
+    overlap_reason: str | None = Field(default=None, max_length=500)
 
 
 class SupportVoid(BaseModel):
@@ -476,7 +532,13 @@ async def create_support(
 ) -> SupportResponse:
     """Create a support bound to a real supplier, product and client. Managers only."""
 
-    view = await service.create(principal, _data(body), supplier_code=body.supplier_code)
+    view = await service.create(
+        principal,
+        _data(body),
+        supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
+    )
     return _response(view)
 
 
@@ -496,9 +558,45 @@ async def create_supports(
     """Create up to 500 supports atomically-validated (all checked before any is saved)."""
 
     views = await service.create_many(
-        principal, [(_data(item), item.supplier_code) for item in body.items]
+        principal,
+        [(_data(item), item.supplier_code) for item in body.items],
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
     )
     return [_response(view) for view in views]
+
+
+@router.post(
+    "/retire",
+    dependencies=[_READ_GATE],
+    response_model=RetireResponse,
+    summary="Void or expire supports in bulk",
+)
+@inject
+async def retire_supports(
+    body: SupportRetire,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> RetireResponse:
+    """Void (``anular``) or expire (``vencer``) the supports chosen (``items``) or every one
+    a search matches (``filter``), up to 2,000, with the observation. All or none; a stale
+    ``version`` or an already voided support is a 409. Managers only."""
+
+    if not body.items and body.filter is None:
+        raise InvalidInputError("Elige los apoyos o un filtro")
+    changed = await service.retire_many(
+        principal,
+        body.action,
+        body.reason,
+        items=[(item.id, item.version) for item in body.items],
+        criteria=body.filter.model_dump() if body.filter is not None else None,
+        last_day=body.last_day,
+    )
+    return RetireResponse(
+        action=body.action,
+        voided=[item.id for item in changed if item.data.status == "anulado"],
+        expired=[item.id for item in changed if item.data.status != "anulado"],
+    )
 
 
 @router.get(
@@ -533,7 +631,7 @@ async def update_support(
 ) -> SupportResponse:
     """Change only the fields sent. A stale ``version`` is a 409. Managers only."""
 
-    sent = body.model_fields_set - {"version", "supplier_code"}
+    sent = body.model_fields_set - {"version", "supplier_code", "on_overlap", "overlap_reason"}
     changes: dict[str, Any] = {name: getattr(body, name) for name in sent}
     if "tiers" in changes:
         changes["tiers"] = _tiers(body.tiers or [])
@@ -543,6 +641,8 @@ async def update_support(
         expected_version=body.version,
         changes=changes,
         supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
     )
     return _response(view)
 

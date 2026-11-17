@@ -114,6 +114,19 @@ def _customer(model: CustomerModel) -> Customer:
     )
 
 
+def _product_ref(row: ProductModel) -> ProductRef:
+    return ProductRef(
+        id=row.id,
+        sku=row.sku,
+        description=row.description,
+        brand=row.brand,
+        commercial_supplier_code=row.commercial_supplier_code,
+        is_active=row.is_active,
+        pack_factor=row.pack_factor if row.pack_factor and row.pack_factor > 0 else None,
+        avg_unit_cost=row.avg_unit_cost,
+    )
+
+
 def _product(model: ProductModel) -> Product:
     return Product(
         id=model.id,
@@ -589,19 +602,93 @@ class SqlAlchemyCommercialMasterRepository:
                 .scalars()
                 .all()
             )
-        return {
-            row.sku: ProductRef(
-                id=row.id,
-                sku=row.sku,
-                description=row.description,
-                brand=row.brand,
-                commercial_supplier_code=row.commercial_supplier_code,
-                is_active=row.is_active,
-                pack_factor=row.pack_factor if row.pack_factor and row.pack_factor > 0 else None,
-                avg_unit_cost=row.avg_unit_cost,
+        return {row.sku: _product_ref(row) for row in rows}
+
+    async def products_by_supplier_sku(
+        self, supplier_id: UUID, supplier_skus: Sequence[str]
+    ) -> dict[str, list[ProductRef]]:
+        """JDH products of a supplier's own SKUs (upper-cased, trimmed).
+
+        The supplier codes table (``supplier_product_codes``) first; else the product master's
+        ``supplier_sku`` among the supplier's products. Several products for one SKU are all
+        returned, so the caller can tell an ambiguous code.
+        """
+
+        wanted = sorted({sku.strip().upper() for sku in supplier_skus if sku and sku.strip()})
+        if not wanted:
+            return {}
+        found: dict[str, dict[UUID, ProductModel]] = {}
+        async with self.database.session_factory() as session:
+            coded = await session.execute(
+                select(func.upper(SupplierProductCodeModel.supplier_sku), ProductModel)
+                .join(ProductModel, ProductModel.id == SupplierProductCodeModel.product_id)
+                .where(
+                    SupplierProductCodeModel.commercial_supplier_id == supplier_id,
+                    func.upper(SupplierProductCodeModel.supplier_sku).in_(wanted),
+                )
             )
-            for row in rows
+            for sku, product in coded.all():
+                found.setdefault(sku, {})[product.id] = product
+            missing = [sku for sku in wanted if sku not in found]
+            if missing:
+                code = select(CommercialSupplierModel.code).where(
+                    CommercialSupplierModel.id == supplier_id
+                )
+                listed = await session.execute(
+                    select(func.upper(func.trim(ProductModel.supplier_sku)), ProductModel).where(
+                        ProductModel.commercial_supplier_code == code.scalar_subquery(),
+                        func.upper(func.trim(ProductModel.supplier_sku)).in_(missing),
+                    )
+                )
+                for sku, product in listed.all():
+                    found.setdefault(sku, {})[product.id] = product
+        return {
+            sku: [_product_ref(product) for product in products.values()]
+            for sku, products in found.items()
         }
+
+    async def business_group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
+        """``{group: [(nit, legal name), ...]}`` of the active customers of each group."""
+
+        names = sorted({group.strip() for group in groups if group and group.strip()})
+        if not names:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(
+                    CustomerModel.business_group,
+                    CustomerModel.nit,
+                    func.max(CustomerModel.legal_name),
+                )
+                .where(
+                    func.upper(CustomerModel.business_group).in_([n.upper() for n in names]),
+                    CustomerModel.is_active.is_(True),
+                )
+                .group_by(CustomerModel.business_group, CustomerModel.nit)
+                .order_by(CustomerModel.nit)
+            )
+        by_upper = {name.upper(): name for name in names}
+        members: dict[str, list[tuple]] = {}
+        for group, nit, name in rows.all():
+            members.setdefault(by_upper[group.upper()], []).append((nit, name))
+        return members
+
+    async def business_groups(self, query: str, limit: int) -> list[tuple[str, int]]:
+        """Business groups whose name contains the text, with their active NITs."""
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(CustomerModel.business_group, func.count(func.distinct(CustomerModel.nit)))
+                .where(
+                    CustomerModel.business_group.is_not(None),
+                    CustomerModel.business_group.icontains(query.strip(), autoescape=True),
+                    CustomerModel.is_active.is_(True),
+                )
+                .group_by(CustomerModel.business_group)
+                .order_by(func.count(func.distinct(CustomerModel.nit)).desc())
+                .limit(limit)
+            )
+        return [(group, int(count)) for group, count in rows.all()]
 
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         """Commercial supplier ids by code."""

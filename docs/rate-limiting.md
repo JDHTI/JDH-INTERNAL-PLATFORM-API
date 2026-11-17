@@ -373,6 +373,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/supplier-supports/form-schema` | `read` |  |
 | `GET` | `/v1/supplier-supports/permissions` | `read` |  |
 | `POST` | `/v1/supplier-supports/requests/batch` | `relaxed` |  |
+| `POST` | `/v1/supplier-supports/retire` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/search` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/search/fields` | `read` |  |
 | `GET` | `/v1/supplier-supports/{support_id}` | `read` |  |

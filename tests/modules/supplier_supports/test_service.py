@@ -292,7 +292,7 @@ async def test_the_state_people_see_is_the_validity_or_voided_and_review_is_a_fl
         supplier_code="233",
     )
     future = await service.create(
-        manager, tactic(valid_from=date(2027, 1, 1), valid_to=None), supplier_code="233"
+        manager, tactic(valid_from=date(2027, 2, 1), valid_to=None), supplier_code="233"
     )
     pending = await service.import_support(
         tactic(product_sku="0000", source_key="Familia:9"), supplier_code="233"
@@ -353,7 +353,12 @@ async def test_a_unit_declared_by_the_sheet_or_by_a_person_is_never_overridden(
     )
     person_set = await service.create(
         manager,
-        tactic(product_sku="3474", reference_cost=D("13783"), value_unit="caja"),
+        tactic(
+            product_sku="3474",
+            reference_cost=D("13783"),
+            value_unit="caja",
+            customer_nit="900430148",
+        ),
         supplier_code="233",
     )
 

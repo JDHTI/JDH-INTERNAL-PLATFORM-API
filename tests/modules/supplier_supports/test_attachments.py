@@ -15,12 +15,13 @@ from tests.modules.supplier_supports.conftest import person
 SHOT = FileUpload("correo.png", b"\x89PNG screenshot")
 
 
-async def make_support(service, manager, sku: str) -> object:
+async def make_support(service, manager, sku: str, nit: str | None = None) -> object:
     data = SupportData(
         kind="tactico_cliente",
         calc_method="pct_costo",
         supplier_value=Decimal("0.05"),
         product_sku=sku,
+        customer_nit=nit,
         reference_cost=Decimal("1000"),
     )
     return (await service.create(manager, data, supplier_code="233")).support.id
@@ -80,7 +81,7 @@ async def test_a_selection_over_the_limit_can_be_previewed_but_not_attached(
     attachments, service, manager, trio
 ) -> None:
     for sku in ("1128", "8749", "3474"):
-        await make_support(service, manager, sku)  # 6 supports; the limit is 5
+        await make_support(service, manager, sku, "800116299")  # 6 supports; the limit is 5
 
     preview = await attachments.preview(manager, search={"supplier_codes": ["233"]})
     assert preview.capped and preview.total == 5 and preview.limit == 5
