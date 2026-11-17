@@ -25,7 +25,11 @@ from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
-from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, branches_margin_field
+from app.modules.commercial_masters.domain.margins import (
+    MARGIN_FIELDS,
+    branches_margin_field,
+    majority,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
@@ -374,8 +378,9 @@ def _base() -> Select[Any]:
     )
 
 
-async def customer_margin_fields(session: Any, nits: Sequence[str]) -> dict[str, str]:
-    """The margin list of each customer NIT (majority of its active branches)."""
+async def customer_profiles(session: Any, nits: Sequence[str]) -> dict[str, tuple[str, str | None]]:
+    """``{nit: (margin list, business group)}``: the majority of its active branches decides
+    the list; the group is the one most of its branches have."""
 
     unique = sorted({nit for nit in nits if nit})
     if not unique:
@@ -387,6 +392,7 @@ async def customer_margin_fields(session: Any, nits: Sequence[str]) -> dict[str,
                 CustomerModel.channel,
                 CustomerModel.billing_center_code,
                 CustomerModel.sales_team_class,
+                CustomerModel.business_group,
                 CustomerModel.is_active,
             ).where(CustomerModel.nit.in_(unique))
         )
@@ -394,7 +400,10 @@ async def customer_margin_fields(session: Any, nits: Sequence[str]) -> dict[str,
     grouped: dict[str, list[Any]] = {}
     for row in rows:
         grouped.setdefault(row.nit, []).append(row)
-    return {nit: branches_margin_field(branches) for nit, branches in grouped.items()}
+    return {
+        nit: (branches_margin_field(branches), majority(b.business_group for b in branches))
+        for nit, branches in grouped.items()
+    }
 
 
 def _rows(
@@ -403,10 +412,11 @@ def _rows(
     conflicts: dict[UUID, list[UUID]],
     attachments: dict[UUID, int],
     costs: dict[UUID, SupportCost],
-    margin_fields: dict[str, str],
+    profiles: dict[str, tuple[str, str | None]],
 ) -> list[SupportRow]:
     rows = []
     for model, code, name, description, brand, pack, *margins in results:
+        margin_field, group = profiles.get(model.customer_nit or "", (None, None))
         rows.append(
             SupportRow(
                 support=_support(model, tiers.get(model.id, [])),
@@ -419,7 +429,8 @@ def _rows(
                 dwh_cost=costs.get(model.id),
                 product_margins=dict(zip(MARGIN_FIELDS, margins, strict=True)),
                 product_pack_factor=pack,
-                customer_margin_field=margin_fields.get(model.customer_nit or ""),
+                customer_margin_field=margin_field,
+                customer_business_group=group,
             )
         )
     return rows
@@ -611,7 +622,7 @@ class SqlAlchemySupportRepository:
                 await self._conflict_ids(session, ids),
                 await self._attachment_counts(session, ids),
                 await _costs(session, ids),
-                await customer_margin_fields(session, [result[0].customer_nit]),
+                await customer_profiles(session, [result[0].customer_nit]),
             )[0]
 
     async def update(
@@ -916,7 +927,7 @@ class SqlAlchemySupportRepository:
                 await self._conflict_ids(session, ids),
                 await self._attachment_counts(session, ids),
                 await _costs(session, ids),
-                await customer_margin_fields(session, [row[0].customer_nit for row in rows]),
+                await customer_profiles(session, [row[0].customer_nit for row in rows]),
             )
         return built, int(total)
 

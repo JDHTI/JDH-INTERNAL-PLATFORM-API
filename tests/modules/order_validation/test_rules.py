@@ -272,6 +272,22 @@ def test_the_margin_of_the_channel_is_the_reference() -> None:
     assert decide(product=other, channel="AUTOSERVICIO").required_margin_pct == D("0.30")
 
 
+def test_group_and_branch_supports_need_the_customer_in_them() -> None:
+    goddard = CustomerScope(
+        "900315138", business_group="GRUPO GODDARD", branches=frozenset({"001", "002"})
+    )
+    other = CustomerScope("900315138", business_group="OTRO")
+    day = date(2026, 11, 3)
+
+    group = agreement(customer_group="Grupo Goddard")
+    branch = agreement(customer_nit="900315138", customer_branch_id="002")
+    assert rules.scope_of(group, line(), goddard, day) == rules.APPLIES
+    assert rules.scope_of(group, line(), other, day) == rules.OUT_OF_SCOPE
+    assert rules.scope_of(group, line(), None, day) == rules.OUT_OF_SCOPE
+    assert rules.scope_of(branch, line(), goddard, day) == rules.APPLIES
+    assert rules.scope_of(branch, line(), other, day) == rules.OUT_OF_SCOPE
+
+
 def test_the_client_margin_list_comes_from_its_center_and_team() -> None:
     product = ProductInfo(
         "1",

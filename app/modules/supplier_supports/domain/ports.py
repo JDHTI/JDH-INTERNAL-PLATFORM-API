@@ -132,6 +132,8 @@ class MasterLookup(Protocol):
 
     async def business_group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]: ...
 
+    async def business_groups(self, query: str, limit: int) -> list[tuple[str, int]]: ...
+
 
 class AttachmentRepository(Protocol):
     """Persistence of the links between supports and documents."""

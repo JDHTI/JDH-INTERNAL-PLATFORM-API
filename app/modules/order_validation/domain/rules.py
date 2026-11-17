@@ -111,6 +111,16 @@ def scope_of(
         return OUT_OF_SCOPE
     if agreement.customer_nit and agreement.customer_nit != line.customer_nit:
         return OUT_OF_SCOPE
+    if agreement.customer_group and not agreement.customer_nit:
+        # A business group's support without a NIT covers every customer of the group.
+        group = customer.business_group if customer else None
+        if not group or _label(group) != _label(agreement.customer_group):
+            return OUT_OF_SCOPE
+    if agreement.customer_branch_id and not (
+        customer and agreement.customer_branch_id in customer.branches
+    ):
+        # The order file carries no branch: the customer must have it.
+        return OUT_OF_SCOPE
     if agreement.product_sku and agreement.product_sku != line.sku:
         return OUT_OF_SCOPE
     if agreement.warehouse and _label(agreement.warehouse) != _label(line.warehouse or ""):

@@ -152,6 +152,24 @@ async def test_mass_void_and_expiry_keep_the_observation(service, repo, manager)
         await service.retire_many(manager, "anular", "otra vez", items=[(two.support.id, None)])
 
 
+async def test_a_business_group_becomes_one_support_per_customer(service, manager) -> None:
+    created = await service.create_for_group(
+        manager, tactic(customer_nit=None, customer_group="Grupo Goddard"), supplier_code="233"
+    )
+
+    assert {view.support.data.customer_nit for view in created} == {"900430148", "830012863"}
+    assert {view.business_group for view in created} == {"Grupo Goddard"}
+    assert await service.business_groups("godd") == [("GRUPO GODDARD", 2)]
+    with pytest.raises(InvalidInputError, match="no tiene clientes"):
+        await service.create_for_group(
+            manager, tactic(customer_nit=None, customer_group="Nadie"), supplier_code="233"
+        )
+    with pytest.raises(InvalidInputError, match="NIT vacío"):
+        await service.create_for_group(
+            manager, tactic(customer_group="Grupo Goddard"), supplier_code="233"
+        )
+
+
 def test_scope_and_dates_of_a_crossing() -> None:
     base = tactic()
 

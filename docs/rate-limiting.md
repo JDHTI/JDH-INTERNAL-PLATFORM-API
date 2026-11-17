@@ -370,6 +370,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/supplier-supports/bulk` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/bulk/groups` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/bulk/template` | `read` |  |
+| `GET` | `/v1/supplier-supports/business-groups` | `read` |  |
+| `POST` | `/v1/supplier-supports/by-group` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/catalogs` | `read` |  |
 | `GET` | `/v1/supplier-supports/form-schema` | `read` |  |
 | `GET` | `/v1/supplier-supports/permissions` | `read` |  |

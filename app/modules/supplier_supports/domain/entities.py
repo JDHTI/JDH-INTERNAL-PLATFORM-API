@@ -244,6 +244,8 @@ class SupportRow:
     product_pack_factor: Decimal | None = None
     # The customer's margin list (``customer_margin_field``), when it has a NIT in the master.
     customer_margin_field: str | None = None
+    # The customer's business group in the customer master (its name; the code is not known).
+    customer_business_group: str | None = None
 
     @property
     def margin_field(self) -> str:
@@ -284,6 +286,9 @@ class SupportView:
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
     dwh_cost: SupportCost | None = None
+    # The support's group, else the customer's in the master; and the margin list it uses.
+    business_group: str | None = None
+    margin_list: str | None = None
 
 
 @dataclass(frozen=True)

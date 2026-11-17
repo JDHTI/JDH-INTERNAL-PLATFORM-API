@@ -103,6 +103,11 @@ class FakeLookup:
             group: self.groups[group.upper()] for group in groups if group.upper() in self.groups
         }
 
+    async def business_groups(self, query, limit):
+        return [(name, len(items)) for name, items in self.groups.items() if query.upper() in name][
+            :limit
+        ]
+
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         return {code: self.suppliers[code] for code in codes if code in self.suppliers}
 

@@ -9,7 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
@@ -258,8 +258,11 @@ class DerivedResponse(BaseModel):
     # at the list price (cost at the product's margin).
     product_margin_pct: Decimal | None
     recomposed_list_margin: Decimal | None
-    # Margen apoyado: how far the margin may drop on top of the support; the supported price
-    # is the net cost at that margin and the client's discount is below the list price.
+    # Rules v2 (per inventory unit). suggested_price = Precio Apoyado Sugerido (list price -
+    # supplier_amount); margin_recomposed = (price - cost + support) / price.
+    # supported_margin_pct = JDH's authorized minimum margin (Excepción margen mínimo);
+    # supported_price = Precio Apoyado Mínimo = net cost / (1 - that margin); the client's
+    # discount is how far it falls below the list price.
     supported_margin_pct: Decimal | None
     supported_price: Decimal | None
     supported_price_per: MoneyPairResponse
@@ -303,6 +306,11 @@ class SupportResponse(_SupportFields):
     special_case_id: UUID | None
     has_conflicts: bool
     attachment_count: int
+    # The support's business group, else the customer's in the master (null = none), and
+    # the margin list its prices use: margin_list, margin_wholesale, margin_mass_food or
+    # margin_market (Food service, Mayoristas, Masivo food, Market Apartadó).
+    business_group: str | None = None
+    margin_list: str | None = None
     conflicts: list[UUID]
     issues: list[IssueResponse]
     tiers: list[TierBody]
@@ -424,6 +432,8 @@ def _response(view: SupportView) -> SupportResponse:
         needs_review=view.needs_review,
         has_conflicts=view.has_conflicts,
         attachment_count=view.attachment_count,
+        business_group=view.business_group,
+        margin_list=view.margin_list,
         conflicts=list(view.conflicts),
         issues=[_issue(issue) for issue in data.issues],
         tiers=[
@@ -515,6 +525,60 @@ async def catalogs(
     and channels in use."""
 
     return await service.catalogs()
+
+
+class BusinessGroupResponse(BaseModel):
+    """A business group of the customer master and its active customers."""
+
+    name: str
+    customers: int
+
+
+@router.get(
+    "/business-groups",
+    dependencies=[_READ_GATE],
+    response_model=list[BusinessGroupResponse],
+    summary="Business groups by name",
+)
+@inject
+async def business_groups(
+    q: str = Query(min_length=2, max_length=100),
+    _: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> list[BusinessGroupResponse]:
+    """Business groups whose name contains ``q`` (the code is not known), with how many active
+    customers a support by group would reach."""
+
+    return [
+        BusinessGroupResponse(name=name, customers=count)
+        for name, count in await service.business_groups(q)
+    ]
+
+
+@router.post(
+    "/by-group",
+    dependencies=[_READ_GATE],
+    response_model=list[SupportResponse],
+    status_code=201,
+    summary="Create one support per customer of a business group",
+)
+@inject
+async def create_by_group(
+    body: SupportCreate,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> list[SupportResponse]:
+    """``customer_group`` names the group and ``customer_nit`` stays empty: one support per
+    active customer of the group, each with the group's name. All or none. Managers only."""
+
+    views = await service.create_for_group(
+        principal,
+        _data(body),
+        supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
+    )
+    return [_response(view) for view in views]
 
 
 @router.post(

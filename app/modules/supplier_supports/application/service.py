@@ -573,6 +573,8 @@ class SupplierSupportService:
             conflicts=row.conflicts,
             attachment_count=row.attachment_count,
             dwh_cost=row.dwh_cost,
+            business_group=data.customer_group or row.customer_business_group,
+            margin_list=row.margin_field,
         )
 
     async def get(self, support_id: UUID) -> SupportView:
@@ -938,6 +940,53 @@ class SupplierSupportService:
             except InvalidInputError as exc:
                 checked.append(Checked(error=exc.detail, field=getattr(exc, "field", None)))
         return checked
+
+    async def create_for_group(
+        self,
+        principal: Principal,
+        data: SupportData,
+        *,
+        supplier_code: str | None = None,
+        on_overlap: str | None = None,
+        overlap_reason: str | None = None,
+    ) -> list[SupportView]:
+        """One support per active customer of ``data.customer_group``, all or none.
+
+        Raises:
+            InvalidInputError: Without a group, with a NIT too, or a group with no customers.
+        """
+
+        await self._require_manager(principal)
+        group = _clean(data.customer_group)
+        if not group:
+            raise FieldError("Escribe el grupo empresarial", "customer_group")
+        if data.customer_nit:
+            raise FieldError("Con grupo empresarial deja el NIT vacío", "customer_nit")
+        members = (await self.group_members([group])).get(group, [])
+        if not members:
+            raise FieldError(
+                f"El grupo empresarial {group} no tiene clientes activos", "customer_group"
+            )
+        if len(members) > MAX_BATCH:
+            raise InvalidInputError(f"El grupo tiene {len(members)} clientes; máximo {MAX_BATCH}")
+        items = [
+            (
+                replace(data, customer_group=group, customer_nit=nit, customer_name=name),
+                supplier_code,
+            )
+            for nit, name in members
+        ]
+        return await self.create_many(
+            principal, items, on_overlap=on_overlap, overlap_reason=overlap_reason
+        )
+
+    async def business_groups(self, query: str) -> list[tuple[str, int]]:
+        """Business groups whose name contains ``query``, with their active customers."""
+
+        text = _clean(query)
+        if not text or len(text) < 2:
+            return []
+        return await self.masters.business_groups(text, 20)
 
     async def group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
         """Active customers ``(nit, name)`` of each business group (by its name)."""
