@@ -401,7 +401,7 @@ Catálogo configurable (`code`, `name`, `color`, `sort_order`, `is_initial`, `is
 |---|---|
 | Leída automática | `POST /cases/{id}/read` al abrir el detalle: si quien abre es el responsable y es la primera vez, fija `first_read_at` y pasa de inicial a `leida` |
 | Novedad | Un correo del cliente o del proveedor que se une al caso fija `news_at` («Novedad»), sin tocar el estado ni el plazo. Se limpia cuando lo abre su responsable o un gestor (`POST /cases/{id}/read`); quien solo sigue el caso no la limpia |
-| En curso automática | Al registrar la primera respuesta de un documento, `recibida`/`leida` pasa a `en_curso` |
+| En curso automática | Cualquier trabajo de quien trabaja el caso (responsable o gestor) pasa `recibida`/`leida` a `en_curso`, con un `status_changed` que dice qué lo movió: un seguimiento o respuesta al cliente, un mensaje al proveedor, enviar al cliente la respuesta del proveedor, editar el caso, o agregar, editar, responder o quitar un documento. No lo mueven abrir el caso, asignarlo, un cambio manual de estado, los correos que llegan ni el comentario de quien solo sigue el caso (quien lo radicó o el vendedor) |
 | Cerrar | Exige respuesta en todos los documentos y causal en los tardíos. Fija `closed_at` |
 | Reabrir | Exige nota. Un caso cerrado es de solo lectura salvo comentarios y estado |
 
@@ -436,8 +436,15 @@ reglas. Un responsable debe haber iniciado sesión una vez.
   historial del módulo. No se edita ni se borra.
 - **Caso eliminado:** se registra el evento `deleted` con motivo, y sus eventos pierden solo el
   vínculo.
-- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos. Se
-  purgan a los 90 días.
+- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos.
+  - Las visitas a la bandeja (`inbox_opened`) se purgan a los 90 días.
+  - Las aperturas de un caso (`read`, `viewed`) se conservan para analítica.
+- **Aperturas fuera de la línea de tiempo:** el detalle del caso no trae `read` ni `viewed`. Se
+  consultan en `GET /pqrsf/cases/{id}/openings`, con el mismo permiso de ver el caso:
+  - `people[]`: `{user, user_id, first_opened_at, last_opened_at, visits}`, de la más reciente
+    a la más antigua;
+  - `entries[]`: cada apertura como evento, de la más nueva a la más antigua. La primera
+    apertura del responsable (`read`) trae el paso a «Leída».
 - **Consultas:** `GET /pqrsf/activity` (gestores, paginado por `before`) y
   `GET /pqrsf/activity/last-seen`.
 
@@ -456,8 +463,8 @@ Cada evento (detalle del caso y `/pqrsf/activity`) trae, además de `event_type`
 | Evento | Se lee |
 |---|---|
 | `created` (formulario / correo / interno) | Sistema · Creó el caso desde el formulario público / desde un correo de x@y / Ana · Creó el caso |
-| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída |
-| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja |
+| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída (solo en aperturas y en `/activity`) |
+| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja (solo en aperturas y en `/activity`) |
 | `assigned` | Asignó el caso a Juan / Tomó el caso / Quitó el responsable / asignación automática |
 | `status_changed` | Cambió el estado / Finalizó el caso / Reabrió el caso, con el chip de estados |
 | `updated` | Editó el asunto y la sede |
@@ -681,6 +688,7 @@ Descripción:
 | Misma conversación y caso finalizado | Caso nuevo con `related_case` |
 | `Tipo: Sugerencia` / `Felicitación` | Se guarda como sugerencia y se agradece en el hilo |
 | Enviado por `pqrsf@`/`info@`, automático, `bulk`, `no-reply` | Ignorado |
+| Respuesta a «Novedad caso …» (respuesta del proveedor enviada al cliente, sección 9) | Ignorado, aunque traiga el radicado |
 
 Cada mensaje se guarda con su `Internet-Message-Id` único: un correo repetido no abre dos casos.
 
@@ -735,7 +743,7 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
 | Acuse por correo | Caso abierto desde el buzón | Remitente, en el hilo |
 | Actualización al cliente | Comentario con `reply_to_client` | Solicitante |
 | Agradecimiento | Sugerencia o felicitación | Remitente |
-| Novedad caso (respuesta del proveedor) | Alguien la envía a mano desde el caso (sección 9) | Solicitante, desde la cuenta no-reply |
+| Novedad caso (respuesta del proveedor) | Alguien la envía a mano desde el caso (sección 9) | Solicitante; sus respuestas no se siguen |
 | Certificados / documento del caso | Sección 10 | Solicitante |
 | Mensaje al proveedor | Sección 9 | Proveedor |
 | `daily_summary` (17:30) | Días hábiles | Miembros de Calidad: casos abiertos y vencidos |
@@ -819,22 +827,26 @@ sale sola.
 - **Errores:**
   - `404` si el evento no es un correo del caso;
   - `422` si es del cliente o el caso no tiene correo del solicitante;
-  - `409` si ya se envió o el caso está finalizado;
-  - `503` sin cuenta no-reply.
-- **Correo:** asunto fijo «Novedad caso {radicado}».
-  - Sale de `MAIL_NOREPLY_SENDER`, con la plantilla JDH (kind `customer_forward`).
-  - Lleva arriba, en un recuadro, que es un correo automático y que sus respuestas no se leen ni
-    se procesan, y dice que escriba a `pqrsf@` con el radicado si necesita agregar algo.
+  - `409` si ya se envió o el caso está finalizado.
+- **Correo:** asunto fijo «Novedad caso {radicado}», con la plantilla JDH (kind
+  `customer_forward`).
+  - Es un correo nuevo, no una respuesta dentro de un hilo.
+  - Sale de `pqrsf@`, o de `MAIL_NOREPLY_SENDER` si algún día se configura.
+  - Lleva arriba, en un recuadro, que es un correo automático y que sus respuestas no se
+    procesan, y dice que escriba a `pqrsf@` con el radicado si necesita agregar algo.
   - Incluye el texto del proveedor sin el historial citado, la nota (si hay) y los adjuntos de
     ese correo.
-  - Como sale de otra cuenta, la respuesta del cliente nunca llega al caso.
+- **Respuestas del cliente a este correo:** no se siguen.
+  - El buzón reconoce el asunto «Novedad caso …», aunque traiga `RE:`, `RV:` o etiquetas como
+    `[PRUEBA para …]`, y deja el correo `ignored` sin tocar el caso, aunque traiga el radicado.
+  - El correo queda en el buzón `pqrsf@`, pero no entra a la plataforma.
 - **Una sola vez:** la cola usa `customer_forward:{event_id}`; dos clics a la vez envían un correo.
 - **Línea de tiempo:** evento `forwarded_to_customer` («Envió al cliente la respuesta de …») con
   `source_event_id`, `from`, `to`, `notification_id` y `file_ids`.
 - **En el `email_received` del detalle:** la API expone estos campos.
   - `sender_role`: `supplier`, `customer` o `external`.
   - `forwardable`: `true` solo si es del proveedor, no se ha enviado, el caso está abierto, tiene
-    correo del solicitante, quien consulta lo trabaja y hay cuenta no-reply.
+    correo del solicitante y quien consulta lo trabaja.
   - `forwarded_at`, `forwarded_by` y `forwarded_to`.
 - **Pruebas:** con `PQRSF_NOTIFY_REDIRECT` llega a esa dirección como los demás correos. La vista
   previa muestra el mismo HTML que recibirá el cliente.
@@ -1014,7 +1026,7 @@ saca de las ventas del DWH; no se le pide al cliente.
 | `MAIL_INTAKE_ENABLED` | `false` | Lectura del buzón |
 | `MAIL_INTAKE_OPEN_CASES` | `false` | `false`: el buzón solo da seguimiento (sección 7). `true`: también abre casos con la plantilla |
 | `MAIL_CC_DOMAINS` | `jdh.com.co` | Dominios de las personas que se pueden copiar (CC) |
-| `MAIL_NOREPLY_SENDER` | vacío | Cuenta que nadie lee para enviar al cliente la respuesta de un proveedor. La app de Graph necesita `Mail.Send` sobre ella (agregarla a la *Application Access Policy*). Vacío apaga ese envío |
+| `MAIL_NOREPLY_SENDER` | vacío | Opcional: cuenta que nadie lee para enviar al cliente la respuesta de un proveedor (la app de Graph necesitaría `Mail.Send` sobre ella). Vacío la envía desde `pqrsf@`; las respuestas no se siguen en ningún caso |
 | `MAIL_GRAPH_TENANT_ID` / `MAIL_GRAPH_CLIENT_ID` / `MAIL_GRAPH_CLIENT_SECRET` | — | App de Entra del buzón (el **valor** del secreto) |
 | `MAIL_PQRSF_INBOX` / `MAIL_IGNORED_SENDERS` | `pqrsf@jdh.com.co` / `info@jdh.com.co` | Buzones |
 | `MAIL_INTAKE_SINCE`, `MAIL_POLL_INTERVAL_SECONDS`, `MAIL_MAX_ATTEMPTS`, `MAIL_MAX_ATTACHMENTS`, `MAIL_MAX_ATTACHMENT_MB`, `MAIL_MAX_TOTAL_ATTACHMENT_MB`, `MAIL_ATTACHMENT_EXTENSIONS` | ver `.env.example` | Correo entrante |

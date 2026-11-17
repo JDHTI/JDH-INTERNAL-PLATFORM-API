@@ -248,6 +248,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/items/{item_id}/delivery` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/openings` | `read` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/read` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/status` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/supplier-messages` | `read` |  |

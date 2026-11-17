@@ -69,6 +69,26 @@ class EventView:
 
 
 @dataclass(frozen=True)
+class PersonOpenings:
+    """How one person opened a case: first and last time, and how many visits."""
+
+    user_id: UUID
+    user: DirectoryUser | None
+    first_opened_at: datetime
+    last_opened_at: datetime
+    # Visits recorded (a repeat within 30 minutes counts once).
+    visits: int
+
+
+@dataclass(frozen=True)
+class CaseOpenings:
+    """Who opened a case and each opening, newest first; not part of the timeline."""
+
+    people: list[PersonOpenings]
+    entries: list[EventView]
+
+
+@dataclass(frozen=True)
 class ActivityPage:
     """One page of the module history; ``next_before`` continues it."""
 

@@ -276,9 +276,9 @@ class Settings(BaseSettings):
     MAIL_INTAKE_OPEN_CASES: bool = False
     # Comma-separated domains whose addresses may be copied (CC) on a reply from a case.
     MAIL_CC_DOMAINS: str = "jdh.com.co"
-    # Mailbox nobody reads, for emails whose answers must not reach a case (a supplier's
-    # answer passed on to the customer). The Graph app needs Mail.Send on it (add it to the
-    # Application Access Policy). Empty turns that forwarding off.
+    # Optional mailbox nobody reads, for a supplier's answer passed on to the customer (the
+    # Graph app needs Mail.Send on it). Empty sends it from MAIL_PQRSF_INBOX; answers to it
+    # are left out of the platform either way.
     MAIL_NOREPLY_SENDER: str = ""
     MAIL_POLL_INTERVAL_SECONDS: int = 120
     MAIL_MAX_ATTEMPTS: int = 5

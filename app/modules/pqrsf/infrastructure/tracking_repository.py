@@ -1074,14 +1074,16 @@ class SqlAlchemyCaseRepository:
             return await session.scalar(query.limit(1)) is not None
 
     async def purge_access_events(self, before: datetime) -> int:
-        """Delete access records older than ``before``.
+        """Delete inbox visits older than ``before``.
+
+        Openings of a case (``viewed``) are kept: they feed later analytics.
 
         Returns:
             int: How many rows went.
         """
 
         statement = delete(CaseEventModel).where(
-            CaseEventModel.event_type.in_(ACCESS_EVENT_TYPES),
+            CaseEventModel.event_type == EventType.INBOX_OPENED,
             CaseEventModel.created_at < before,
         )
         async with self.database.session_factory() as session:
