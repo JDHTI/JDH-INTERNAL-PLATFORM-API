@@ -10,7 +10,9 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0066_customer_sales_team"
-down_revision: str | None = "0065_employee_margin"
+# Also the merge point of the two 0065 that landed in parallel on master (action plans and
+# employee margin), so the history has one head again.
+down_revision: str | Sequence[str] | None = ("0065_action_plans", "0065_employee_margin")
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
