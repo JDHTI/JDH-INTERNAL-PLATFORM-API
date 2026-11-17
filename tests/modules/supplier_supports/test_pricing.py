@@ -92,7 +92,7 @@ def test_jdh_minimum_margin_gives_the_minimum_supported_price(method, value, net
 
     assert result.supported_margin_pct == D("0.08")
     assert result.supported_price == net_cost / D("0.92")
-    assert result.customer_discount_pct == 1 - result.supported_price / D("6000")
+    assert result.customer_discount_pct is None  # disabled for now
 
 
 def test_movistar_arena_22505_supported_cost_per_box_and_jdh_margin() -> None:
@@ -117,6 +117,45 @@ def test_movistar_arena_22505_supported_cost_per_box_and_jdh_margin() -> None:
     assert result.suggested_price == listed - (D("11233.38") - unit_cost)
     assert result.supported_price == unit_cost / D("0.9")
     assert result.supported_price_per.box == unit_cost / D("0.9") * 12
+
+
+def test_a_supported_cost_above_todays_cost_counts_as_no_support() -> None:
+    # 23677: 64.482 per box of 24 (2.686,75 per unit) while the DWH cost is 2.158 per unit.
+    result = derive(
+        data(calc_method="costo_neto", value_unit="caja", supplier_value=D("64482")),
+        dwh_unit_cost=D("2158"),
+        product_margin=D("0.20"),
+        product_pack_factor=D("24"),
+    )
+
+    assert result.support_above_cost is True
+    assert result.supplier_amount == 0 and result.net_cost == D("2158")
+    # The suggested price never goes above the list price.
+    assert result.suggested_price == result.list_price.unit == D("2697.5")
+    below = derive(
+        data(calc_method="costo_neto", value_unit="caja", supplier_value=D("48000")),
+        D("2158"),
+        D("0.20"),
+        D("24"),
+    )
+    assert below.support_above_cost is False and below.supplier_amount == D("158")
+
+
+def test_the_three_skus_bi_checked_are_priced_per_unit() -> None:
+    # 26593 (box of 12), 16594 and 24956 (boxes of 24): supported cost per box, DWH per unit.
+    for value, pack, cost, expected in (
+        (D("119927"), D("12"), D("13893"), D("13893") - D("119927") / 12),
+        (D("103862"), D("24"), D("6407"), D("6407") - D("103862") / 24),
+        (D("87921"), D("24"), D("5517"), D("5517") - D("87921") / 24),
+    ):
+        result = derive(
+            data(calc_method="costo_neto", value_unit="caja", supplier_value=value),
+            cost,
+            D("0.18"),
+            pack,
+        )
+        assert result.supplier_amount == expected and result.cost.unit == cost
+        assert result.suggested_price_per.box == result.suggested_price * pack
 
 
 def test_a_box_value_is_divided_by_the_master_pack_factor_and_null_is_one() -> None:

@@ -275,7 +275,11 @@ class DerivedResponse(BaseModel):
     supported_margin_pct: Decimal | None
     supported_price: Decimal | None
     supported_price_per: MoneyPairResponse
+    # Disabled for now: always null (do not show the client's discount).
     customer_discount_pct: Decimal | None
+    # True when the supported cost is above today's DWH cost (or the value is negative): the
+    # support brings no money at this cost and the figures count it as 0.
+    support_above_cost: bool = False
 
 
 class DwhCostResponse(BaseModel):

@@ -225,6 +225,12 @@ def derive(
         pack_factor=pack,
         guaranteed_margin=data.target_margin_pct,
     )
+    # A supported cost above today's cost (or a negative value) brings no money: the support
+    # does not raise the price over the list price, it just stops counting until the cost
+    # goes back up. ``support_above_cost`` tells the screen why.
+    above_cost = amount is not None and amount < 0
+    if above_cost:
+        amount = ZERO
     net_cost = cost - amount if cost is not None and amount is not None else None
     if method in ("margen_minimo", "puntos_margen"):
         net_cost = cost
@@ -269,7 +275,7 @@ def derive(
         supported_margin_pct=floor_margin,
         supported_price=min_price,
         supported_price_per=per(min_price),
-        customer_discount_pct=(
-            None if min_price is None or listed is None else _complement(_div(min_price, listed))
-        ),
+        # Disabled (BI, 2026-11-17): the client's discount is not shown for now.
+        customer_discount_pct=None,
+        support_above_cost=above_cost,
     )

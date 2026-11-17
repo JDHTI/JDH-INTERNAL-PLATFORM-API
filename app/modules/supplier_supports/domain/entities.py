@@ -204,7 +204,11 @@ class Derived:
     supported_margin_pct: Decimal | None = None
     supported_price: Decimal | None = None
     supported_price_per: MoneyPair = field(default_factory=MoneyPair)
+    # Disabled for now (always ``None``).
     customer_discount_pct: Decimal | None = None
+    # The supported cost is above today's cost (or the value is negative): the support brings
+    # no money at this cost and counts as 0.
+    support_above_cost: bool = False
 
 
 @dataclass(frozen=True)
