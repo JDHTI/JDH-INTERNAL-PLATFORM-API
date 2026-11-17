@@ -46,6 +46,7 @@ _VALUE_REQUIRED = (
     "pct_costo",
     "pct_precio_lista",
     "valor_unidad",
+    "valor_precio_lista",
     "costo_neto",
     "precio_neto",
     "puntos_margen",
@@ -449,9 +450,33 @@ class SupplierSupportService:
             masters=masters,
         )
         self._check(prepared)
+        if previous is None or (previous.kind, previous.calc_method) != (
+            prepared.kind,
+            prepared.calc_method,
+        ):
+            self._check_class(prepared)
         if prepared.kind != "excepcion_margen" and prepared.commercial_supplier_id is None:
             raise InvalidInputError("El apoyo requiere un proveedor comercial")
         return prepared
+
+    @staticmethod
+    def _check_class(data: SupportData) -> None:
+        """Rules v2: only three classes, each with its types (a new or reclassified support)."""
+
+        if data.kind not in vocabulary.ACTIVE_KINDS:
+            labels = ", ".join(vocabulary.KIND_LABELS[kind] for kind in vocabulary.ACTIVE_KINDS)
+            raise FieldError(
+                f"La clase {vocabulary.KIND_LABELS.get(data.kind, data.kind)} ya no se crea "
+                f"(clases: {labels})",
+                "kind",
+            )
+        allowed = vocabulary.METHODS_BY_KIND[data.kind]
+        if data.calc_method not in allowed:
+            labels = ", ".join(vocabulary.CALC_METHOD_LABELS[method] for method in allowed)
+            raise FieldError(
+                f"{vocabulary.KIND_LABELS[data.kind]} admite estos tipos: {labels}",
+                "calc_method",
+            )
 
     # --------------------------------------------------------------- queries
 
@@ -479,6 +504,7 @@ class SupplierSupportService:
                 data,
                 row.dwh_cost.unit_cost if row.dwh_cost else None,
                 row.product_margin,
+                row.product_pack_factor,
             ),
             conflicts=row.conflicts,
             attachment_count=row.attachment_count,
@@ -651,11 +677,19 @@ class SupplierSupportService:
 
         return filters.catalog()
 
-    async def catalogs(self) -> dict[str, list[str]]:
-        """Closed vocabularies plus the scope values already in use."""
+    async def catalogs(self) -> dict[str, Any]:
+        """Closed vocabularies plus the scope values already in use.
+
+        ``active_kinds`` are the classes that can be created (rules v2) and
+        ``methods_by_kind`` the types each one admits; ``kinds`` keeps every stored class.
+        """
 
         values = await self.repository.scope_values()
         return {
+            "active_kinds": list(vocabulary.ACTIVE_KINDS),
+            "kind_labels": dict(vocabulary.KIND_LABELS),
+            "calc_method_labels": dict(vocabulary.CALC_METHOD_LABELS),
+            "methods_by_kind": {kind: list(m) for kind, m in vocabulary.METHODS_BY_KIND.items()},
             "kinds": list(vocabulary.KINDS),
             "fundings": list(vocabulary.FUNDINGS),
             "settlement_methods": list(vocabulary.SETTLEMENTS),

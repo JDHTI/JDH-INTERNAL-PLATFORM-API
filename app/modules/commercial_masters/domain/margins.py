@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Protocol
 
 # Product columns that hold a margin, in the order the master lists them.
 MARGIN_FIELDS = (
@@ -98,6 +99,37 @@ def customer_margin_field(
     if MASS_FOOD_TEAM in normalize(team_class):
         return "margin_mass_food"
     return channel_field(channel)
+
+
+def majority(values: Iterable[str | None]) -> str | None:
+    """The most frequent non-empty value (ties go to the first in alphabetical order)."""
+
+    counts = Counter(value for value in values if value)
+    if not counts:
+        return None
+    return max(sorted(counts), key=lambda value: counts[value])
+
+
+def branches_margin_field(branches: Iterable[BranchMarginKey]) -> str:
+    """The margin list of a customer with several branches: the majority of the active ones
+    (or of all, when none is active) decides the channel, the C.O. and the sales team."""
+
+    every = list(branches)
+    active = [branch for branch in every if branch.is_active] or every
+    return customer_margin_field(
+        majority(branch.channel for branch in active),
+        majority(branch.billing_center_code for branch in active),
+        majority(branch.sales_team_class for branch in active),
+    )
+
+
+class BranchMarginKey(Protocol):
+    """What a customer branch says about its margin list."""
+
+    channel: str | None
+    billing_center_code: str | None
+    sales_team_class: str | None
+    is_active: bool
 
 
 def margin_for(margins: Mapping[str, Decimal | None], field_name: str) -> Decimal | None:

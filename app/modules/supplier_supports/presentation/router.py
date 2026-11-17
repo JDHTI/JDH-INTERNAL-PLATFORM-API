@@ -54,6 +54,7 @@ CalcMethod = Literal[
     "pct_costo",
     "pct_precio_lista",
     "valor_unidad",
+    "valor_precio_lista",
     "costo_neto",
     "precio_neto",
     "puntos_margen",
@@ -453,8 +454,9 @@ async def permissions(
 async def catalogs(
     _: Principal = _principal,
     service: SupplierSupportService = _service,
-) -> dict[str, list[str]]:
-    """Closed vocabularies (types, methods, statuses) and the regions, units and channels used."""
+) -> dict[str, Any]:
+    """Closed vocabularies (classes and their types, statuses, labels) and the regions, units
+    and channels in use."""
 
     return await service.catalogs()
 

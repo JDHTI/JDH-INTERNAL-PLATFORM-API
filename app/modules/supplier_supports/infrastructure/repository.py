@@ -25,6 +25,7 @@ from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, branches_margin_field
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
@@ -363,12 +364,64 @@ def _base() -> Select[Any]:
             CommercialSupplierModel.name,
             ProductModel.description,
             ProductModel.brand,
-            ProductModel.margin_list,
+            ProductModel.pack_factor,
+            *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
         )
         .select_from(S)
         .outerjoin(CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id)
         .outerjoin(ProductModel, ProductModel.id == S.product_id)
     )
+
+
+async def customer_margin_fields(session: Any, nits: Sequence[str]) -> dict[str, str]:
+    """The margin list of each customer NIT (majority of its active branches)."""
+
+    unique = sorted({nit for nit in nits if nit})
+    if not unique:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                CustomerModel.nit,
+                CustomerModel.channel,
+                CustomerModel.billing_center_code,
+                CustomerModel.sales_team_class,
+                CustomerModel.is_active,
+            ).where(CustomerModel.nit.in_(unique))
+        )
+    ).all()
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(row.nit, []).append(row)
+    return {nit: branches_margin_field(branches) for nit, branches in grouped.items()}
+
+
+def _rows(
+    results: Sequence[Any],
+    tiers: dict[UUID, list[Any]],
+    conflicts: dict[UUID, list[UUID]],
+    attachments: dict[UUID, int],
+    costs: dict[UUID, SupportCost],
+    margin_fields: dict[str, str],
+) -> list[SupportRow]:
+    rows = []
+    for model, code, name, description, brand, pack, *margins in results:
+        rows.append(
+            SupportRow(
+                support=_support(model, tiers.get(model.id, [])),
+                supplier_code=code,
+                supplier_name=name,
+                product_description=description,
+                product_brand=brand,
+                conflicts=tuple(conflicts.get(model.id, ())),
+                attachment_count=attachments.get(model.id, 0),
+                dwh_cost=costs.get(model.id),
+                product_margins=dict(zip(MARGIN_FIELDS, margins, strict=True)),
+                product_pack_factor=pack,
+                customer_margin_field=margin_fields.get(model.customer_nit or ""),
+            )
+        )
+    return rows
 
 
 class SqlAlchemySupportRepository:
@@ -468,22 +521,15 @@ class SqlAlchemySupportRepository:
             result = (await session.execute(_base().where(S.id == support_id))).first()
             if result is None:
                 return None
-            model, code, name, description, brand, margin = result
-            tiers = (await self._tiers(session, [support_id])).get(support_id, [])
-            conflicts = await self._conflict_ids(session, [support_id])
-            attachments = await self._attachment_counts(session, [support_id])
-            costs = await _costs(session, [support_id])
-            return SupportRow(
-                support=_support(model, tiers),
-                supplier_code=code,
-                supplier_name=name,
-                product_description=description,
-                product_brand=brand,
-                conflicts=tuple(conflicts.get(support_id, ())),
-                attachment_count=attachments.get(support_id, 0),
-                dwh_cost=costs.get(support_id),
-                product_margin=margin,
-            )
+            ids = [support_id]
+            return _rows(
+                [result],
+                await self._tiers(session, ids),
+                await self._conflict_ids(session, ids),
+                await self._attachment_counts(session, ids),
+                await _costs(session, ids),
+                await customer_margin_fields(session, [result[0].customer_nit]),
+            )[0]
 
     async def update(
         self,
@@ -775,27 +821,15 @@ class SqlAlchemySupportRepository:
                 )
             ).all()
             ids = [row[0].id for row in rows]
-            tiers = await self._tiers(session, ids)
-            conflicts = await self._conflict_ids(session, ids)
-            attachments = await self._attachment_counts(session, ids)
-            costs = await _costs(session, ids)
-        return (
-            [
-                SupportRow(
-                    support=_support(model, tiers.get(model.id, [])),
-                    supplier_code=code,
-                    supplier_name=name,
-                    product_description=description,
-                    product_brand=brand,
-                    conflicts=tuple(conflicts.get(model.id, ())),
-                    attachment_count=attachments.get(model.id, 0),
-                    dwh_cost=costs.get(model.id),
-                    product_margin=margin,
-                )
-                for model, code, name, description, brand, margin in rows
-            ],
-            int(total),
-        )
+            built = _rows(
+                rows,
+                await self._tiers(session, ids),
+                await self._conflict_ids(session, ids),
+                await self._attachment_counts(session, ids),
+                await _costs(session, ids),
+                await customer_margin_fields(session, [row[0].customer_nit for row in rows]),
+            )
+        return built, int(total)
 
     async def _attachment_counts(self, session: Any, ids: Sequence[UUID]) -> dict[UUID, int]:
         if not ids:

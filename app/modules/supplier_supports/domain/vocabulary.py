@@ -9,40 +9,81 @@ from __future__ import annotations
 KINDS = (
     "tactico_cliente",  # support for one client (usually x SKU)
     "actividad_temporal",  # named promotion, no client
-    "lista_especial",  # special price list for one client
-    "rebate",  # credit note / rebate on sales
-    "recuperacion_cliente",  # client acquisition or recovery program
-    "liquidacion_inventario",  # clearance / price protection over stock
-    "presupuesto",  # capped budget with consumption
+    "lista_especial",  # special price list for one client (discontinued)
+    "rebate",  # credit note / rebate on sales (kept apart for a later module)
+    "recuperacion_cliente",  # client acquisition or recovery program (discontinued)
+    "liquidacion_inventario",  # clearance / price protection over stock (discontinued)
+    "presupuesto",  # capped budget with consumption (kept apart, like rebates)
     "excepcion_margen",  # authorized minimum margin, no supplier money
 )
+
+# The support classes (rules v2): the only ones that can be created, loaded or edited into.
+# The others stay readable: rebates and budgets wait for their own module; the discontinued
+# ones are purged (``scripts/purge-discontinued-supports.py``).
+ACTIVE_KINDS = ("tactico_cliente", "actividad_temporal", "excepcion_margen")
+KIND_LABELS = {
+    "tactico_cliente": "Apoyo táctico",
+    "actividad_temporal": "Actividad descuento temporal",
+    "excepcion_margen": "Excepción margen JDH",
+    "lista_especial": "Lista especial",
+    "rebate": "Rebate",
+    "recuperacion_cliente": "Recuperación de cliente",
+    "liquidacion_inventario": "Liquidación de inventario",
+    "presupuesto": "Presupuesto",
+}
+DISCONTINUED_KINDS = ("lista_especial", "recuperacion_cliente", "liquidacion_inventario")
 
 FUNDINGS = ("proveedor", "jdh", "mixto")
 
 SETTLEMENTS = ("nota_credito", "pie_factura", "costo_neto_facturado", "rebate_periodico")
 
 CALC_METHODS = (
-    "pct_costo",  # supplier_value is a fraction of cost
-    "pct_precio_lista",  # fraction of list price, credited against cost
-    "valor_unidad",  # fixed amount per unit
-    "costo_neto",  # supplier_value is the agreed net cost
-    "precio_neto",  # supplier_value is the agreed net price; target_margin_pct is guaranteed
-    "puntos_margen",  # supplier_value is margin points off list margin
-    "pct_ventas",  # rebate over sales; no per-unit amount
-    "margen_minimo",  # only a minimum order margin, no supplier money
+    "pct_costo",  # % Apoyo en Costo: supplier_value is a fraction of cost
+    "pct_precio_lista",  # % Apoyo en Precio Lista: fraction of the list price
+    "valor_unidad",  # $ Apoyo en Costo: fixed amount per unit (or box)
+    "valor_precio_lista",  # $ Apoyo en Precio Lista: fixed amount off the list price
+    "costo_neto",  # $ Costo Apoyado: supplier_value is the agreed net cost
+    "precio_neto",  # % Margen Garantizado: supplier_value is the agreed price, target margin
+    "puntos_margen",  # margin points off list margin (no longer offered)
+    "pct_ventas",  # rebate over sales; no per-unit amount (rebates only)
+    "margen_minimo",  # only a minimum order margin, no supplier money (JDH exception)
 )
 
-# How each calc method is written in the general template ("Tipo de apoyo" column). The file
-# may carry the label or the code.
+# How each calc method is written in the general template ("Tipo apoyo" column). The file
+# may carry the label, an older label (see ``CALC_METHOD_ALIASES``) or the code.
 CALC_METHOD_LABELS = {
-    "pct_costo": "% sobre costo",
-    "pct_precio_lista": "% sobre precio lista",
-    "costo_neto": "Costo apoyado",
-    "precio_neto": "Precio apoyado sin IVA",
-    "valor_unidad": "$ por unidad",
-    "margen_minimo": "Margen mínimo",
+    "pct_costo": "% Apoyo en Costo",
+    "pct_precio_lista": "% Apoyo en Precio Lista",
+    "valor_unidad": "$ Apoyo en Costo",
+    "valor_precio_lista": "$ Apoyo en Precio Lista",
+    "costo_neto": "$ Costo Apoyado",
+    "precio_neto": "% Margen Garantizado",
+    "margen_minimo": "Margen mínimo autorizado",
     "puntos_margen": "Puntos de margen",
     "pct_ventas": "% sobre ventas",
+}
+# Labels of the first general template, still accepted in files.
+CALC_METHOD_ALIASES = {
+    "% sobre costo": "pct_costo",
+    "% sobre precio lista": "pct_precio_lista",
+    "costo apoyado": "costo_neto",
+    "precio apoyado sin iva": "precio_neto",
+    "$ por unidad": "valor_unidad",
+    "margen minimo": "margen_minimo",
+}
+# The types each class can be created with (rules v2).
+_TACTICAL_METHODS = (
+    "pct_costo",
+    "pct_precio_lista",
+    "valor_unidad",
+    "valor_precio_lista",
+    "costo_neto",
+    "precio_neto",
+)
+METHODS_BY_KIND = {
+    "tactico_cliente": _TACTICAL_METHODS,
+    "actividad_temporal": ("pct_costo", "pct_precio_lista", "valor_unidad", "valor_precio_lista"),
+    "excepcion_margen": ("margen_minimo",),
 }
 
 VALUE_UNITS = ("unidad", "caja", "kg")

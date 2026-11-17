@@ -41,7 +41,8 @@ def test_all_other_methods_use_percentage():
         assert request_mode(method) == "porcentaje"
 
 
-def test_net_cost_keeps_supplier_amount_and_cancels_back_to_original():
+def test_the_old_jdh_net_cost_is_history_and_no_longer_moves_the_figures():
+    # Rules v2: JDH supports with an authorized minimum margin, not with a net cost.
     data = SupportData(
         kind="tactico_cliente",
         calc_method="costo_neto",
@@ -52,13 +53,9 @@ def test_net_cost_keeps_supplier_amount_and_cancels_back_to_original():
         pack_factor=Decimal(10),
     )
     result = derive(data)
-    assert result.supplier_amount == 20
-    assert result.net_cost == 70
-    assert result.jdh_amount == 10
-    assert result.net_cost_per.unit == 7
-    original = derive(replace(data, jdh_net_cost=None))
-    assert original.net_cost == 80
-    assert original.supplier_amount == 20
+    assert result.supplier_amount == 2 and result.net_cost == 8  # per unit (box of 10)
+    assert result.jdh_amount is None and result.net_cost_per.box == 80
+    assert derive(replace(data, jdh_net_cost=None)) == result
 
 
 async def test_roles_and_ownership_are_enforced():

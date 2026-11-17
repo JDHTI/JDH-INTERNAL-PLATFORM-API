@@ -418,25 +418,42 @@ _COMMON = ("reference_cost", "reference_list_price", "pack_factor", "value_unit"
 
 METHOD_RULES: dict[str, MethodRule] = {
     "pct_costo": MethodRule(
-        "percent", ("supplier_value",), _COMMON, "Fracción del costo: costo × valor."
+        "percent",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo = costo × %. Precio apoyado sugerido = precio lista − $ Apoyo.",
     ),
     "pct_precio_lista": MethodRule(
         "percent",
         ("supplier_value",),
         _COMMON,
-        "Fracción del precio lista, acreditada contra el costo.",
+        "$ Apoyo = precio lista × % (el valor absoluto se resta al costo). Precio apoyado "
+        "sugerido = precio lista − $ Apoyo.",
     ),
     "valor_unidad": MethodRule(
-        "money", ("supplier_value",), _COMMON, "Monto fijo por unidad (o caja)."
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo en costo, por unidad o por caja (la caja se divide por la unidad de empaque).",
+    ),
+    "valor_precio_lista": MethodRule(
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo que se descuenta del precio lista, por unidad o por caja.",
     ),
     "costo_neto": MethodRule(
-        "money", ("supplier_value",), _COMMON, "Costo apoyado pactado: costo − valor."
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Costo apoyado pactado: $ Apoyo = costo − costo apoyado.",
     ),
     "precio_neto": MethodRule(
         "money",
         ("supplier_value", "target_margin_pct"),
         (*_COMMON, "target_margin_pct"),
-        "Precio neto pactado; el margen objetivo es el margen garantizado.",
+        "% Margen garantizado: el valor es el precio apoyado ya definido y el margen objetivo "
+        "es el margen garantizado. $ Apoyo = costo − precio apoyado × (1 − margen).",
     ),
     "puntos_margen": MethodRule(
         "percent",

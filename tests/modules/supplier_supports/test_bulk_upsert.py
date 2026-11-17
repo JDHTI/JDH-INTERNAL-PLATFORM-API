@@ -120,7 +120,7 @@ async def test_an_unknown_type_lists_the_labels(bulk, manager) -> None:
     )
 
     assert report.errors[0].field == "calc_method"
-    assert "% sobre costo" in report.errors[0].message
+    assert "% Apoyo en Costo" in report.errors[0].message
 
 
 async def test_the_supported_margin_column_and_the_minimum_margin_type(bulk, repo, manager) -> None:

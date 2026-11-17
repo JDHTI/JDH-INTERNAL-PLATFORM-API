@@ -52,7 +52,10 @@ PREVIEW_ROWS = 50
 # Read first: later fields need to know the calc method (how ``supplier_value`` is typed).
 _CHOICE_FIELDS = tuple(spec.name for spec in fields.FIELD_SPECS if spec.type == fields.CHOICE)
 # "Tipo de apoyo" written as its label ("% sobre costo") instead of its code.
-_CALC_LABELS = {n.fold(label): code for code, label in vocabulary.CALC_METHOD_LABELS.items()}
+_CALC_LABELS = {
+    **{n.fold(label): code for label, code in vocabulary.CALC_METHOD_ALIASES.items()},
+    **{n.fold(label): code for code, label in vocabulary.CALC_METHOD_LABELS.items()},
+}
 
 
 class _BadCell(ValueError):

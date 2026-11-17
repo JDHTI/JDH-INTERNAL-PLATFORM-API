@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
+
+from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 
 
 @dataclass(frozen=True)
@@ -230,8 +233,33 @@ class SupportRow:
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
     dwh_cost: SupportCost | None = None
-    # The product's general margin in the margin master (``products.margin_list``).
-    product_margin: Decimal | None = None
+    # The product's optimal margins by list in the margin master (``margin_list``...).
+    product_margins: Mapping[str, Decimal | None] = field(default_factory=dict)
+    # Units per box in the product master (``None`` when the product is unknown).
+    product_pack_factor: Decimal | None = None
+    # The customer's margin list (``customer_margin_field``), when it has a NIT in the master.
+    customer_margin_field: str | None = None
+
+    @property
+    def margin_field(self) -> str:
+        """The margin list the support is priced on.
+
+        The customer's when it has a NIT; else its channels (all Mayoristas channels →
+        Mayoristas); else Food service, the default.
+        """
+
+        if self.customer_margin_field:
+            return self.customer_margin_field
+        channels = self.support.data.channels
+        if channels and all(channel_field(channel) == "margin_wholesale" for channel in channels):
+            return "margin_wholesale"
+        return "margin_list"
+
+    @property
+    def product_margin(self) -> Decimal | None:
+        """The product's optimal margin on :attr:`margin_field`."""
+
+        return margin_for(self.product_margins, self.margin_field)
 
 
 @dataclass(frozen=True)
