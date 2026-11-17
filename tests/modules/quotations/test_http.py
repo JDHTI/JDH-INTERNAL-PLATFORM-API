@@ -76,7 +76,7 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
     assert Decimal(line["min_price"]) == Decimal("3719")
     assert Decimal(line["optimal_price"]) == Decimal("3765")
     assert line["cost_source"] == "inventario" and line["is_active"] is True
-    assert line["margin_basis_label"] == "Margen Lista 1" and line["compliance"] is None
+    assert line["margin_basis_label"] == "Margen Food Service" and line["compliance"] is None
     url = f"{BASE}/{quotation['id']}"
 
     below = client.put(

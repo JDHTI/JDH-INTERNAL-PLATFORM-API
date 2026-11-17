@@ -124,10 +124,32 @@ class WarehouseMasterSource:
 
         return self._keyset("proveedores", _SUPPLIER_COLUMNS, "proveedor_key", batch_size)
 
-    def customers(self, batch_size: int) -> AsyncIterator[list[Mapping[str, Any]]]:
-        """Pages of ``consumo.clientes`` ordered by ``cliente_key``."""
+    async def customers(self, batch_size: int) -> AsyncIterator[list[Mapping[str, Any]]]:
+        """Pages of ``consumo.clientes`` ordered by ``cliente_key``, with the seller's team.
 
-        return self._keyset("clientes", _CUSTOMER_COLUMNS, "cliente_key", batch_size)
+        The team (``equipo``, ``clase_equipo``) comes from ``consumo.vendedores`` by the
+        branch's seller code; an active seller wins when the code repeats.
+        """
+
+        selected = ", ".join(f'c."{column}"' for column in _CUSTOMER_COLUMNS)
+        query = (
+            f'SELECT {selected}, t."equipo", t."clase_equipo" '
+            f"FROM {self._relation('clientes')} c "
+            'LEFT JOIN LATERAL (SELECT v."equipo", v."clase_equipo" '
+            f"FROM {self._relation('vendedores')} v "
+            'WHERE v."codigo" = c."cod_vendedor" '
+            "ORDER BY (v.\"estado\" = 'A') DESC NULLS LAST LIMIT 1) t ON true "
+            'WHERE c."cliente_key" > $1 ORDER BY c."cliente_key" ASC LIMIT $2'
+        )
+        after = ""
+        while True:
+            rows = await self.connection.fetch(query, after, batch_size)
+            if not rows:
+                return
+            yield [dict(row) for row in rows]
+            if len(rows) < batch_size:
+                return
+            after = rows[-1]["cliente_key"]
 
     def products(self, batch_size: int) -> AsyncIterator[list[Mapping[str, Any]]]:
         """Pages of ``consumo.productos`` ordered by ``producto_key``."""

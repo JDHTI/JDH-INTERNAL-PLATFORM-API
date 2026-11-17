@@ -9,7 +9,12 @@ import pytest
 
 from app.core.errors import InvalidInputError
 from app.modules.commercial_masters.domain.entities import Product, ProductMargins
-from app.modules.commercial_masters.domain.margins import channel_field, parse_margin
+from app.modules.commercial_masters.domain.margins import (
+    channel_field,
+    customer_margin_field,
+    margin_for,
+    parse_margin,
+)
 from app.modules.commercial_masters.infrastructure.margins_file import (
     SpreadsheetMarginReader,
     parse_tax,
@@ -53,8 +58,8 @@ def test_unreadable_margins_are_rejected(value) -> None:
         ("MAYORISTAS Y DISTRIBUIDORES", "margin_wholesale"),
         ("Subdistribuidor", "margin_wholesale"),
         ("SUBDISTRIBUIDOR", "margin_wholesale"),
-        ("SALSAMENTARIAS", "margin_salsamentarias"),
-        ("Salsamentaría", "margin_salsamentarias"),
+        ("SALSAMENTARIAS", "margin_wholesale"),
+        ("Salsamentaría", "margin_wholesale"),
         ("HOTELES Y CLUBES", "margin_list"),
         ("RESTAURANTES", "margin_list"),
         ("AUTOSERVICIO", "margin_list"),
@@ -64,6 +69,29 @@ def test_unreadable_margins_are_rejected(value) -> None:
 )
 def test_channel_field(channel, field) -> None:
     assert channel_field(channel) == field
+
+
+@pytest.mark.parametrize(
+    ("channel", "center", "team", "field"),
+    [
+        ("RESTAURANTES", "200", "MASIVO FOOD", "margin_market"),
+        ("MAYORISTAS Y DISTRIBUIDORES", "200", None, "margin_market"),
+        ("RESTAURANTES", "201", None, "margin_list"),  # Market Valledupar is not Apartadó
+        ("AUTOSERVICIO", "003", "MASIVO FOOD", "margin_mass_food"),
+        ("SALSAMENTARIAS", "001", "SENIOR", "margin_wholesale"),
+        ("RESTAURANTES", "001", None, "margin_list"),
+        (None, None, None, "margin_list"),
+    ],
+)
+def test_customer_margin_field(channel, center, team, field) -> None:
+    assert customer_margin_field(channel, center, team) == field
+
+
+def test_new_lists_fall_back_to_food_service() -> None:
+    margins = {"margin_list": D("0.2"), "margin_wholesale": None, "margin_market": None}
+
+    assert margin_for(margins, "margin_market") == D("0.2")
+    assert margin_for(margins, "margin_wholesale") is None
 
 
 HEADER = [

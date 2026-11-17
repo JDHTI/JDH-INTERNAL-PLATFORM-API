@@ -94,6 +94,8 @@ def customer_row(row: Row) -> dict[str, Any] | None:
         "city": text(row.get("ciudad")),
         "salesperson_code": text(row.get("cod_vendedor")),
         "salesperson_name": text(row.get("nombre_vendedor")),
+        "sales_team": text(row.get("equipo")),
+        "sales_team_class": text(row.get("clase_equipo")),
         "state": text(row.get("estado")),
         "branch_state": text(row.get("estado_sucursal")),
         "is_active": is_active(row.get("estado"), row.get("estado_sucursal")),

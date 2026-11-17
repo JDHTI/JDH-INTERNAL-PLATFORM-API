@@ -94,6 +94,12 @@ class CustomerScope:
     channels: frozenset[str] = frozenset()
     business_units: frozenset[str] = frozenset()
     regionals: frozenset[str] = frozenset()
+    # The product margin list of the customer (see ``customer_margin_field``); ``None`` when
+    # it is not known and the channel of the order decides.
+    margin_field: str | None = None
+    # Branch ids and business group, for supports restricted to them.
+    branches: frozenset[str] = frozenset()
+    business_group: str | None = None
 
 
 @dataclass(frozen=True)

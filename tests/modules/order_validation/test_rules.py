@@ -263,12 +263,33 @@ def test_the_margin_of_the_channel_is_the_reference() -> None:
     wholesale = decide(product=product, channel="MAYORISTAS Y DISTRIBUIDORES")
     assert wholesale.required_margin_pct == D("0.12") and wholesale.margin_basis == "mayoristas"
     assert decide(product=product, channel="SUBDISTRIBUIDOR").margin_basis == "mayoristas"
-    sal = decide(product=product, channel="SALSAMENTARIAS", margin_pct=D("0.10"))
-    assert sal.reason == "cumple_margen_lista" and sal.margin_basis == "salsamentarias"
-    assert sal.detail == "Margen del pedido 10,00 % ≥ margen salsamentarias 10,00 %"
-    # Masivo Food and Market Apartadó are loaded but no rule applies them yet.
+    # Salsamentarias is on the Mayoristas list; its own column is no longer applied.
+    sal = decide(product=product, channel="SALSAMENTARIAS", margin_pct=D("0.12"))
+    assert sal.reason == "cumple_margen_lista" and sal.margin_basis == "mayoristas"
+    assert sal.detail == "Margen del pedido 12,00 % ≥ margen mayoristas 12,00 %"
+    # Without a known client, a channel alone never reaches Masivo Food.
     other = ProductInfo("1", {"margin_list": D("0.30"), "margin_mass_food": D("0.01")})
     assert decide(product=other, channel="AUTOSERVICIO").required_margin_pct == D("0.30")
+
+
+def test_the_client_margin_list_comes_from_its_center_and_team() -> None:
+    product = ProductInfo(
+        "1",
+        {
+            "margin_list": D("0.30"),
+            "margin_wholesale": D("0.12"),
+            "margin_mass_food": D("0.22"),
+            "margin_market": None,
+        },
+    )
+    mass = CustomerScope("1", margin_field="margin_mass_food")
+    market = CustomerScope("2", margin_field="margin_market")
+
+    result = decide(product=product, customer=mass, channel="AUTOSERVICIO", margin_pct=D("0.25"))
+    assert result.margin_basis == "masivo_food" and result.required_margin_pct == D("0.22")
+    # Market Apartadó without a margin of its own falls back to Food service.
+    fallback = decide(product=product, customer=market, channel=None, margin_pct=D("0.31"))
+    assert fallback.margin_basis == "market" and fallback.required_margin_pct == D("0.30")
 
 
 def test_the_client_channel_is_used_when_the_file_has_none() -> None:
@@ -372,7 +393,7 @@ def test_a_line_that_meets_its_margin_but_lacks_the_liquor_tax_is_held_back() ->
     # It meets the margin, yet the missing tax holds it back.
     assert held.status == "pendiente_validacion" and held.reason == "falta_impuesto_licor"
     assert held.liquor_tax and held.liquor_tax_amount == D("6911")
-    assert "$6.911 por unidad" in held.detail and "≥ margen lista" in held.detail
+    assert "$6.911 por unidad" in held.detail and "≥ margen Food Service" in held.detail
     assert held.required_margin_pct == D("0.200000")
     # A line already pending for another reason keeps that reason, still flagged.
     assert pending.reason == "sin_acuerdo" and pending.liquor_tax

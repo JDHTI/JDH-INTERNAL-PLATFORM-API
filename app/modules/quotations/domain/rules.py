@@ -23,7 +23,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
 from uuid import UUID
 
-from app.modules.commercial_masters.domain.margins import channel_field
+from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, OrderLine
 from app.modules.order_validation.domain.rules import (
     AMOUNT_METHODS,
@@ -629,6 +629,7 @@ def build_line(
     scope: CustomerScope | None,
     product: ProductMaster | None,
     supplier_name: str | None,
+    margin_field: str | None = None,
     cost: CostInfo | None,
     list_price: ListPrice | None,
     tax: ValueTaxKey | None,
@@ -668,8 +669,9 @@ def build_line(
     supplier_code = _first(
         product.supplier_code if product else None, source.supplier_code if source else None
     )
-    field_name = channel_field(channel)
-    product_target = product.margins.get(field_name) if product else None
+    # The customer's business-unit margin list (see ``customer_margin_field``).
+    field_name = margin_field or channel_field(channel)
+    product_target = margin_for(product.margins, field_name) if product else None
     basis = BASIS.get(field_name, "lista")
     cost_value, cost_source = pricing.effective_cost(
         cost.quote_cost if cost else None,

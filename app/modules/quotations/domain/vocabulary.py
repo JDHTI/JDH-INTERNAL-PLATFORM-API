@@ -177,9 +177,11 @@ WARNING_LABELS = {
 }
 
 BASIS_LABELS = {
-    "lista": "Margen Lista 1",
+    "lista": "Margen Food Service",
     "mayoristas": "Margen Mayoristas",
     "salsamentarias": "Margen Salsamentarias",
+    "masivo_food": "Margen Masivo Food",
+    "market": "Margen Market Apartadó",
     "apoyo": "Objetivo del apoyo",
 }
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 
 from sqlalchemy import and_, or_, select
 
 from app.infrastructure.database import Database
-from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
+from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, customer_margin_field
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
@@ -144,24 +145,47 @@ class SqlAlchemyAgreementSource:
                             CustomerModel.channel,
                             CustomerModel.business_unit,
                             CustomerModel.billing_center,
+                            CustomerModel.billing_center_code,
+                            CustomerModel.sales_team_class,
+                            CustomerModel.branch_id,
+                            CustomerModel.business_group,
+                            CustomerModel.is_active,
                         ).where(CustomerModel.nit.in_(unique[start : start + _CHUNK]))
                     )
                 ).all()
-        merged: dict[str, tuple[set[str], set[str], set[str]]] = {}
-        for nit, channel, unit, regional in rows:
-            channels, units, regionals = merged.setdefault(nit, (set(), set(), set()))
-            for target, value in ((channels, channel), (units, unit), (regionals, regional)):
-                if value:
-                    target.add(value)
-        return {
-            nit: CustomerScope(
-                nit=nit,
-                channels=frozenset(channels),
-                business_units=frozenset(units),
-                regionals=frozenset(regionals),
-            )
-            for nit, (channels, units, regionals) in merged.items()
-        }
+        by_nit: dict[str, list] = {}
+        for row in rows:
+            by_nit.setdefault(row.nit, []).append(row)
+        return {nit: customer_scope(nit, branches) for nit, branches in by_nit.items()}
+
+
+def _majority(values: Sequence[str | None]) -> str | None:
+    counts = Counter(value for value in values if value)
+    if not counts:
+        return None
+    return max(sorted(counts), key=lambda value: counts[value])
+
+
+def customer_scope(nit: str, branches: Sequence) -> CustomerScope:
+    """Merge the branches of a client: every channel, unit and regional counts for the scope;
+    the margin list follows the majority of the active branches (C.O., team, channel).
+    """
+
+    active = [branch for branch in branches if branch.is_active] or list(branches)
+    field_name = customer_margin_field(
+        _majority([branch.channel for branch in active]),
+        _majority([branch.billing_center_code for branch in active]),
+        _majority([branch.sales_team_class for branch in active]),
+    )
+    return CustomerScope(
+        nit=nit,
+        channels=frozenset(b.channel for b in branches if b.channel),
+        business_units=frozenset(b.business_unit for b in branches if b.business_unit),
+        regionals=frozenset(b.billing_center for b in branches if b.billing_center),
+        margin_field=field_name,
+        branches=frozenset(b.branch_id for b in branches if b.branch_id),
+        business_group=_majority([branch.business_group for branch in branches]),
+    )
 
 
 __all__ = ["SqlAlchemyAgreementSource"]

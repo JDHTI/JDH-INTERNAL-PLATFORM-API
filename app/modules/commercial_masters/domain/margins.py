@@ -1,14 +1,15 @@
-"""Margins by product and channel: how a value is read and which channel uses which margin.
+"""Margins by product and business-unit list: how a value is read and which customer uses which.
 
-The margin master gives every product one margin per channel. The order validator picks
-the one for the channel of the order (see :func:`channel_field`); the others are stored
-and shown but not applied yet.
+The margin master gives every product one optimal margin per business-unit list (Food service,
+Mayoristas, Masivo food, Market Apartadó; Salsamentarias is kept but no longer applied). The
+quoter, the order validator and the supports master pick it with :func:`customer_margin_field`.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -23,16 +24,23 @@ MARGIN_FIELDS = (
 )
 
 MARGIN_LABELS = {
-    "margin_list": "Margen Lista 1",
+    "margin_list": "Margen Food Service",
     "margin_wholesale": "Margen Mayoristas",
     "margin_mass_food": "Margen Masivo Food",
     "margin_market": "Margen Market Apartadó",
     "margin_salsamentarias": "Margen Salsamentarias",
 }
 
-# Margins the validator applies today. Masivo Food and Market Apartadó are loaded and shown,
-# but no rule uses them yet.
-APPLIED_FIELDS = ("margin_list", "margin_wholesale", "margin_salsamentarias")
+# Margins the rules apply (see :func:`customer_margin_field`). Salsamentarias is loaded and
+# shown, but those customers use the Mayoristas margin.
+APPLIED_FIELDS = ("margin_list", "margin_wholesale", "margin_mass_food", "margin_market")
+
+# Billing operation center of JDH Market Apartadó (``cod_co_factura``).
+MARKET_CENTER = "200"
+# ``consumo.vendedores.clase_equipo`` of the Masivo food sales teams.
+MASS_FOOD_TEAM = "masivo food"
+# Lists that fall back to Food service when the product has no margin of their own.
+_FALLBACK_TO_LIST = ("margin_mass_food", "margin_market")
 
 # Liquor consumption tax per unit by regional (``IMPTOLIC``): Nacional and Costa, and the tax
 # group (``0503`` wine, ``0509`` spirits). The margin master keeps them in the ``IMPUESTOS``
@@ -58,19 +66,51 @@ def normalize(value: object) -> str:
 
 
 def channel_field(channel: str | None) -> str:
-    """The margin column that applies to a client channel.
+    """The margin column a channel alone gives (no operation center or sales team known).
 
-    - ``MAYORISTAS Y DISTRIBUIDORES`` and ``SUBDISTRIBUIDOR`` use the wholesale margin.
-    - ``SALSAMENTARIAS`` uses the salsamentarias margin.
-    - Any other channel, or none, uses list margin 1.
+    ``MAYORISTAS Y DISTRIBUIDORES``, ``SUBDISTRIBUIDOR`` and ``SALSAMENTARIAS`` use the
+    Mayoristas margin; any other channel, or none, Food service (``margin_list``).
     """
 
     name = normalize(channel)
-    if "mayorista" in name or "subdistribuidor" in name:
+    if "mayorista" in name or "subdistribuidor" in name or "salsamentaria" in name:
         return "margin_wholesale"
-    if "salsamentaria" in name:
-        return "margin_salsamentarias"
     return "margin_list"
+
+
+def customer_margin_field(
+    channel: str | None,
+    billing_center: str | None = None,
+    team_class: str | None = None,
+) -> str:
+    """The margin list («Margen objetivo Listas de Unidad Negocio») of a customer.
+
+    In this order:
+
+    1. Billing operation center ``200`` (JDH Market Apartadó): ``margin_market``.
+    2. Sales team class ``MASIVO FOOD``: ``margin_mass_food``.
+    3. Channel Mayoristas, Subdistribuidores or Salsamentarias: ``margin_wholesale``.
+    4. Anything else, or no customer at all: Food service (``margin_list``).
+    """
+
+    if (billing_center or "").strip() == MARKET_CENTER:
+        return "margin_market"
+    if MASS_FOOD_TEAM in normalize(team_class):
+        return "margin_mass_food"
+    return channel_field(channel)
+
+
+def margin_for(margins: Mapping[str, Decimal | None], field_name: str) -> Decimal | None:
+    """A product's margin on a list; Masivo food and Market fall back to Food service.
+
+    Those two lists are new in the rules and many products have no value for them yet; the
+    Food service margin is then the closest optimal margin. Mayoristas never falls back.
+    """
+
+    value = margins.get(field_name)
+    if value is None and field_name in _FALLBACK_TO_LIST:
+        return margins.get("margin_list")
+    return value
 
 
 def parse_margin(value: Any) -> tuple[bool, Decimal | None]:

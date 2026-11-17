@@ -100,10 +100,14 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                 ),
                 Rule(
                     "margen_objetivo",
-                    "Margen objetivo por canal",
-                    "Mayoristas y Distribuidores y Subdistribuidor usan el margen mayoristas; "
-                    "Salsamentarias, el suyo; cualquier otro canal, el margen Lista 1 del maestro "
-                    "de márgenes. Si el apoyo aplicado trae su propio objetivo, manda el del "
+                    "Margen objetivo Listas de Unidad Negocio",
+                    "El margen óptimo del maestro de márgenes según la lista de unidad de "
+                    "negocio del cliente, en este orden: Market Apartadó, si factura desde el "
+                    "C.O. 200; Masivo food, si su vendedor es de un equipo Masivo food; "
+                    "Mayoristas, para los canales Mayoristas y Distribuidores, Subdistribuidor y "
+                    "Salsamentarias; Food service, para todos los demás canales o si no hay "
+                    "cliente. Si el producto no tiene margen Masivo food o Market, usa el de "
+                    "Food service. Si el apoyo aplicado trae su propio objetivo, manda el del "
                     "apoyo.",
                     INFORMS,
                 ),

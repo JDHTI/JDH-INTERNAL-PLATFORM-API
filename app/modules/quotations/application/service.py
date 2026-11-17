@@ -21,9 +21,10 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.modules.commercial_masters.domain.entities import clean_nit
-from app.modules.commercial_masters.domain.margins import channel_field
+from app.modules.commercial_masters.domain.margins import customer_margin_field
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.catalog import Section
+from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
@@ -289,8 +290,17 @@ def normalize_nit(value: str) -> str:
     return nit
 
 
+def _margin_field(context: CustomerContext, scope: CustomerScope | None = None) -> str:
+    """The customer's margin list: the platform's master (with the seller's team) when it
+    knows the customer, else the channel and operation center the quotation read."""
+
+    if scope is not None and scope.margin_field:
+        return scope.margin_field
+    return customer_margin_field(context.channel, context.billing_center_code)
+
+
 def _setup(context: CustomerContext) -> _Setup:
-    basis = BASIS.get(channel_field(context.channel), "lista")
+    basis = BASIS.get(_margin_field(context), "lista")
     return _Setup(
         family=pricing.family(context.price_list_id, basis),
         plans=pricing.stock_plans(context.price_list_id, context.cost_centers),
@@ -715,6 +725,7 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
+                    margin_field=_margin_field(context),
                     scope=None,
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),
@@ -749,6 +760,7 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
+                    margin_field=_margin_field(context, scopes.get(context.nit)),
                     scope=scopes.get(context.nit),
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),

@@ -18,7 +18,7 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
-from app.modules.commercial_masters.domain.margins import channel_field
+from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 from app.modules.order_validation.domain import vocabulary
 from app.modules.order_validation.domain.entities import (
     Agreement,
@@ -48,11 +48,15 @@ BASIS = {
     "margin_list": "lista",
     "margin_wholesale": "mayoristas",
     "margin_salsamentarias": "salsamentarias",
+    "margin_mass_food": "masivo_food",
+    "margin_market": "market",
 }
 _BASIS_LABEL = {
-    "lista": "margen lista",
+    "lista": "margen Food Service",
     "mayoristas": "margen mayoristas",
     "salsamentarias": "margen salsamentarias",
+    "masivo_food": "margen Masivo Food",
+    "market": "margen Market Apartadó",
 }
 AMOUNT_METHODS = ("pct_costo", "costo_neto", "valor_unidad", "precio_neto", "pct_precio_lista")
 
@@ -184,25 +188,31 @@ def points(value: Decimal) -> str:
 def reference_margin(
     line: OrderLine, customer: CustomerScope | None, product: ProductInfo | None
 ) -> tuple[Decimal | None, str | None]:
-    """The product margin for the channel of the order, and its name.
+    """The product's optimal margin for the customer's business-unit list, and its name.
 
-    The channel is the one in the file, else the client's in the master. Wholesale and
-    subdistributor channels use the wholesale margin, salsamentarias their own, and any other
-    channel list margin 1. The mass food and market margins are loaded but not applied yet.
+    A known client uses its list (operation center 200 Market Apartadó, Masivo food team,
+    Mayoristas channels, else Food service: see ``customer_margin_field``). The channel in
+    the file decides only when the client is not in the master.
 
     Returns:
         tuple[Decimal | None, str | None]: The margin (``None`` when the product has none
-        for that channel) and its basis (``lista``, ``mayoristas`` or ``salsamentarias``).
+        on that list) and its basis (``lista``, ``mayoristas``, ``masivo_food``, ``market``).
     """
 
-    channel = line.channel
-    if not channel and customer and customer.channels:
-        channel = sorted(customer.channels)[0]
-    field_name = channel_field(channel)
+    if customer is not None and customer.margin_field:
+        field_name = customer.margin_field
+        if line.channel and field_name in ("margin_list", "margin_wholesale"):
+            # The channel written on the order line wins over the client's majority one.
+            field_name = channel_field(line.channel)
+    else:
+        channel = line.channel
+        if not channel and customer and customer.channels:
+            channel = sorted(customer.channels)[0]
+        field_name = channel_field(channel)
     basis = BASIS[field_name]
     if product is None:
         return None, basis
-    return product.margins.get(field_name), basis
+    return margin_for(product.margins, field_name), basis
 
 
 def check(
