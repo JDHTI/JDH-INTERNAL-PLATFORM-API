@@ -44,9 +44,16 @@ def same_scope(left: SupportData, right: SupportData) -> bool:
 
     if left.kind != right.kind or left.commercial_supplier_id != right.commercial_supplier_id:
         return False
-    for name in ("customer_nit", "customer_branch_id", "customer_group", "warehouse"):
+    for name in ("customer_nit", "customer_branch_id", "warehouse"):
         if (getattr(left, name) or "").upper() != (getattr(right, name) or "").upper():
             return False
+    # With a NIT the business group is only a label (a group's support is one per NIT): the
+    # group decides the scope only of a support without a customer.
+    if (
+        not left.customer_nit
+        and (left.customer_group or "").upper() != (right.customer_group or "").upper()
+    ):
+        return False
     if left.product_sku or right.product_sku:
         if left.product_sku != right.product_sku:
             return False

@@ -174,6 +174,11 @@ def test_scope_and_dates_of_a_crossing() -> None:
     base = tactic()
 
     assert same_scope(base, tactic(valid_from=None))
+    # Same customer and SKU: a support born from a business group still crosses.
+    assert same_scope(base, tactic(customer_group="GRUPO GODDARD"))
+    assert same_scope(base, tactic(supplier_sku="72163"))  # the JDH SKU decides
+    group_only = tactic(customer_nit=None, customer_group="A")
+    assert not same_scope(group_only, tactic(customer_nit=None, customer_group="B"))
     assert not same_scope(base, tactic(customer_branch_id="002"))
     assert not same_scope(base, tactic(regionals=("ANTIOQUIA",)))
     assert dates_cross(base, tactic(valid_from=date(2026, 12, 31), valid_to=None))
