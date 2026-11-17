@@ -1175,7 +1175,7 @@ de la UI.
 | I-9 | Ejecutivo comercial desde la factura (DWH) | [x] | [x] |
 | I-9 | Respaldo por el vendedor del cliente | [ ] | — |
 | I-10 | Resultado al finalizar (procede / no procede, fallo interno) y OM P.06 (plantilla en el bucket, Word y PDF, consecutivo por sede, envío y marca «OM enviada») | [x] | [ ] |
-| I-11 | Planes de acción (P.04) como módulo aparte, enlazado al caso | [ ] | [ ] |
+| I-11 | Planes de acción (P.04) como módulo aparte, enlazado al caso: `POST /action-plans/from-case/{id}` y evento `action_plan_opened`. Ver [`docs/action-plans.md`](action-plans.md) | [x] | [ ] |
 | — | UI de certificados, solicitudes de documentos y respuesta con archivo (hecha en `Lovealone1/pqrsf-certificates-ui`, sin fusionar en master) | [x] | [ ] |
 
 ### Fases siguientes

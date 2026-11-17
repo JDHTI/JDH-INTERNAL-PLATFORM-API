@@ -11,6 +11,9 @@ from app.infrastructure.gotenberg import GotenbergConverter
 from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
+from app.modules.action_plans.application.service import ActionPlanService
+from app.modules.action_plans.infrastructure.pqrsf_cases import PqrsfCaseSource
+from app.modules.action_plans.infrastructure.repository import SqlAlchemyActionPlanRepository
 from app.modules.app_monitoring.application.board import MonitoringBoardService
 from app.modules.app_monitoring.application.service import AppMonitoringService
 from app.modules.app_monitoring.infrastructure.prober import HttpProber
@@ -1100,6 +1103,26 @@ class V1Container(containers.DeclarativeContainer):
             DirectorySigner, employees=directory_repository, people=user_directory
         ),
         managers=pqrsf_manager_policy,
+    )
+    # --- Action plans (P.04.F.02), fed by the PQRSF cases ---
+    action_plan_repository = providers.Factory(SqlAlchemyActionPlanRepository, database=database)
+    action_plan_policy = providers.Factory(
+        PermissionPolicy, areas=area_service, area_slug=None, module="planes-accion"
+    )
+    action_plan_service = providers.Factory(
+        ActionPlanService,
+        repository=action_plan_repository,
+        policy=action_plan_policy,
+        cases=providers.Factory(
+            PqrsfCaseSource, tracking=pqrsf_tracking_service, requests=pqrsf_repository
+        ),
+        profiles=providers.Factory(
+            DirectorySigner, employees=directory_repository, people=user_directory
+        ),
+        storage=storage,
+        guard=pqrsf_comment_guard,
+        bell=notification_service,
+        area_slug=config.pqrsf.manager_area_slug,
     )
     pqrsf_supplier_message_service = providers.Factory(
         SupplierMessageService,

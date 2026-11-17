@@ -181,7 +181,7 @@ def test_my_permissions_and_the_catalog(client, world) -> None:
     assert mine["role"] == "user" and mine["is_platform_admin"] is False
     assert [(a["slug"], a["modules"]) for a in mine["areas"]] == [("calidad", {"pqrsf": "manage"})]
     calidad = next(a for a in catalog["areas"] if a["slug"] == "calidad")
-    assert [m["key"] for m in calidad["modules"]] == ["documentos", "pqrsf"]
+    assert [m["key"] for m in calidad["modules"]] == ["documentos", "pqrsf", "planes-accion"]
     assert catalog["actions"] == ["read", "manage"] and catalog["wildcard"] == "*"
 
 

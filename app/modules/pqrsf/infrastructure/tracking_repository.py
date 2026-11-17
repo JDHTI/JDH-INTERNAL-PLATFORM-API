@@ -131,6 +131,7 @@ def _dependency(model: DependencyModel) -> Dependency:
         is_active=model.is_active,
         created_at=model.created_at,
         updated_at=model.updated_at,
+        process_code=model.process_code,
     )
 
 

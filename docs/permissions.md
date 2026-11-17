@@ -59,6 +59,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | ti | `monitoreo` | tablero general y aplicativos | registrar, editar, borrar, chequear |
 | ti | `datawarehouse` | las pantallas del monitoreo del DWH | pedir una carga |
 | calidad | `pqrsf` | todos los casos en solo lectura, sugerencias, contactos, feedback, certificados, envíos | asignar, catálogos, ajustes, certificados, envíos |
+| calidad | `planes-accion` | toda la matriz P.04, indicadores y exportación a Excel | crear acciones (a mano o desde un caso), correcciones, causas, plan, calificar eficacia, nuevo intento, procedencias. Sin el módulo, un responsable ve sus acciones, marca sus filas y sube evidencias |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
 | bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, staging y cargas | crear y editar actualizaciones de cualquier lista **salvo las principales** y marcar ítems «Por validar». Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar ítems, descargar el staging y marcarlo cargado |

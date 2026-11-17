@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.modules.action_plans.presentation.router import router as action_plans_router
 from app.modules.app_monitoring.presentation.router import board_router as monitoring_board_router
 from app.modules.app_monitoring.presentation.router import router as app_monitoring_router
 from app.modules.areas.presentation.permissions_router import router as permissions_router
@@ -133,6 +134,7 @@ v1_router.include_router(pqrsf_item_delivery_router, tags=["pqrsf-tracking"])
 v1_router.include_router(pqrsf_classification_router, tags=["pqrsf-classification"])
 v1_router.include_router(pqrsf_supplier_messages_router, tags=["pqrsf-tracking"])
 v1_router.include_router(pqrsf_improvement_router, tags=["pqrsf-tracking"])
+v1_router.include_router(action_plans_router, tags=["action-plans"])
 
 # Register every versioned module explicitly here. Example:
 # from app.modules.orders.presentation.router import router as orders_router

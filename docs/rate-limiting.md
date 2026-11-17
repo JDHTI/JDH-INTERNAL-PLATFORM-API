@@ -55,6 +55,27 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 |---|---|---|---|
 | `GET` | `/health/live` | `sin límite` | Las sondas del orquestador siempre deben recibir respuesta |
 | `GET` | `/health/ready` | `sin límite` | Las sondas del orquestador siempre deben recibir respuesta |
+| `GET` | `/v1/action-plans` | `read` |  |
+| `POST` | `/v1/action-plans` | `relaxed` |  |
+| `GET` | `/v1/action-plans/catalog` | `read` |  |
+| `GET` | `/v1/action-plans/export` | `read` |  |
+| `POST` | `/v1/action-plans/from-case/{case_id}` | `relaxed` |  |
+| `GET` | `/v1/action-plans/indicators` | `read` |  |
+| `GET` | `/v1/action-plans/permissions` | `read` |  |
+| `POST` | `/v1/action-plans/processes` | `relaxed` |  |
+| `PATCH` | `/v1/action-plans/processes/{process_id}` | `relaxed` |  |
+| `DELETE` | `/v1/action-plans/{plan_id}` | `relaxed` |  |
+| `GET` | `/v1/action-plans/{plan_id}` | `read` |  |
+| `PATCH` | `/v1/action-plans/{plan_id}` | `relaxed` |  |
+| `PUT` | `/v1/action-plans/{plan_id}/activities` | `relaxed` |  |
+| `POST` | `/v1/action-plans/{plan_id}/activities/{activity_id}/rating` | `relaxed` |  |
+| `PUT` | `/v1/action-plans/{plan_id}/causes` | `relaxed` |  |
+| `PUT` | `/v1/action-plans/{plan_id}/corrections` | `relaxed` |  |
+| `POST` | `/v1/action-plans/{plan_id}/files` | `relaxed` |  |
+| `DELETE` | `/v1/action-plans/{plan_id}/files/{file_id}` | `relaxed` |  |
+| `GET` | `/v1/action-plans/{plan_id}/files/{file_id}/download` | `read` |  |
+| `POST` | `/v1/action-plans/{plan_id}/next-attempt` | `relaxed` |  |
+| `POST` | `/v1/action-plans/{plan_id}/rows/{row_id}/done` | `relaxed` |  |
 | `GET` | `/v1/app-monitoring/applications` | `read` |  |
 | `POST` | `/v1/app-monitoring/applications` | `relaxed` |  |
 | `DELETE` | `/v1/app-monitoring/applications/{application_id}` | `relaxed` |  |
