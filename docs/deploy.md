@@ -100,7 +100,9 @@ Cron (una vez, `crontab -e` del usuario del servidor):
 Restaurar la base:
 
 ```bash
+cd ~/apps/JDH-INTERNAL-PLATFORM-API
 export PLATFORM_API_ENV=~/apps/platform/api.env
+set -a; . "$PLATFORM_API_ENV"; set +a   # compose interpola las contraseñas, como deploy.sh
 C="docker compose -f deploy/compose.prod.yaml"
 $C stop api
 $C exec -T postgres pg_restore -U platform -d internal_platform --clean --if-exists \
