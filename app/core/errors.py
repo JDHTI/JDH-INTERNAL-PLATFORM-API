@@ -13,9 +13,11 @@ class ApplicationError(Exception):
 
     status_code: int = 400
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, extra: dict[str, object] | None = None) -> None:
         super().__init__(detail)
         self.detail = detail
+        # Machine-readable fields sent next to ``detail`` (e.g. the supports that overlap).
+        self.extra = extra or {}
 
 
 class UnauthenticatedError(ApplicationError):

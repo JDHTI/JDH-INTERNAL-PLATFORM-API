@@ -33,6 +33,7 @@ from app.modules.supplier_supports.domain.entities import (
     Trace,
 )
 from app.modules.supplier_supports.domain.filters import Group, SearchSpec
+from app.modules.supplier_supports.domain.overlap import overlaps
 from app.modules.supplier_supports.domain.profiles import Profile
 from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
 
@@ -69,10 +70,43 @@ class FakeLookup:
             "3474": SKU_3474,
             "1001": SKU_1001,
         }
-        self.customers = {"800116299": "LIMPIEZA Y MANTENIMIENTO DE ANTIOQUIA SAS"}
+        self.customers = {
+            "800116299": "LIMPIEZA Y MANTENIMIENTO DE ANTIOQUIA SAS",
+            "900430148": "GODDARD CATERING GROUP COLOMBIA",
+            "830012863": "GODDARD CATERING GROUP BOGOTA",
+        }
+        # A supplier's own codes: Familia's 72163 is JDH 1128; 99999 maps to two products.
+        self.supplier_codes = {
+            (FAMILIA_ID, "72163"): [SKU_1128],
+            (FAMILIA_ID, "99999"): [SKU_1128, SKU_8749],
+        }
+        self.groups = {
+            "GRUPO GODDARD": [
+                ("900430148", "GODDARD CATERING GROUP COLOMBIA"),
+                ("830012863", "GODDARD CATERING GROUP BOGOTA"),
+            ]
+        }
 
     async def products_by_sku(self, skus: Sequence[str]) -> dict[str, ProductRef]:
         return {sku: self.products[sku] for sku in skus if sku in self.products}
+
+    async def products_by_supplier_sku(self, supplier_id, supplier_skus):
+        found = {}
+        for sku in supplier_skus:
+            products = self.supplier_codes.get((supplier_id, sku.strip().upper()))
+            if products:
+                found[sku.strip().upper()] = products
+        return found
+
+    async def business_group_members(self, groups):
+        return {
+            group: self.groups[group.upper()] for group in groups if group.upper() in self.groups
+        }
+
+    async def business_groups(self, query, limit):
+        return [(name, len(items)) for name, items in self.groups.items() if query.upper() in name][
+            :limit
+        ]
 
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         return {code: self.suppliers[code] for code in codes if code in self.suppliers}
@@ -108,6 +142,53 @@ class FakeSupportRepository:
         self.traces: dict[UUID, Trace] = {}
         self.loads: list[LoadPlan] = []
 
+    async def live_in_groups(self, kinds):
+        return [
+            item
+            for item in self.items.values()
+            if item.data.status != "anulado" and item.data.is_enabled and item.data.kind in kinds
+        ]
+
+    async def pricing_context(self, product_sku, customer_nit):
+        margins = {"margin_list": Decimal("0.20"), "margin_wholesale": Decimal("0.12")}
+        return margins, Decimal("12"), "margin_list" if customer_nit else None, None
+
+    async def overlapping(self, data: SupportData, exclude=()) -> list[Support]:
+        return [
+            item
+            for item in self.items.values()
+            if item.id not in set(exclude) and overlaps(data, item.data)
+        ]
+
+    async def supersede(self, items, actor: str, now: datetime) -> list[Support]:
+        changed = []
+        for item in items:
+            current = self.items.get(item.support_id)
+            if current is None:
+                raise NotFoundError("Apoyo no encontrado")
+            if item.version is not None and current.version != item.version:
+                raise ConflictError("versión")
+            if current.data.status == "anulado":
+                raise ConflictError("ya está anulado")
+            starts = current.data.valid_from
+            if item.valid_to is not None and (starts is None or starts <= item.valid_to):
+                data = replace(current.data, valid_to=item.valid_to)
+                saved = replace(current, data=data, version=current.version + 1)
+                self.traces[item.support_id] = Trace("vencimiento")
+            else:
+                data = replace(current.data, status="anulado")
+                saved = replace(
+                    current,
+                    data=data,
+                    void_reason=item.reason,
+                    voided_at=now,
+                    version=current.version + 1,
+                )
+                self.traces[item.support_id] = Trace("anulacion")
+            self.items[item.support_id] = saved
+            changed.append(saved)
+        return changed
+
     async def create(
         self,
         support_id: UUID,
@@ -115,7 +196,9 @@ class FakeSupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede=(),
     ):
+        await self.supersede(supersede, actor, now)
         if data.source_key and any(
             item.data.source_key == data.source_key for item in self.items.values()
         ):
@@ -135,10 +218,13 @@ class FakeSupportRepository:
         self.traces[support_id] = trace or Trace("manual")
         return support
 
-    async def create_many(self, items, actor: str, now: datetime, trace: Trace | None = None):
+    async def create_many(
+        self, items, actor: str, now: datetime, trace: Trace | None = None, supersede=()
+    ):
         keys = [data.source_key for _, data in items if data.source_key]
         if len(keys) != len(set(keys)):
             raise ConflictError("duplicado")
+        await self.supersede(supersede, actor, now)
         # All or none, like the real transaction.
         return [
             await self.create(support_id, data, actor, now, trace or Trace("lote"))
@@ -160,6 +246,7 @@ class FakeSupportRepository:
                 raise ConflictError("versión")
         self.loads.append(plan)
         trace = Trace("carga", plan.load_id)
+        await self.supersede(plan.retirements, actor, now)
         for support_id, data in plan.creates:
             await self.create(support_id, data, actor, now, trace)
         for support_id, version, data in plan.updates:
@@ -179,6 +266,7 @@ class FakeSupportRepository:
             created=tuple(support_id for support_id, _ in plan.creates),
             updated=tuple(support_id for support_id, _, _ in plan.updates),
             expired=tuple(support_id for support_id, _, _ in plan.expirations),
+            retired=tuple(item.support_id for item in plan.retirements),
         )
 
     async def get(self, support_id: UUID) -> Support | None:
@@ -188,12 +276,15 @@ class FakeSupportRepository:
         support = self.items.get(support_id)
         return None if support is None else SupportRow(support=support, supplier_code="233")
 
-    async def update(self, support_id, data, expected_version, actor, now, trace=None):
+    async def update(
+        self, support_id, data, expected_version, actor, now, trace=None, supersede=()
+    ):
         current = self.items.get(support_id)
         if current is None:
             raise NotFoundError("Apoyo no encontrado")
         if current.version != expected_version:
             raise ConflictError("versión")
+        await self.supersede(supersede, actor, now)
         saved = replace(
             current, data=data, version=current.version + 1, updated_by=actor, updated_at=now
         )

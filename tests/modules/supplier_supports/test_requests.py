@@ -11,7 +11,12 @@ from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.pricing import derive
-from app.modules.supplier_supports.domain.requests import request_mode, validate_value
+from app.modules.supplier_supports.domain.requests import (
+    MARGIN_MODE,
+    legacy_mode,
+    request_mode,
+    validate_value,
+)
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
 
 
@@ -27,21 +32,21 @@ def test_invalid_net_cost(value):
         validate_value("costo_neto", Decimal(value))
 
 
-def test_all_other_methods_use_percentage():
-    assert request_mode("costo_neto") == "costo_neto"
-    for method in (
-        "pct_costo",
-        "pct_precio_lista",
-        "precio_neto",
-        "valor_unidad",
-        "puntos_margen",
-        "pct_ventas",
-        "margen_minimo",
-    ):
-        assert request_mode(method) == "porcentaje"
+def test_every_new_request_asks_for_the_authorized_minimum_margin():
+    for method in ("costo_neto", "pct_costo", "pct_precio_lista", "valor_precio_lista"):
+        assert request_mode(method) == MARGIN_MODE
+    # The earlier modes are kept to decide the requests still pending.
+    assert (legacy_mode("costo_neto"), legacy_mode("pct_costo")) == ("costo_neto", "porcentaje")
 
 
-def test_net_cost_keeps_supplier_amount_and_cancels_back_to_original():
+@pytest.mark.parametrize("value", ["1", "-0.01", "1.5"])
+def test_invalid_minimum_margins(value):
+    with pytest.raises(InvalidInputError):
+        validate_value(MARGIN_MODE, Decimal(value))
+
+
+def test_the_old_jdh_net_cost_is_history_and_no_longer_moves_the_figures():
+    # Rules v2: JDH supports with an authorized minimum margin, not with a net cost.
     data = SupportData(
         kind="tactico_cliente",
         calc_method="costo_neto",
@@ -52,13 +57,9 @@ def test_net_cost_keeps_supplier_amount_and_cancels_back_to_original():
         pack_factor=Decimal(10),
     )
     result = derive(data)
-    assert result.supplier_amount == 20
-    assert result.net_cost == 70
-    assert result.jdh_amount == 10
-    assert result.net_cost_per.unit == 7
-    original = derive(replace(data, jdh_net_cost=None))
-    assert original.net_cost == 80
-    assert original.supplier_amount == 20
+    assert result.supplier_amount == 2 and result.net_cost == 8  # per unit (box of 10)
+    assert result.jdh_amount is None and result.net_cost_per.box == 80
+    assert derive(replace(data, jdh_net_cost=None)) == result
 
 
 async def test_roles_and_ownership_are_enforced():

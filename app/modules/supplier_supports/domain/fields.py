@@ -63,13 +63,14 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         "kind",
-        "Clase de apoyo",
+        "Clase apoyo",
         GROUP_IDENTITY,
         CHOICE,
-        ("clase apoyo", "clase", "tipo"),
+        ("clase de apoyo", "clase", "tipo"),
         vocabulary.KINDS,
-        "Clase de apoyo. En la carga, si falta: excepcion_margen con margen mínimo, "
-        "tactico_cliente si hay NIT y actividad_temporal si no.",
+        "Apoyo táctico, Actividad descuento temporal o Excepción margen JDH. En la carga, si "
+        "falta: excepción con margen mínimo, táctico si hay NIT y actividad si no.",
+        core=True,
     ),
     FieldSpec(
         "funding",
@@ -107,7 +108,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         max_length=30,
         core=True,
     ),
-    FieldSpec("customer_branch_id", "Sucursal Cliente", GROUP_SCOPE, TEXT, ("sucursal",)),
+    FieldSpec(
+        "customer_branch_id",
+        "Sucursal",
+        GROUP_SCOPE,
+        TEXT,
+        ("sucursal cliente", "id sucursal"),
+        help="Solo esa sucursal del cliente. Vacío = todas.",
+        max_length=20,
+        core=True,
+    ),
     FieldSpec(
         "customer_name",
         "Cliente",
@@ -116,13 +126,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         ("razon social", "nombre cliente"),
         help="Se completa desde el maestro de clientes si se deja vacío.",
         max_length=300,
+        core=True,
     ),
     FieldSpec(
         "customer_group",
-        "Grupo Cliente",
+        "Grupo Empresarial",
         GROUP_SCOPE,
         TEXT,
-        ("grupo empresarial", "grupo"),
+        ("grupo cliente", "grupo"),
+        help="Nombre del grupo empresarial: crea un apoyo por cada cliente activo del grupo "
+        "(sin NIT).",
         max_length=200,
     ),
     FieldSpec(
@@ -173,11 +186,10 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50),
     FieldSpec(
         "calc_method",
-        "Tipo de apoyo",
+        "Tipo apoyo",
         GROUP_BENEFIT,
         CHOICE,
         (
-            "tipo apoyo",
             "tipo de apoyo",
             "metodo",
             "metodo calculo",
@@ -218,23 +230,31 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         "supported_margin_pct",
-        "Margen apoyado",
+        "Excepción margen mínimo autorizado JDH",
         GROUP_BENEFIT,
         FRACTION,
-        ("margen autorizado", "margen minimo apoyado", "margen apoyado autorizado"),
-        help="Hasta qué margen se autoriza bajar el producto sobre el margen que deja "
-        "el apoyo del proveedor (base: margen general del producto en el maestro de "
-        "márgenes). Con Tipo de apoyo = Margen mínimo es ese margen.",
+        (
+            "margen apoyado",
+            "margen autorizado",
+            "margen minimo apoyado",
+            "margen apoyado autorizado",
+            "excepcion margen minimo",
+            "margen minimo autorizado jdh",
+        ),
+        help="Margen mínimo que JDH autoriza sobre el apoyo: da el Precio Apoyado Mínimo = "
+        "(costo − apoyo) / (1 − margen). En una Excepción margen JDH es su margen.",
         core=True,
     ),
     FieldSpec(
         "value_unit",
-        "Unidad del valor",
+        "Unidad valor",
         GROUP_BENEFIT,
         CHOICE,
-        ("unidad del costo", "unidad", "unidad costo", "costo por"),
+        ("unidad del valor", "unidad del costo", "unidad", "unidad costo", "costo por"),
         vocabulary.VALUE_UNITS,
-        "Si el valor en pesos está por caja o por unidad. Vacío = se infiere del DWH.",
+        "Unidad o Caja: un valor en pesos por caja se divide por la unidad de empaque del "
+        "maestro de productos (vacía = 1). Vacío = unidad.",
+        core=True,
     ),
     FieldSpec(
         "target_margin_pct",
@@ -242,7 +262,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_BENEFIT,
         FRACTION,
         ("margen objetivo", "margen optimo", "% margen optimo", "% margen garantizado"),
-        help="Obligatorio con precio apoyado sin IVA.",
+        help="Obligatorio con % Margen Garantizado (el Valor apoyo es el precio apoyado).",
     ),
     FieldSpec(
         "min_margin_pct",
@@ -397,6 +417,34 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
 )
 
+# Rules v2: the order of the creation form and of the template (BI, 2026-11-17); the other
+# fields follow in their catalog order.
+_ORDER = (
+    "kind",
+    "calc_method",
+    "supplier_value",
+    "value_unit",
+    "supported_margin_pct",
+    "valid_from",
+    "valid_to",
+    "customer_nit",
+    "customer_name",
+    "customer_branch_id",
+    "customer_group",
+    "product_sku",
+    "supplier_sku",
+    "regionals",
+    "business_units",
+    "channels",
+    "warehouse",
+)
+FIELD_SPECS = tuple(
+    sorted(
+        FIELD_SPECS,
+        key=lambda spec: _ORDER.index(spec.name) if spec.name in _ORDER else len(_ORDER),
+    )
+)
+
 FIELDS: dict[str, FieldSpec] = {spec.name: spec for spec in FIELD_SPECS}
 
 # Calc methods whose ``supplier_value`` is a fraction of something (typed as a percentage).
@@ -418,25 +466,42 @@ _COMMON = ("reference_cost", "reference_list_price", "pack_factor", "value_unit"
 
 METHOD_RULES: dict[str, MethodRule] = {
     "pct_costo": MethodRule(
-        "percent", ("supplier_value",), _COMMON, "Fracción del costo: costo × valor."
+        "percent",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo = costo × %. Precio apoyado sugerido = precio lista − $ Apoyo.",
     ),
     "pct_precio_lista": MethodRule(
         "percent",
         ("supplier_value",),
         _COMMON,
-        "Fracción del precio lista, acreditada contra el costo.",
+        "$ Apoyo = precio lista × % (el valor absoluto se resta al costo). Precio apoyado "
+        "sugerido = precio lista − $ Apoyo.",
     ),
     "valor_unidad": MethodRule(
-        "money", ("supplier_value",), _COMMON, "Monto fijo por unidad (o caja)."
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo en costo, por unidad o por caja (la caja se divide por la unidad de empaque).",
+    ),
+    "valor_precio_lista": MethodRule(
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Apoyo que se descuenta del precio lista, por unidad o por caja.",
     ),
     "costo_neto": MethodRule(
-        "money", ("supplier_value",), _COMMON, "Costo apoyado pactado: costo − valor."
+        "money",
+        ("supplier_value",),
+        _COMMON,
+        "$ Costo apoyado pactado: $ Apoyo = costo − costo apoyado.",
     ),
     "precio_neto": MethodRule(
         "money",
         ("supplier_value", "target_margin_pct"),
         (*_COMMON, "target_margin_pct"),
-        "Precio neto pactado; el margen objetivo es el margen garantizado.",
+        "% Margen garantizado: el valor es el precio apoyado ya definido y el margen objetivo "
+        "es el margen garantizado. $ Apoyo = costo − precio apoyado × (1 − margen).",
     ),
     "puntos_margen": MethodRule(
         "percent",

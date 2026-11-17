@@ -1,6 +1,8 @@
 """HTTP contract of the supplier supports routes, over the real service and in-memory ports."""
 
+from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +11,7 @@ from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.requests import SupportRequestService
+from app.modules.supplier_supports.domain.entities import SupportCost
 from tests.modules.supplier_supports.conftest import person
 
 BASE = "/api/v1/supplier-supports"
@@ -42,6 +45,30 @@ class NoInternalRequests:
         return {"can_review_internal": False, "can_request_internal": False}
 
 
+class FakeCosts:
+    """The DWH cost with the quoter's rule: 1.000 per unit for every SKU."""
+
+    def __init__(self) -> None:
+        self.refreshed: list = []
+
+    async def refresh(self, support_ids):
+        self.refreshed.extend(support_ids)
+        return len(support_ids)
+
+    async def cost_of(self, product_sku, customer_nit):
+        return SupportCost(
+            support_id=uuid4(),
+            product_sku=product_sku,
+            plan_key="lista1-mayor",
+            plan_label="Lista 1",
+            unit_cost=Decimal("1000"),
+            source="inventario",
+            quote_cost=None,
+            inventory_cost=Decimal("1000"),
+            snapshot_date=None,
+        )
+
+
 @pytest.fixture
 def client(service):
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
@@ -54,6 +81,7 @@ def client(service):
             SupportRequestService(None, service.managers, service.managers, service.calendar)
         ),
         container.v1_container.internal_support_request_service.override(NoInternalRequests()),
+        container.v1_container.supplier_support_cost_service.override(FakeCosts()),
         TestClient(app) as test_client,
     ):
         yield test_client
@@ -265,6 +293,68 @@ def test_base_search_accepts_client_supplier_and_reference_independently(client,
     assert [item.field for item in repo.last_search.group.items[:-1]] == ["product_sku"]
     client.post(f"{BASE}/search", json={"state": "inactivo"})
     assert repo.last_search.state == "inactivo"
+
+
+def test_a_crossing_support_is_a_409_with_the_overlaps_and_can_replace_it(client) -> None:
+    first = client.post(BASE, json=NEW).json()
+
+    crossing = client.post(BASE, json={**NEW, "valid_from": "2026-11-01"})
+    assert crossing.status_code == 409
+    assert [item["id"] for item in crossing.json()["overlaps"]] == [first["id"]]
+
+    replaced = client.post(
+        BASE, json={**NEW, "valid_from": "2026-11-01", "on_overlap": "vencer_anterior"}
+    )
+    assert replaced.status_code == 201
+    assert client.get(f"{BASE}/{first['id']}").json()["valid_to"] == "2026-10-31"
+
+
+def test_mass_void_by_ids_with_the_observation(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+
+    missing = client.post(f"{BASE}/retire", json={"action": "anular", "reason": "Duplicado"})
+    response = client.post(
+        f"{BASE}/retire",
+        json={
+            "action": "anular",
+            "reason": "Duplicado",
+            "items": [{"id": created["id"], "version": 1}],
+        },
+    )
+
+    assert missing.status_code == 422
+    assert response.status_code == 200 and response.json()["voided"] == [created["id"]]
+    assert client.get(f"{BASE}/{created['id']}").json()["void_reason"] == "Duplicado"
+
+
+def test_the_preview_shows_the_form_figures_without_saving(client) -> None:
+    body = {**NEW, "supplier_value": "0.10", "supported_margin_pct": "0.08"}
+    body.pop("reference_cost")
+
+    response = client.post(f"{BASE}/preview", json=body)
+
+    assert response.status_code == 200
+    derived = response.json()["derived"]
+    # DWH cost 1.000, Food service 20 %: list price 1.250, 10 % of cost = 100 off.
+    assert derived["cost_basis"] == "dwh" and float(derived["list_price"]["unit"]) == 1250
+    assert float(derived["suggested_price"]) == 1150
+    assert float(derived["supported_price"]) == pytest.approx(900 / 0.92)
+    assert client.post(f"{BASE}/search", json={}).json()["total"] == 0  # nothing saved
+
+
+def test_comercial_never_sees_the_cost(client) -> None:
+    created = client.post(BASE, json=NEW).json()
+    assert created["reference_cost"] is not None  # BI sees it
+
+    client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
+    seen = client.post(f"{BASE}/search", json={}).json()["items"][0]
+
+    assert seen["reference_cost"] is None and seen["dwh_cost"] is None
+    assert seen["derived"]["cost"] == {"box": None, "unit": None}
+    assert seen["derived"]["net_cost"] is None and seen["derived"]["margin_order"] is None
+    # The prices and the support itself stay.
+    assert seen["supplier_value"] == created["supplier_value"]
+    assert "suggested_price" in seen["derived"] and "supported_price" in seen["derived"]
 
 
 def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:

@@ -143,6 +143,9 @@ class CustomerModel(Base):
     city: Mapped[str | None] = mapped_column(Text)
     salesperson_code: Mapped[str | None] = mapped_column(Text)
     salesperson_name: Mapped[str | None] = mapped_column(Text)
+    # The seller's team in ``consumo.vendedores`` (``equipo``, ``clase_equipo``).
+    sales_team: Mapped[str | None] = mapped_column(Text)
+    sales_team_class: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str | None] = mapped_column(Text)
     branch_state: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)

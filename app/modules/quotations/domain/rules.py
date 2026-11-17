@@ -23,7 +23,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
 from uuid import UUID
 
-from app.modules.commercial_masters.domain.margins import channel_field
+from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, OrderLine
 from app.modules.order_validation.domain.rules import (
     AMOUNT_METHODS,
@@ -113,6 +113,40 @@ def price_at_margin(
     if price <= 0:
         return None
     return pricing.round_price(price, family)
+
+
+def supported_price(
+    cost: Decimal | None,
+    support: Decimal,
+    target: Decimal | None,
+    family: str,
+    calc_method: str | None = None,
+) -> Decimal | None:
+    """Precio Apoyado Sugerido (rules v2): the list price minus the supplier's money.
+
+    The list price is the cost at ``target`` and the customer keeps exactly the support:
+    ``cost / (1 − target) − support``. Without money (a margin exception) it is the price at
+    ``target``; a % Margen Garantizado is priced at its guaranteed margin over the net cost,
+    which is its agreed supported price.
+    """
+
+    if cost is None or target is None or target >= ONE:
+        return None
+    if not support or calc_method == "precio_neto":
+        return price_at_margin(cost, support, target, family)
+    price = cost / (ONE - target) - support
+    if price <= 0:
+        return None
+    return pricing.round_price(price, family)
+
+
+def _list_target(agreement: Agreement, product_target: Decimal | None) -> Decimal | None:
+    """The margin the list price is set at: the support's own target, else the product's.
+
+    JDH's authorized minimum (``supported_margin_pct``) is a floor, never the target.
+    """
+
+    return required_margin(replace(agreement, supported_margin_pct=None), product_target)
 
 
 def price_for_margin(line: QuotationLine, target: Decimal, family: str) -> Decimal | None:
@@ -317,6 +351,7 @@ def _applied(
         needs_review=agreement.status == "pendiente_revision",
         valid_from=agreement.valid_from,
         valid_to=agreement.valid_to,
+        authorized_margin_pct=ratio(agreement.supported_margin_pct),
     )
 
 
@@ -384,7 +419,7 @@ def pick_support(
             continue
         method = agreement.calc_method
         if method in AMOUNT_METHODS:
-            share, how = share_of_cost(agreement)
+            share, how = share_of_cost(agreement, cost, product_target)
             if share is None:
                 candidates.append(_candidate(agreement, f"No se puede calcular: {how}"))
             else:
@@ -406,7 +441,7 @@ def pick_support(
             if other.id != chosen.id:
                 candidates.append(_candidate(other, "Otro apoyo trae más dinero"))
         amount = None if cost is None else share * cost
-        required = required_margin(chosen, product_target)
+        required = _list_target(chosen, product_target)
         applied = _applied(chosen, amount, share, required, f"Apoyo de {how}")
         if chosen.min_quantity is not None:
             problems.append("apoyo_condicionado")
@@ -487,10 +522,12 @@ def pick_list_support(
     options: list[tuple[SupportOption, Agreement, Decimal | None]] = []
     problems: list[str] = []
 
-    def prices(amount: Decimal, target: Decimal | None) -> tuple[Decimal | None, Decimal | None]:
-        floor = minimum_margin(target, policy)
+    def prices(
+        amount: Decimal, target: Decimal | None, authorized: Decimal | None = None
+    ) -> tuple[Decimal | None, Decimal | None]:
+        floor = authorized if authorized is not None else minimum_margin(target, policy)
         low = minimum_price(cost, amount, floor)
-        optimal = price_at_margin(cost, amount, target, family)
+        optimal = supported_price(cost, amount, target, family)
         if optimal is not None and low is not None:
             optimal = max(optimal, low)
         return low, optimal
@@ -518,7 +555,7 @@ def pick_list_support(
             problems.append("apoyo_en_revision")
         method = agreement.calc_method
         if method in AMOUNT_METHODS:
-            share, how = share_of_cost(agreement)
+            share, how = share_of_cost(agreement, cost, product_target)
             if share is None:
                 options.append(
                     (
@@ -529,9 +566,8 @@ def pick_list_support(
                 )
                 continue
             amount = money(share * cost) if cost is not None else None
-            required = required_margin(agreement, product_target)
-            target = required if required is not None else product_target
-            low, optimal = prices(amount or ZERO, target)
+            required = target = _list_target(agreement, product_target)
+            low, optimal = prices(amount or ZERO, target, agreement.supported_margin_pct)
             option = replace(
                 base,
                 detail=f"Apoyo de {how}",
@@ -629,6 +665,7 @@ def build_line(
     scope: CustomerScope | None,
     product: ProductMaster | None,
     supplier_name: str | None,
+    margin_field: str | None = None,
     cost: CostInfo | None,
     list_price: ListPrice | None,
     tax: ValueTaxKey | None,
@@ -668,8 +705,9 @@ def build_line(
     supplier_code = _first(
         product.supplier_code if product else None, source.supplier_code if source else None
     )
-    field_name = channel_field(channel)
-    product_target = product.margins.get(field_name) if product else None
+    # The customer's business-unit margin list (see ``customer_margin_field``).
+    field_name = margin_field or channel_field(channel)
+    product_target = margin_for(product.margins, field_name) if product else None
     basis = BASIS.get(field_name, "lista")
     cost_value, cost_source = pricing.effective_cost(
         cost.quote_cost if cost else None,
@@ -715,6 +753,9 @@ def build_line(
         problems.append("sin_margen_objetivo")
     amount = support.amount if support and support.amount is not None else ZERO
     floor = minimum_margin(target, policy)
+    if support is not None and support.authorized_margin_pct is not None:
+        # JDH authorized going down to this margin with the support (Precio Apoyado Mínimo).
+        floor = support.authorized_margin_pct
     # The liquor tax SIESA has in the customer's list; else the margin master's value for
     # the customer's regional (the Coast pays more on some SKUs).
     tax_amount = None
@@ -733,7 +774,9 @@ def build_line(
         last_price = money(sale.net_price) if sale else None
     current_with_support = margin(last_price, cost_value, amount)
     min_price = minimum_price(cost_value, amount, floor)
-    optimal = price_at_margin(cost_value, amount, target, price_family)
+    optimal = supported_price(
+        cost_value, amount, target, price_family, support.calc_method if support else None
+    )
     if optimal is not None and min_price is not None:
         optimal = max(optimal, min_price)
     return QuotationLine(
@@ -772,6 +815,8 @@ def build_line(
         min_price=min_price,
         support=support,
         support_candidates=candidates,
+        stock_on_hand=cost.stock if cost else None,
+        stock_available=cost.available if cost else None,
         problems=tuple(dict.fromkeys(problems)),
         origin=origin or (vocabulary.HISTORY if sale is not None else vocabulary.ADDED),
         last_sale_price=money(sale.net_price) if for_list and sale else None,

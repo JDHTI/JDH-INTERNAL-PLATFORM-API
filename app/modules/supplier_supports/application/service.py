@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import (
+    ConflictError,
+    DependencyUnavailableError,
+    ForbiddenError,
+    InvalidInputError,
+    NotFoundError,
+)
 from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
 from app.modules.identity.domain.principal import Principal
-from app.modules.supplier_supports.domain import filters, vocabulary
+from app.modules.supplier_supports.domain import filters, overlap, vocabulary
 from app.modules.supplier_supports.domain.entities import (
     Checked,
     Conflict,
@@ -21,12 +27,14 @@ from app.modules.supplier_supports.domain.entities import (
     LoadPlan,
     LoadResult,
     Support,
+    SupportCost,
     SupportData,
     SupportPage,
     SupportRow,
     SupportView,
     Trace,
 )
+from app.modules.supplier_supports.domain.overlap import Supersede
 from app.modules.supplier_supports.domain.ports import (
     Calendar,
     ManagerPolicy,
@@ -39,13 +47,33 @@ from app.modules.supplier_supports.domain.validity import validity_on
 
 MAX_PAGE_SIZE = 200
 MAX_BATCH = 500
+# Supports voided or expired in one mass action.
+MAX_RETIRE = 2000
 IMPORT_ACTOR = "importacion"
+# Fields whose change can make a support cross another (rules v2).
+_OVERLAP_FIELDS = (
+    "kind",
+    "commercial_supplier_id",
+    "customer_nit",
+    "customer_branch_id",
+    "customer_group",
+    "product_sku",
+    "supplier_sku",
+    "warehouse",
+    "regionals",
+    "channels",
+    "business_units",
+    "valid_from",
+    "valid_to",
+    "is_enabled",
+)
 
 _PCT_METHODS = ("pct_costo", "pct_precio_lista", "puntos_margen")
 _VALUE_REQUIRED = (
     "pct_costo",
     "pct_precio_lista",
     "valor_unidad",
+    "valor_precio_lista",
     "costo_neto",
     "precio_neto",
     "puntos_margen",
@@ -131,6 +159,7 @@ EDITABLE_FIELDS = frozenset(
         "valid_to",
         "status",
         "is_enabled",
+        "promo_warehouses",
         "tiers",
         *_TEXT_FIELDS,
         *_ARRAY_FIELDS,
@@ -220,6 +249,14 @@ class PrefetchedMasters:
 
     async def commercial_supplier_names(self, ids: Sequence[UUID]) -> dict[UUID, tuple[str, str]]:
         return await self.masters.commercial_supplier_names(ids)
+
+    async def products_by_supplier_sku(
+        self, supplier_id: UUID, supplier_skus: Sequence[str]
+    ) -> dict[str, list[ProductRef]]:
+        return await self.masters.products_by_supplier_sku(supplier_id, supplier_skus)
+
+    async def business_group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
+        return await self.masters.business_group_members(groups)
 
     async def commercial_suppliers_by_name(self, query: str) -> Any:
         return await self.masters.commercial_suppliers_by_name(query)
@@ -369,6 +406,15 @@ class SupplierSupportService:
             if supplier_id not in await lookup.commercial_supplier_names([supplier_id]):
                 raise InvalidInputError("El proveedor comercial no existe")
 
+        unchanged = previous is not None and (previous.supplier_sku, previous.product_sku) == (
+            data.supplier_sku,
+            data.product_sku,
+        )
+        if not data.product_sku and data.supplier_sku and supplier_id is not None and not unchanged:
+            data, issue = await self._jdh_sku_of(data, supplier_id, lookup, strict=strict)
+            if issue is not None:
+                issues.append(issue)
+
         product_id, brand = data.product_id, data.brand
         product: ProductRef | None = None
         if previous is not None and previous.product_sku == data.product_sku:
@@ -414,6 +460,33 @@ class SupplierSupportService:
         )
 
     @staticmethod
+    async def _jdh_sku_of(
+        data: SupportData, supplier_id: UUID, lookup: MasterLookup, *, strict: bool
+    ) -> tuple[SupportData, Issue | None]:
+        """The JDH SKU of a support written only with the supplier's SKU.
+
+        Without it a support would cover every product of the supplier. With ``strict`` an
+        unknown or ambiguous code is an error; otherwise it becomes an issue to review.
+        """
+
+        code = (data.supplier_sku or "").strip()
+        products = (await lookup.products_by_supplier_sku(supplier_id, [code])).get(
+            code.upper(), []
+        )
+        if len(products) == 1:
+            return replace(data, product_sku=products[0].sku), None
+        problem = (
+            f"El SKU de proveedor {code} corresponde a varias referencias JDH "
+            f"({', '.join(sorted(product.sku for product in products))}): escribe el SKU JDH"
+            if products
+            else f"El SKU de proveedor {code} no está en el maestro de productos: "
+            "escribe el SKU JDH"
+        )
+        if strict:
+            raise FieldError(problem, "supplier_sku")
+        return data, Issue("sku_sin_cruce", code, "supplier_sku")
+
+    @staticmethod
     def _fill_unit(data: SupportData, product: ProductRef) -> SupportData:
         """Complete the pack factor and the unit of the cost from the product master.
 
@@ -449,9 +522,33 @@ class SupplierSupportService:
             masters=masters,
         )
         self._check(prepared)
+        if previous is None or (previous.kind, previous.calc_method) != (
+            prepared.kind,
+            prepared.calc_method,
+        ):
+            self._check_class(prepared)
         if prepared.kind != "excepcion_margen" and prepared.commercial_supplier_id is None:
             raise InvalidInputError("El apoyo requiere un proveedor comercial")
         return prepared
+
+    @staticmethod
+    def _check_class(data: SupportData) -> None:
+        """Rules v2: only three classes, each with its types (a new or reclassified support)."""
+
+        if data.kind not in vocabulary.ACTIVE_KINDS:
+            labels = ", ".join(vocabulary.KIND_LABELS[kind] for kind in vocabulary.ACTIVE_KINDS)
+            raise FieldError(
+                f"La clase {vocabulary.KIND_LABELS.get(data.kind, data.kind)} ya no se crea "
+                f"(clases: {labels})",
+                "kind",
+            )
+        allowed = vocabulary.METHODS_BY_KIND[data.kind]
+        if data.calc_method not in allowed:
+            labels = ", ".join(vocabulary.CALC_METHOD_LABELS[method] for method in allowed)
+            raise FieldError(
+                f"{vocabulary.KIND_LABELS[data.kind]} admite estos tipos: {labels}",
+                "calc_method",
+            )
 
     # --------------------------------------------------------------- queries
 
@@ -479,10 +576,13 @@ class SupplierSupportService:
                 data,
                 row.dwh_cost.unit_cost if row.dwh_cost else None,
                 row.product_margin,
+                row.product_pack_factor,
             ),
             conflicts=row.conflicts,
             attachment_count=row.attachment_count,
             dwh_cost=row.dwh_cost,
+            business_group=data.customer_group or row.customer_business_group,
+            margin_list=row.margin_field,
         )
 
     async def get(self, support_id: UUID) -> SupportView:
@@ -651,11 +751,19 @@ class SupplierSupportService:
 
         return filters.catalog()
 
-    async def catalogs(self) -> dict[str, list[str]]:
-        """Closed vocabularies plus the scope values already in use."""
+    async def catalogs(self) -> dict[str, Any]:
+        """Closed vocabularies plus the scope values already in use.
+
+        ``active_kinds`` are the classes that can be created (rules v2) and
+        ``methods_by_kind`` the types each one admits; ``kinds`` keeps every stored class.
+        """
 
         values = await self.repository.scope_values()
         return {
+            "active_kinds": list(vocabulary.ACTIVE_KINDS),
+            "kind_labels": dict(vocabulary.KIND_LABELS),
+            "calc_method_labels": dict(vocabulary.CALC_METHOD_LABELS),
+            "methods_by_kind": {kind: list(m) for kind, m in vocabulary.METHODS_BY_KIND.items()},
             "kinds": list(vocabulary.KINDS),
             "fundings": list(vocabulary.FUNDINGS),
             "settlement_methods": list(vocabulary.SETTLEMENTS),
@@ -678,7 +786,13 @@ class SupplierSupportService:
     # ---------------------------------------------------------------- writes
 
     async def create(
-        self, principal: Principal, data: SupportData, *, supplier_code: str | None = None
+        self,
+        principal: Principal,
+        data: SupportData,
+        *,
+        supplier_code: str | None = None,
+        on_overlap: str | None = None,
+        overlap_reason: str | None = None,
     ) -> SupportView:
         """Create a support bound to real masters.
 
@@ -686,6 +800,9 @@ class SupplierSupportService:
             principal (Principal): The caller; must be a manager.
             data (SupportData): Support inputs.
             supplier_code (str | None): Commercial supplier code, instead of its id.
+            on_overlap (str | None): ``vencer_anterior`` or ``anular_anterior`` when it
+                crosses supports of the same class and scope; without it a crossing is a 409.
+            overlap_reason (str | None): The observation left on the supports it replaces.
 
         Returns:
             SupportView: The created support.
@@ -698,19 +815,75 @@ class SupplierSupportService:
 
         await self._require_manager(principal)
         prepared = await self._prepare(data, supplier_code=supplier_code, strict=True)
-        saved = await self.repository.create(uuid4(), prepared, principal.email, datetime.now(UTC))
+        plan = await self._overlaps([prepared], on_overlap, overlap_reason)
+        saved = await self.repository.create(
+            uuid4(), prepared, principal.email, datetime.now(UTC), supersede=plan
+        )
         return await self.get(saved.id)
+
+    async def _overlaps(
+        self,
+        items: Sequence[SupportData],
+        on_overlap: str | None,
+        reason: str | None,
+        exclude: Sequence[UUID] = (),
+    ) -> list[Supersede]:
+        """Rules v2: no two supports of the same class and scope in force on the same day.
+
+        Without ``on_overlap`` a crossing is a 409 that lists the supports crossed (in
+        ``overlaps``), so the person decides; with it, the plan that expires or voids them.
+
+        Raises:
+            ConflictError: If a support crosses another and no decision was given.
+            InvalidInputError: If two supports of the same request cross each other.
+        """
+
+        if on_overlap is not None and on_overlap not in overlap.OVERLAP_ACTIONS:
+            raise InvalidInputError(
+                f"on_overlap inválido (válidos: {', '.join(overlap.OVERLAP_ACTIONS)})"
+            )
+        plan: dict[UUID, Supersede] = {}
+        crossed: dict[UUID, Support] = {}
+        for index, data in enumerate(items):
+            if not overlap.is_live(data):
+                continue
+            if any(overlap.overlaps(data, other) for other in items[:index]):
+                raise InvalidInputError(
+                    f"El apoyo {index + 1} se cruza con otro del mismo envío (misma clase, "
+                    "cliente, referencia y vigencia)"
+                )
+            found = await self.repository.overlapping(data, exclude)
+            if not found:
+                continue
+            if on_overlap is None:
+                crossed.update((support.id, support) for support in found)
+                continue
+            for item in overlap.supersede(data, found, on_overlap, _clean(reason)):
+                plan.setdefault(item.support_id, item)
+        if crossed:
+            listed = list(crossed.values())
+            raise ConflictError(
+                f"Se cruza con {len(listed)} apoyo(s) vigente(s) de la misma clase, cliente y "
+                "referencia. Indica si se vence o se anula el anterior (on_overlap).",
+                extra={"overlaps": [overlap.describe(support) for support in listed]},
+            )
+        return list(plan.values())
 
     async def create_many(
         self,
         principal: Principal,
         items: Sequence[tuple[SupportData, str | None]],
+        *,
+        on_overlap: str | None = None,
+        overlap_reason: str | None = None,
     ) -> list[SupportView]:
         """Create several supports; all are validated before any is written.
 
         Args:
             principal (Principal): The caller; must be a manager.
             items (Sequence[tuple[SupportData, str | None]]): Inputs with supplier code.
+            on_overlap (str | None): What happens to the supports they cross.
+            overlap_reason (str | None): The observation left on those supports.
 
         Returns:
             list[SupportView]: The created supports, in order.
@@ -722,13 +895,20 @@ class SupplierSupportService:
         prepared = [
             await self._prepare(data, supplier_code=code, strict=True) for data, code in items
         ]
-        return await self._save_all(principal, prepared)
+        plan = await self._overlaps(prepared, on_overlap, overlap_reason)
+        return await self._save_all(principal, prepared, plan)
 
     async def _save_all(
-        self, principal: Principal, prepared: Sequence[SupportData]
+        self,
+        principal: Principal,
+        prepared: Sequence[SupportData],
+        supersede: Sequence[Supersede] = (),
     ) -> list[SupportView]:
         created = await self.repository.create_many(
-            [(uuid4(), data) for data in prepared], principal.email, datetime.now(UTC)
+            [(uuid4(), data) for data in prepared],
+            principal.email,
+            datetime.now(UTC),
+            supersede=supersede,
         )
         return [await self.get(support.id) for support in created]
 
@@ -769,6 +949,105 @@ class SupplierSupportService:
                 checked.append(Checked(error=exc.detail, field=getattr(exc, "field", None)))
         return checked
 
+    async def create_for_group(
+        self,
+        principal: Principal,
+        data: SupportData,
+        *,
+        supplier_code: str | None = None,
+        on_overlap: str | None = None,
+        overlap_reason: str | None = None,
+    ) -> list[SupportView]:
+        """One support per active customer of ``data.customer_group``, all or none.
+
+        Raises:
+            InvalidInputError: Without a group, with a NIT too, or a group with no customers.
+        """
+
+        await self._require_manager(principal)
+        group = _clean(data.customer_group)
+        if not group:
+            raise FieldError("Escribe el grupo empresarial", "customer_group")
+        if data.customer_nit:
+            raise FieldError("Con grupo empresarial deja el NIT vacío", "customer_nit")
+        members = (await self.group_members([group])).get(group, [])
+        if not members:
+            raise FieldError(
+                f"El grupo empresarial {group} no tiene clientes activos", "customer_group"
+            )
+        if len(members) > MAX_BATCH:
+            raise InvalidInputError(f"El grupo tiene {len(members)} clientes; máximo {MAX_BATCH}")
+        items = [
+            (
+                replace(data, customer_group=group, customer_nit=nit, customer_name=name),
+                supplier_code,
+            )
+            for nit, name in members
+        ]
+        return await self.create_many(
+            principal, items, on_overlap=on_overlap, overlap_reason=overlap_reason
+        )
+
+    async def business_groups(self, query: str) -> list[tuple[str, int]]:
+        """Business groups whose name contains ``query``, with their active customers."""
+
+        text = _clean(query)
+        if not text or len(text) < 2:
+            return []
+        return await self.masters.business_groups(text, 20)
+
+    async def preview(
+        self,
+        principal: Principal,
+        data: SupportData,
+        *,
+        supplier_code: str | None,
+        cost: Callable[[str, str | None], Awaitable[SupportCost]] | None = None,
+    ) -> SupportView:
+        """The figures of a support before saving it (the creation form).
+
+        The same checks as a creation, the DWH cost with the quoter's rule (``cost``; without
+        it, or with the DWH down, the reference cost), the optimal margin of the customer's
+        list and the product master's pack factor. Nothing is written.
+        """
+
+        await self._require_manager(principal)
+        prepared = await self._prepare(data, supplier_code=supplier_code, strict=True)
+        margins, pack, field, group = await self.repository.pricing_context(
+            prepared.product_sku, prepared.customer_nit
+        )
+        dwh = None
+        if cost is not None and prepared.product_sku:
+            try:
+                dwh = await cost(prepared.product_sku, prepared.customer_nit)
+            except DependencyUnavailableError:
+                dwh = None
+        now = datetime.now(UTC)
+        row = SupportRow(
+            support=Support(
+                id=uuid4(),
+                data=prepared,
+                void_reason=None,
+                voided_at=None,
+                created_by=principal.email,
+                updated_by=principal.email,
+                version=0,
+                created_at=now,
+                updated_at=now,
+            ),
+            dwh_cost=dwh,
+            product_margins=margins,
+            product_pack_factor=pack,
+            customer_margin_field=field,
+            customer_business_group=group,
+        )
+        return self._view(row, self.calendar.today())
+
+    async def group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
+        """Active customers ``(nit, name)`` of each business group (by its name)."""
+
+        return await self.masters.business_group_members(groups)
+
     def validate(self, data: SupportData) -> None:
         """The rules that need no lookup, on an already resolved support (a merged version).
 
@@ -808,8 +1087,13 @@ class SupplierSupportService:
         expected_version: int,
         changes: Mapping[str, Any],
         supplier_code: str | None = None,
+        on_overlap: str | None = None,
+        overlap_reason: str | None = None,
     ) -> SupportView:
         """Apply the fields the client sent; the rest stays as it is.
+
+        A change of scope, dates or switch that makes it cross another support of the same
+        class is refused like a creation, unless ``on_overlap`` says what to do with it.
 
         Args:
             principal (Principal): The caller; must be a manager.
@@ -850,10 +1134,67 @@ class SupplierSupportService:
         prepared = await self._prepare(
             merged, supplier_code=supplier_code, strict=True, previous=current.data
         )
+        plan: list[Supersede] = []
+        if any(getattr(prepared, name) != getattr(current.data, name) for name in _OVERLAP_FIELDS):
+            plan = await self._overlaps([prepared], on_overlap, overlap_reason, (support_id,))
         saved = await self.repository.update(
-            support_id, prepared, expected_version, principal.email, datetime.now(UTC)
+            support_id,
+            prepared,
+            expected_version,
+            principal.email,
+            datetime.now(UTC),
+            supersede=plan,
         )
         return await self.get(saved.id)
+
+    async def retire_many(
+        self,
+        principal: Principal,
+        action: str,
+        reason: str,
+        *,
+        items: Sequence[tuple[UUID, int | None]] = (),
+        criteria: Mapping[str, Any] | None = None,
+        last_day: date | None = None,
+    ) -> list[Support]:
+        """Void or expire several supports at once, with the observation; all or none.
+
+        Args:
+            principal (Principal): The caller; must be a manager.
+            action (str): ``anular`` or ``vencer``.
+            reason (str): Why (``void_reason``; an expiry adds it to the notes).
+            items (Sequence[tuple[UUID, int | None]]): The supports chosen, with the version
+                the person saw (``None``: the current one).
+            criteria (Mapping[str, Any] | None): Or every support a search matches (the
+                keyword arguments of :meth:`search`), voided ones excluded.
+            last_day (date | None): Last day in force of an expiry (default yesterday). A
+                programmed support that starts later is voided instead.
+
+        Returns:
+            list[Support]: The supports changed.
+
+        Raises:
+            InvalidInputError: If the action, the observation or the selection is invalid.
+            ConflictError: If one is already voided or changed since it was seen.
+        """
+
+        await self._require_manager(principal)
+        if action not in ("anular", "vencer"):
+            raise InvalidInputError("La acción debe ser anular o vencer")
+        text = _clean(reason)
+        if not text:
+            raise InvalidInputError("Indica la observación: por qué se anulan o se vencen")
+        chosen = dict(items)
+        if criteria is not None:
+            found = await self.search_ids(MAX_RETIRE + 1, **{**criteria, "include_voided": False})
+            chosen.update((support_id, None) for support_id in found if support_id not in chosen)
+        if not 1 <= len(chosen) <= MAX_RETIRE:
+            raise InvalidInputError(f"Selecciona entre 1 y {MAX_RETIRE} apoyos")
+        day = None
+        if action == "vencer":
+            day = last_day or self.calendar.today() - timedelta(days=1)
+        plan = [Supersede(support_id, version, day, text) for support_id, version in chosen.items()]
+        return await self.repository.supersede(plan, principal.email, datetime.now(UTC))
 
     async def void(
         self, principal: Principal, support_id: UUID, *, expected_version: int, reason: str

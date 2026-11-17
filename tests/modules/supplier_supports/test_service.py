@@ -292,7 +292,7 @@ async def test_the_state_people_see_is_the_validity_or_voided_and_review_is_a_fl
         supplier_code="233",
     )
     future = await service.create(
-        manager, tactic(valid_from=date(2027, 1, 1), valid_to=None), supplier_code="233"
+        manager, tactic(valid_from=date(2027, 2, 1), valid_to=None), supplier_code="233"
     )
     pending = await service.import_support(
         tactic(product_sku="0000", source_key="Familia:9"), supplier_code="233"
@@ -353,7 +353,12 @@ async def test_a_unit_declared_by_the_sheet_or_by_a_person_is_never_overridden(
     )
     person_set = await service.create(
         manager,
-        tactic(product_sku="3474", reference_cost=D("13783"), value_unit="caja"),
+        tactic(
+            product_sku="3474",
+            reference_cost=D("13783"),
+            value_unit="caja",
+            customer_nit="900430148",
+        ),
         supplier_code="233",
     )
 
@@ -370,7 +375,8 @@ async def test_a_cost_that_matches_neither_unit_nor_box_stays_without_unit(
 
     assert view.support.data.value_unit is None
     assert view.support.data.unit_basis_source == "desconocido"
-    assert view.derived.net_cost_per.unit is None
+    # The figures read an undeclared unit as per unit.
+    assert view.derived.net_cost_per.unit == view.derived.net_cost
 
 
 async def test_changing_the_unit_by_hand_records_the_provenance(service, manager) -> None:
@@ -381,6 +387,45 @@ async def test_changing_the_unit_by_hand_records_the_provenance(service, manager
     )
 
     assert updated.support.data.unit_basis_source == "manual"
+
+
+async def test_only_the_three_classes_and_their_types_are_created(service, manager) -> None:
+    with pytest.raises(InvalidInputError, match="ya no se crea"):
+        await service.create(manager, tactic(kind="lista_especial"), supplier_code="233")
+    with pytest.raises(InvalidInputError, match="admite estos tipos"):
+        await service.create(
+            manager,
+            tactic(calc_method="puntos_margen", supplier_value=D("0.02")),
+            supplier_code="233",
+        )
+    with pytest.raises(InvalidInputError, match="admite estos tipos"):
+        await service.create(
+            manager, tactic(kind="actividad_temporal", customer_nit=None), supplier_code="233"
+        )
+    created = await service.create(
+        manager,
+        tactic(calc_method="valor_precio_lista", supplier_value=D("250")),
+        supplier_code="233",
+    )
+    assert created.derived.supplier_amount == D("250")
+
+
+async def test_a_legacy_support_keeps_its_class_when_other_fields_change(
+    service, repo, manager
+) -> None:
+    legacy = await service.import_support(
+        tactic(kind="lista_especial", source_key="legacy:1"), supplier_code="233"
+    )
+
+    updated = await service.update(
+        manager, legacy.support_id, expected_version=1, changes={"notes": "revisado"}
+    )
+
+    assert updated.support.data.kind == "lista_especial"
+    with pytest.raises(InvalidInputError, match="ya no se crea"):
+        await service.update(
+            manager, legacy.support_id, expected_version=2, changes={"kind": "rebate"}
+        )
 
 
 async def test_a_support_can_be_switched_off_and_on_without_voiding_it(service, manager) -> None:

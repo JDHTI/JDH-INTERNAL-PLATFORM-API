@@ -106,6 +106,15 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
+    # Every morning: a programmed support that starts replaces the previous one.
+    JobDefinition(
+        "supplier-supports-rollover",
+        "Apoyos: programados reemplazan al anterior",
+        "Vence el día anterior el apoyo que un apoyo programado de la misma clase, cliente y "
+        "referencia reemplaza, para que nunca se crucen",
+        "identidad",
+        EVERY_DAY,
+    ),
     # After the supply load: the price lists and the inventory are the day's.
     JobDefinition(
         "main-lists-sync",

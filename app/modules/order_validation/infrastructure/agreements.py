@@ -7,14 +7,22 @@ from collections.abc import Sequence
 from sqlalchemy import and_, or_, select
 
 from app.infrastructure.database import Database
-from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
+from app.modules.commercial_masters.domain.margins import (
+    MARGIN_FIELDS,
+    branches_margin_field,
+    majority,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
     ProductModel,
 )
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, ProductInfo
-from app.modules.supplier_supports.infrastructure.models import SupplierSupportModel
+from app.modules.supplier_supports.domain.vocabulary import ACTIVE_KINDS
+from app.modules.supplier_supports.infrastructure.models import (
+    SupplierSupportCostModel,
+    SupplierSupportModel,
+)
 
 S = SupplierSupportModel
 # `source` of the supports imported from the workbook's `Condiciones Especiales` table.
@@ -55,13 +63,22 @@ class SqlAlchemyAgreementSource:
         customer = [] if many else [or_(S.customer_nit.is_(None), S.customer_nit.in_(list(nits)))]
         product = or_(S.product_sku.is_(None), S.product_sku.in_(list(skus)))
         query = (
-            select(S, CommercialSupplierModel.code)
+            select(
+                S,
+                CommercialSupplierModel.code,
+                ProductModel.pack_factor,
+                SupplierSupportCostModel.unit_cost,
+            )
             .outerjoin(
                 CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id
             )
+            .outerjoin(ProductModel, ProductModel.id == S.product_id)
+            .outerjoin(SupplierSupportCostModel, SupplierSupportCostModel.support_id == S.id)
             .where(
                 S.status != "anulado",
                 S.is_enabled.is_(True),
+                # Rules v2: only the three classes apply; rebates and budgets wait apart.
+                S.kind.in_(ACTIVE_KINDS),
                 # The special conditions of the workbook stay documented, not applied: some
                 # cannot be automated (docs/condiciones-especiales.md).
                 or_(S.source.is_(None), ~S.source.ilike(SPECIAL_CONDITIONS_SOURCE)),
@@ -97,8 +114,15 @@ class SqlAlchemyAgreementSource:
                 min_quantity=model.min_quantity,
                 valid_from=model.valid_from,
                 valid_to=model.valid_to,
+                value_unit=model.value_unit,
+                pack_factor=pack if pack is not None else model.pack_factor,
+                dwh_unit_cost=unit_cost,
+                supported_margin_pct=model.supported_margin_pct,
+                customer_branch_id=model.customer_branch_id,
+                customer_group=model.customer_group,
+                promo_warehouses=model.promo_warehouses,
             )
-            for model, code in rows
+            for model, code, pack, unit_cost in rows
             if not many or model.customer_nit is None or model.customer_nit in wanted
         ]
 
@@ -144,24 +168,34 @@ class SqlAlchemyAgreementSource:
                             CustomerModel.channel,
                             CustomerModel.business_unit,
                             CustomerModel.billing_center,
+                            CustomerModel.billing_center_code,
+                            CustomerModel.sales_team_class,
+                            CustomerModel.branch_id,
+                            CustomerModel.business_group,
+                            CustomerModel.is_active,
                         ).where(CustomerModel.nit.in_(unique[start : start + _CHUNK]))
                     )
                 ).all()
-        merged: dict[str, tuple[set[str], set[str], set[str]]] = {}
-        for nit, channel, unit, regional in rows:
-            channels, units, regionals = merged.setdefault(nit, (set(), set(), set()))
-            for target, value in ((channels, channel), (units, unit), (regionals, regional)):
-                if value:
-                    target.add(value)
-        return {
-            nit: CustomerScope(
-                nit=nit,
-                channels=frozenset(channels),
-                business_units=frozenset(units),
-                regionals=frozenset(regionals),
-            )
-            for nit, (channels, units, regionals) in merged.items()
-        }
+        by_nit: dict[str, list] = {}
+        for row in rows:
+            by_nit.setdefault(row.nit, []).append(row)
+        return {nit: customer_scope(nit, branches) for nit, branches in by_nit.items()}
+
+
+def customer_scope(nit: str, branches: Sequence) -> CustomerScope:
+    """Merge the branches of a client: every channel, unit and regional counts for the scope;
+    the margin list follows the majority of the active branches (C.O., team, channel).
+    """
+
+    return CustomerScope(
+        nit=nit,
+        channels=frozenset(b.channel for b in branches if b.channel),
+        business_units=frozenset(b.business_unit for b in branches if b.business_unit),
+        regionals=frozenset(b.billing_center for b in branches if b.billing_center),
+        margin_field=branches_margin_field(branches),
+        branches=frozenset(b.branch_id for b in branches if b.branch_id),
+        business_group=majority(branch.business_group for branch in branches),
+    )
 
 
 __all__ = ["SqlAlchemyAgreementSource"]

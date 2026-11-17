@@ -25,6 +25,11 @@ from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.margins import (
+    MARGIN_FIELDS,
+    branches_margin_field,
+    majority,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
@@ -49,6 +54,7 @@ from app.modules.supplier_supports.domain.filters import (
     SearchSpec,
     SortKey,
 )
+from app.modules.supplier_supports.domain.overlap import Supersede, overlaps
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportAttachmentModel,
     SupplierSupportCostModel,
@@ -363,12 +369,71 @@ def _base() -> Select[Any]:
             CommercialSupplierModel.name,
             ProductModel.description,
             ProductModel.brand,
-            ProductModel.margin_list,
+            ProductModel.pack_factor,
+            *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
         )
         .select_from(S)
         .outerjoin(CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id)
         .outerjoin(ProductModel, ProductModel.id == S.product_id)
     )
+
+
+async def customer_profiles(session: Any, nits: Sequence[str]) -> dict[str, tuple[str, str | None]]:
+    """``{nit: (margin list, business group)}``: the majority of its active branches decides
+    the list; the group is the one most of its branches have."""
+
+    unique = sorted({nit for nit in nits if nit})
+    if not unique:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                CustomerModel.nit,
+                CustomerModel.channel,
+                CustomerModel.billing_center_code,
+                CustomerModel.sales_team_class,
+                CustomerModel.business_group,
+                CustomerModel.is_active,
+            ).where(CustomerModel.nit.in_(unique))
+        )
+    ).all()
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(row.nit, []).append(row)
+    return {
+        nit: (branches_margin_field(branches), majority(b.business_group for b in branches))
+        for nit, branches in grouped.items()
+    }
+
+
+def _rows(
+    results: Sequence[Any],
+    tiers: dict[UUID, list[Any]],
+    conflicts: dict[UUID, list[UUID]],
+    attachments: dict[UUID, int],
+    costs: dict[UUID, SupportCost],
+    profiles: dict[str, tuple[str, str | None]],
+) -> list[SupportRow]:
+    rows = []
+    for model, code, name, description, brand, pack, *margins in results:
+        margin_field, group = profiles.get(model.customer_nit or "", (None, None))
+        rows.append(
+            SupportRow(
+                support=_support(model, tiers.get(model.id, [])),
+                supplier_code=code,
+                supplier_name=name,
+                product_description=description,
+                product_brand=brand,
+                conflicts=tuple(conflicts.get(model.id, ())),
+                attachment_count=attachments.get(model.id, 0),
+                dwh_cost=costs.get(model.id),
+                product_margins=dict(zip(MARGIN_FIELDS, margins, strict=True)),
+                product_pack_factor=pack,
+                customer_margin_field=margin_field,
+                customer_business_group=group,
+            )
+        )
+    return rows
 
 
 class SqlAlchemySupportRepository:
@@ -394,6 +459,139 @@ class SqlAlchemySupportRepository:
             grouped.setdefault(tier.support_id, []).append(tier)
         return grouped
 
+    async def live_in_groups(self, kinds: Sequence[str]) -> list[Support]:
+        """Live supports of these classes that share supplier, class, customer and SKU with
+        another live one (the only ones that can cross or replace each other)."""
+
+        live = and_(S.status != "anulado", S.is_enabled.is_(True), S.kind.in_(list(kinds)))
+        counted = (
+            select(
+                S.id,
+                func.count()
+                .over(
+                    partition_by=(
+                        S.commercial_supplier_id,
+                        S.kind,
+                        func.coalesce(S.customer_nit, ""),
+                        func.coalesce(S.product_sku, S.supplier_sku, ""),
+                    )
+                )
+                .label("peers"),
+            )
+            .where(live)
+            .subquery()
+        )
+        async with self.database.session_factory() as session:
+            models = list(
+                (
+                    await session.execute(
+                        select(S).where(S.id.in_(select(counted.c.id).where(counted.c.peers > 1)))
+                    )
+                ).scalars()
+            )
+            tiers = await self._tiers(session, [model.id for model in models])
+        return [_support(model, tiers.get(model.id, [])) for model in models]
+
+    async def pricing_context(
+        self, product_sku: str | None, customer_nit: str | None
+    ) -> tuple[dict[str, Any], Any, str | None, str | None]:
+        """``(product margins, pack factor, customer margin list, customer group)`` for a
+        support not saved yet (the form preview)."""
+
+        margins: dict[str, Any] = {}
+        pack = None
+        async with self.database.session_factory() as session:
+            if product_sku:
+                row = (
+                    await session.execute(
+                        select(
+                            ProductModel.pack_factor,
+                            *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
+                        ).where(ProductModel.sku == product_sku)
+                    )
+                ).first()
+                if row is not None:
+                    pack, *values = row
+                    margins = dict(zip(MARGIN_FIELDS, values, strict=True))
+            profiles = await customer_profiles(session, [customer_nit] if customer_nit else [])
+        field, group = profiles.get(customer_nit or "", (None, None))
+        return margins, pack, field, group
+
+    async def overlapping(self, data: SupportData, exclude: Sequence[UUID] = ()) -> list[Support]:
+        """Live supports that cross ``data`` (same class and scope, validities that overlap)."""
+
+        conditions = [
+            S.status != "anulado",
+            S.is_enabled.is_(True),
+            S.kind == data.kind,
+            _same(S.customer_nit, data.customer_nit),
+        ]
+        if data.commercial_supplier_id is None:
+            conditions.append(S.commercial_supplier_id.is_(None))
+        else:
+            conditions.append(S.commercial_supplier_id == data.commercial_supplier_id)
+        if data.product_sku:
+            conditions.append(S.product_sku == data.product_sku)
+        if exclude:
+            conditions.append(S.id.not_in(list(exclude)))
+        async with self.database.session_factory() as session:
+            models = list((await session.execute(select(S).where(*conditions))).scalars())
+            tiers = await self._tiers(session, [model.id for model in models])
+        supports = [_support(model, tiers.get(model.id, [])) for model in models]
+        return [support for support in supports if overlaps(data, support.data)]
+
+    async def _supersede(
+        self,
+        session: Any,
+        items: Sequence[Supersede],
+        actor: str,
+        now: datetime,
+        load_id: UUID | None = None,
+    ) -> list[SupplierSupportModel]:
+        """Expire or void the supports a new one replaces (locked, version-checked)."""
+
+        changed: list[SupplierSupportModel] = []
+        for item in items:
+            model = (
+                await session.execute(select(S).where(S.id == item.support_id).with_for_update())
+            ).scalar_one_or_none()
+            if model is None:
+                raise NotFoundError(f"Apoyo no encontrado: {item.support_id}")
+            if item.version is not None and model.version != item.version:
+                raise ConflictError(
+                    "Un apoyo cambió mientras guardabas; recarga y vuelve a intentarlo"
+                )
+            if model.status == "anulado":
+                raise ConflictError(f"El apoyo {item.support_id} ya está anulado")
+            expires = item.valid_to is not None and (
+                model.valid_from is None or model.valid_from <= item.valid_to
+            )
+            if expires:
+                model.valid_to = item.valid_to
+                line = f"Vencido al {item.valid_to.isoformat()}: {item.reason}"
+                model.notes = f"{model.notes}\n{line}" if model.notes else line
+                _stamp(model, actor, now, Trace("vencimiento", load_id))
+            else:
+                model.status = "anulado"
+                model.void_reason = item.reason
+                model.voided_at = now
+                _stamp(model, actor, now, Trace("anulacion", load_id))
+            changed.append(model)
+        await session.flush()
+        return changed
+
+    async def supersede(
+        self, items: Sequence[Supersede], actor: str, now: datetime
+    ) -> list[Support]:
+        """Expire or void several supports in one transaction (all or none)."""
+
+        async with self.database.session_factory() as session:
+            changed = await self._supersede(session, items, actor, now)
+            await queue_supports(session, changed)
+            await session.commit()
+            tiers = await self._tiers(session, [model.id for model in changed])
+            return [_support(model, tiers.get(model.id, [])) for model in changed]
+
     async def create(
         self,
         support_id: UUID,
@@ -401,20 +599,25 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support:
-        """Insert a support and its tiers, and queue its first version for the DWH."""
+        """Insert a support and its tiers, and queue its first version for the DWH.
+
+        ``supersede`` expires or voids, in the same transaction, the supports it replaces.
+        """
 
         model = _new_model(support_id, data, actor, now, trace or Trace("manual"))
         if data.status == "anulado":
             model.voided_at = now
         tiers = _tier_models(support_id, data.tiers)
         async with self.database.session_factory() as session:
+            replaced = await self._supersede(session, supersede, actor, now)
             session.add(model)
             try:
                 await session.flush()
                 session.add_all(tiers)
                 await session.flush()
-                await queue_supports(session, [model])
+                await queue_supports(session, [*replaced, model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -427,6 +630,7 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> list[Support]:
         """Insert several supports and their tiers in one transaction: all or none."""
 
@@ -439,12 +643,13 @@ class SqlAlchemySupportRepository:
             for support_id, data in items
         ]
         async with self.database.session_factory() as session:
+            replaced = await self._supersede(session, supersede, actor, now)
             session.add_all([model for model, _ in models])
             try:
                 await session.flush()
                 session.add_all([tier for _, tiers in models for tier in tiers])
                 await session.flush()
-                await queue_supports(session, [model for model, _ in models])
+                await queue_supports(session, [*replaced, *(model for model, _ in models)])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -468,22 +673,15 @@ class SqlAlchemySupportRepository:
             result = (await session.execute(_base().where(S.id == support_id))).first()
             if result is None:
                 return None
-            model, code, name, description, brand, margin = result
-            tiers = (await self._tiers(session, [support_id])).get(support_id, [])
-            conflicts = await self._conflict_ids(session, [support_id])
-            attachments = await self._attachment_counts(session, [support_id])
-            costs = await _costs(session, [support_id])
-            return SupportRow(
-                support=_support(model, tiers),
-                supplier_code=code,
-                supplier_name=name,
-                product_description=description,
-                product_brand=brand,
-                conflicts=tuple(conflicts.get(support_id, ())),
-                attachment_count=attachments.get(support_id, 0),
-                dwh_cost=costs.get(support_id),
-                product_margin=margin,
-            )
+            ids = [support_id]
+            return _rows(
+                [result],
+                await self._tiers(session, ids),
+                await self._conflict_ids(session, ids),
+                await self._attachment_counts(session, ids),
+                await _costs(session, ids),
+                await customer_profiles(session, [result[0].customer_nit]),
+            )[0]
 
     async def update(
         self,
@@ -493,6 +691,7 @@ class SqlAlchemySupportRepository:
         actor: str,
         now: datetime,
         trace: Trace | None = None,
+        supersede: Sequence[Supersede] = (),
     ) -> Support:
         """Replace a support's data when its version still matches."""
 
@@ -506,9 +705,10 @@ class SqlAlchemySupportRepository:
                 raise NotFoundError("Apoyo no encontrado")
             if model.version != expected_version:
                 raise ConflictError("El apoyo cambió desde que lo abriste; recárgalo")
+            replaced = await self._supersede(session, supersede, actor, now)
             tiers = await self._replace(session, model, data, actor, now, trace or Trace("edicion"))
             try:
-                await queue_supports(session, [model])
+                await queue_supports(session, [*replaced, model])
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
@@ -604,13 +804,16 @@ class SqlAlchemySupportRepository:
             updated=len(plan.updates),
             unchanged=plan.unchanged,
             missing=plan.missing,
-            expired=len(plan.expirations),
+            # Closed by the load: missing ones expired, plus those crossed or not validated.
+            expired=len(plan.expirations) + len(plan.retirements),
         )
         async with self.database.session_factory() as session:
             try:
                 session.add(load)
                 await session.flush()
-                written: list[SupplierSupportModel] = []
+                written: list[SupplierSupportModel] = await self._supersede(
+                    session, plan.retirements, actor, now, plan.load_id
+                )
                 for support_id, data in plan.creates:
                     model = _new_model(support_id, data, actor, now, trace)
                     session.add(model)
@@ -649,6 +852,7 @@ class SqlAlchemySupportRepository:
             created=tuple(support_id for support_id, _ in plan.creates),
             updated=tuple(support_id for support_id, _, _ in plan.updates),
             expired=tuple(support_id for support_id, _, _ in plan.expirations),
+            retired=tuple(item.support_id for item in plan.retirements),
         )
 
     @staticmethod
@@ -775,27 +979,15 @@ class SqlAlchemySupportRepository:
                 )
             ).all()
             ids = [row[0].id for row in rows]
-            tiers = await self._tiers(session, ids)
-            conflicts = await self._conflict_ids(session, ids)
-            attachments = await self._attachment_counts(session, ids)
-            costs = await _costs(session, ids)
-        return (
-            [
-                SupportRow(
-                    support=_support(model, tiers.get(model.id, [])),
-                    supplier_code=code,
-                    supplier_name=name,
-                    product_description=description,
-                    product_brand=brand,
-                    conflicts=tuple(conflicts.get(model.id, ())),
-                    attachment_count=attachments.get(model.id, 0),
-                    dwh_cost=costs.get(model.id),
-                    product_margin=margin,
-                )
-                for model, code, name, description, brand, margin in rows
-            ],
-            int(total),
-        )
+            built = _rows(
+                rows,
+                await self._tiers(session, ids),
+                await self._conflict_ids(session, ids),
+                await self._attachment_counts(session, ids),
+                await _costs(session, ids),
+                await customer_profiles(session, [row[0].customer_nit for row in rows]),
+            )
+        return built, int(total)
 
     async def _attachment_counts(self, session: Any, ids: Sequence[UUID]) -> dict[UUID, int]:
         if not ids:

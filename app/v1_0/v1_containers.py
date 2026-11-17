@@ -185,6 +185,7 @@ from app.modules.supplier_supports.application.internal_requests import (
 )
 from app.modules.supplier_supports.application.profiles import SupportProfileService
 from app.modules.supplier_supports.application.requests import SupportRequestService
+from app.modules.supplier_supports.application.rollover import SupportRolloverService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.application.special_cases import SpecialCaseService
 from app.modules.supplier_supports.infrastructure.attachments_repository import (
@@ -205,6 +206,7 @@ from app.modules.supplier_supports.infrastructure.profiles_repository import (
     SqlAlchemyProfileRepository,
 )
 from app.modules.supplier_supports.infrastructure.publication import (
+    DeleteTopic,
     LoadTopic,
     SupportTopic,
     build_topics,
@@ -671,6 +673,7 @@ class V1Container(containers.DeclarativeContainer):
         build_topics,
         supports=providers.Factory(SupportTopic, database=database),
         loads=providers.Factory(LoadTopic, database=database),
+        deletes=providers.Factory(DeleteTopic),
     )
     dwh_publish_settings = providers.Singleton(
         PublishSettings,
@@ -951,6 +954,12 @@ class V1Container(containers.DeclarativeContainer):
         repository=providers.Factory(SqlAlchemyCostRepository, database=database),
         warehouse=supplier_support_cost_source,
     )
+    # Programmed supports replace the previous one (daily job and the alerts).
+    supplier_support_rollover_service = providers.Factory(
+        SupportRolloverService,
+        repository=supplier_support_repository,
+        calendar=pqrsf_calendar,
+    )
     # The worker and the API share the last poll result and the queue of runs.
     job_poll_status = providers.Singleton(PollStatus)
     job_request = providers.Singleton(RunRequest)
@@ -978,6 +987,7 @@ class V1Container(containers.DeclarativeContainer):
         commercial_sync=master_sync_service.provider,
         support_costs=supplier_support_cost_service.provider,
         main_lists=main_board_service.provider,
+        support_rollover=supplier_support_rollover_service.provider,
     )
     job_service = providers.Factory(
         JobService,

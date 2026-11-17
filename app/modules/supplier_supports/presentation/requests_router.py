@@ -29,7 +29,13 @@ class VersionBody(BaseModel):
 
 
 class RequestBody(VersionBody):
-    value: Decimal = Field(max_digits=18, decimal_places=6, allow_inf_nan=False)
+    # Rules v2: the authorized minimum margin JDH is asked for, as a fraction (0.12 = 12 %).
+    value: Decimal = Field(
+        max_digits=18,
+        decimal_places=6,
+        allow_inf_nan=False,
+        description="Excepción margen mínimo autorizado JDH, 0 ≤ valor < 1",
+    )
     reason: str = Field(min_length=3, max_length=2000)
 
 
@@ -67,7 +73,8 @@ class RequestResponse(BaseModel):
     support_id: UUID
     supplier_name: str | None = None
     supplier_code: str | None = None
-    mode: Literal["porcentaje", "costo_neto"]
+    # margen_minimo since rules v2; porcentaje / costo_neto are the earlier requests.
+    mode: Literal["margen_minimo", "porcentaje", "costo_neto"]
     value: Decimal
     reason: str
     requested_by_id: UUID

@@ -15,7 +15,7 @@ from app.modules.supplier_supports.application.costs import (
     plan_key,
 )
 from app.modules.supplier_supports.domain.entities import SupportData
-from app.modules.supplier_supports.domain.pricing import derive, dwh_cost_in_unit
+from app.modules.supplier_supports.domain.pricing import derive
 
 D = Decimal
 
@@ -25,8 +25,10 @@ class FakeRepository:
         self._targets = targets
         self.saved = []
 
-    async def targets(self):
-        return self._targets
+    async def targets(self, support_ids=None):
+        if support_ids is None:
+            return self._targets
+        return [target for target in self._targets if target.support_id in set(support_ids)]
 
     async def save(self, costs, now):
         self.saved = list(costs)
@@ -82,7 +84,7 @@ async def test_the_highest_cost_of_the_clients_plans_without_the_list_factor() -
     assert summary["with_cost"] == 2 and summary["without_cost"] == 0
 
 
-def test_the_figures_use_the_dwh_cost_in_the_supports_unit() -> None:
+def test_the_figures_use_the_dwh_cost_per_unit() -> None:
     data = SupportData(
         kind="tactico_cliente",
         calc_method="pct_costo",
@@ -93,19 +95,17 @@ def test_the_figures_use_the_dwh_cost_in_the_supports_unit() -> None:
         target_margin_pct=D("0.2"),
     )
 
-    derived = derive(data, dwh_unit_cost=D("100"))
+    derived = derive(data, dwh_unit_cost=D("100"), product_pack_factor=D("12"))
 
-    assert derived.cost_basis == "dwh"
-    assert derived.supplier_amount == D("120.0")  # 10 % of a box of 12 x 100
+    assert derived.cost_basis == "dwh" and derived.cost.unit == D("100")
+    assert derived.supplier_amount == D("10.0")  # 10 % of 100 per unit
+    assert derived.supplier_amount_per.box == D("120.0")  # a box of 12
     assert derive(data).cost_basis == "referencia"
-    assert derive(data).supplier_amount == D("99.9")
-    # Unknown unit: the DWH cost cannot be placed, the reference stays.
-    assert dwh_cost_in_unit(D("100"), None, D("12")) is None
-    assert dwh_cost_in_unit(D("100"), "caja", None) is None
+    assert derive(data).cost.unit == D("83.25")  # 999 per box / 12
 
 
 def test_the_supported_margin_sits_on_the_recomposed_margin() -> None:
-    # 10 % over cost; the product's general margin (margin master) is 20 %.
+    # 10 % over cost; the product's optimal margin (margin master) is 20 %.
     data = SupportData(
         kind="tactico_cliente",
         calc_method="pct_costo",
@@ -122,13 +122,21 @@ def test_the_supported_margin_sits_on_the_recomposed_margin() -> None:
     assert derived.supported_price.quantize(D("0.01")) == D("81.82")  # 72 / (1 - 12 %)
     assert derived.customer_discount_pct.quantize(D("0.0001")) == D("0.1818")
     assert derived.product_margin_pct == D("0.20") and derived.supported_margin_pct == D("0.12")
-    # Without a supported margin the price stays at the product's margin over the net cost.
+    # Without a JDH margin there is no minimum price; the suggested one is PL - $Apoyo.
     plain = derive(replace(data, supported_margin_pct=None), D("80"), D("0.20"))
-    assert plain.supported_price is None and plain.suggested_price == D("90")
+    assert plain.supported_price is None and plain.suggested_price == D("92.00")
 
 
-def test_a_sku_that_is_the_box_is_not_multiplied_again() -> None:
-    # Ohra: the SKU is a case of 18 bottles; the DWH cost 108.000 is already the case.
-    assert dwh_cost_in_unit(D("108000"), "caja", D("18"), D("108000")) == D("108000")
-    # Familia: the DWH cost is per roll and the sheet's box has 24.
-    assert dwh_cost_in_unit(D("3636"), "caja", D("24"), D("87275")) == D("87264")
+def test_a_sku_that_is_the_box_is_not_divided_again() -> None:
+    # Ohra: the SKU is a case of 18 bottles (pack factor 1 in the master); the sheet says 18.
+    data = SupportData(
+        kind="tactico_cliente",
+        calc_method="costo_neto",
+        supplier_value=D("100000"),
+        value_unit="caja",
+        pack_factor=D("18"),
+    )
+
+    derived = derive(data, dwh_unit_cost=D("108000"), product_pack_factor=D("1"))
+
+    assert derived.net_cost == D("100000") and derived.supplier_amount == D("8000")

@@ -139,6 +139,7 @@ class SupplierSupportModel(Base):
         ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )
     warehouse: Mapped[str | None] = mapped_column(Text)
+    promo_warehouses: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     # Benefit
     calc_method: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -396,7 +397,9 @@ class SupportRequestModel(Base):
         CheckConstraint(
             "status IN ('pendiente','aprobada','rechazada')", name="ck_support_request_status"
         ),
-        CheckConstraint("mode IN ('porcentaje','costo_neto')", name="ck_support_request_mode"),
+        CheckConstraint(
+            "mode IN ('porcentaje','costo_neto','margen_minimo')", name="ck_support_request_mode"
+        ),
         Index("ix_support_requests_owner_created", "requested_by_id", "created_at"),
         Index("ix_support_requests_status_created", "status", "created_at"),
         Index("ix_support_requests_support", "support_id"),

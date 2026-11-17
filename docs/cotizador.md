@@ -26,6 +26,13 @@ El mismo motor actualiza una lista vigente de SIESA en el módulo de BI
 [Actualización de listas](actualizacion-listas.md) (`kind = 'lista'`): sin oferta y comparando
 contra el precio de la lista.
 
+**Reglas para BI, manual para Comercial**: las reglas de cálculo (este documento y
+`GET /quotations/rules`) son de BI: las ven quienes validan el cotizador, las listas principales
+y los administradores (`can_see_rules` en `/permissions`); para el resto `/rules` responde 403.
+Comercial lee el **manual operativo** (`GET /quotations/manual`, `domain/manual.py`): crear,
+qué significa cada columna, apoyos y validación, sin fórmulas, costos ni bodegas. El buscador de
+clientes encuentra también por grupo empresarial y lo devuelve (`business_group`).
+
 Las reglas de costo, bodega, redondeo e impuesto son las del área de listas de precios, escritas
 en la skill del proyecto [`lista-precios`](../.claude/skills/lista-precios/SKILL.md). El cotizador
 las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia, se cambia ahí.
@@ -84,8 +91,10 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      referencia. **Lactalis** (NIT 800245795) cotiza por sucursal: la `003` para las listas de
      Centro (003, 10U, 10S, o un cliente que factura desde el CO 003) y la `001` para el resto;
    - el **costo promedio de inventario** (`consumo.inventario_fecha`, la foto de SIESA de la
-     mañana) de la bodega de la lista, redondeado al peso. La bodega 2 aplica a las líneas
-     CONGELADOS y REFRIGERADOS;
+     mañana) de la bodega de la lista, redondeado al peso. La **bodega 2** (cuarto frío) aplica
+     solo a las referencias de línea `CONGELADOS` y `REFRIGERADOS` (`consumo.productos.linea`);
+     el resto usa la bodega 1. Oriente (BGA1) y Market (URA6) no tienen cuarto frío aparte: la
+     bodega 2 es la misma bodega 1;
    - el **costo nuevo de un alza pendiente**: si la alza más reciente de la referencia en el
      histórico del maestro de productos no tiene fecha de actualización en SIESA, su costo nuevo
      (con impuesto saludable si lo trae). Solo gana si es estrictamente mayor
@@ -126,15 +135,37 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
    márgenes según la **regional**: **Costa** si alguno de los CO del costo es el `004`; con
    Nacional, la del CO que factura; Nacional para el resto (`regional` en la cabecera). El IVA no
    se muestra ni se suma.
-6. **Margen objetivo**: el del producto para el canal del cliente, como en el validador:
-   `MAYORISTAS Y DISTRIBUIDORES` y `SUBDISTRIBUIDOR` → Margen Mayoristas; `SALSAMENTARIAS` →
-   Margen Salsamentarias; cualquier otro canal (o sin canal) → Margen Lista 1. Si un apoyo aplica
-   y trae su propio objetivo (`target_margin_pct`, `min_margin_pct` o `list_margin_pct`), manda el
-   del apoyo.
+6. **Margen objetivo Listas de Unidad Negocio** (reglas v2, 2026-11-17): el margen óptimo del
+   producto en la lista del cliente, igual en el validador y el maestro de apoyos
+   (`customer_margin_field`), en este orden:
+   1. **Market Apartadó**: factura desde el C.O. `200` (el 201 Market Valledupar no).
+   2. **Masivo food**: su vendedor es de un equipo con clase `MASIVO FOOD`
+      (`consumo.vendedores.clase_equipo`, copiado al maestro de clientes como
+      `sales_team_class`).
+   3. **Mayoristas**: canal `MAYORISTAS Y DISTRIBUIDORES`, `SUBDISTRIBUIDOR` o `SALSAMENTARIAS`.
+      El margen Salsamentarias del maestro ya no se aplica.
+   4. **Food service** (`margin_list`): cualquier otro canal, o sin cliente.
+
+   Con varias sucursales decide la mayoría de las activas. Si el producto no tiene margen Masivo
+   food o Market, usa el de Food service. Si un apoyo aplica y trae su propio objetivo
+   (`target_margin_pct`, `min_margin_pct` o `list_margin_pct`), manda el del apoyo.
 7. **Apoyo**: los apoyos activos (no anulados ni desactivados, sin el origen `Condiciones
    Especiales`) que cubren al cliente y la referencia hoy, con el mismo alcance que en el
    validador. Se aplica el de mayor importe entre los que traen dinero. Un apoyo en revisión o
    restringido a una bodega no se aplica: se lista como candidato con el motivo.
+   - **Importe** (reglas v2): el dinero del proveedor por unidad de inventario con la función
+     compartida del maestro de apoyos (`unit_amount`): % sobre el costo de la línea, % sobre el
+     precio lista (su valor absoluto: costo / (1 − objetivo) × %), $ en costo o en precio lista,
+     costo apoyado o margen garantizado. Un valor por caja se divide por la unidad de empaque del
+     maestro de productos (vacía = 1).
+   - **Precio óptimo con apoyo** = **precio apoyado sugerido** = precio lista − apoyo (antes era el
+     objetivo sobre el costo neto).
+   - **Precio mínimo**: si el apoyo trae el **margen mínimo autorizado JDH**
+     (`supported_margin_pct`), el mínimo es (costo − apoyo) / (1 − ese margen)
+     (`support.authorized_margin_pct`); si no, la regla general.
+   - Rebates y presupuestos quedan aparte: nunca se aplican.
+   - **Inventario**: cada línea trae `stock_on_hand` (existencia) y `stock_available`
+     (`cant_disponible`) de las mismas bodegas del costo.
 8. **Referencias inactivas**: una referencia inactiva en SIESA (`consumo.productos.estado`) se
    muestra marcada (`is_active: false`, `referencia_inactiva`) para reemplazarla. **No sale en el
    Excel ni en el plano**, no cuenta en las líneas cambiadas y no bloquea la confirmación. Se puede

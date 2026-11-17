@@ -182,6 +182,8 @@ class CostInfo:
     snapshot_date: date | None = None
     # The operation center whose warehouses gave this cost, when the quotation names some.
     center_code: str | None = None
+    # Available units (existence minus committed) in the same warehouses as ``stock``.
+    available: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -269,6 +271,8 @@ class AppliedSupport:
     needs_review: bool = False
     valid_from: date | None = None
     valid_to: date | None = None
+    # JDH's authorized minimum margin (rules v2): the floor of the line's minimum price.
+    authorized_margin_pct: Decimal | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe form, for storage."""
@@ -286,6 +290,7 @@ class AppliedSupport:
             "needs_review": self.needs_review,
             "valid_from": self.valid_from.isoformat() if self.valid_from else None,
             "valid_to": self.valid_to.isoformat() if self.valid_to else None,
+            "authorized_margin_pct": _text(self.authorized_margin_pct),
         }
 
     @classmethod
@@ -305,6 +310,7 @@ class AppliedSupport:
             needs_review=bool(data.get("needs_review")),
             valid_from=date.fromisoformat(data["valid_from"]) if data.get("valid_from") else None,
             valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
+            authorized_margin_pct=_decimal(data.get("authorized_margin_pct")),
         )
 
 
@@ -476,6 +482,9 @@ class QuotationLine:
     note: str | None = None
     # The load that took the validated price to SIESA; ``None`` while it waits in the staging.
     load_id: UUID | None = None
+    # Units on hand and available in the warehouses that cost the line (as the cost read it).
+    stock_on_hand: Decimal | None = None
+    stock_available: Decimal | None = None
 
     @property
     def is_staged(self) -> bool:
@@ -706,6 +715,8 @@ class CustomerOption:
     salesperson_name: str | None
     branch_count: int
     active_branch_count: int
+    # The business group's name in the customer master (the code is not known).
+    business_group: str | None = None
 
     @property
     def is_active(self) -> bool:

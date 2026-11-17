@@ -94,26 +94,35 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                 Rule(
                     "formulas",
                     "Fórmulas",
-                    "Sin apoyo: (precio − costo) / precio. Con apoyo: (precio − (costo − apoyo)) "
-                    "/ precio, donde el apoyo es el dinero del proveedor por unidad.",
+                    "Sin apoyo: (precio − costo) / precio. Con apoyo (margen recompuesto): "
+                    "(precio − costo + apoyo) / precio, donde el apoyo es el dinero del "
+                    "proveedor por unidad de inventario: % sobre el costo, % sobre el precio "
+                    "lista (su valor absoluto), $ en costo o en precio lista, costo apoyado o "
+                    "margen garantizado. Un valor por caja se divide por la unidad de empaque.",
                     INFORMS,
                 ),
                 Rule(
                     "margen_objetivo",
-                    "Margen objetivo por canal",
-                    "Mayoristas y Distribuidores y Subdistribuidor usan el margen mayoristas; "
-                    "Salsamentarias, el suyo; cualquier otro canal, el margen Lista 1 del maestro "
-                    "de márgenes. Si el apoyo aplicado trae su propio objetivo, manda el del "
+                    "Margen objetivo Listas de Unidad Negocio",
+                    "El margen óptimo del maestro de márgenes según la lista de unidad de "
+                    "negocio del cliente, en este orden: Market Apartadó, si factura desde el "
+                    "C.O. 200; Masivo food, si su vendedor es de un equipo Masivo food; "
+                    "Mayoristas, para los canales Mayoristas y Distribuidores, Subdistribuidor y "
+                    "Salsamentarias; Food service, para todos los demás canales o si no hay "
+                    "cliente. Si el producto no tiene margen Masivo food o Market, usa el de "
+                    "Food service. Si el apoyo aplicado trae su propio objetivo, manda el del "
                     "apoyo.",
                     INFORMS,
                 ),
                 Rule(
                     "precio_optimo",
                     "Precio óptimo y precio mínimo",
-                    "Precio óptimo: el que da exactamente el margen objetivo, (costo − apoyo) / "
-                    "(1 − objetivo), en pesos enteros (hacia arriba en Salsamentarias y Market). "
-                    f"Precio mínimo: el más bajo que cumple la regla (objetivo − {points} punto), "
-                    "redondeado hacia arriba.",
+                    "Sin apoyo, el precio óptimo es el precio lista: costo / (1 − objetivo). Con "
+                    "apoyo, es el precio apoyado sugerido: precio lista − apoyo (el cliente "
+                    "recibe exactamente el dinero del proveedor). En pesos enteros, hacia arriba "
+                    "en Salsamentarias y Market. Precio mínimo: el más bajo que cumple la regla "
+                    f"(objetivo − {points} punto), o el margen mínimo autorizado por JDH si el "
+                    "apoyo lo trae: (costo − apoyo) / (1 − margen autorizado), hacia arriba.",
                     INFORMS,
                 ),
                 Rule(

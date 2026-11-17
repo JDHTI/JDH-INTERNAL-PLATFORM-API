@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -43,14 +44,15 @@ class SqlAlchemyCostRepository:
 
         self.database = database
 
-    async def targets(self) -> list[CostTarget]:
-        """Every support that is not voided and has a JDH SKU."""
+    async def targets(self, support_ids: Sequence[UUID] | None = None) -> list[CostTarget]:
+        """Every support (or these ones) that is not voided and has a JDH SKU."""
 
+        conditions = [S.status != "anulado", S.product_sku.is_not(None)]
+        if support_ids is not None:
+            conditions.append(S.id.in_(list(support_ids)))
         async with self.database.session_factory() as session:
             rows = await session.execute(
-                select(S.id, S.product_sku, S.customer_nit).where(
-                    S.status != "anulado", S.product_sku.is_not(None)
-                )
+                select(S.id, S.product_sku, S.customer_nit).where(*conditions)
             )
             return [CostTarget(row[0], row[1], row[2]) for row in rows.all()]
 

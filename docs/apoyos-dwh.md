@@ -113,6 +113,27 @@ select a.*,
 from {{ source('plataforma', 'apoyo_proveedor') }} a
 ```
 
+### Reglas v2: borrados, clases aparte y bodegas promocionales (2026-11-17)
+
+- **Borrado** (tópico `supplier_support_delete`): la purga de las clases descontinuadas
+  (`scripts/purge-discontinued-supports.py`) encola un evento por apoyo con `version` = la última
+  + 1 y descarta en la misma transacción los eventos pendientes de ese apoyo, para que ninguna
+  versión vieja llegue después. El publicador llama
+  `plataforma.borrar_apoyo_proveedor(id, version, borrado_por, borrado_en)`: función
+  `SECURITY DEFINER` del equipo del DWH (propuesta `086_plataforma_apoyos_borrado.sql`, sin
+  aplicar) que solo borra las tres clases descontinuadas y agrega la fila `operacion = 'borrado'`
+  al historial. El escritor sigue sin `DELETE`. Requiere enmendar ADR-008 (decisión del dueño).
+- **Rebate y presupuesto** se publican con `habilitado = false`, así la vista no los muestra
+  vigentes sin que el DWH conozca las clases.
+- **Grupo de bodega**: SIESA lo tiene (`t151`/`t152`, ya en `staging`); es N:M. El DWH propone
+  `consumo.bodegas_grupos` y `bodega_promocional` en `consumo.inventario_fecha` (sin aplicar).
+  Mientras tanto la plataforma lleva las 18 bodegas del grupo 23 en
+  `vocabulary.PROMO_WAREHOUSES`.
+- **Cotización por C.O.**: `t212` tiene `f212_id_co` vacío en el 100 % de las filas; SIESA no
+  registra la cotización por C.O. El costo por C.O. solo existe como último costo de compra por
+  instalación (`inventario_fecha.ultimo_costo_unit`). Pendiente: confirmar con el usuario qué
+  comparación esperaba para Antioquia.
+
 ## Costo del DWH (regla del cotizador)
 
 El costo de un apoyo **siempre** sale del DWH, con la regla del cotizador

@@ -164,6 +164,8 @@ def family(price_list_id: str | None, margin_basis: str | None = None) -> str:
         return WHOLESALE
     if margin_basis == "salsamentarias":
         return SALSAMENTARIAS
+    if margin_basis == "market":
+        return MARKET
     return GENERAL
 
 

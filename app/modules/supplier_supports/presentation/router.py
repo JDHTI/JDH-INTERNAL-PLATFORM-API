@@ -9,15 +9,18 @@ from typing import Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
+from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.application.internal_requests import InternalRequestService
 from app.modules.supplier_supports.application.requests import SupportRequestService
+from app.modules.supplier_supports.application.rollover import SupportRolloverService
 from app.modules.supplier_supports.application.service import (
     MAX_BATCH,
     MAX_PAGE_SIZE,
@@ -37,6 +40,8 @@ _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_se
 _principal = Depends(get_current_principal)
 _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 _internal = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
+_costs = Depends(Provide[ApplicationContainer.v1_container.supplier_support_cost_service])
+_rollover = Depends(Provide[ApplicationContainer.v1_container.supplier_support_rollover_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -54,6 +59,7 @@ CalcMethod = Literal[
     "pct_costo",
     "pct_precio_lista",
     "valor_unidad",
+    "valor_precio_lista",
     "costo_neto",
     "precio_neto",
     "puntos_margen",
@@ -64,6 +70,7 @@ ValueUnit = Literal["unidad", "caja", "kg"]
 Validity = Literal["vigente", "vencido", "programado"]
 ThresholdType = Literal["unidades", "cajas", "monto_ventas"]
 State = Literal["vigente", "vencido", "programado", "inactivo", "anulado"]
+OnOverlap = Literal["vencer_anterior", "anular_anterior"]
 
 
 class TierBody(BaseModel):
@@ -101,6 +108,9 @@ class _SupportFields(BaseModel):
     business_units: list[str] = Field(default_factory=list, max_length=20)
     channels: list[str] = Field(default_factory=list, max_length=30)
     warehouse: str | None = Field(default=None, max_length=50)
+    # Applies also in the promotional warehouses (SIESA group 23); otherwise an order from one
+    # of them goes at that warehouse's cost, without the support.
+    promo_warehouses: bool = False
     supplier_value: Decimal | None = None
     jdh_pct: Decimal | None = None
     jdh_net_cost: Decimal | None = Field(default=None, ge=0, lt=10**12, decimal_places=6)
@@ -142,12 +152,66 @@ class SupportCreate(_SupportFields):
     source: str | None = Field(default=None, max_length=300)
     source_key: str | None = Field(default=None, max_length=300)
     tiers: list[TierBody] = Field(default_factory=list, max_length=20)
+    on_overlap: OnOverlap | None = Field(
+        default=None,
+        description="When it crosses a live support of the same class and scope: expire "
+        "(vencer_anterior) or void (anular_anterior) the previous one; without it, a 409 "
+        "lists the supports crossed in `overlaps`",
+    )
+    overlap_reason: str | None = Field(default=None, max_length=500)
 
 
 class SupportBatch(BaseModel):
     """Several new supports validated together."""
 
     items: list[SupportCreate] = Field(min_length=1, max_length=MAX_BATCH)
+    on_overlap: OnOverlap | None = None
+    overlap_reason: str | None = Field(default=None, max_length=500)
+
+
+class RetireItem(BaseModel):
+    """A support chosen in the table, at the version the person saw."""
+
+    id: UUID
+    version: int | None = Field(default=None, ge=1)
+
+
+class RetireFilter(BaseModel):
+    """Every support a search matches (the body of ``/search`` without paging)."""
+
+    match: Literal["all", "any"] = "all"
+    conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    customer_nits: list[str] = Field(default_factory=list, max_length=500)
+    supplier_codes: list[str] = Field(default_factory=list, max_length=500)
+    product_skus: list[str] = Field(default_factory=list, max_length=500)
+    q: str | None = Field(default=None, max_length=100)
+    active_on: date | None = None
+    validity: Validity | None = None
+    state: State | None = None
+    needs_review: bool | None = None
+    has_issues: bool | None = None
+    has_conflicts: bool | None = None
+    has_attachments: bool | None = None
+
+
+class SupportRetire(BaseModel):
+    """Void or expire several supports at once, with the observation."""
+
+    action: Literal["anular", "vencer"]
+    reason: str = Field(min_length=3, max_length=500)
+    last_day: date | None = Field(
+        default=None, description="Last day in force of an expiry; default yesterday"
+    )
+    items: list[RetireItem] = Field(default_factory=list, max_length=2000)
+    filter: RetireFilter | None = None
+
+
+class RetireResponse(BaseModel):
+    """What a mass action changed."""
+
+    action: str
+    voided: list[UUID]
+    expired: list[UUID]
 
 
 class SupportPatch(_SupportFields):
@@ -162,6 +226,8 @@ class SupportPatch(_SupportFields):
     # Reversible switch: off = greyed out and out of force, without voiding the support.
     is_enabled: bool = True
     tiers: list[TierBody] | None = Field(default=None, max_length=20)
+    on_overlap: OnOverlap | None = None
+    overlap_reason: str | None = Field(default=None, max_length=500)
 
 
 class SupportVoid(BaseModel):
@@ -201,8 +267,11 @@ class DerivedResponse(BaseModel):
     # at the list price (cost at the product's margin).
     product_margin_pct: Decimal | None
     recomposed_list_margin: Decimal | None
-    # Margen apoyado: how far the margin may drop on top of the support; the supported price
-    # is the net cost at that margin and the client's discount is below the list price.
+    # Rules v2 (per inventory unit). suggested_price = Precio Apoyado Sugerido (list price -
+    # supplier_amount); margin_recomposed = (price - cost + support) / price.
+    # supported_margin_pct = JDH's authorized minimum margin (Excepción margen mínimo);
+    # supported_price = Precio Apoyado Mínimo = net cost / (1 - that margin); the client's
+    # discount is how far it falls below the list price.
     supported_margin_pct: Decimal | None
     supported_price: Decimal | None
     supported_price_per: MoneyPairResponse
@@ -246,6 +315,11 @@ class SupportResponse(_SupportFields):
     special_case_id: UUID | None
     has_conflicts: bool
     attachment_count: int
+    # The support's business group, else the customer's in the master (null = none), and
+    # the margin list its prices use: margin_list, margin_wholesale, margin_mass_food or
+    # margin_market (Food service, Mayoristas, Masivo food, Market Apartadó).
+    business_group: str | None = None
+    margin_list: str | None = None
     conflicts: list[UUID]
     issues: list[IssueResponse]
     tiers: list[TierBody]
@@ -345,6 +419,30 @@ def _tiers(items: list[TierBody]) -> tuple[Tier, ...]:
     )
 
 
+_HIDDEN_COST_FIELDS = {"reference_cost": None, "jdh_net_cost": None}
+_HIDDEN_DERIVED = ("cost", "net_cost_per")
+
+
+def _commercial(response: SupportResponse) -> SupportResponse:
+    """What Comercial sees: list price and supported prices, never the cost (BI only)."""
+
+    empty = MoneyPairResponse(box=None, unit=None)
+    derived = response.derived.model_copy(
+        update={
+            **dict.fromkeys(_HIDDEN_DERIVED, empty),
+            "net_cost": None,
+            "margin_order": None,
+            "cost_basis": None,
+        }
+    )
+    return response.model_copy(update={**_HIDDEN_COST_FIELDS, "dwh_cost": None, "derived": derived})
+
+
+def _shown(view: SupportView, sees_cost: bool) -> SupportResponse:
+    response = _response(view)
+    return response if sees_cost else _commercial(response)
+
+
 def _response(view: SupportView) -> SupportResponse:
     support, data = view.support, view.support.data
     values: dict[str, Any] = {
@@ -367,6 +465,8 @@ def _response(view: SupportView) -> SupportResponse:
         needs_review=view.needs_review,
         has_conflicts=view.has_conflicts,
         attachment_count=view.attachment_count,
+        business_group=view.business_group,
+        margin_list=view.margin_list,
         conflicts=list(view.conflicts),
         issues=[_issue(issue) for issue in data.issues],
         tiers=[
@@ -409,14 +509,16 @@ def _issue(issue: Issue) -> IssueResponse:
 @inject
 async def search_supports(
     body: SearchRequest,
-    _: Principal = _principal,
+    principal: Principal = _principal,
     service: SupplierSupportService = _service,
 ) -> SupportPageResponse:
-    """Filter supports with a dynamic tree of conditions, free text, validity and sorting."""
+    """Filter supports with a dynamic tree of conditions, free text, validity and sorting.
+    The cost is only for BI (managers of ``apoyos``); Comercial gets it empty."""
 
     page = await service.search(**body.model_dump())
+    sees_cost = await service.can_manage(principal)
     return SupportPageResponse(
-        items=[_response(view) for view in page.items],
+        items=[_shown(view, sees_cost) for view in page.items],
         total=page.total,
         page=page.page,
         size=page.size,
@@ -453,10 +555,141 @@ async def permissions(
 async def catalogs(
     _: Principal = _principal,
     service: SupplierSupportService = _service,
-) -> dict[str, list[str]]:
-    """Closed vocabularies (types, methods, statuses) and the regions, units and channels used."""
+) -> dict[str, Any]:
+    """Closed vocabularies (classes and their types, statuses, labels) and the regions, units
+    and channels in use."""
 
     return await service.catalogs()
+
+
+class AlertSupport(BaseModel):
+    """A support as an alert shows it."""
+
+    id: UUID
+    version: int
+    kind: str
+    calc_method: str
+    customer_nit: str | None
+    customer_name: str | None
+    product_sku: str | None
+    supplier_sku: str | None
+    supplier_value: Decimal | None
+    valid_from: date | None
+    valid_to: date | None
+
+
+class ReplacementAlert(BaseModel):
+    """A programmed support and the one in force it will replace."""
+
+    programmed: AlertSupport
+    previous: AlertSupport
+    # The previous one's last day when the programmed one starts.
+    previous_ends: date
+    # True: the previous one already ends that day; false: the daily job will cut it.
+    chained: bool
+
+
+def _alert_support(support: Any) -> AlertSupport:
+    data = support.data
+    return AlertSupport(
+        id=support.id,
+        version=support.version,
+        kind=data.kind,
+        calc_method=data.calc_method,
+        customer_nit=data.customer_nit,
+        customer_name=data.customer_name,
+        product_sku=data.product_sku,
+        supplier_sku=data.supplier_sku,
+        supplier_value=data.supplier_value,
+        valid_from=data.valid_from,
+        valid_to=data.valid_to,
+    )
+
+
+@router.get(
+    "/alerts",
+    dependencies=[_READ_GATE],
+    response_model=list[ReplacementAlert],
+    summary="Programmed supports that will replace one in force",
+)
+@inject
+async def replacement_alerts(
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+    rollover: SupportRolloverService = _rollover,
+) -> list[ReplacementAlert]:
+    """Each programmed support with the one in force it replaces. BI decides: leave it
+    programmed (the previous one ends the day before; the daily job cuts it if needed) or
+    expire the previous one now with ``POST /retire`` (``vencer``). Managers only."""
+
+    if not await service.can_manage(principal):
+        raise ForbiddenError("No tienes permiso para gestionar apoyos de proveedores")
+    return [
+        ReplacementAlert(
+            programmed=_alert_support(item.programmed),
+            previous=_alert_support(item.previous),
+            previous_ends=item.previous_ends,
+            chained=item.chained,
+        )
+        for item in await rollover.replacements()
+    ]
+
+
+class BusinessGroupResponse(BaseModel):
+    """A business group of the customer master and its active customers."""
+
+    name: str
+    customers: int
+
+
+@router.get(
+    "/business-groups",
+    dependencies=[_READ_GATE],
+    response_model=list[BusinessGroupResponse],
+    summary="Business groups by name",
+)
+@inject
+async def business_groups(
+    q: str = Query(min_length=2, max_length=100),
+    _: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> list[BusinessGroupResponse]:
+    """Business groups whose name contains ``q`` (the code is not known), with how many active
+    customers a support by group would reach."""
+
+    return [
+        BusinessGroupResponse(name=name, customers=count)
+        for name, count in await service.business_groups(q)
+    ]
+
+
+@router.post(
+    "/by-group",
+    dependencies=[_READ_GATE],
+    response_model=list[SupportResponse],
+    status_code=201,
+    summary="Create one support per customer of a business group",
+)
+@inject
+async def create_by_group(
+    body: SupportCreate,
+    background: BackgroundTasks,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
+) -> list[SupportResponse]:
+    """``customer_group`` names the group and ``customer_nit`` stays empty: one support per
+    active customer of the group, each with the group's name. All or none. Managers only."""
+
+    views = await service.create_for_group(
+        principal,
+        _data(body),
+        supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
+    )
+    background.add_task(costs.refresh, [view.support.id for view in views])
+    return [_response(view) for view in views]
 
 
 @router.post(
@@ -469,12 +702,44 @@ async def catalogs(
 @inject
 async def create_support(
     body: SupportCreate,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> SupportResponse:
     """Create a support bound to a real supplier, product and client. Managers only."""
 
-    view = await service.create(principal, _data(body), supplier_code=body.supplier_code)
+    view = await service.create(
+        principal,
+        _data(body),
+        supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
+    )
+    background.add_task(costs.refresh, [view.support.id])
+    return _response(view)
+
+
+@router.post(
+    "/preview",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    summary="Figures of a support before saving it",
+)
+@inject
+async def preview_support(
+    body: SupportCreate,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
+) -> SupportResponse:
+    """The creation form's figures: DWH cost (the quoter's rule), list price at the
+    customer's optimal margin, Precio Apoyado Sugerido and Precio Apoyado Mínimo. The same
+    checks as creating (422 names the field); nothing is saved. Managers only."""
+
+    view = await service.preview(
+        principal, _data(body), supplier_code=body.supplier_code, cost=costs.cost_of
+    )
     return _response(view)
 
 
@@ -488,15 +753,54 @@ async def create_support(
 @inject
 async def create_supports(
     body: SupportBatch,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> list[SupportResponse]:
     """Create up to 500 supports atomically-validated (all checked before any is saved)."""
 
     views = await service.create_many(
-        principal, [(_data(item), item.supplier_code) for item in body.items]
+        principal,
+        [(_data(item), item.supplier_code) for item in body.items],
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
     )
+    background.add_task(costs.refresh, [view.support.id for view in views])
     return [_response(view) for view in views]
+
+
+@router.post(
+    "/retire",
+    dependencies=[_READ_GATE],
+    response_model=RetireResponse,
+    summary="Void or expire supports in bulk",
+)
+@inject
+async def retire_supports(
+    body: SupportRetire,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> RetireResponse:
+    """Void (``anular``) or expire (``vencer``) the supports chosen (``items``) or every one
+    a search matches (``filter``), up to 2,000, with the observation. All or none; a stale
+    ``version`` or an already voided support is a 409. Managers only."""
+
+    if not body.items and body.filter is None:
+        raise InvalidInputError("Elige los apoyos o un filtro")
+    changed = await service.retire_many(
+        principal,
+        body.action,
+        body.reason,
+        items=[(item.id, item.version) for item in body.items],
+        criteria=body.filter.model_dump() if body.filter is not None else None,
+        last_day=body.last_day,
+    )
+    return RetireResponse(
+        action=body.action,
+        voided=[item.id for item in changed if item.data.status == "anulado"],
+        expired=[item.id for item in changed if item.data.status != "anulado"],
+    )
 
 
 @router.get(
@@ -508,12 +812,13 @@ async def create_supports(
 @inject
 async def get_support(
     support_id: UUID,
-    _: Principal = _principal,
+    principal: Principal = _principal,
     service: SupplierSupportService = _service,
 ) -> SupportResponse:
-    """Return one support with names, validity, conflicts and derived values."""
+    """Return one support with names, validity, conflicts and derived values (the cost only
+    for BI)."""
 
-    return _response(await service.get(support_id))
+    return _shown(await service.get(support_id), await service.can_manage(principal))
 
 
 @router.patch(
@@ -526,12 +831,14 @@ async def get_support(
 async def update_support(
     support_id: UUID,
     body: SupportPatch,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> SupportResponse:
     """Change only the fields sent. A stale ``version`` is a 409. Managers only."""
 
-    sent = body.model_fields_set - {"version", "supplier_code"}
+    sent = body.model_fields_set - {"version", "supplier_code", "on_overlap", "overlap_reason"}
     changes: dict[str, Any] = {name: getattr(body, name) for name in sent}
     if "tiers" in changes:
         changes["tiers"] = _tiers(body.tiers or [])
@@ -541,7 +848,11 @@ async def update_support(
         expected_version=body.version,
         changes=changes,
         supplier_code=body.supplier_code,
+        on_overlap=body.on_overlap,
+        overlap_reason=body.overlap_reason,
     )
+    if sent & {"product_sku", "supplier_sku", "customer_nit"}:
+        background.add_task(costs.refresh, [view.support.id])
     return _response(view)
 
 

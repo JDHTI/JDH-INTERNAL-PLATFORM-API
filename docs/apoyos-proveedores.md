@@ -7,7 +7,94 @@ filtrado dinámico y CRUD. Esta primera entrega es solo backend, para validar
 resultados.
 
 Módulos: `commercial_masters` (espejo de los maestros del DWH) y
-`supplier_supports` (los apoyos). Migraciones `0017` a `0019`.
+`supplier_supports` (los apoyos). Migraciones `0017` a `0019`; reglas v2 en `0066` a `0069`.
+
+## Reglas v2 (2026-11-17)
+
+Definidas por BI. Lo que sigue manda sobre las secciones anteriores de este documento cuando
+se contradicen.
+
+### Los dos frentes
+
+| | BI (gestores de `apoyos`) | Comercial |
+| --- | --- | --- |
+| Ve | Todo, incluido el costo (referencia, DWH, neto) | Precio lista, precio apoyado sugerido y mínimo, márgenes; **nunca el costo** |
+| Crea y carga | Manual, por grupo empresarial, carga masiva, subida por grupo | — |
+| Mantiene | Anulación y vencimiento masivo con observación; descarga con datos para validar con el proveedor; alertas de programados | — |
+| Pide | Decide las solicitudes | Margen mínimo JDH sobre un apoyo (Solicitudes) y apoyos internos desde la cotización |
+| Cotizador | Reglas de cálculo (`/quotations/rules`) | Manual operativo (`/quotations/manual`) |
+
+### Clases y tipos
+
+Solo se crean tres clases (`active_kinds`), cada una con sus tipos (`methods_by_kind`):
+
+| Clase | Tipos |
+| --- | --- |
+| Apoyo táctico (`tactico_cliente`) | % Apoyo en Costo, % Apoyo en Precio Lista, $ Apoyo en Costo, $ Apoyo en Precio Lista (`valor_precio_lista`, nuevo), $ Costo Apoyado, % Margen Garantizado |
+| Actividad descuento temporal (`actividad_temporal`) | los cuatro primeros |
+| Excepción margen JDH (`excepcion_margen`) | Margen mínimo autorizado |
+
+Rebate y presupuesto quedan aparte: no se crean, no se aplican y van al DWH con
+`habilitado = false`. Lista especial, recuperación y liquidación se **borran**
+(`scripts/purge-discontinued-supports.py`, con respaldo CSV y evento de borrado al DWH). Un
+apoyo viejo de otra clase se puede seguir editando en lo demás.
+
+### Cálculo (por unidad de inventario)
+
+Un valor por caja se divide por la unidad de empaque del **maestro de productos** (vacía = 1).
+Costo = DWH (regla del cotizador). Precio lista (PL) = costo / (1 − margen óptimo de la lista
+del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
+[cotizador.md](cotizador.md), paso 6; sin cliente ni canal, Food service).
+
+| Tipo | $ Apoyo | Precio apoyado sugerido (PA) |
+| --- | --- | --- |
+| % Apoyo en Costo | costo × % | PL − $ Apoyo |
+| % Apoyo en Precio Lista | PL × % (su valor absoluto se resta al costo) | PL − $ Apoyo |
+| $ Apoyo en Costo / en Precio Lista | $ | PL − $ Apoyo |
+| $ Costo Apoyado | costo − $ costo apoyado | PL − $ Apoyo |
+| % Margen Garantizado | costo − PA × (1 − % garantizado) | el PA pactado |
+
+- Margen recompuesto = (PA − costo + $ Apoyo) / PA. Ejemplo de BI: costo 4.920, PL 6.000,
+  10 % en precio lista → apoyo 600, PA 5.400, margen 20 %.
+- **Excepción margen mínimo autorizado JDH** (`supported_margin_pct`): Precio Apoyado Mínimo =
+  (costo − $ Apoyo) / (1 − margen); para $ Costo Apoyado, costo apoyado / (1 − margen).
+  Reemplaza el % JDH (`jdh_pct`, `jdh_net_cost` quedan como historia y ya no mueven las cifras).
+- Las mismas fórmulas usan el cotizador y el validador de pedidos (`pricing.unit_amount`).
+
+### Integridad
+
+- **SKU de proveedor**: si solo viene el SKU del proveedor, se busca el SKU JDH
+  (`supplier_product_codes`, luego `products.supplier_sku` del proveedor); desconocido o
+  ambiguo = error. Ya no cubre todo el proveedor.
+- **Sin cruces**: dos apoyos vivos de la misma clase, proveedor, cliente, sucursal, grupo,
+  referencia, bodega y listas no pueden tener vigencias que se toquen. Crear, editar o cargar
+  uno que cruza responde 409 con `overlaps` (o error de fila), salvo `on_overlap`:
+  `vencer_anterior` (termina el día antes; si empezaba después, se anula) o
+  `anular_anterior`, en la misma transacción.
+- **Programados**: el job `supplier-supports-rollover` (cada mañana) corta el apoyo anterior el
+  día antes de que empiece el siguiente; `GET /supplier-supports/alerts` lista cada programado con
+  el que reemplaza, para dejarlo programado o vencer ya el anterior.
+- **Grupo empresarial**: `POST /by-group` y la subida `POST /bulk/groups` crean un apoyo por
+  cliente activo del grupo (por nombre; el código no se conoce). El validador aplica un apoyo de
+  grupo sin NIT a los clientes del grupo y uno de sucursal solo al cliente que la tiene. Cada
+  apoyo muestra `business_group` y la lista de margen que usa (`margin_list`).
+- **Bodegas promocionales** (grupo 23 de SIESA, 18 bodegas): un apoyo aplica allí solo con
+  `promo_warehouses`; si no, el pedido de esa bodega va a su costo, sin apoyo.
+
+### Operación
+
+- `POST /supplier-supports/retire`: anula o vence hasta 2.000 apoyos (elegidos o por filtro) con
+  observación obligatoria; todo o nada.
+- `POST /supplier-supports/preview`: las cifras del formulario antes de guardar.
+- Un apoyo nuevo o editado trae su costo DWH en segundo plano, sin esperar el job.
+- Plantilla (`GET /bulk/template`): Clase apoyo, Tipo apoyo, Valor apoyo, Unidad valor,
+  Excepción margen mínimo autorizado JDH, Fecha Inicio, Fecha Fin, NIT Cliente, Cliente,
+  Sucursal, SKU JDH, SKU Proveedor, Observaciones; Clase, Tipo y Unidad con lista desplegable y
+  fechas validadas. `?groups=true` cambia el cliente por Grupo Empresarial.
+- **Descarga con datos** (`GET /bulk/export?supplier_code=`): los apoyos vigentes y programados
+  del proveedor con la columna **Validación**; al subirla, Sí actualiza, No vence ayer con la
+  observación de la fila, vacía no toca.
+- Panel de solicitudes JDH: pide y aprueba el margen mínimo autorizado (`mode = margen_minimo`).
 
 ## Maestros comerciales (`commercial_masters`)
 
@@ -66,7 +153,9 @@ Valores cerrados (`GET /supplier-supports/catalogs`):
   `state` y `needs_review`. Un apoyo se anula con motivo (endpoint `void`): no se borra
   nada, queda quién y por qué, y se oculta de las búsquedas salvo `state: "anulado"`.
 
-### Cómo se aplica `supplier_value` (`calc_method`)
+### Cómo se aplica `supplier_value` (`calc_method`) — antes de las reglas v2
+
+Histórico: las fórmulas vigentes están en «Reglas v2» arriba.
 
 | `calc_method` | `supplier_value` es… | Dinero del proveedor |
 | --- | --- | --- |

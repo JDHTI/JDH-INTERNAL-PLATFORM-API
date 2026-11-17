@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
+
+from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,9 @@ class SupportData:
     business_units: tuple[str, ...] = ()
     channels: tuple[str, ...] = ()
     warehouse: str | None = None
+    # Applies also in the promotional warehouses (SIESA warehouse group 23); otherwise an order
+    # from one of them goes at that warehouse's cost, without the support.
+    promo_warehouses: bool = False
     supplier_value: Decimal | None = None
     jdh_pct: Decimal | None = None
     jdh_net_cost: Decimal | None = None
@@ -121,6 +127,10 @@ class LoadPlan:
     missing: int = 0
     # Do not send it to the DWH before this moment (a big load waits for quiet hours).
     publish_not_before: datetime | None = None
+    # Supports the load expires or voids with an observation: those its rows cross (rules
+    # v2, ``on_overlap``) and those the supplier did not validate (``Validación = No``).
+    # Items of ``overlap.Supersede``.
+    retirements: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,6 +141,7 @@ class LoadResult:
     created: tuple[UUID, ...] = ()
     updated: tuple[UUID, ...] = ()
     expired: tuple[UUID, ...] = ()
+    retired: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -230,8 +241,35 @@ class SupportRow:
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
     dwh_cost: SupportCost | None = None
-    # The product's general margin in the margin master (``products.margin_list``).
-    product_margin: Decimal | None = None
+    # The product's optimal margins by list in the margin master (``margin_list``...).
+    product_margins: Mapping[str, Decimal | None] = field(default_factory=dict)
+    # Units per box in the product master (``None`` when the product is unknown).
+    product_pack_factor: Decimal | None = None
+    # The customer's margin list (``customer_margin_field``), when it has a NIT in the master.
+    customer_margin_field: str | None = None
+    # The customer's business group in the customer master (its name; the code is not known).
+    customer_business_group: str | None = None
+
+    @property
+    def margin_field(self) -> str:
+        """The margin list the support is priced on.
+
+        The customer's when it has a NIT; else its channels (all Mayoristas channels →
+        Mayoristas); else Food service, the default.
+        """
+
+        if self.customer_margin_field:
+            return self.customer_margin_field
+        channels = self.support.data.channels
+        if channels and all(channel_field(channel) == "margin_wholesale" for channel in channels):
+            return "margin_wholesale"
+        return "margin_list"
+
+    @property
+    def product_margin(self) -> Decimal | None:
+        """The product's optimal margin on :attr:`margin_field`."""
+
+        return margin_for(self.product_margins, self.margin_field)
 
 
 @dataclass(frozen=True)
@@ -251,6 +289,9 @@ class SupportView:
     conflicts: tuple[UUID, ...] = ()
     attachment_count: int = 0
     dwh_cost: SupportCost | None = None
+    # The support's group, else the customer's in the master; and the margin list it uses.
+    business_group: str | None = None
+    margin_list: str | None = None
 
 
 @dataclass(frozen=True)

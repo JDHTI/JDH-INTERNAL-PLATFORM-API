@@ -153,6 +153,13 @@ class BulkReport:
     missing: int = 0
     to_expire: int = 0
     missing_preview: list[MissingSupport] = field(default_factory=list)
+    # Rules v2: supports the load expires or voids (crossed by a row with ``on_overlap``, or
+    # ``Validación = No``), rows a blank ``Validación`` leaves alone, and the supports the
+    # rows of a business group became.
+    to_retire: int = 0
+    retired: list[UUID] = field(default_factory=list)
+    skipped: int = 0
+    group_supports: int = 0
     updated: list[UUID] = field(default_factory=list)
     expired: list[UUID] = field(default_factory=list)
     load_id: UUID | None = None

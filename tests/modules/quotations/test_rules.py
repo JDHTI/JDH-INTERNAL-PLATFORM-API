@@ -154,11 +154,53 @@ def test_support_with_money_raises_the_margin_and_its_target_rules() -> None:
     # (4000 - (3000 - 300)) / 4000
     assert line.current_margin_with_support_pct == Decimal("0.325")
     assert line.target_margin_pct == Decimal("0.25") and line.margin_basis == "apoyo"
-    # (3000 - 300) / 0.75
-    assert line.optimal_price == Decimal("3600")
+    # Precio apoyado sugerido = list price - support = 3000 / 0.75 - 300
+    assert line.optimal_price == Decimal("3700")
     priced = rules.reprice(line, Decimal("3500"))
     assert priced.new_margin_with_support_pct == Decimal("0.228571")
     assert priced.compliance == "bajo_minimo"
+
+
+def test_the_line_shows_the_stock_on_hand_and_available() -> None:
+    line = build(cost=cost(inventory="3000", stock=Decimal("120"), available=Decimal("80")))
+
+    assert (line.stock_on_hand, line.stock_available) == (Decimal("120"), Decimal("80"))
+
+
+def test_rules_v2_percent_on_the_list_price_takes_its_absolute_value() -> None:
+    # Cost 3.000 at the list margin 20 %: list price 3.750; 10 % of it is 375 off the cost.
+    line = build([agreement(calc_method="pct_precio_lista", supplier_value=Decimal("0.10"))])
+
+    assert line.support.amount == Decimal("375")
+    assert line.optimal_price == Decimal("3375")  # 3.750 - 375
+
+
+def test_rules_v2_a_box_value_is_divided_by_the_pack_factor() -> None:
+    boxed = agreement(
+        calc_method="valor_unidad",
+        supplier_value=Decimal("2400"),
+        value_unit="caja",
+        pack_factor=Decimal("12"),
+    )
+
+    line = build([boxed])
+
+    assert line.support.amount == Decimal("200")  # 2.400 per box of 12
+
+
+def test_rules_v2_jdh_authorized_margin_sets_the_minimum_price() -> None:
+    supported = agreement(
+        calc_method="costo_neto",
+        supplier_value=Decimal("2700"),
+        supported_margin_pct=Decimal("0.10"),
+    )
+
+    line = build([supported])
+
+    assert line.support.authorized_margin_pct == Decimal("0.1")
+    assert line.min_margin_pct == Decimal("0.1")
+    assert line.min_price == Decimal("3000")  # $Costo apoyado 2.700 / (1 - 10 %)
+    assert line.optimal_price == Decimal("3450")  # 3.750 - (3.000 - 2.700)
 
 
 def test_the_support_with_more_money_wins_and_others_are_listed() -> None:

@@ -141,9 +141,10 @@ def test_template_is_a_workbook_that_follows_the_profile(client) -> None:
         key: [cell.value for cell in openpyxl.load_workbook(io.BytesIO(r.content))["Apoyos"][1]]
         for key, r in (("general", general), ("own", own), ("full", full))
     }
-    assert "Tipo de apoyo" in headers["general"] and "% APOYO" not in headers["general"]
-    assert "Tipo de apoyo" not in headers["own"] and "% APOYO" in headers["own"]
-    assert "Clase de apoyo" not in headers["general"] and "Clase de apoyo" in headers["full"]
+    assert "Tipo apoyo" in headers["general"] and "% APOYO" not in headers["general"]
+    assert "Tipo apoyo" not in headers["own"] and "% APOYO" in headers["own"]
+    assert "Clase apoyo" in headers["general"] and "Costo Referencia" not in headers["general"]
+    assert "Costo Referencia" in headers["full"]
     assert openpyxl.load_workbook(io.BytesIO(general.content)).sheetnames == [
         "Apoyos",
         "Instrucciones",

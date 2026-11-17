@@ -11,6 +11,8 @@ from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel as C
 from app.modules.supplier_supports.domain.requests import (
+    MARGIN_MODE,
+    legacy_mode,
     request_mode,
     require_eligible,
     validate_value,
@@ -36,6 +38,8 @@ def snapshot(model: S) -> dict[str, Any]:
         "supplier_value",
         "jdh_pct",
         "jdh_net_cost",
+        "supported_margin_pct",
+        "min_margin_pct",
         "reference_cost",
         "reference_list_price",
         "value_unit",
@@ -278,10 +282,15 @@ class SqlAlchemySupportRequestRepository:
             if approved:
                 self._version(support.version, support_version)
                 require_eligible(support, today)
-                if request_mode(support.calc_method) != model.mode:
-                    raise ConflictError("Cambió el tipo del acuerdo; rechaza y solicita de nuevo")
                 validate_value(model.mode, model.value)
-                if model.mode == "costo_neto":
+                if model.mode == MARGIN_MODE:
+                    # Rules v2: the authorized minimum margin (Precio Apoyado Mínimo).
+                    support.supported_margin_pct = model.value
+                    if support.calc_method == "margen_minimo":
+                        support.min_margin_pct = model.value
+                elif legacy_mode(support.calc_method) != model.mode:
+                    raise ConflictError("Cambió el tipo del acuerdo; rechaza y solicita de nuevo")
+                elif model.mode == "costo_neto":
                     support.jdh_net_cost = model.value
                     support.jdh_pct = None
                 else:
@@ -316,12 +325,18 @@ class SqlAlchemySupportRequestRepository:
     async def cancel(self, support_id: UUID, version: int, actor: str, reason: str) -> None:
         async with self.database.session_factory() as session, session.begin():
             support = await self._support(session, support_id)
-            if support.jdh_pct is None and support.jdh_net_cost is None:
+            if (
+                support.jdh_pct is None
+                and support.jdh_net_cost is None
+                and support.supported_margin_pct is None
+            ):
                 return
             self._version(support.version, version)
             before = snapshot(support)
             support.jdh_pct = None
             support.jdh_net_cost = None
+            # The authorized minimum margin goes too (an exception keeps its own margin).
+            support.supported_margin_pct = None
             support.updated_by = actor
             support.updated_at = datetime.now(UTC)
             support.version += 1

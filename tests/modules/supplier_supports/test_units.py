@@ -71,9 +71,10 @@ def test_derived_values_come_per_box_and_per_unit() -> None:
     assert (result.list_price.box, result.list_price.unit) == (D("125"), D("15.625"))
     assert (result.net_cost_per.box, result.net_cost_per.unit) == (D("80"), D("10"))
     assert (result.supplier_amount_per.box, result.supplier_amount_per.unit) == (D("20"), D("2.5"))
+    # PA = PL - $Apoyo = 15,625 - 2,5 per unit.
     assert (result.suggested_price_per.box, result.suggested_price_per.unit) == (
-        D("100"),
-        D("12.5"),
+        D("105"),
+        D("13.125"),
     )
 
 
@@ -95,7 +96,7 @@ def test_a_cost_per_unit_gives_the_box_price_from_the_pack_factor() -> None:
     assert result.net_cost_per.unit == D("9856.88")
 
 
-def test_without_a_known_unit_nothing_is_converted() -> None:
+def test_without_a_known_unit_the_value_is_read_per_unit() -> None:
     result = derive(
         SupportData(
             kind="tactico_cliente",
@@ -106,5 +107,5 @@ def test_without_a_known_unit_nothing_is_converted() -> None:
         )
     )
 
-    assert result.net_cost == D("95.00")  # the amounts in the sheet's own unit are still there
-    assert (result.net_cost_per.box, result.net_cost_per.unit) == (None, None)
+    assert result.net_cost == D("95.00")
+    assert (result.net_cost_per.box, result.net_cost_per.unit) == (D("570.00"), D("95.00"))

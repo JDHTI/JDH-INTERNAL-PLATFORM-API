@@ -21,9 +21,10 @@ from app.core.errors import (
     NotFoundError,
 )
 from app.modules.commercial_masters.domain.entities import clean_nit
-from app.modules.commercial_masters.domain.margins import channel_field
+from app.modules.commercial_masters.domain.margins import customer_margin_field
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.catalog import Section
+from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
@@ -256,6 +257,8 @@ class Permissions:
     sales_scope: str | None = None
     # May ask an internal support from a customer quotation (quotes and does not review).
     can_request_support: bool = False
+    # The calculation rules (costs, warehouses, formulas) are BI's; Comercial gets the manual.
+    can_see_rules: bool = False
 
 
 @dataclass(frozen=True)
@@ -289,8 +292,17 @@ def normalize_nit(value: str) -> str:
     return nit
 
 
+def _margin_field(context: CustomerContext, scope: CustomerScope | None = None) -> str:
+    """The customer's margin list: the platform's master (with the seller's team) when it
+    knows the customer, else the channel and operation center the quotation read."""
+
+    if scope is not None and scope.margin_field:
+        return scope.margin_field
+    return customer_margin_field(context.channel, context.billing_center_code)
+
+
 def _setup(context: CustomerContext) -> _Setup:
-    basis = BASIS.get(channel_field(context.channel), "lista")
+    basis = BASIS.get(_margin_field(context), "lista")
     return _Setup(
         family=pricing.family(context.price_list_id, basis),
         plans=pricing.stock_plans(context.price_list_id, context.cost_centers),
@@ -536,7 +548,24 @@ class QuotationService:
             await self.can_validate(principal, kind),
             scope.scope if scope is not None else None,
             can_request,
+            await self.can_see_rules(principal),
         )
+
+    async def can_see_rules(self, principal: Principal) -> bool:
+        """BI's members (the quoter's validators and the main lists' area) and admins see
+        the calculation rules; Comercial sees the operating manual."""
+
+        if principal.is_platform_admin:
+            return True
+        for policy in (
+            self.approvers,
+            self.list_approvers,
+            self.main_approvers,
+            self.main_managers,
+        ):
+            if policy is not None and await policy.can_read(principal):
+                return True
+        return False
 
     async def support_requests_for(self, detail: QuotationDetail) -> Mapping[str, Any]:
         """The latest internal support request of each SKU of a customer quotation.
@@ -715,6 +744,7 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
+                    margin_field=_margin_field(context),
                     scope=None,
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),
@@ -749,6 +779,7 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
+                    margin_field=_margin_field(context, scopes.get(context.nit)),
                     scope=scopes.get(context.nit),
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),

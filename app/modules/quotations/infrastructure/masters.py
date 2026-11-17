@@ -195,6 +195,8 @@ class SqlAlchemyQuotationMasterSource:
                             _plain(CustomerModel.establishment_name).contains(
                                 token, autoescape=True
                             ),
+                            # The business group: one word finds every customer of the group.
+                            _plain(CustomerModel.business_group).contains(token, autoescape=True),
                         )
                     )
         active = func.sum(cast(CustomerModel.is_active, Integer))
@@ -206,6 +208,7 @@ class SqlAlchemyQuotationMasterSource:
                 func.max(CustomerModel.channel).label("channel"),
                 func.max(CustomerModel.salesperson_code).label("salesperson_code"),
                 func.max(CustomerModel.salesperson_name).label("salesperson_name"),
+                func.max(CustomerModel.business_group).label("business_group"),
                 func.count().label("branch_count"),
                 active.label("active_count"),
             )
@@ -238,6 +241,7 @@ class SqlAlchemyQuotationMasterSource:
                     salesperson_name=row.salesperson_name,
                     branch_count=int(row.branch_count),
                     active_branch_count=int(row.active_count or 0),
+                    business_group=row.business_group,
                 )
                 for row in rows
             ),

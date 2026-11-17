@@ -282,23 +282,27 @@ async def test_profile_defaults_are_validated_and_versioned(profiles, manager) -
 async def test_template_follows_the_profile_layout(profiles, manager) -> None:
     general = [header for _, header in template_headers(None)]
     # The short general template: the key, the type and value; never costs or prices.
-    assert "Tipo de apoyo" in general and "Valor apoyo" in general
+    assert "Tipo apoyo" in general and "Valor apoyo" in general
     assert "NIT Cliente" in general and "SKU JDH" in general and "Fecha Inicio" in general
     assert "Costo Referencia" not in general and "Precio Lista Referencia" not in general
-    # The short template: NIT, SKUs, type, value, supported margin, dates and notes.
+    # Rules v2: the short template in BI's order; never costs or prices.
     assert general == [
-        "NIT Cliente",
-        "SKU JDH",
-        "SKU Proveedor",
-        "Tipo de apoyo",
+        "Clase apoyo",
+        "Tipo apoyo",
         "Valor apoyo",
-        "Margen apoyado",
+        "Unidad valor",
+        "Excepción margen mínimo autorizado JDH",
         "Fecha Inicio",
         "Fecha Fin",
+        "NIT Cliente",
+        "Cliente",
+        "Sucursal",
+        "SKU JDH",
+        "SKU Proveedor",
         "Observaciones",
     ]
     full = [header for _, header in template_headers(None, full=True)]
-    assert "Costo Referencia" in full and "Clase de apoyo" in full
+    assert "Costo Referencia" in full and "Grupo Empresarial" in full
 
     profile = await profiles.save(
         manager,
