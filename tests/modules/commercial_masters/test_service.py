@@ -273,6 +273,26 @@ async def test_setting_the_margins_of_one_product_by_hand(service, repo) -> None
     assert updated.margins.market == D("0.2") and updated.margins.source == "manual"
 
 
+async def test_the_employee_margin_is_optional_and_does_not_count_as_a_margin(
+    service, repo
+) -> None:
+    admin = principal(admin=True)
+
+    await service.set_product_margins(admin, "7244", FIVE, None, None)
+    assert "margin_employee" not in repo.calls[-1][2]
+    await service.set_product_margins(
+        admin, "7244", FIVE, None, None, employee_margin=D("0.1500004")
+    )
+    assert repo.calls[-1][2]["margin_employee"] == D("0.150000")
+    with pytest.raises(InvalidInputError, match="Margen Empleado JDH"):
+        await service.set_product_margins(admin, "7244", FIVE, None, None, employee_margin=D("1"))
+
+    updated = await service.update_product(admin, "1569", {"margin_employee": D("0.13")})
+    assert updated.margins.employee == D("0.13") and updated.margins.defined is False
+    with pytest.raises(InvalidInputError, match="Margen Empleado JDH"):
+        await service.update_product(admin, "1569", {"margin_employee": D("13")})
+
+
 async def test_every_margin_is_required_and_a_fraction(service) -> None:
     admin = principal(admin=True)
     partial = {k: v for k, v in FIVE.items() if k != "margin_market"}

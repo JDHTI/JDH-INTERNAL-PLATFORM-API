@@ -166,6 +166,15 @@ def test_put_sets_every_margin_of_one_product(api) -> None:
     with_tax = {**MARGINS, "liquor_tax": {"national": "1200", "coast": "1350", "group": "0509"}}
     assert client.put(f"{BASE}/products/7244/margins", json=with_tax).status_code == 200
     assert repo.calls[-1][2]["liquor_tax_coast"] == 1350
+    employee = {**MARGINS, "margin_employee": "0.13"}
+    body = client.put(f"{BASE}/products/7244/margins", json=employee).json()
+    assert body["margin_employee"] == "0.130000"
+    assert (
+        client.put(
+            f"{BASE}/products/7244/margins", json={**employee, "margin_employee": 13}
+        ).status_code
+        == 422
+    )
 
 
 @pytest.mark.parametrize(
