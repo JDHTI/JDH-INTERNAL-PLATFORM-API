@@ -1,4 +1,7 @@
-"""Opt-in: crossing supports and mass retirement on PostgreSQL (SUPPORT_REQUEST_TEST_DATABASE_URL)."""
+"""Opt-in: crossing supports and mass retirement on PostgreSQL.
+
+Runs with ``SUPPORT_REQUEST_TEST_DATABASE_URL``.
+"""
 
 from __future__ import annotations
 

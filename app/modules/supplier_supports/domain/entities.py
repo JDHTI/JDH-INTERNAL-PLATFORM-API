@@ -124,6 +124,10 @@ class LoadPlan:
     missing: int = 0
     # Do not send it to the DWH before this moment (a big load waits for quiet hours).
     publish_not_before: datetime | None = None
+    # Supports the load expires or voids with an observation: those its rows cross (rules
+    # v2, ``on_overlap``) and those the supplier did not validate (``Validación = No``).
+    # Items of ``overlap.Supersede``.
+    retirements: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,7 @@ class LoadResult:
     created: tuple[UUID, ...] = ()
     updated: tuple[UUID, ...] = ()
     expired: tuple[UUID, ...] = ()
+    retired: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True)

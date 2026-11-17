@@ -472,7 +472,12 @@ class SqlAlchemySupportRepository:
         return [support for support in supports if overlaps(data, support.data)]
 
     async def _supersede(
-        self, session: Any, items: Sequence[Supersede], actor: str, now: datetime
+        self,
+        session: Any,
+        items: Sequence[Supersede],
+        actor: str,
+        now: datetime,
+        load_id: UUID | None = None,
     ) -> list[SupplierSupportModel]:
         """Expire or void the supports a new one replaces (locked, version-checked)."""
 
@@ -496,12 +501,12 @@ class SqlAlchemySupportRepository:
                 model.valid_to = item.valid_to
                 line = f"Vencido al {item.valid_to.isoformat()}: {item.reason}"
                 model.notes = f"{model.notes}\n{line}" if model.notes else line
-                _stamp(model, actor, now, Trace("vencimiento"))
+                _stamp(model, actor, now, Trace("vencimiento", load_id))
             else:
                 model.status = "anulado"
                 model.void_reason = item.reason
                 model.voided_at = now
-                _stamp(model, actor, now, Trace("anulacion"))
+                _stamp(model, actor, now, Trace("anulacion", load_id))
             changed.append(model)
         await session.flush()
         return changed
@@ -730,13 +735,16 @@ class SqlAlchemySupportRepository:
             updated=len(plan.updates),
             unchanged=plan.unchanged,
             missing=plan.missing,
-            expired=len(plan.expirations),
+            # Closed by the load: missing ones expired, plus those crossed or not validated.
+            expired=len(plan.expirations) + len(plan.retirements),
         )
         async with self.database.session_factory() as session:
             try:
                 session.add(load)
                 await session.flush()
-                written: list[SupplierSupportModel] = []
+                written: list[SupplierSupportModel] = await self._supersede(
+                    session, plan.retirements, actor, now, plan.load_id
+                )
                 for support_id, data in plan.creates:
                     model = _new_model(support_id, data, actor, now, trace)
                     session.add(model)
@@ -775,6 +783,7 @@ class SqlAlchemySupportRepository:
             created=tuple(support_id for support_id, _ in plan.creates),
             updated=tuple(support_id for support_id, _, _ in plan.updates),
             expired=tuple(support_id for support_id, _, _ in plan.expirations),
+            retired=tuple(item.support_id for item in plan.retirements),
         )
 
     @staticmethod

@@ -230,6 +230,7 @@ class FakeSupportRepository:
                 raise ConflictError("versión")
         self.loads.append(plan)
         trace = Trace("carga", plan.load_id)
+        await self.supersede(plan.retirements, actor, now)
         for support_id, data in plan.creates:
             await self.create(support_id, data, actor, now, trace)
         for support_id, version, data in plan.updates:
@@ -249,6 +250,7 @@ class FakeSupportRepository:
             created=tuple(support_id for support_id, _ in plan.creates),
             updated=tuple(support_id for support_id, _, _ in plan.updates),
             expired=tuple(support_id for support_id, _, _ in plan.expirations),
+            retired=tuple(item.support_id for item in plan.retirements),
         )
 
     async def get(self, support_id: UUID) -> Support | None:

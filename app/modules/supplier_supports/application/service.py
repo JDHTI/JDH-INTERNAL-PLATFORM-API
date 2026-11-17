@@ -939,6 +939,11 @@ class SupplierSupportService:
                 checked.append(Checked(error=exc.detail, field=getattr(exc, "field", None)))
         return checked
 
+    async def group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
+        """Active customers ``(nit, name)`` of each business group (by its name)."""
+
+        return await self.masters.business_group_members(groups)
+
     def validate(self, data: SupportData) -> None:
         """The rules that need no lookup, on an already resolved support (a merged version).
 

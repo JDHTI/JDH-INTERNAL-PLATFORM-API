@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -28,7 +28,7 @@ from app.modules.supplier_supports.application.profiles import (
     normalize_defaults,
 )
 from app.modules.supplier_supports.application.service import SupplierSupportService
-from app.modules.supplier_supports.domain import fields, vocabulary
+from app.modules.supplier_supports.domain import fields, overlap, vocabulary
 from app.modules.supplier_supports.domain.bulk import (
     CREATE,
     UNCHANGED,
@@ -42,6 +42,7 @@ from app.modules.supplier_supports.domain.bulk import (
     support_key,
 )
 from app.modules.supplier_supports.domain.entities import LoadPlan, Support, SupportData
+from app.modules.supplier_supports.domain.overlap import OVERLAP_ACTIONS, Supersede, overlaps
 from app.modules.supplier_supports.domain.ports import SupportFileReader
 from app.modules.supplier_supports.domain.profiles import Profile
 
@@ -58,8 +59,60 @@ _CALC_LABELS = {
 }
 
 
+_KIND_LABELS = {n.fold(label): code for code, label in vocabulary.KIND_LABELS.items()}
+# The «Validación» column of a download with data: Sí keeps (and updates) the support, No
+# expires it, blank leaves the row alone. Not a field of the support.
+VALIDATION = "validation"
+_VALIDATION_HEADERS = ("Validación", "Validacion proveedor", "Validado proveedor")
+_YES = {"si", "s", "x", "ok", "yes"}
+_NO = {"no", "n"}
+# Fields whose change makes an updated row check crossings again.
+_SCOPE = (
+    "kind",
+    "customer_nit",
+    "customer_branch_id",
+    "customer_group",
+    "product_sku",
+    "supplier_sku",
+    "warehouse",
+    "regionals",
+    "channels",
+    "business_units",
+    "valid_from",
+    "valid_to",
+    "is_enabled",
+)
+
+
 class _BadCell(ValueError):
     """A cell that cannot be read as what its column holds."""
+
+
+@dataclass(frozen=True)
+class _Row:
+    """A support read from the file: its sheet row, supplier, the fields it gives and its
+    «Validación» (``si``/``no``; ``None`` without the column). A business group's row
+    becomes one per customer (``from_group``)."""
+
+    number: int
+    data: SupportData
+    supplier: str | None
+    given: frozenset[str]
+    verdict: str | None = None
+    from_group: bool = False
+
+
+def _verdict(raw: Any) -> tuple[str | None, str | None]:
+    """``(si | no | None, problem)`` of a «Validación» cell."""
+
+    if _blank(raw):
+        return None, None
+    text = n.fold(raw)
+    if text in _YES:
+        return "si", None
+    if text in _NO:
+        return "no", None
+    return None, f"Validación: escribe Sí o No (o déjala vacía), no {raw!r}"
 
 
 def _blank(value: Any) -> bool:
@@ -69,7 +122,7 @@ def _blank(value: Any) -> bool:
 def _header_lookup(*column_maps: Mapping[str, Sequence[str]]) -> dict[str, str]:
     """Folded header -> field. The template's names first; each saved mapping overrides."""
 
-    lookup: dict[str, str] = {}
+    lookup: dict[str, str] = {n.fold(text): VALIDATION for text in _VALIDATION_HEADERS}
     for spec in fields.FIELD_SPECS:
         for text in (spec.label, spec.name, *spec.aliases):
             lookup.setdefault(n.fold(text), spec.name)
@@ -122,10 +175,13 @@ def _convert(name: str, raw: Any, calc: str | None, values: dict[str, Any]) -> A
         chosen = cells.choice(raw, spec.choices)
         if chosen is None and name == "calc_method":
             chosen = _CALC_LABELS.get(n.fold(raw))
+        if chosen is None and name == "kind":
+            chosen = _KIND_LABELS.get(n.fold(raw))
         if chosen is None:
-            shown = (
-                vocabulary.CALC_METHOD_LABELS.values() if name == "calc_method" else spec.choices
-            )
+            shown = {
+                "calc_method": vocabulary.CALC_METHOD_LABELS.values(),
+                "kind": [vocabulary.KIND_LABELS[kind] for kind in vocabulary.ACTIVE_KINDS],
+            }.get(name, spec.choices)
             raise _BadCell(f"valor no válido: {raw!r} (válidos: {', '.join(shown)})")
         return chosen
     if spec.type == fields.TEXT:
@@ -224,6 +280,8 @@ class SupportBulkService:
         defaults: Mapping[str, Any] | None = None,
         column_map: Mapping[str, Any] | None = None,
         expire_missing: bool = False,
+        on_overlap: str | None = None,
+        groups: bool = False,
     ) -> BulkReport:
         """Check every row of the file and, with ``apply`` and no errors, write them all.
 
@@ -245,6 +303,13 @@ class SupportBulkService:
             column_map (Mapping[str, Any] | None): Field -> headers for this load, over the
                 profile's.
             expire_missing (bool): Close the supports in force that the file no longer brings.
+            on_overlap (str | None): What happens to a stored support a row crosses
+                (``vencer_anterior`` / ``anular_anterior``); without it, a crossing is an error.
+            groups (bool): The business-group upload: every row names a group (no NIT) and
+                becomes one support per active customer of the group.
+
+        A «Validación» column (the download with data) decides each row: Sí loads it, No
+        expires the stored support yesterday with the row's observation, blank skips it.
 
         Returns:
             BulkReport: The simulation or the result.
@@ -282,32 +347,56 @@ class SupportBulkService:
                 f"El archivo tiene {len(built)} filas; el máximo por carga es {self.max_rows}"
             )
 
+        if on_overlap is not None and on_overlap not in OVERLAP_ACTIONS:
+            raise InvalidInputError(f"on_overlap inválido (válidos: {', '.join(OVERLAP_ACTIONS)})")
+        if groups and "customer_group" not in positions:
+            raise InvalidInputError("La subida por grupo empresarial necesita la columna Grupo")
+        has_validation = VALIDATION in positions
+        today = self.supports.calendar.today()
+        last_day = today - timedelta(days=1)
+
         issues: list[RowIssue] = []
-        data: dict[int, tuple[SupportData, str | None]] = {}
-        provided: dict[int, frozenset[str]] = {}
+        rows_in: list[_Row] = []
+        skipped = 0
         for number, row_cells in built:
+            verdict = None
+            if has_validation:
+                verdict, problem = _verdict(row_cells.pop(VALIDATION, None))
+                if problem is not None:
+                    issues.append(RowIssue(number, VALIDATION, problem))
+                    continue
+                if verdict is None:
+                    skipped += 1  # a blank «Validación» leaves the row alone
+                    continue
             support, row_supplier, problems, given = self._support(
                 number, row_cells, effective_defaults, code, filename
             )
             issues.extend(problems)
             if support is not None and not problems:
-                data[number] = (support, row_supplier)
-                provided[number] = given
+                if groups and support.customer_nit:
+                    issues.append(
+                        RowIssue(number, "customer_nit", "En la subida por grupo deja el NIT vacío")
+                    )
+                    continue
+                rows_in.append(_Row(number, support, row_supplier, given, verdict))
+        rows_in, group_issues = await self._expand_groups(rows_in, groups)
+        issues.extend(group_issues)
 
-        ordered = list(data)
-        checked = await self.supports.check_many(principal, [data[number] for number in ordered])
-        accepted: dict[int, SupportData] = {}
-        for number, result in zip(ordered, checked, strict=True):
+        checked = await self.supports.check_many(
+            principal, [(row.data, row.supplier) for row in rows_in]
+        )
+        accepted: dict[int, _Row] = {}
+        for index, (row, result) in enumerate(zip(rows_in, checked, strict=True)):
             if result.error is not None or result.data is None:
-                issues.append(RowIssue(number, result.field, result.error or "Apoyo no válido"))
+                issues.append(RowIssue(row.number, result.field, result.error or "Apoyo no válido"))
             else:
-                accepted[number] = result.data
+                accepted[index] = replace(row, data=result.data)
         issues.extend(self._repeated(accepted))
 
         stored = await self.supports.live_for_suppliers(
             principal,
             sorted(
-                {item.commercial_supplier_id for item in accepted.values()} - {None},
+                {row.data.commercial_supplier_id for row in accepted.values()} - {None},
                 key=str,
             ),
         )
@@ -317,29 +406,57 @@ class SupportBulkService:
                 continue  # an internal request's support is never matched by a file
             by_key[support_key(support.data)] = support
         actions: dict[int, tuple[str, Support | None, SupportData]] = {}
-        for number, item in accepted.items():
+        retirements: dict[UUID, Supersede] = {}
+        for index, row in accepted.items():
+            item, number = row.data, row.number
             match = by_key.get(support_key(item))
-            if match is None:
-                actions[number] = (CREATE, None, item)
+            if row.verdict == "no":
+                # The supplier did not validate it: the stored support expires yesterday.
+                if match is None:
+                    issues.append(
+                        RowIssue(number, VALIDATION, "Validación No: no hay un apoyo guardado así")
+                    )
+                else:
+                    note = item.notes or "No validado por el proveedor"
+                    retirements[match.id] = Supersede(match.id, match.version, last_day, note)
                 continue
-            merged = merge(match.data, item, provided[number])
+            if match is None:
+                actions[index] = (CREATE, None, item)
+                continue
+            merged = merge(match.data, item, row.given)
             if same_support(merged, match.data):
-                actions[number] = (UNCHANGED, match, match.data)
+                actions[index] = (UNCHANGED, match, match.data)
                 continue
             try:
                 self.supports.validate(merged)
             except InvalidInputError as exc:
                 issues.append(RowIssue(number, getattr(exc, "field", None), exc.detail))
                 continue
-            actions[number] = (UPDATE, match, merged)
+            actions[index] = (UPDATE, match, merged)
+
+        flagged = {issue.row_number for issue in issues}
+        crossing_issues, crossed = self._crossings(
+            accepted,
+            {i: action for i, action in actions.items() if accepted[i].number not in flagged},
+            stored,
+            set(retirements),
+            on_overlap,
+        )
+        issues.extend(crossing_issues)
+        for item in crossed:
+            retirements.setdefault(item.support_id, item)
 
         bad_rows = {issue.row_number for issue in issues}
-        valid = {number: item for number, item in actions.items() if number not in bad_rows}
+        valid = {
+            index: action
+            for index, action in actions.items()
+            if accepted[index].number not in bad_rows
+        }
         issues.sort(key=lambda issue: issue.row_number)
 
-        today = self.supports.calendar.today()
         matched = {support.id for _, support, _ in valid.values() if support is not None}
-        classes = {(item.commercial_supplier_id, item.kind) for item in accepted.values()}
+        matched |= set(retirements)
+        classes = {(row.data.commercial_supplier_id, row.data.kind) for row in accepted.values()}
         missing = [
             support
             for support in stored
@@ -349,7 +466,6 @@ class SupportBulkService:
             and (support.data.commercial_supplier_id, support.data.kind) in classes
             and (support.data.valid_to is None or support.data.valid_to >= today)
         ]
-        last_day = today - timedelta(days=1)
         expirations = (
             [
                 support
@@ -368,12 +484,13 @@ class SupportBulkService:
             if action == UPDATE and support is not None
         ]
         unchanged = sum(1 for action, _, _ in valid.values() if action == UNCHANGED)
-        writes = len(creates) + len(updates) + len(expirations)
+        writes = len(creates) + len(updates) + len(expirations) + len(retirements)
 
         blocked = bool(issues)
         created: list[UUID] = []
         updated: list[UUID] = []
         expired: list[UUID] = []
+        retired: list[UUID] = []
         load_id = None
         not_before = (
             self.quiet_hours.not_before(writes, self._clock()) if self.quiet_hours else None
@@ -396,13 +513,15 @@ class SupportBulkService:
                     unchanged=unchanged,
                     missing=len(missing),
                     publish_not_before=not_before,
+                    retirements=tuple(retirements.values()),
                 ),
             )
             load_id = result.load_id
-            created, updated, expired = (
+            created, updated, expired, retired = (
                 list(result.created),
                 list(result.updated),
                 list(result.expired),
+                list(result.retired),
             )
         with_conflicts = 0
         for support_id in created[:PREVIEW_ROWS]:
@@ -420,8 +539,10 @@ class SupportBulkService:
             errors=issues[:MAX_REPORTED_ERRORS],
             errors_truncated=len(issues) > MAX_REPORTED_ERRORS,
             preview=[
-                self._preview(number, item, data[number][1], action, support)
-                for number, (action, support, item) in list(valid.items())[:PREVIEW_ROWS]
+                self._preview(
+                    accepted[index].number, item, accepted[index].supplier, action, support
+                )
+                for index, (action, support, item) in list(valid.items())[:PREVIEW_ROWS]
             ],
             to_create=len(creates),
             to_update=len(updates),
@@ -455,7 +576,124 @@ class SupportBulkService:
             profile_used=profile is not None,
             created=created,
             with_conflicts=with_conflicts,
+            to_retire=len(retirements),
+            retired=retired,
+            skipped=skipped,
+            group_supports=sum(1 for row in accepted.values() if row.from_group),
         )
+
+    async def _expand_groups(
+        self, rows: Sequence[_Row], required: bool
+    ) -> tuple[list[_Row], list[RowIssue]]:
+        """A row with a business group and no NIT becomes one support per customer of the
+        group (its active NITs in the customer master), each with the group's name."""
+
+        names = sorted(
+            {row.data.customer_group for row in rows if row.data.customer_group}
+            if required
+            else {
+                row.data.customer_group
+                for row in rows
+                if row.data.customer_group and not row.data.customer_nit
+            }
+        )
+        members = await self.supports.group_members(names) if names else {}
+        by_upper = {name.upper(): items for name, items in members.items()}
+        expanded: list[_Row] = []
+        issues: list[RowIssue] = []
+        for row in rows:
+            group = row.data.customer_group
+            if not group or row.data.customer_nit:
+                if required:
+                    issues.append(RowIssue(row.number, "customer_group", "Falta el grupo"))
+                else:
+                    expanded.append(row)
+                continue
+            customers = by_upper.get(group.upper())
+            if not customers:
+                issues.append(
+                    RowIssue(
+                        row.number,
+                        "customer_group",
+                        f"El grupo empresarial {group} no tiene clientes activos en el maestro",
+                    )
+                )
+                continue
+            given = row.given | {"customer_nit", "customer_name"}
+            for nit, name in customers:
+                data = replace(row.data, customer_nit=nit, customer_name=name)
+                expanded.append(replace(row, data=data, given=given, from_group=True))
+        return expanded, issues
+
+    @staticmethod
+    def _crossings(
+        accepted: Mapping[int, _Row],
+        actions: Mapping[int, tuple[str, Support | None, SupportData]],
+        stored: Sequence[Support],
+        retiring: set[UUID],
+        on_overlap: str | None,
+    ) -> tuple[list[RowIssue], list[Supersede]]:
+        """Rules v2 in a load: a created support, or an updated one whose scope or dates
+        change, cannot cross a live support of the same class and scope.
+
+        Against a stored support: an error, or with ``on_overlap`` the plan that expires or
+        voids it. Against another row of the file: always an error.
+        """
+
+        updated = {support.id for _, support, _ in actions.values() if support is not None}
+        index: dict[tuple[Any, ...], list[tuple[str, Any, SupportData]]] = {}
+
+        def bucket(data: SupportData) -> tuple[Any, ...]:
+            return (data.kind, data.commercial_supplier_id, data.customer_nit, data.product_sku)
+
+        for support in stored:
+            if support.id not in updated and support.id not in retiring:
+                index.setdefault(bucket(support.data), []).append(("stored", support, support.data))
+        issues: list[RowIssue] = []
+        plan: list[Supersede] = []
+        for position, (action, match, data) in actions.items():
+            if action == UNCHANGED:
+                continue
+            row = accepted[position]
+            checks = action == CREATE or (
+                match is not None
+                and any(getattr(data, name) != getattr(match.data, name) for name in _SCOPE)
+            )
+            candidates = index.setdefault(bucket(data), [])
+            if checks:
+                rows = [
+                    other
+                    for kind, other, other_data in candidates
+                    if kind == "row" and overlaps(data, other_data)
+                ]
+                if rows:
+                    issues.append(
+                        RowIssue(
+                            row.number,
+                            None,
+                            f"Se cruza con la fila {rows[0]} (misma clase, cliente, referencia "
+                            "y vigencia)",
+                        )
+                    )
+                found = [
+                    other
+                    for kind, other, other_data in candidates
+                    if kind == "stored" and overlaps(data, other_data)
+                ]
+                if found and on_overlap is None:
+                    first = found[0].data
+                    issues.append(
+                        RowIssue(
+                            row.number,
+                            "valid_from",
+                            f"Se cruza con un apoyo vigente ({first.valid_from or 'sin inicio'} a "
+                            f"{first.valid_to or 'indefinido'}): elige vencer o anular el anterior",
+                        )
+                    )
+                elif found:
+                    plan.extend(overlap.supersede(data, found, on_overlap or "", row.data.notes))
+            candidates.append(("row", row.number, data))
+        return issues, plan
 
     # ----------------------------------------------------------------- reading
 
@@ -577,25 +815,25 @@ class SupportBulkService:
         return SupportData(**values), row_supplier, problems, given
 
     @staticmethod
-    def _repeated(accepted: Mapping[int, SupportData]) -> list[RowIssue]:
+    def _repeated(accepted: Mapping[int, _Row]) -> list[RowIssue]:
         """Rows with the same key as an earlier one of the same file (they would fight over
         the same support)."""
 
         seen: dict[tuple[Any, ...], int] = {}
         issues: list[RowIssue] = []
-        for number, item in accepted.items():
-            key = support_key(item)
+        for row in accepted.values():
+            key = support_key(row.data)
             if key in seen:
                 issues.append(
                     RowIssue(
-                        number,
+                        row.number,
                         None,
                         f"Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha "
                         f"inicio) que la fila {seen[key]}",
                     )
                 )
             else:
-                seen[key] = number
+                seen[key] = row.number
         return issues
 
     @staticmethod
