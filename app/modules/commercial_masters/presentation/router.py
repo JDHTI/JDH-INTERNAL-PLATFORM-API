@@ -516,8 +516,12 @@ class EmployeePriceResponse(BaseModel):
     cost: Decimal
     margin: Decimal
     price: Decimal
+    # 19, 5 or 0 (SIESA tax group without VAT); null only when the group carries VAT and
+    # SIESA has no rate for it.
     vat_pct: Decimal | None
     price_with_vat: Decimal
+    tax_group_id: str | None
+    tax_group: str | None
 
 
 class EmployeePriceListResponse(BaseModel):
@@ -530,6 +534,8 @@ class EmployeePriceListResponse(BaseModel):
     total: int
     # Active products left out because MDE1 has no usable cost for them.
     without_cost: int
+    # Lines whose VAT rate is unknown (vat_pct null).
+    unknown_vat: int
     items: list[EmployeePriceResponse]
 
 
@@ -556,6 +562,7 @@ async def employee_prices(
         snapshot_date=result.snapshot_date,
         total=len(result.items),
         without_cost=result.without_cost,
+        unknown_vat=result.unknown_vat,
         items=[EmployeePriceResponse(**asdict(item)) for item in result.items],
     )
 

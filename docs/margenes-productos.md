@@ -44,12 +44,20 @@ regla del validador ni del cotizador lo lee y no cuenta para `has_margin`.
   (`consumo.inventario_fecha`), por unidad de inventario y sin IVA, redondeado a pesos y el mayor de
   sus instalaciones, como lo lee el cotizador. Un costo de 1 peso o menos es de relleno y no da precio.
 - **Precio** = costo / (1 − `margin_employee`), en pesos enteros (mitad hacia arriba).
-- **Precio con IVA** = precio × (1 + `iva_venta_pct` / 100), en pesos enteros.
+- **Precio con IVA** = precio × (1 + IVA / 100), en pesos enteros.
+- **IVA**: se lee en vivo del producto en SIESA (`consumo.productos`), con su grupo impositivo
+  (`tax_group_id`, `tax_group`). SIESA deja `iva_venta_pct` vacío en los grupos sin IVA (`0024 SIN IVA,
+  RFFTE COMPRAS 2.5%, RTICA 1%`, `0000 SIN IVA, SIN RETENCIONES`…): esos se facturan al **0 %** y la lista
+  los manda con `vat_pct = 0`. Solo queda `null` (y cuenta en `unknown_vat`) cuando el grupo sí lleva IVA
+  y SIESA no tiene la tasa (`1640 IVA 19%, SIN RETENCIONES`, cuatro productos activos, ninguno con costo
+  en MDE1). El IVA del maestro local solo se usa si SIESA no trae ni tasa ni grupo. El precio con IVA no
+  incluye otros impuestos (IBUA de bebidas azucaradas, impuesto al consumo de licores).
 - Solo productos activos. `without_cost` cuenta los activos que MDE1 no tiene con costo (líneas frías
   que viven en MDE3, productos sin inventario en Medellín).
 
 `scripts/export-employee-prices.py <ruta>` escribe la misma lista en `<ruta>.json` y `<ruta>.csv`.
-El 2026-11-17 dio 5.246 productos con precio y 4.103 activos sin costo en MDE1. Esa lista se envió
+El 2026-11-17 dio 5.246 productos con precio (4.688 con IVA 19 %, 218 con 5 % y 340 sin IVA, ninguno
+desconocido) y 4.103 activos sin costo en MDE1. Esa lista se envió
 como prueba al catálogo (`jdh-catalogo-api`), que la guarda aparte para mostrarla solo a los empleados
 que inician sesión.
 

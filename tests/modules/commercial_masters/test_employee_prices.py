@@ -16,6 +16,7 @@ from app.modules.commercial_masters.domain.employee_prices import (
     EmployeePriceProduct,
     WarehouseCost,
     employee_price,
+    sale_vat,
     with_vat,
 )
 from app.modules.identity.domain.principal import Principal
@@ -76,6 +77,21 @@ def test_price_is_the_cost_over_one_minus_the_margin(cost, margin, price) -> Non
     assert employee_price(cost, margin) == price
 
 
+@pytest.mark.parametrize(
+    ("rate", "group", "expected"),
+    [
+        (D("19"), "IVA19%,RTFTCOMP2.5%,RIVA15%,RICA1%", D("19")),
+        (D("5"), "IVA 5%, RTF COMP 2.5%, RIVA15%, RICA 1%", D("5")),
+        (None, "SIN IVA, RFFTE COMPRAS 2.5%, RTICA 1%", D("0")),
+        (None, " sin iva, sin retenciones", D("0")),
+        (None, "IVA 19%, SIN RETENCIONES", None),  # the group carries VAT: a gap
+        (None, None, None),
+    ],
+)
+def test_an_empty_rate_is_zero_only_in_a_group_without_vat(rate, group, expected) -> None:
+    assert sale_vat(rate, group) == expected
+
+
 def test_vat_is_added_in_whole_pesos() -> None:
     assert with_vat(D("10000"), D("19")) == D("11900")
     assert with_vat(D("1149"), D("5")) == D("1206")  # 1206.45
@@ -102,6 +118,26 @@ async def test_the_list_prices_every_active_product_with_an_mde1_cost() -> None:
         ("7244", D("10000"), D("11900")),
     ]
     assert result.without_cost == 1  # 0001 has no MDE1 cost
+
+
+async def test_the_vat_comes_from_siesa_with_zero_for_groups_without_vat() -> None:
+    day = date(2026, 11, 17)
+    costs = Costs(
+        WarehouseCost("11273", D("8700"), day, None, "0024", "SIN IVA, RFFTE COMPRAS 2.5%"),
+        WarehouseCost("10034", D("8700"), day, D("5"), "0501", "IVA 5%, RTF COMP 2.5%"),
+        WarehouseCost("9001", D("8700"), day, None, "1640", "IVA 19%, SIN RETENCIONES"),
+    )
+    # The master's copy says 19 for all three: SIESA wins.
+    service = EmployeePriceService(Products(item("11273"), item("10034"), item("9001")), costs)
+
+    result = await service.price_list()
+
+    lines = {line.sku: line for line in result.items}
+    assert (lines["11273"].vat_pct, lines["11273"].price_with_vat) == (D("0"), D("10000"))
+    assert lines["11273"].tax_group_id == "0024"
+    assert (lines["10034"].vat_pct, lines["10034"].price_with_vat) == (D("5"), D("10500"))
+    assert lines["9001"].vat_pct is None and lines["9001"].price_with_vat == D("10000")
+    assert result.unknown_vat == 1
 
 
 async def test_a_warehouse_outage_is_a_dependency_error() -> None:

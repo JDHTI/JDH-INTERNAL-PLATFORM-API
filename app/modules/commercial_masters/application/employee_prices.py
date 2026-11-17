@@ -13,6 +13,7 @@ from app.modules.commercial_masters.domain.employee_prices import (
     EmployeePrice,
     EmployeePriceList,
     employee_price,
+    sale_vat,
     with_vat,
 )
 from app.modules.commercial_masters.domain.ports import (
@@ -65,6 +66,10 @@ class EmployeePriceService:
             if cost is None or price is None:
                 without_cost += 1
                 continue
+            # SIESA's product as of today wins; the master's copy only when SIESA says nothing.
+            vat = sale_vat(cost.vat_pct, cost.tax_group)
+            if vat is None and cost.tax_group is None:
+                vat = product.vat_pct
             items.append(
                 EmployeePrice(
                     sku=product.sku,
@@ -74,8 +79,10 @@ class EmployeePriceService:
                     cost=cost.cost,
                     margin=margin,
                     price=price,
-                    vat_pct=product.vat_pct,
-                    price_with_vat=with_vat(price, product.vat_pct) or price,
+                    vat_pct=vat,
+                    price_with_vat=with_vat(price, vat) or price,
+                    tax_group_id=cost.tax_group_id,
+                    tax_group=cost.tax_group,
                 )
             )
         dates = [item.snapshot_date for item in costs.values() if item.snapshot_date]
@@ -85,4 +92,5 @@ class EmployeePriceService:
             snapshot_date=max(dates) if dates else None,
             items=tuple(items),
             without_cost=without_cost,
+            unknown_vat=sum(1 for item in items if item.vat_pct is None),
         )

@@ -40,6 +40,8 @@ _CSV_COLUMNS = (
     "price",
     "vat_pct",
     "price_with_vat",
+    "tax_group_id",
+    "tax_group",
 )
 
 
@@ -58,6 +60,7 @@ def write(result: EmployeePriceList, out: Path) -> tuple[Path, Path]:
         "snapshot_date": result.snapshot_date.isoformat() if result.snapshot_date else None,
         "total": len(result.items),
         "without_cost": result.without_cost,
+        "unknown_vat": result.unknown_vat,
         "items": [
             {name: _plain(value) for name, value in asdict(item).items()} for item in result.items
         ],
@@ -90,6 +93,12 @@ async def run(out: Path) -> int:
     print(f"  foto de inventario ...... {result.snapshot_date}")
     print(f"  productos con precio .... {len(result.items)}")
     print(f"  activos sin costo MDE1 .. {result.without_cost}")
+    print(f"  IVA desconocido ......... {result.unknown_vat}")
+    rates: dict[str, int] = {}
+    for item in result.items:
+        key = "?" if item.vat_pct is None else format(item.vat_pct.normalize(), "f")
+        rates[key] = rates.get(key, 0) + 1
+    print(f"  por IVA % ............... {dict(sorted(rates.items()))}")
     print(f"  {json_path}")
     print(f"  {csv_path}")
     return 0
