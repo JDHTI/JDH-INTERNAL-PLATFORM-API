@@ -48,6 +48,7 @@ from app.modules.pqrsf.domain.ports import (
 )
 from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_candidates
 from app.modules.pqrsf.domain.timeline import (
+    EVENT_ACTION_PLAN_OPENED,
     EVENT_FORWARDED_TO_CUSTOMER,
     EVENT_OM_SENT,
     EVENT_SUPPLIER_MESSAGE,
@@ -1226,6 +1227,20 @@ class CaseTrackingService:
             )
         actors = await self.people.get_users({principal.user_id})
         return self._event_view(event, actors, TimelineContext())
+
+    async def record_action_plan(
+        self, case_id: UUID, principal: Principal, plan_id: UUID, plan_code: str
+    ) -> None:
+        """Leave in the timeline the corrective action opened from the case."""
+
+        await self.repository.add_event(
+            self._event(
+                case_id,
+                EVENT_ACTION_PLAN_OPENED,
+                principal.user_id,
+                data={"plan_id": str(plan_id), "code": plan_code},
+            )
+        )
 
     async def list_events_of(self, case: TrackingCase) -> list[CaseEvent]:
         """The timeline of a case already loaded with its access checked."""

@@ -90,6 +90,8 @@ class Dependency:
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # The SIG process of the dependency (action plans): COM, DIS, ALM…
+    process_code: str | None = None
 
 
 @dataclass
