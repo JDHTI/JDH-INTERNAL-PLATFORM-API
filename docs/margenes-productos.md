@@ -31,7 +31,7 @@ sincronización. El estado y el proveedor comercial vienen del DWH y no se puede
 
 ## Margen Empleado JDH y lista de precios para empleados
 
-`margin_employee` (migración `0064_employee_margin`) es el margen de la lista de precios para
+`margin_employee` (migración `0065_employee_margin`) es el margen de la lista de precios para
 empleados de JDH. Todos los productos arrancan en **13 %**, y los que la sincronización agregue
 después también, por el valor por defecto de la columna. Se edita producto por producto con
 `PATCH /commercial/products/{sku}` o con `margin_employee` en `PUT .../margins` (allí es
