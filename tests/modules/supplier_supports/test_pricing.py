@@ -1,5 +1,6 @@
 """Derived amounts, prices and margins (rules v2), per inventory unit."""
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -117,6 +118,25 @@ def test_movistar_arena_22505_supported_cost_per_box_and_jdh_margin() -> None:
     assert result.suggested_price == listed - (D("11233.38") - unit_cost)
     assert result.supported_price == unit_cost / D("0.9")
     assert result.supported_price_per.box == unit_cost / D("0.9") * 12
+
+
+def test_22506_recomposed_margin_is_at_the_suggested_or_the_minimum_price() -> None:
+    # 22506: the SKU is the box (no pack factor); supported cost 118.400, DWH cost 133.736,
+    # Food service 18 %: list price 163.092,68; suggested price = list - 15.336.
+    support = data(calc_method="costo_neto", value_unit="caja", supplier_value=D("118400"))
+
+    result = derive(support, D("133736"), D("0.18"), None)
+
+    listed = D("133736") / D("0.82")
+    assert result.suggested_price == listed - (D("133736") - D("118400"))
+    # At the suggested price (19,9 %), never at the list price (27,4 %).
+    assert result.margin_recomposed == 1 - D("118400") / result.suggested_price
+    assert round(result.margin_recomposed, 3) == D("0.199")
+    assert result.recomposed_list_margin == result.margin_recomposed
+    # With JDH's 10 % minimum, at the minimum price: 10 %.
+    jdh = derive(replace(support, supported_margin_pct=D("0.10")), D("133736"), D("0.18"), None)
+    assert jdh.supported_price == D("118400") / D("0.9")
+    assert round(jdh.margin_recomposed, 6) == D("0.1")
 
 
 def test_a_supported_cost_above_todays_cost_counts_as_no_support() -> None:

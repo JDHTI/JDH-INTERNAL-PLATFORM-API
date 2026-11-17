@@ -54,8 +54,12 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 | $ Costo Apoyado | costo − $ costo apoyado | PL − $ Apoyo |
 | % Margen Garantizado | costo − PA × (1 − % garantizado) | el PA pactado |
 
-- Margen recompuesto = (PA − costo + $ Apoyo) / PA. Ejemplo de BI: costo 4.920, PL 6.000,
-  10 % en precio lista → apoyo 600, PA 5.400, margen 20 %.
+- Margen recompuesto = (precio − costo + $ Apoyo) / precio, donde el precio es el **Precio
+  Apoyado Mínimo** si hay margen mínimo JDH y si no el **precio apoyado sugerido**; nunca el
+  precio lista (`margin_recomposed`; `recomposed_list_margin` trae el mismo valor por
+  compatibilidad). Ejemplo de BI: costo 4.920, PL 6.000, 10 % en precio lista → apoyo 600,
+  PA 5.400, margen 20 %. Ejemplo 22506: costo apoyado 118.400, PA 147.757 → 19,9 % (al precio
+  lista daría 27,4 %); con margen JDH del 10 %, al mínimo 131.556 → 10 %.
 - **Excepción margen mínimo autorizado JDH** (`supported_margin_pct`): Precio Apoyado Mínimo =
   (costo − $ Apoyo) / (1 − margen); para $ Costo Apoyado, costo apoyado / (1 − margen).
   Reemplaza el % JDH (`jdh_pct`, `jdh_net_cost` quedan como historia y ya no mueven las cifras).
