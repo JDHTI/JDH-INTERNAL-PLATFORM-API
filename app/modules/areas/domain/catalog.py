@@ -75,6 +75,12 @@ MODULES: tuple[Module, ...] = (
     Module("monitoreo", "Tablero general y aplicativos", ("ti",), "Estado de los aplicativos"),
     Module("datawarehouse", "Datawarehouse", ("ti",), "Cargas y frescura del DWH"),
     Module("pqrsf", "PQRSF", ("calidad",), "Peticiones, quejas, reclamos y sugerencias"),
+    Module(
+        "planes-accion",
+        "Planes de acción",
+        ("calidad",),
+        "Acciones correctivas, preventivas y de mejora del SIG (P.04.F.02)",
+    ),
     Module("cotizador", "Cotizador", ("comercial", "bi"), "Cotizaciones a clientes"),
     Module(
         "actualizacion-listas",

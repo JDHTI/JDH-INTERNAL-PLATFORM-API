@@ -33,6 +33,8 @@ EVENT_FORWARDED_TO_CUSTOMER = "forwarded_to_customer"
 # The improvement opportunity (OM, P.06): generated (or generated again) and sent.
 EVENT_OM_GENERATED = "om_generated"
 EVENT_OM_SENT = "om_sent"
+# A corrective action (P.04, module «Planes de acción») opened from the case.
+EVENT_ACTION_PLAN_OPENED = "action_plan_opened"
 SUPPLIER_MESSAGE_KINDS = {
     "request": "una solicitud de información",
     "response": "una respuesta",
@@ -188,6 +190,10 @@ def describe(
         if data.get("edited"):
             verb = "Subió una versión editada de"
         return EventSummary(kind, name, f"{verb} la OM {code}{supplier}", DOCUMENTS)
+    if event_type == EVENT_ACTION_PLAN_OPENED:
+        return EventSummary(
+            kind, name, f"Abrió la acción correctiva {data.get('code') or ''}", LIFECYCLE
+        )
     if event_type == EVENT_OM_SENT:
         target = _join(data.get("to", [])) or "el proveedor"
         return EventSummary(

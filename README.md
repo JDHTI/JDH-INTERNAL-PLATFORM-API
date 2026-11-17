@@ -51,6 +51,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - Todo el módulo PQRSF (contrato de la API, interfaz, estado y hoja de ruta) está
   en un solo documento: [`docs/pqrsf.md`](docs/pqrsf.md). Su formulario público
   vive en `/pqrsf`, fuera del layout autenticado.
+- Los planes de acción del SIG (P.04.F.02: acciones correctivas, preventivas y de
+  mejora, alimentadas desde los casos PQRSF) están en
+  [`docs/action-plans.md`](docs/action-plans.md).
 - El monitoreo del datawarehouse (TI → Monitoreo → Datawarehouse) vive en
   `/api/v1/dwh-monitoring`; su carga y su contrato están en
   [`docs/dwh-monitoring.md`](docs/dwh-monitoring.md).
