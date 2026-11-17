@@ -120,7 +120,7 @@ def test_the_supported_margin_sits_on_the_recomposed_margin() -> None:
     assert derived.net_cost == D("72.00")  # 80 - 10 % of 80
     assert derived.recomposed_list_margin == D("0.28")  # 1 - 72 / 100
     assert derived.supported_price.quantize(D("0.01")) == D("81.82")  # 72 / (1 - 12 %)
-    assert derived.customer_discount_pct.quantize(D("0.0001")) == D("0.1818")
+    assert derived.customer_discount_pct is None  # disabled for now
     assert derived.product_margin_pct == D("0.20") and derived.supported_margin_pct == D("0.12")
     # Without a JDH margin there is no minimum price; the suggested one is PL - $Apoyo.
     plain = derive(replace(data, supported_margin_pct=None), D("80"), D("0.20"))
