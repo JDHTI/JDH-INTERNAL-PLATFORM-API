@@ -88,6 +88,33 @@ METHODS_BY_KIND = {
 
 VALUE_UNITS = ("unidad", "caja", "kg")
 
+# SIESA warehouse group 23 (PROMOCIONES), read by the DWH team on 2026-11-17 (t151/t152).
+# A support applies there only with ``promo_warehouses``. When ``consumo.inventario_fecha``
+# carries ``bodega_promocional`` this list is read from the DWH instead.
+PROMO_WAREHOUSE_GROUP = "23"
+PROMO_WAREHOUSES = frozenset(
+    {
+        "26",
+        "MDE10",
+        "MDE27",
+        "MDE28",
+        "MDE30",
+        "OCC17",
+        "OCC18",
+        "OCC19",
+        "BTA23",
+        "BTA24",
+        "CTG18",
+        "CTG20",
+        "BGA13",
+        "URA17",
+        "VUP12",
+        "BAQ11",
+        "BAQ14",
+        "BGA12",
+    }
+)
+
 STATUSES = ("activo", "pendiente_revision", "anulado")
 
 THRESHOLD_TYPES = ("unidades", "cajas", "monto_ventas")

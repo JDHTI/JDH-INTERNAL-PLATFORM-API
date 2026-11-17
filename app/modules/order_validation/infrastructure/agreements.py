@@ -120,6 +120,7 @@ class SqlAlchemyAgreementSource:
                 supported_margin_pct=model.supported_margin_pct,
                 customer_branch_id=model.customer_branch_id,
                 customer_group=model.customer_group,
+                promo_warehouses=model.promo_warehouses,
             )
             for model, code, pack, unit_cost in rows
             if not many or model.customer_nit is None or model.customer_nit in wanted

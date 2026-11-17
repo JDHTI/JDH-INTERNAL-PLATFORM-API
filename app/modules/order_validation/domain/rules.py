@@ -33,6 +33,7 @@ from app.modules.order_validation.domain.entities import (
 from app.modules.supplier_supports.domain import pricing
 from app.modules.supplier_supports.domain.pricing import per_unit, unit_amount
 from app.modules.supplier_supports.domain.validity import validity_on
+from app.modules.supplier_supports.domain.vocabulary import PROMO_WAREHOUSES
 
 ONE = Decimal(1)
 ZERO = Decimal(0)
@@ -124,6 +125,13 @@ def scope_of(
     if agreement.product_sku and agreement.product_sku != line.sku:
         return OUT_OF_SCOPE
     if agreement.warehouse and _label(agreement.warehouse) != _label(line.warehouse or ""):
+        return OUT_OF_SCOPE
+    if (
+        not agreement.promo_warehouses
+        and line.warehouse
+        and _label(line.warehouse) in PROMO_WAREHOUSES
+    ):
+        # A promotional warehouse (group 23) goes at its own cost unless the support says so.
         return OUT_OF_SCOPE
     if agreement.channels:
         channels = {line.channel or "", *(customer.channels if customer else ())}

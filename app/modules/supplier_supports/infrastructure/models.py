@@ -139,6 +139,7 @@ class SupplierSupportModel(Base):
         ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )
     warehouse: Mapped[str | None] = mapped_column(Text)
+    promo_warehouses: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     # Benefit
     calc_method: Mapped[str] = mapped_column(String(30), nullable=False)

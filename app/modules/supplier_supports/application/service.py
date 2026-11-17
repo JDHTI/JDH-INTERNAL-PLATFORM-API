@@ -159,6 +159,7 @@ EDITABLE_FIELDS = frozenset(
         "valid_to",
         "status",
         "is_enabled",
+        "promo_warehouses",
         "tiers",
         *_TEXT_FIELDS,
         *_ARRAY_FIELDS,

@@ -66,6 +66,11 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   ver [`docs/listas-principales.md`](docs/listas-principales.md). Desde una cotización de cliente
   se piden apoyos internos (margen apoyado) que BI o un aprobador designado decide; ver
   [`docs/apoyos-internos.md`](docs/apoyos-internos.md).
+- El maestro de apoyos de proveedores vive en `/api/v1/supplier-supports`: tres clases, un
+  cálculo por unidad de inventario compartido con el cotizador y el validador, sin cruces, carga
+  masiva y por grupo empresarial, y publicación al DWH; BI ve costos y Comercial no. Ver
+  [`docs/apoyos-proveedores.md`](docs/apoyos-proveedores.md) (reglas v2) y
+  [`docs/apoyos-dwh.md`](docs/apoyos-dwh.md).
 - El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
   archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
   calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).

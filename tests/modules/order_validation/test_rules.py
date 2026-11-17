@@ -272,6 +272,15 @@ def test_the_margin_of_the_channel_is_the_reference() -> None:
     assert decide(product=other, channel="AUTOSERVICIO").required_margin_pct == D("0.30")
 
 
+def test_a_promotional_warehouse_needs_a_support_that_says_so() -> None:
+    day = date(2026, 11, 3)
+    promo_line = line(warehouse="MDE27")  # group 23 PROMOCIONES
+
+    assert rules.scope_of(agreement(), promo_line, None, day) == rules.OUT_OF_SCOPE
+    assert rules.scope_of(agreement(promo_warehouses=True), promo_line, None, day) == rules.APPLIES
+    assert rules.scope_of(agreement(), line(warehouse="MDE1"), None, day) == rules.APPLIES
+
+
 def test_group_and_branch_supports_need_the_customer_in_them() -> None:
     goddard = CustomerScope(
         "900315138", business_group="GRUPO GODDARD", branches=frozenset({"001", "002"})

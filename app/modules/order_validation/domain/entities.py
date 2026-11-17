@@ -75,6 +75,7 @@ class Agreement:
     supported_margin_pct: Decimal | None = None
     customer_branch_id: str | None = None
     customer_group: str | None = None
+    promo_warehouses: bool = False
 
 
 @dataclass(frozen=True)

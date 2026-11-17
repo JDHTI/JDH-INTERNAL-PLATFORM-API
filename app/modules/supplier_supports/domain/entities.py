@@ -60,6 +60,9 @@ class SupportData:
     business_units: tuple[str, ...] = ()
     channels: tuple[str, ...] = ()
     warehouse: str | None = None
+    # Applies also in the promotional warehouses (SIESA warehouse group 23); otherwise an order
+    # from one of them goes at that warehouse's cost, without the support.
+    promo_warehouses: bool = False
     supplier_value: Decimal | None = None
     jdh_pct: Decimal | None = None
     jdh_net_cost: Decimal | None = None
