@@ -55,7 +55,7 @@ echo "> Build $GIT_SHA"
 "${COMPOSE[@]}" build api
 
 echo "> Dependencies"
-"${COMPOSE[@]}" up -d --wait postgres redis minio clamav
+"${COMPOSE[@]}" up -d --wait postgres redis minio clamav gotenberg
 "${COMPOSE[@]}" up minio-init
 
 echo "> Migrations"

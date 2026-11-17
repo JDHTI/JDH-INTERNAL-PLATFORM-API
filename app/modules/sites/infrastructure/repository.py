@@ -23,6 +23,9 @@ def _site(model: SiteModel) -> Site:
         created_at=model.created_at,
         updated_at=model.updated_at,
         abbreviation=model.abbreviation,
+        city=model.city,
+        address=model.address,
+        om_code=model.om_code,
     )
 
 
@@ -92,12 +95,15 @@ class SqlAlchemySiteRepository:
                 raise ConflictError("La sede ya no existe")
             model.name = site.name
             model.abbreviation = site.abbreviation
+            model.city = site.city
+            model.address = site.address
+            model.om_code = site.om_code
             model.is_active = site.is_active
             try:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
-                raise ConflictError("Otra sede ya usa esa sigla") from exc
+                raise ConflictError("Otra sede ya usa esa sigla o ese código de OM") from exc
             await session.refresh(model)
             return _site(model)
 

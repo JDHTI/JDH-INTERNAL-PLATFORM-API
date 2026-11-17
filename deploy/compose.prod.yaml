@@ -36,6 +36,7 @@ x-api: &api
     S3_BUCKET: ${S3_BUCKET:-internal-platform}
     PQRSF_CLAMAV_HOST: clamav
     PQRSF_CLAMAV_PORT: 3310
+    GOTENBERG_URL: http://gotenberg:3000
     # deploy.sh resolves Caddy's address when api.env leaves it empty.
     RATE_LIMIT_TRUSTED_PROXY_IPS: ${RATE_LIMIT_TRUSTED_PROXY_IPS:-}
   logging: *logging
@@ -87,6 +88,21 @@ services:
       timeout: 5s
       retries: 20
       start_period: 120s
+    logging: *logging
+
+  # Word to PDF (LibreOffice inside), for the documents the platform fills: the improvement
+  # opportunity (OM) sent to suppliers. LibreOffice starts on the first conversion; the API
+  # keeps the Word and retries the PDF when this is down, so it is not a hard dependency.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    command: ["gotenberg", "--api-timeout=90s", "--log-level=warn"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     logging: *logging
 
   # S3-compatible storage. RustFS, as the intranet used: the MinIO images are no longer

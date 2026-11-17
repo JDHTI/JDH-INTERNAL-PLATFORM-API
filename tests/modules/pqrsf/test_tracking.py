@@ -194,6 +194,10 @@ class FakeCases:
         case.news_at = None
         return had
 
+    async def set_om_sent(self, case_id, at):
+        case = self.cases[case_id]
+        case.om_sent_at = case.om_sent_at or at
+
     async def list_events(self, case_id):
         return [e for e in self.events if e.case_id == case_id]
 

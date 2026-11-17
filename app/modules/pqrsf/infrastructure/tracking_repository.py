@@ -89,6 +89,10 @@ _HEADER_FIELDS = (
     "pickup_order_requested",
     "pickup_order_number",
     "delivery_date",
+    "resolution",
+    "internal_failure",
+    "resolution_note",
+    "resolved_at",
 )
 _ITEM_FIELDS = (
     "description",
@@ -151,6 +155,9 @@ def _site(model: SiteModel) -> Site:
         created_at=model.created_at,
         updated_at=model.updated_at,
         abbreviation=model.abbreviation,
+        city=model.city,
+        address=model.address,
+        om_code=model.om_code,
     )
 
 
@@ -273,6 +280,11 @@ def _case(
         created_by_user_id=model.created_by_user_id,
         first_read_at=model.first_read_at,
         news_at=model.news_at,
+        resolution=model.resolution,
+        internal_failure=model.internal_failure,
+        resolution_note=model.resolution_note,
+        resolved_at=model.resolved_at,
+        om_sent_at=model.om_sent_at,
         closed_at=model.closed_at,
         legacy=dict(model.legacy) if model.legacy is not None else None,
         created_at=model.created_at,
@@ -361,6 +373,14 @@ def _conditions(filters: CaseFilters, today: date) -> list:
         conditions.append(CaseModel.due_on == today)
     if filters.with_news:
         conditions.append(CaseModel.news_at.is_not(None))
+    if filters.resolution:
+        conditions.append(CaseModel.resolution == filters.resolution)
+    if filters.internal_failure is not None:
+        conditions.append(CaseModel.internal_failure.is_(filters.internal_failure))
+    if filters.om_sent is not None:
+        conditions.append(
+            CaseModel.om_sent_at.is_not(None) if filters.om_sent else CaseModel.om_sent_at.is_(None)
+        )
     if filters.received_from:
         conditions.append(CaseModel.received_on >= filters.received_from)
     if filters.received_to:
@@ -843,6 +863,7 @@ class SqlAlchemyCaseRepository:
             func.count().filter(and_(is_open, CaseModel.due_on == today)),
             func.count().filter(and_(is_open, CaseModel.assignee_user_id.is_(None))),
             func.count().filter(and_(is_open, CaseModel.news_at.is_not(None))),
+            func.count().filter(CaseModel.om_sent_at.is_not(None)),
         )
         by_status_query = base.add_columns(CaseModel.status_id, func.count()).group_by(
             CaseModel.status_id
@@ -851,7 +872,7 @@ class SqlAlchemyCaseRepository:
             CaseModel.request_type_id
         )
         async with self.database.session_factory() as session:
-            total, open_count, overdue, due_today, unassigned, with_news = (
+            total, open_count, overdue, due_today, unassigned, with_news, om_sent = (
                 await session.execute(totals_query)
             ).one()
             status_counts = dict((await session.execute(by_status_query)).tuples().all())
@@ -871,6 +892,7 @@ class SqlAlchemyCaseRepository:
             due_today=int(due_today),
             unassigned=int(unassigned),
             with_news=int(with_news),
+            om_sent=int(om_sent),
             by_status=[
                 CountBucket(s.id, s.code, s.name, int(status_counts.get(s.id, 0)), s.color)
                 for s in statuses
@@ -976,6 +998,22 @@ class SqlAlchemyCaseRepository:
             )
             await session.commit()
             return bool(result.rowcount)
+
+    async def set_om_sent(self, case_id: UUID, at: datetime) -> None:
+        """Mark that an improvement opportunity went to the supplier; the first keeps its time.
+
+        Args:
+            case_id (UUID): Case identifier.
+            at (datetime): When the OM was queued.
+        """
+
+        async with self.database.session_factory() as session:
+            await session.execute(
+                update(CaseModel)
+                .where(CaseModel.id == case_id, CaseModel.om_sent_at.is_(None))
+                .values(om_sent_at=at)
+            )
+            await session.commit()
 
     async def clear_news(self, case_id: UUID) -> bool:
         """Clear the news flag of a case.

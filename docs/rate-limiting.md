@@ -244,6 +244,11 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/pqrsf/cases/{case_id}/events/{event_id}/forward-to-customer/preview` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files` | `read` |  |
 | `GET` | `/v1/pqrsf/cases/{case_id}/files/{file_id}/download` | `read` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/improvement-opportunities` | `read` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/improvement-opportunities` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/cases/{case_id}/improvement-opportunities/{om_id}/document` | `read` |  |
+| `PUT` | `/v1/pqrsf/cases/{case_id}/improvement-opportunities/{om_id}/document` | `relaxed` |  |
+| `POST` | `/v1/pqrsf/cases/{case_id}/improvement-opportunities/{om_id}/pdf` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/cases/{case_id}/items` | `relaxed` |  |
 | `DELETE` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
 | `PATCH` | `/v1/pqrsf/cases/{case_id}/items/{item_id}` | `relaxed` |  |
@@ -271,6 +276,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/pqrsf/feedback/summary` | `read` |  |
 | `GET` | `/v1/pqrsf/feedback/{feedback_id}` | `read` |  |
 | `GET` | `/v1/pqrsf/feedback/{feedback_id}/files/{file_id}/download` | `read` |  |
+| `GET` | `/v1/pqrsf/om/settings` | `read` |  |
+| `PUT` | `/v1/pqrsf/om/settings` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/people` | `read` |  |
 | `GET` | `/v1/pqrsf/request-types` | `read` |  |
 | `PATCH` | `/v1/pqrsf/request-types/{request_type_id}` | `relaxed` |  |
@@ -287,6 +294,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `PATCH` | `/v1/pqrsf/subjects/{subject_id}` | `relaxed` |  |
 | `POST` | `/v1/pqrsf/subjects/{subject_id}/causes` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/supplier-contacts` | `read` |  |
+| `GET` | `/v1/pqrsf/templates/{kind}` | `read` |  |
+| `POST` | `/v1/pqrsf/templates/{kind}` | `relaxed` |  |
+| `GET` | `/v1/pqrsf/templates/{kind}/{template_id}/download` | `read` |  |
 | `GET` | `/v1/pqrsf/tracking/catalogs` | `read` |  |
 | `GET` | `/v1/price-list-updates/liquor-taxes` | `read` |  |
 | `GET` | `/v1/price-list-updates/liquor-taxes/updates` | `read` |  |

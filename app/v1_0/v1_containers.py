@@ -7,6 +7,7 @@ from dependency_injector import containers, providers
 from app.core.config import Settings
 from app.infrastructure.data_provider import DataProviderConnection
 from app.infrastructure.database import Database
+from app.infrastructure.gotenberg import GotenbergConverter
 from app.infrastructure.realtime import RealtimeBroker
 from app.infrastructure.redis import RedisClient
 from app.infrastructure.s3 import S3Storage
@@ -105,6 +106,9 @@ from app.modules.pqrsf.application.document_delivery import DocumentDeliveryServ
 from app.modules.pqrsf.application.email_intake import EmailIntakeService
 from app.modules.pqrsf.application.feedback import FeedbackService
 from app.modules.pqrsf.application.forwards import CustomerForwardService
+from app.modules.pqrsf.application.improvement_opportunities import (
+    ImprovementOpportunityService,
+)
 from app.modules.pqrsf.application.item_delivery import ItemDeliveryService
 from app.modules.pqrsf.application.notifications import NotificationService
 from app.modules.pqrsf.application.service import PqrsfService
@@ -118,6 +122,9 @@ from app.modules.pqrsf.infrastructure.delivery_repository import SqlAlchemyDeliv
 from app.modules.pqrsf.infrastructure.email_repository import SqlAlchemyEmailRepository
 from app.modules.pqrsf.infrastructure.feedback_repository import SqlAlchemyFeedbackRepository
 from app.modules.pqrsf.infrastructure.holidays_api import NagerHolidayProvider
+from app.modules.pqrsf.infrastructure.improvement_repository import (
+    SqlAlchemyImprovementRepository,
+)
 from app.modules.pqrsf.infrastructure.item_delivery_repository import (
     SqlAlchemyItemDeliveryRepository,
 )
@@ -134,10 +141,12 @@ from app.modules.pqrsf.infrastructure.security import (
     PillowImageProcessor,
     VideoInspector,
 )
+from app.modules.pqrsf.infrastructure.signer_directory import DirectorySigner
 from app.modules.pqrsf.infrastructure.supplier_contact_repository import (
     SqlAlchemySupplierContactRepository,
 )
 from app.modules.pqrsf.infrastructure.tracking_repository import SqlAlchemyCaseRepository
+from app.modules.pqrsf.infrastructure.word_renderer import DocxTemplateRenderer
 from app.modules.projects.application.live import ProjectLiveService
 from app.modules.projects.application.service import ProjectService
 from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepository
@@ -1064,6 +1073,28 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_supplier_contact_repository = providers.Factory(
         SqlAlchemySupplierContactRepository, database=database
     )
+    # --- Improvement opportunity (OM, P.06): template in the bucket, Word and PDF ---
+    pqrsf_improvement_repository = providers.Factory(
+        SqlAlchemyImprovementRepository, database=database
+    )
+    pdf_converter = providers.Singleton(
+        GotenbergConverter,
+        base_url=config.gotenberg.url,
+        timeout_seconds=config.gotenberg.timeout,
+    )
+    pqrsf_om_service = providers.Factory(
+        ImprovementOpportunityService,
+        tracking=pqrsf_tracking_service,
+        requests=pqrsf_repository,
+        repository=pqrsf_improvement_repository,
+        storage=storage,
+        renderer=providers.Singleton(DocxTemplateRenderer),
+        converter=pdf_converter,
+        signers=providers.Factory(
+            DirectorySigner, employees=directory_repository, people=user_directory
+        ),
+        managers=pqrsf_manager_policy,
+    )
     pqrsf_supplier_message_service = providers.Factory(
         SupplierMessageService,
         tracking=pqrsf_tracking_service,
@@ -1073,6 +1104,7 @@ class V1Container(containers.DeclarativeContainer):
         requests=pqrsf_repository,
         contacts=pqrsf_supplier_contact_repository,
         wake=pqrsf_wakeup.provided.set,
+        oms=pqrsf_om_service,
     )
     pqrsf_case_attachment_service = providers.Factory(
         CaseAttachmentService,
