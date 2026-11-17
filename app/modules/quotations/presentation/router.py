@@ -331,6 +331,8 @@ class SupportResponse(BaseModel):
     needs_review: bool
     valid_from: date | None
     valid_to: date | None
+    # JDH's authorized minimum margin: when set, the line's minimum price uses it.
+    authorized_margin_pct: Decimal | None = None
 
 
 class CandidateResponse(BaseModel):
@@ -606,6 +608,7 @@ def _support(item: AppliedSupport | None) -> SupportResponse | None:
         needs_review=item.needs_review,
         valid_from=item.valid_from,
         valid_to=item.valid_to,
+        authorized_margin_pct=item.authorized_margin_pct,
     )
 
 

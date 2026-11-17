@@ -71,12 +71,13 @@ async def test_every_support_of_the_list_is_shown_and_the_lowest_price_applies(
     line = detail.lines[0]
     options = {item.support_id: item for item in line.support_options}
     assert set(options) == {general.id, one_customer.id, review.id}
-    # Cost 3,000, wholesale target 12 % (minimum 11 %).
+    # Cost 3,000, wholesale target 12 % (minimum 11 %): list price 3,409.09; the suggested
+    # price is the list price minus the support.
     assert options[one_customer.id].min_price == Decimal(3034)
-    assert options[one_customer.id].optimal_price == Decimal(3068)
+    assert options[one_customer.id].optimal_price == Decimal(3109)
     assert options[one_customer.id].customer_nit == "800111222"
     assert options[general.id].min_price == Decimal(3203)
-    assert options[general.id].optimal_price == Decimal(3239)
+    assert options[general.id].optimal_price == Decimal(3259)
     assert options[review.id].reason == "Apoyo en revisión" and not options[review.id].applied
     assert options[one_customer.id].applied and line.support.support_id == one_customer.id
     assert line.min_price == Decimal(3034) and line.support.amount == Decimal(300)

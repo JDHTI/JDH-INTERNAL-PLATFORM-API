@@ -269,6 +269,8 @@ class AppliedSupport:
     needs_review: bool = False
     valid_from: date | None = None
     valid_to: date | None = None
+    # JDH's authorized minimum margin (rules v2): the floor of the line's minimum price.
+    authorized_margin_pct: Decimal | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe form, for storage."""
@@ -286,6 +288,7 @@ class AppliedSupport:
             "needs_review": self.needs_review,
             "valid_from": self.valid_from.isoformat() if self.valid_from else None,
             "valid_to": self.valid_to.isoformat() if self.valid_to else None,
+            "authorized_margin_pct": _text(self.authorized_margin_pct),
         }
 
     @classmethod
@@ -305,6 +308,7 @@ class AppliedSupport:
             needs_review=bool(data.get("needs_review")),
             valid_from=date.fromisoformat(data["valid_from"]) if data.get("valid_from") else None,
             valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
+            authorized_margin_pct=_decimal(data.get("authorized_margin_pct")),
         )
 
 

@@ -30,6 +30,8 @@ from app.modules.order_validation.domain.entities import (
     OrderPolicy,
     ProductInfo,
 )
+from app.modules.supplier_supports.domain import pricing
+from app.modules.supplier_supports.domain.pricing import per_unit, unit_amount
 from app.modules.supplier_supports.domain.validity import validity_on
 
 ONE = Decimal(1)
@@ -58,7 +60,7 @@ _BASIS_LABEL = {
     "masivo_food": "margen Masivo Food",
     "market": "margen Market Apartadó",
 }
-AMOUNT_METHODS = ("pct_costo", "costo_neto", "valor_unidad", "precio_neto", "pct_precio_lista")
+AMOUNT_METHODS = pricing.AMOUNT_METHODS
 
 
 def pct(value: Decimal | None) -> str:
@@ -128,12 +130,68 @@ def scope_of(
     return APPLIES
 
 
-def share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
-    """Supplier amount as a share of the cost, and how it was obtained.
+_HOW = {
+    "pct_costo": "{value} sobre el costo",
+    "pct_precio_lista": "{value} sobre el precio lista",
+    "valor_unidad": "{money} en costo por unidad",
+    "valor_precio_lista": "{money} sobre el precio lista por unidad",
+    "costo_neto": "costo apoyado {money} por unidad",
+    "precio_neto": "precio apoyado {money} con margen garantizado",
+}
+
+
+def share_of_cost(
+    agreement: Agreement,
+    cost: Decimal | None = None,
+    target: Decimal | None = None,
+) -> tuple[Decimal | None, str]:
+    """Supplier amount ($ Apoyo) as a share of the cost, and how it was obtained.
+
+    Rules v2: the amount is :func:`unit_amount` per inventory unit, with the list price at
+    the customer's optimal margin (``target``: list price = cost / (1 − target)). The cost is
+    the line's when it is known (the quoter), else the support's DWH cost (the validator, whose
+    file prices are not in inventory units). Without either, the references stored with the
+    support decide, as before.
 
     Returns:
         tuple[Decimal | None, str]: The share, or ``None`` with the reason it is unknown.
     """
+
+    value = agreement.supplier_value
+    if value is None:
+        return None, "el apoyo no tiene valor"
+    method = agreement.calc_method
+    base = cost if cost is not None and cost > 0 else agreement.dwh_unit_cost
+    if base is not None and base > 0:
+        listed = price_at(base, target)
+        if listed is None and agreement.reference_cost and agreement.reference_list_price:
+            listed = base * agreement.reference_list_price / agreement.reference_cost
+        amount = unit_amount(
+            method,
+            value,
+            cost=base,
+            list_price=listed,
+            value_unit=agreement.value_unit,
+            pack_factor=agreement.pack_factor,
+            guaranteed_margin=agreement.target_margin_pct,
+        )
+        if amount is not None:
+            shown = per_unit(value, agreement.value_unit, agreement.pack_factor)
+            how = _HOW[method].format(value=pct(value), money=f"{shown:,.2f}")
+            return max(ZERO, amount / base), how
+    return _share_from_references(agreement)
+
+
+def price_at(cost: Decimal, margin: Decimal | None) -> Decimal | None:
+    """``cost / (1 − margin)``, or ``None`` without a usable margin."""
+
+    if margin is None or margin >= ONE:
+        return None
+    return cost / (ONE - margin)
+
+
+def _share_from_references(agreement: Agreement) -> tuple[Decimal | None, str]:
+    """The share with the cost and list price stored in the support (first templates)."""
 
     value, cost, listed = (
         agreement.supplier_value,
@@ -155,7 +213,7 @@ def share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
         return None, "el apoyo no tiene costo de referencia"
     if method == "costo_neto":
         return max(ZERO, ONE - value / cost), f"costo neto pactado {value:,.2f}"
-    if method == "valor_unidad":
+    if method in ("valor_unidad", "valor_precio_lista"):
         return value / cost, f"{value:,.2f} por unidad de costo"
     if method == "precio_neto":
         if agreement.target_margin_pct is None:
@@ -166,9 +224,11 @@ def share_of_cost(agreement: Agreement) -> tuple[Decimal | None, str]:
 
 
 def required_margin(agreement: Agreement, reference: Decimal | None) -> Decimal | None:
-    """Margin the line must reach with the support: the one agreed, else the product's."""
+    """Margin the line must reach with the support: JDH's authorized minimum when the support
+    has one (rules v2), else the one agreed, else the product's optimal margin."""
 
     for value in (
+        agreement.supported_margin_pct,
         agreement.target_margin_pct,
         agreement.min_margin_pct,
         agreement.list_margin_pct,
@@ -277,7 +337,7 @@ def check(
     if method not in AMOUNT_METHODS:
         return _outcome(agreement, "no_evaluable", f"Método {method} no evaluable por pedido")
 
-    share, how = share_of_cost(agreement)
+    share, how = share_of_cost(agreement, target=reference)
     if share is None:
         return _outcome(agreement, "no_evaluable", f"No se puede evaluar: {how}")
     required = required_margin(agreement, reference)

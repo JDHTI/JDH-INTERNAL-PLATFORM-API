@@ -18,7 +18,10 @@ from app.modules.commercial_masters.infrastructure.models import (
     ProductModel,
 )
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, ProductInfo
-from app.modules.supplier_supports.infrastructure.models import SupplierSupportModel
+from app.modules.supplier_supports.infrastructure.models import (
+    SupplierSupportCostModel,
+    SupplierSupportModel,
+)
 
 S = SupplierSupportModel
 # `source` of the supports imported from the workbook's `Condiciones Especiales` table.
@@ -59,10 +62,17 @@ class SqlAlchemyAgreementSource:
         customer = [] if many else [or_(S.customer_nit.is_(None), S.customer_nit.in_(list(nits)))]
         product = or_(S.product_sku.is_(None), S.product_sku.in_(list(skus)))
         query = (
-            select(S, CommercialSupplierModel.code)
+            select(
+                S,
+                CommercialSupplierModel.code,
+                ProductModel.pack_factor,
+                SupplierSupportCostModel.unit_cost,
+            )
             .outerjoin(
                 CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id
             )
+            .outerjoin(ProductModel, ProductModel.id == S.product_id)
+            .outerjoin(SupplierSupportCostModel, SupplierSupportCostModel.support_id == S.id)
             .where(
                 S.status != "anulado",
                 S.is_enabled.is_(True),
@@ -101,8 +111,14 @@ class SqlAlchemyAgreementSource:
                 min_quantity=model.min_quantity,
                 valid_from=model.valid_from,
                 valid_to=model.valid_to,
+                value_unit=model.value_unit,
+                pack_factor=pack if pack is not None else model.pack_factor,
+                dwh_unit_cost=unit_cost,
+                supported_margin_pct=model.supported_margin_pct,
+                customer_branch_id=model.customer_branch_id,
+                customer_group=model.customer_group,
             )
-            for model, code in rows
+            for model, code, pack, unit_cost in rows
             if not many or model.customer_nit is None or model.customer_nit in wanted
         ]
 

@@ -67,6 +67,14 @@ class Agreement:
     min_quantity: Decimal | None = None
     valid_from: date | None = None
     valid_to: date | None = None
+    # Rules v2: how a money value is written (``caja`` is divided by the product master's
+    # pack factor), the support's DWH cost per unit and JDH's authorized minimum margin.
+    value_unit: str | None = None
+    pack_factor: Decimal | None = None
+    dwh_unit_cost: Decimal | None = None
+    supported_margin_pct: Decimal | None = None
+    customer_branch_id: str | None = None
+    customer_group: str | None = None
 
 
 @dataclass(frozen=True)
