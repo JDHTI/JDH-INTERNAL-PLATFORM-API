@@ -118,7 +118,9 @@ def test_the_supported_margin_sits_on_the_recomposed_margin() -> None:
 
     assert derived.list_price.unit == D("100")  # 80 / (1 - 20 %)
     assert derived.net_cost == D("72.00")  # 80 - 10 % of 80
-    assert derived.recomposed_list_margin == D("0.28")  # 1 - 72 / 100
+    # With JDH's minimum the recomposed margin is the one at the minimum price: that margin.
+    assert round(derived.margin_recomposed, 6) == D("0.12")
+    assert derived.recomposed_list_margin == derived.margin_recomposed
     assert derived.supported_price.quantize(D("0.01")) == D("81.82")  # 72 / (1 - 12 %)
     assert derived.customer_discount_pct is None  # disabled for now
     assert derived.product_margin_pct == D("0.20") and derived.supported_margin_pct == D("0.12")

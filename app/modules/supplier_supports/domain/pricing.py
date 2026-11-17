@@ -248,6 +248,11 @@ def derive(
 
     floor_margin = authorized_margin(data)
     min_price = minimum_price(net_cost, floor_margin)
+    # The recomposed margin is the one the support leaves at the price it is sold at: the
+    # Precio Apoyado Mínimo when JDH authorized a minimum margin, else the suggested price.
+    # Never at the list price (BI, 2026-11-18).
+    recomposed_at = min_price if min_price is not None else price
+    recomposed = None if recomposed_at is None else _complement(_div(net_cost, recomposed_at))
 
     def per(value: Decimal | None) -> MoneyPair:
         return MoneyPair(box=None if value is None else value * pack, unit=value)
@@ -260,7 +265,7 @@ def derive(
         pct_on_list=_div(amount, listed),
         suggested_price=price,
         margin_order=None if price is None else _complement(_div(cost, price)),
-        margin_recomposed=None if price is None else _complement(_div(net_cost, price)),
+        margin_recomposed=recomposed,
         min_margin_pct=min_margin,
         cost=per(cost),
         list_price=per(listed),
@@ -269,9 +274,8 @@ def derive(
         suggested_price_per=per(price),
         cost_basis=basis,
         product_margin_pct=margin_of_list,
-        recomposed_list_margin=(
-            None if listed is None or net_cost is None else _complement(_div(net_cost, listed))
-        ),
+        # Kept for the screens that read it: the same recomposed margin (no longer at list).
+        recomposed_list_margin=recomposed,
         supported_margin_pct=floor_margin,
         supported_price=min_price,
         supported_price_per=per(min_price),
