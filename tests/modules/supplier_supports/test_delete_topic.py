@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.modules.dwh_publish.domain.entities import OutboxItem
@@ -39,6 +40,8 @@ async def test_each_delete_calls_the_function_with_its_version() -> None:
 
 
 def test_the_delete_topic_is_published() -> None:
-    topics = build_topics(object(), object(), DeleteTopic())  # type: ignore[arg-type]
+    supports, loads = SimpleNamespace(name="a"), SimpleNamespace(name="b")
 
-    assert DELETE_TOPIC in topics
+    topics = build_topics(supports, loads, DeleteTopic())  # type: ignore[arg-type]
+
+    assert set(topics) == {"a", "b", DELETE_TOPIC}
