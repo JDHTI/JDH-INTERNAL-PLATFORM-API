@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
+from app.modules.commercial_masters.application.employee_prices import EmployeePriceService
 from app.modules.commercial_masters.application.price_increases import (
     MAX_PAGE_SIZE as PRICE_INCREASES_MAX_PAGE,
 )
@@ -52,6 +53,7 @@ router = APIRouter(
 )
 _service = Depends(Provide[ApplicationContainer.v1_container.commercial_master_service])
 _increases = Depends(Provide[ApplicationContainer.v1_container.price_increase_service])
+_employee_prices = Depends(Provide[ApplicationContainer.v1_container.employee_price_service])
 _principal = Depends(get_current_principal)
 
 
@@ -159,6 +161,8 @@ class ProductResponse(BaseModel):
     margin_mass_food: Decimal | None
     margin_market: Decimal | None
     margin_salsamentarias: Decimal | None
+    # Margen Empleado JDH: the employee price list (MDE1 cost), not a channel margin.
+    margin_employee: Decimal | None
     margin_notes: str | None
     margin_source: str | None
     margin_updated_by: str | None
@@ -195,6 +199,7 @@ class ProductUpdate(BaseModel):
     margin_mass_food: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_market: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_salsamentarias: Decimal | None = Field(default=None, gt=0, lt=1)
+    margin_employee: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_notes: str | None = Field(default=None, max_length=1000)
     liquor_tax: Decimal | None = Field(default=None, ge=0)
     liquor_tax_coast: Decimal | None = Field(default=None, ge=0)
@@ -215,10 +220,11 @@ class LiquorTaxRequest(BaseModel):
 
 
 class ProductMarginsRequest(BaseModel):
-    """Every margin of a product, set by hand. All fields are required.
+    """Every margin of a product, set by hand. All fields are required but the employee one.
 
     Margins are fractions (0.18 = 18 %). ``notes`` may be ``null``. ``liquor_tax`` is
     ``null`` for a product that does not pay it; a product that already pays it must send it.
+    ``margin_employee`` (Margen Empleado JDH) may be left out to keep the product's.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -228,6 +234,7 @@ class ProductMarginsRequest(BaseModel):
     margin_mass_food: _Margin
     margin_market: _Margin
     margin_salsamentarias: _Margin
+    margin_employee: _Margin | None = None
     notes: str | None = Field(max_length=1000)
     liquor_tax: LiquorTaxRequest | None
 
@@ -290,6 +297,7 @@ def _product(product: Product) -> ProductResponse:
         margin_mass_food=margins.mass_food,
         margin_market=margins.market,
         margin_salsamentarias=margins.salsamentarias,
+        margin_employee=margins.employee,
         margin_notes=margins.notes,
         margin_source=margins.source,
         margin_updated_by=margins.updated_by,
@@ -495,6 +503,60 @@ async def list_products(
         total=result.total,
         page=result.page,
         size=result.size,
+    )
+
+
+class EmployeePriceResponse(BaseModel):
+    """One line of the JDH employee price list (pesos per inventory unit)."""
+
+    sku: str
+    description: str | None
+    brand: str | None
+    inventory_unit: str | None
+    cost: Decimal
+    margin: Decimal
+    price: Decimal
+    vat_pct: Decimal | None
+    price_with_vat: Decimal
+
+
+class EmployeePriceListResponse(BaseModel):
+    """The employee price list: every active product with an MDE1 cost."""
+
+    warehouse: str
+    generated_at: datetime
+    # Day of the inventory photo the costs come from.
+    snapshot_date: date | None
+    total: int
+    # Active products left out because MDE1 has no usable cost for them.
+    without_cost: int
+    items: list[EmployeePriceResponse]
+
+
+@router.get(
+    "/products/employee-prices",
+    response_model=EmployeePriceListResponse,
+    summary="JDH employee price list",
+)
+@inject
+async def employee_prices(
+    _: Principal = _principal,
+    service: EmployeePriceService = _employee_prices,
+) -> EmployeePriceListResponse:
+    """Every active product priced at its Margen Empleado JDH over the MDE1 average cost.
+
+    ``price = cost / (1 - margin)`` and ``price_with_vat = price * (1 + vat_pct / 100)``, both
+    in whole pesos. The cost is read live from the data warehouse (morning inventory photo).
+    """
+
+    result = await service.price_list()
+    return EmployeePriceListResponse(
+        warehouse=result.warehouse,
+        generated_at=result.generated_at,
+        snapshot_date=result.snapshot_date,
+        total=len(result.items),
+        without_cost=result.without_cost,
+        items=[EmployeePriceResponse(**asdict(item)) for item in result.items],
     )
 
 
@@ -938,6 +1000,7 @@ async def set_product_margins(
         {name: getattr(body, name) for name in MARGIN_FIELDS},
         body.notes,
         LiquorTax(liquor.national, liquor.coast, liquor.group) if liquor else None,
+        employee_margin=body.margin_employee,
     )
     return _product(product)
 

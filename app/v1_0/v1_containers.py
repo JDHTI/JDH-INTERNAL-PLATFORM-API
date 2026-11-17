@@ -17,6 +17,7 @@ from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyAppli
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import PermissionPolicy, UnrestrictedAreaAccess
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
+from app.modules.commercial_masters.application.employee_prices import EmployeePriceService
 from app.modules.commercial_masters.application.price_increases import (
     AnalysisCache,
     PriceIncreaseService,
@@ -536,6 +537,11 @@ class V1Container(containers.DeclarativeContainer):
     pqrsf_product_catalog = providers.Factory(MasterProductCatalog, masters=master_lookup)
     warehouse_master_source = providers.Factory(
         WarehouseMasterSource, connection=data_provider, schema=settings.provided.DWH_SCHEMA
+    )
+    employee_price_service = providers.Factory(
+        EmployeePriceService,
+        repository=commercial_master_repository,
+        costs=warehouse_master_source,
     )
     master_sync_service = providers.Factory(
         MasterSyncService,

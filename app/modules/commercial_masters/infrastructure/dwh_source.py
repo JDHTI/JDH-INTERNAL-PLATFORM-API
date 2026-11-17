@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Mapping
+from decimal import Decimal
 from typing import Any
 
 from app.infrastructure.data_provider import DataProviderConnection
+from app.modules.commercial_masters.domain.employee_prices import WarehouseCost
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -175,6 +177,28 @@ class WarehouseMasterSource:
             'HAVING count(*) FILTER (WHERE "costo_prom_unit_ins" > 0) > 0'
         )
         return [dict(row) for row in await self.connection.fetch(query)]
+
+    async def warehouse_costs(self, warehouse: str) -> list[WarehouseCost]:
+        """Average cost per SKU in one warehouse, from the inventory photo.
+
+        Read as the quoter reads a list's warehouse: the cost of each installation rounded to
+        pesos, the highest of them, and costs of one peso or less left out (placeholders).
+        Costs are per inventory unit and exclude VAT.
+        """
+
+        query = (
+            'SELECT trim("referencia") AS sku, '
+            'max(round("costo_prom_unit_ins")) '
+            'FILTER (WHERE round("costo_prom_unit_ins") > 1) AS cost, '
+            'max("foto_at")::date AS cut_date '
+            f"FROM {self._relation('inventario_fecha')} "
+            'WHERE "bodega" = $1 GROUP BY 1'
+        )
+        return [
+            WarehouseCost(sku=row["sku"], cost=Decimal(row["cost"]), snapshot_date=row["cut_date"])
+            for row in await self.connection.fetch(query, warehouse)
+            if row["sku"] and row["cost"] is not None
+        ]
 
     async def commercial_suppliers(self) -> list[Mapping[str, Any]]:
         """Distinct ``(cod_proveedor, proveedor)`` labels with product counts."""

@@ -29,6 +29,30 @@ notas y el impuesto al licor **no se tocan** al actualizar los productos. En cam
 del DWH que se edite a mano (descripción, marca, categoría…) se sobrescribe en la siguiente
 sincronización. El estado y el proveedor comercial vienen del DWH y no se pueden editar.
 
+## Margen Empleado JDH y lista de precios para empleados
+
+`margin_employee` (migración `0064_employee_margin`) es el margen de la lista de precios para
+empleados de JDH. Todos los productos arrancan en **13 %**, y los que la sincronización agregue
+después también, por el valor por defecto de la columna. Se edita producto por producto con
+`PATCH /commercial/products/{sku}` o con `margin_employee` en `PUT .../margins` (allí es
+opcional: si no llega, se conserva). **No es un margen de canal**: no está en `MARGIN_FIELDS`, ninguna
+regla del validador ni del cotizador lo lee y no cuenta para `has_margin`.
+
+`GET /commercial/products/employee-prices` arma la lista completa en vivo:
+
+- **Costo**: costo promedio de la bodega **MDE1** en la foto de inventario de la mañana
+  (`consumo.inventario_fecha`), por unidad de inventario y sin IVA, redondeado a pesos y el mayor de
+  sus instalaciones, como lo lee el cotizador. Un costo de 1 peso o menos es de relleno y no da precio.
+- **Precio** = costo / (1 − `margin_employee`), en pesos enteros (mitad hacia arriba).
+- **Precio con IVA** = precio × (1 + `iva_venta_pct` / 100), en pesos enteros.
+- Solo productos activos. `without_cost` cuenta los activos que MDE1 no tiene con costo (líneas frías
+  que viven en MDE3, productos sin inventario en Medellín).
+
+`scripts/export-employee-prices.py <ruta>` escribe la misma lista en `<ruta>.json` y `<ruta>.csv`.
+El 2026-11-17 dio 5.246 productos con precio y 4.103 activos sin costo en MDE1. Esa lista se envió
+como prueba al catálogo (`jdh-catalogo-api`), que la guarda aparte para mostrarla solo a los empleados
+que inician sesión.
+
 ## Impuesto al licor
 
 `liquor_tax` (`IMPTOLIC`, valor por unidad en la región Nacional), `liquor_tax_coast` (Costa) y
