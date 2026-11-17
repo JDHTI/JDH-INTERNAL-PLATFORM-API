@@ -79,6 +79,23 @@ async def test_a_new_support_expires_the_one_it_crosses_in_one_transaction(stora
     assert queued >= 3  # first's two versions and the new one
 
 
+async def test_only_supports_with_a_peer_come_to_the_rollover(storage) -> None:
+    repo, _, supplier_id = storage
+    now = datetime.now(UTC)
+    lone = await repo.create(uuid4(), tactic(supplier_id, product_sku="LONE"), "bi", now)
+    first = await repo.create(uuid4(), tactic(supplier_id, product_sku="PAIR"), "bi", now)
+    second = await repo.create(
+        uuid4(),
+        tactic(supplier_id, product_sku="PAIR", valid_from=date(2027, 1, 1), valid_to=None),
+        "bi",
+        now,
+    )
+
+    found = {item.id for item in await repo.live_in_groups(("tactico_cliente",))}
+
+    assert {first.id, second.id} <= found and lone.id not in found
+
+
 async def test_a_stale_version_aborts_everything(storage) -> None:
     repo, _, supplier_id = storage
     now = datetime.now(UTC)

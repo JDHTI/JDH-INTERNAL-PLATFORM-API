@@ -13,13 +13,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
-from app.core.errors import InvalidInputError
+from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.application.internal_requests import InternalRequestService
 from app.modules.supplier_supports.application.requests import SupportRequestService
+from app.modules.supplier_supports.application.rollover import SupportRolloverService
 from app.modules.supplier_supports.application.service import (
     MAX_BATCH,
     MAX_PAGE_SIZE,
@@ -40,6 +41,7 @@ _principal = Depends(get_current_principal)
 _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 _internal = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
 _costs = Depends(Provide[ApplicationContainer.v1_container.supplier_support_cost_service])
+_rollover = Depends(Provide[ApplicationContainer.v1_container.supplier_support_rollover_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -555,6 +557,79 @@ async def catalogs(
     and channels in use."""
 
     return await service.catalogs()
+
+
+class AlertSupport(BaseModel):
+    """A support as an alert shows it."""
+
+    id: UUID
+    version: int
+    kind: str
+    calc_method: str
+    customer_nit: str | None
+    customer_name: str | None
+    product_sku: str | None
+    supplier_sku: str | None
+    supplier_value: Decimal | None
+    valid_from: date | None
+    valid_to: date | None
+
+
+class ReplacementAlert(BaseModel):
+    """A programmed support and the one in force it will replace."""
+
+    programmed: AlertSupport
+    previous: AlertSupport
+    # The previous one's last day when the programmed one starts.
+    previous_ends: date
+    # True: the previous one already ends that day; false: the daily job will cut it.
+    chained: bool
+
+
+def _alert_support(support: Any) -> AlertSupport:
+    data = support.data
+    return AlertSupport(
+        id=support.id,
+        version=support.version,
+        kind=data.kind,
+        calc_method=data.calc_method,
+        customer_nit=data.customer_nit,
+        customer_name=data.customer_name,
+        product_sku=data.product_sku,
+        supplier_sku=data.supplier_sku,
+        supplier_value=data.supplier_value,
+        valid_from=data.valid_from,
+        valid_to=data.valid_to,
+    )
+
+
+@router.get(
+    "/alerts",
+    dependencies=[_READ_GATE],
+    response_model=list[ReplacementAlert],
+    summary="Programmed supports that will replace one in force",
+)
+@inject
+async def replacement_alerts(
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+    rollover: SupportRolloverService = _rollover,
+) -> list[ReplacementAlert]:
+    """Each programmed support with the one in force it replaces. BI decides: leave it
+    programmed (the previous one ends the day before; the daily job cuts it if needed) or
+    expire the previous one now with ``POST /retire`` (``vencer``). Managers only."""
+
+    if not await service.can_manage(principal):
+        raise ForbiddenError("No tienes permiso para gestionar apoyos de proveedores")
+    return [
+        ReplacementAlert(
+            programmed=_alert_support(item.programmed),
+            previous=_alert_support(item.previous),
+            previous_ends=item.previous_ends,
+            chained=item.chained,
+        )
+        for item in await rollover.replacements()
+    ]
 
 
 class BusinessGroupResponse(BaseModel):

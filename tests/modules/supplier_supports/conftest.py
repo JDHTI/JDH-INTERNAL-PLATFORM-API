@@ -142,6 +142,13 @@ class FakeSupportRepository:
         self.traces: dict[UUID, Trace] = {}
         self.loads: list[LoadPlan] = []
 
+    async def live_in_groups(self, kinds):
+        return [
+            item
+            for item in self.items.values()
+            if item.data.status != "anulado" and item.data.is_enabled and item.data.kind in kinds
+        ]
+
     async def pricing_context(self, product_sku, customer_nit):
         margins = {"margin_list": Decimal("0.20"), "margin_wholesale": Decimal("0.12")}
         return margins, Decimal("12"), "margin_list" if customer_nit else None, None

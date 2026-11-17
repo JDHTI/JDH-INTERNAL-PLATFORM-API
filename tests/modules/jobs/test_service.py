@@ -11,7 +11,11 @@ from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.jobs.domain.registry import RunStatus, Trigger
 from tests.modules.jobs.conftest import NOW, READY, sequence
 
-IDENTITY_JOBS = {"masters-warm-identity", "commercial-sync-identity"}
+IDENTITY_JOBS = {
+    "masters-warm-identity",
+    "commercial-sync-identity",
+    "supplier-supports-rollover",
+}
 ALL_JOBS = IDENTITY_JOBS | {
     "masters-warm-products",
     "commercial-sync-products",
@@ -33,6 +37,7 @@ async def test_the_first_poll_dispatches_every_mapped_job_once(make_service, run
     assert [runs.items[run_id].job for run_id in queued] == [
         "masters-warm-identity",
         "commercial-sync-identity",
+        "supplier-supports-rollover",
         "masters-warm-products",
         "commercial-sync-products",
         "commercial-sync-supply",
@@ -124,7 +129,12 @@ async def test_the_fallback_runs_today_what_the_dwh_did_not(make_service, runs):
     queued = await make_service(clock=lambda: saturday).fallback()
 
     jobs = {runs.items[i].job for i in queued}
-    assert jobs == {"commercial-sync-identity", "masters-warm-products", "commercial-sync-products"}
+    assert jobs == {
+        "commercial-sync-identity",
+        "supplier-supports-rollover",
+        "masters-warm-products",
+        "commercial-sync-products",
+    }
     assert all(runs.items[i].trigger is Trigger.SCHEDULED for i in queued)
 
 
@@ -180,7 +190,7 @@ async def test_recover_overview_and_history(make_service, runs):
     service = make_service()
     await service.poll_dwh()
 
-    assert await service.recover_stale_runs() == 7
+    assert await service.recover_stale_runs() == 8
     settings, status, items = await service.overview()
     history = await service.history("masters-warm-identity", 10)
 

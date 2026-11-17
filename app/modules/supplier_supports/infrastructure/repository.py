@@ -459,6 +459,39 @@ class SqlAlchemySupportRepository:
             grouped.setdefault(tier.support_id, []).append(tier)
         return grouped
 
+    async def live_in_groups(self, kinds: Sequence[str]) -> list[Support]:
+        """Live supports of these classes that share supplier, class, customer and SKU with
+        another live one (the only ones that can cross or replace each other)."""
+
+        live = and_(S.status != "anulado", S.is_enabled.is_(True), S.kind.in_(list(kinds)))
+        counted = (
+            select(
+                S.id,
+                func.count()
+                .over(
+                    partition_by=(
+                        S.commercial_supplier_id,
+                        S.kind,
+                        func.coalesce(S.customer_nit, ""),
+                        func.coalesce(S.product_sku, S.supplier_sku, ""),
+                    )
+                )
+                .label("peers"),
+            )
+            .where(live)
+            .subquery()
+        )
+        async with self.database.session_factory() as session:
+            models = list(
+                (
+                    await session.execute(
+                        select(S).where(S.id.in_(select(counted.c.id).where(counted.c.peers > 1)))
+                    )
+                ).scalars()
+            )
+            tiers = await self._tiers(session, [model.id for model in models])
+        return [_support(model, tiers.get(model.id, [])) for model in models]
+
     async def pricing_context(
         self, product_sku: str | None, customer_nit: str | None
     ) -> tuple[dict[str, Any], Any, str | None, str | None]:

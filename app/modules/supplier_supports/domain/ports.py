@@ -79,6 +79,10 @@ class SupportRepository(Protocol):
         """Product margins, pack factor, customer margin list and group (form preview)."""
         ...
 
+    async def live_in_groups(self, kinds: Sequence[str]) -> list[Support]:
+        """Live supports sharing supplier, class, customer and SKU with another live one."""
+        ...
+
     async def supersede(
         self, items: Sequence[Supersede], actor: str, now: datetime
     ) -> list[Support]:

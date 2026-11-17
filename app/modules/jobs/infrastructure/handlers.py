@@ -51,6 +51,19 @@ def _support_costs(build: Callable[[], SupportCostService]) -> JobHandler:
     return handler
 
 
+class Rollover(Protocol):
+    """The supports' rollover (programmed ones replace the previous)."""
+
+    async def run(self) -> Mapping[str, Any]: ...
+
+
+def _rollover(build: Callable[[], Rollover]) -> JobHandler:
+    async def handler() -> Mapping[str, Any]:
+        return await build().run()
+
+    return handler
+
+
 def _main_lists(build: Callable[[], MainListsSync]) -> JobHandler:
     async def handler() -> Mapping[str, Any]:
         return await build().sync_all()
@@ -63,6 +76,7 @@ def build_job_handlers(
     commercial_sync: Callable[[], MasterSyncService],
     support_costs: Callable[[], SupportCostService],
     main_lists: Callable[[], MainListsSync] | None = None,
+    support_rollover: Callable[[], Rollover] | None = None,
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
@@ -77,6 +91,8 @@ def build_job_handlers(
     """
 
     extra = {"main-lists-sync": _main_lists(main_lists)} if main_lists is not None else {}
+    if support_rollover is not None:
+        extra["supplier-supports-rollover"] = _rollover(support_rollover)
     return {
         **extra,
         "masters-warm-identity": _warm(masters, "identidad"),

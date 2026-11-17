@@ -317,6 +317,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/billing-centers` | `read` |  |
 | `GET` | `/v1/quotations/customers` | `read` |  |
 | `POST` | `/v1/quotations/list-updates` | `relaxed` |  |
+| `GET` | `/v1/quotations/manual` | `read` |  |
 | `GET` | `/v1/quotations/permissions` | `read` |  |
 | `GET` | `/v1/quotations/price-lists` | `read` |  |
 | `GET` | `/v1/quotations/rules` | `read` |  |
@@ -364,6 +365,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/supplier-support-requests/{request_id}/approve` | `relaxed` |  |
 | `POST` | `/v1/supplier-support-requests/{request_id}/reject` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports` | `relaxed` |  |
+| `GET` | `/v1/supplier-supports/alerts` | `read` |  |
 | `POST` | `/v1/supplier-supports/attachments` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/attachments/preview` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/batch` | `relaxed` |  |
