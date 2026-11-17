@@ -34,6 +34,7 @@ WIRED_MODULES = (
     "app.modules.pqrsf.presentation.item_delivery_router",
     "app.modules.pqrsf.presentation.classification_router",
     "app.modules.pqrsf.presentation.supplier_messages_router",
+    "app.modules.pqrsf.presentation.improvement_router",
     "app.modules.projects.presentation.router",
     "app.modules.commercial_masters.presentation.router",
     "app.modules.supplier_supports.presentation.router",

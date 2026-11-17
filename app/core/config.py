@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     # must be the one the browser reaches; empty means S3_ENDPOINT_URL.
     S3_PUBLIC_ENDPOINT_URL: str = ""
 
+    # Gotenberg (LibreOffice in its own container) turns the Word documents the platform
+    # fills, such as the improvement opportunity (OM), into PDF. Empty keeps them as Word.
+    GOTENBERG_URL: str = ""
+    GOTENBERG_TIMEOUT_SECONDS: float = 60.0
+
     # Employee directory: a nightly copy of the Entra users (Microsoft Graph, application
     # permission User.Read.All). The app registration may differ from the SSO one; an
     # empty tenant falls back to ENTRA_TENANT_ID.
@@ -610,6 +615,10 @@ class Settings(BaseSettings):
                 "bucket": self.S3_BUCKET,
                 "connect_timeout": self.S3_CONNECT_TIMEOUT_SECONDS,
                 "public_endpoint_url": self.S3_PUBLIC_ENDPOINT_URL,
+            },
+            "gotenberg": {
+                "url": self.GOTENBERG_URL,
+                "timeout": self.GOTENBERG_TIMEOUT_SECONDS,
             },
             "documents": {
                 "max_upload_bytes": self.DOCUMENTS_MAX_UPLOAD_MB * 1024 * 1024,

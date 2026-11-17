@@ -15,6 +15,7 @@ from sqlalchemy import (
     Index,
     Integer,
     PrimaryKeyConstraint,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -354,6 +355,10 @@ class CaseModel(Base):
         Index("ix_pqrsf_cases_cause", "cause_id"),
         Index("ix_pqrsf_cases_news_at", "news_at", postgresql_where=text("news_at IS NOT NULL")),
         CheckConstraint(
+            "resolution IS NULL OR resolution IN ('procede', 'no_procede')",
+            name="ck_pqrsf_cases_resolution",
+        ),
+        CheckConstraint(
             "route IS NULL OR route IN ('supplier', 'internal', 'none')",
             name="ck_pqrsf_cases_route",
         ),
@@ -438,6 +443,13 @@ class CaseModel(Base):
     # An email from the client or a supplier the team has not opened yet; set and cleared
     # on its own (never through the header save), so a concurrent edit cannot undo it.
     news_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # How the case ended (``procede`` | ``no_procede``) and whether a JDH process failed.
+    resolution: Mapped[str | None] = mapped_column(String(12))
+    internal_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # An improvement opportunity went to the supplier; set on its own, like ``news_at``.
+    om_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     legacy: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
@@ -867,4 +879,105 @@ class JobRunModel(Base):
     run_date: Mapped[date] = mapped_column(Date, primary_key=True)
     ran_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DocumentTemplateModel(Base):
+    """A Word template kept in the bucket (the OM, P.06); one active per kind."""
+
+    __tablename__ = "pqrsf_document_templates"
+    __table_args__ = (
+        CheckConstraint("kind IN ('om')", name="ck_pqrsf_document_templates_kind"),
+        Index(
+            "ix_pqrsf_document_templates_active",
+            "kind",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    version_label: Mapped[str] = mapped_column(String(60), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class OmSequenceModel(Base):
+    """The next OM number (one row); Calidad sets where it starts."""
+
+    __tablename__ = "pqrsf_om_sequence"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_pqrsf_om_sequence_single"),
+        CheckConstraint("next_number > 0", name="ck_pqrsf_om_sequence_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    next_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ImprovementOpportunityModel(Base):
+    """An improvement opportunity (OM, P.06) of a case for one supplier."""
+
+    __tablename__ = "pqrsf_improvement_opportunities"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'sent')", name="ck_pqrsf_improvement_opportunities_status"
+        ),
+        UniqueConstraint("number", name="pqrsf_improvement_opportunities_number_key"),
+        Index("ix_pqrsf_improvement_opportunities_case", "case_id", "created_at"),
+        Index(
+            "ux_pqrsf_improvement_opportunities_supplier",
+            "case_id",
+            text("coalesce(supplier_code, '')"),
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    supplier_code: Mapped[str | None] = mapped_column(String(40))
+    supplier_name: Mapped[str | None] = mapped_column(String(200))
+    immediate_actions: Mapped[str | None] = mapped_column(Text)
+    request_note: Mapped[str | None] = mapped_column(Text)
+    document_number: Mapped[str | None] = mapped_column(String(200))
+    document_date: Mapped[date | None] = mapped_column(Date)
+    evidence_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}"
+    )
+    signer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    signer_name: Mapped[str | None] = mapped_column(String(200))
+    signer_position: Mapped[str | None] = mapped_column(String(200))
+    signer_email: Mapped[str | None] = mapped_column(String(320))
+    signer_phone: Mapped[str | None] = mapped_column(String(60))
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pqrsf_document_templates.id", ondelete="SET NULL")
+    )
+    docx_key: Mapped[str | None] = mapped_column(String(500))
+    pdf_key: Mapped[str | None] = mapped_column(String(500))
+    edited: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="draft")
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

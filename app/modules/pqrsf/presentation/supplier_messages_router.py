@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
+from app.core.errors import InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -49,6 +50,7 @@ _BODY = {
                     "supplier_name": {"type": "string"},
                     "include_evidence": {"type": "boolean", "default": False},
                     "include_case_data": {"type": "boolean", "default": True},
+                    "om_id": {"type": "string", "format": "uuid"},
                     "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
                 },
             }
@@ -91,6 +93,18 @@ class SupplierContactResponse(BaseModel):
     last_used_at: datetime | None
 
 
+def _uuid(value: object) -> UUID | None:
+    """An optional identifier from a form field; a malformed one is a validation error."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return UUID(text)
+    except ValueError as exc:
+        raise InvalidInputError("El identificador de la OM no es válido") from exc
+
+
 def _email(item: Notification) -> SupplierEmailResponse:
     event_id = item.payload.get("event_id")
     return SupplierEmailResponse(
@@ -127,7 +141,8 @@ async def send_supplier_message(
     people of the organization, copied on the first email), ``body``, optional
     ``supplier_code`` and ``supplier_name``, ``include_evidence`` (attach the client's
     photos and video), ``include_case_data`` (client, site and products; on by default)
-    and ``files``. Only who works the case, and only while it is open.
+    and ``files``. Only who works the case, and only while it is open. With ``om_id``
+    (``kind=improvement``) the PDF of that OM goes attached and the OM is marked as sent.
     """
 
     form = await request.form(max_files=_MAX_FILES, max_fields=30)
@@ -149,6 +164,7 @@ async def send_supplier_message(
         files=uploads,
         include_evidence=str(form.get("include_evidence") or "").lower() in _TRUE,
         include_case_data=str(form.get("include_case_data") or "true").lower() in _TRUE,
+        om_id=_uuid(form.get("om_id")),
     )
     return SupplierMessageResponse(
         **_event(result.event).model_dump(),

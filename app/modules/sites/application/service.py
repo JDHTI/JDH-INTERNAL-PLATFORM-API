@@ -7,9 +7,11 @@ from uuid import UUID
 from app.core.errors import ConflictError, NotFoundError
 from app.modules.sites.domain.entities import (
     Site,
+    clean_om_code,
     clean_site_abbreviation,
     clean_site_code,
     clean_site_name,
+    clean_site_text,
 )
 from app.modules.sites.domain.ports import SiteRepository
 
@@ -65,11 +67,15 @@ class SiteService:
         is_active: bool | None,
         fields: frozenset[str],
         abbreviation: str | None = None,
+        city: str | None = None,
+        address: str | None = None,
+        om_code: str | None = None,
     ) -> Site:
         """Update a site's display fields while keeping its code immutable.
 
         A new abbreviation applies to the next PQRSF consecutives of the site;
-        existing cases keep the code they were given.
+        existing cases keep the code they were given. City, address and OM code are
+        what an improvement opportunity prints; sending ``null`` (or blank) clears them.
         """
 
         site = await self.get_site(site_id)
@@ -77,6 +83,12 @@ class SiteService:
             site.name = clean_site_name(name)
         if "abbreviation" in fields and abbreviation is not None:
             site.abbreviation = clean_site_abbreviation(abbreviation)
+        if "city" in fields:
+            site.city = clean_site_text(city, "La ciudad", 80)
+        if "address" in fields:
+            site.address = clean_site_text(address, "La dirección", 200)
+        if "om_code" in fields:
+            site.om_code = clean_om_code(om_code)
         if "is_active" in fields and is_active is not None:
             site.is_active = is_active
         return await self.repository.save_site(site)

@@ -49,6 +49,14 @@ services:
       retries: 10
       start_period: 30s
 
+  # Word to PDF for the documents the platform fills (the OM). From the host:
+  # GOTENBERG_URL=http://localhost:3100.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    command: ["gotenberg", "--api-timeout=90s", "--log-level=warn"]
+    ports:
+      - "127.0.0.1:${GOTENBERG_HOST_PORT:-3100}:3000"
+
   minio:
     image: quay.io/minio/minio:RELEASE.2024-06-13T22-53-53Z
     command: server /data --console-address ":9001"
@@ -173,6 +181,7 @@ services:
       PQRSF_CLAMAV_HOST: ${PQRSF_CLAMAV_HOST:-clamav}
       PQRSF_CLAMAV_PORT: ${PQRSF_CLAMAV_PORT:-3310}
       PQRSF_CLAMAV_TIMEOUT_SECONDS: ${PQRSF_CLAMAV_TIMEOUT_SECONDS:-10}
+      GOTENBERG_URL: ${GOTENBERG_URL:-http://gotenberg:3000}
       PRODUCT_MARGINS_MAX_UPLOAD_MB: ${PRODUCT_MARGINS_MAX_UPLOAD_MB:-20}
       SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG: ${SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG:-bi}
       SUPPLIER_SUPPORTS_DOCUMENTS_AREA_SLUG: ${SUPPLIER_SUPPORTS_DOCUMENTS_AREA_SLUG:-bi}

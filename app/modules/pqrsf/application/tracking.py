@@ -49,6 +49,7 @@ from app.modules.pqrsf.domain.ports import (
 from app.modules.pqrsf.domain.sales import SOURCE_INVOICE, SOURCE_MANUAL, invoice_candidates
 from app.modules.pqrsf.domain.timeline import (
     EVENT_FORWARDED_TO_CUSTOMER,
+    EVENT_OM_SENT,
     EVENT_SUPPLIER_MESSAGE,
     TimelineContext,
     describe,
@@ -63,6 +64,8 @@ from app.modules.pqrsf.domain.tracking import (
     CASE_SORTS,
     IN_PROGRESS_STATUS_CODE,
     READ_STATUS_CODE,
+    RESOLUTION_REQUIRED_TYPES,
+    RESOLUTIONS,
     ActivityFilters,
     CaseEvent,
     CaseFilters,
@@ -114,6 +117,9 @@ EXPORT_HEADER = [
     "Estado",
     "Causal Tiempo de Respuesta",
     "Detalle Tiempo de Respuesta",
+    # After the P.13.F.01 columns: how the case ended.
+    "Resultado",
+    "Fallo interno",
 ]
 _CLOSED_MESSAGE = "El caso está finalizado: reábrelo para modificarlo"
 _ITEM_LIMIT = 200
@@ -1195,6 +1201,32 @@ class CaseTrackingService:
         ]
         return CaseOpenings(people, entries)
 
+    async def record_om(
+        self, case: TrackingCase, principal: Principal, event_type: str, data: dict
+    ) -> EventView:
+        """Write an OM step in the timeline; sending it also sets the «OM enviada» flag.
+
+        Args:
+            case (TrackingCase): The case, already checked for work access.
+            principal (Principal): Who did it.
+            event_type (str): ``om_generated`` or ``om_sent``.
+            data (dict): The OM (id, code, supplier) and, when sent, its recipients.
+
+        Returns:
+            EventView: The new timeline entry.
+        """
+
+        event = self._event(case.id, event_type, principal.user_id, data=data)
+        await self.repository.add_event(event)
+        if event_type == EVENT_OM_SENT:
+            await self.repository.set_om_sent(case.id, event.created_at)
+        else:
+            await self._progress_on_work(
+                case, principal.user_id, "Cambio automático al generar la OM"
+            )
+        actors = await self.people.get_users({principal.user_id})
+        return self._event_view(event, actors, TimelineContext())
+
     async def list_events_of(self, case: TrackingCase) -> list[CaseEvent]:
         """The timeline of a case already loaded with its access checked."""
 
@@ -1326,6 +1358,8 @@ class CaseTrackingService:
                         case.status.name,
                         (item.delay_cause or "") if item else "",
                         (item.delay_detail or "") if item else "",
+                        RESOLUTIONS.get(case.resolution or "", ""),
+                        ("Sí" if case.internal_failure else "No") if case.resolution else "",
                     ]
                 )
         return rows
@@ -1510,18 +1544,31 @@ class CaseTrackingService:
             logger.exception("Could not queue the assignment notice of case %s", case.code)
 
     async def change_status(
-        self, case_id: UUID, status_id: UUID, note: str | None, principal: Principal
+        self,
+        case_id: UUID,
+        status_id: UUID,
+        note: str | None,
+        principal: Principal,
+        resolution: str | None = None,
+        internal_failure: bool = False,
+        resolution_note: str | None = None,
     ) -> CaseView:
         """Move the case to another status.
 
         Closing requires every document to have a response date and a delay
-        cause when it was late; reopening a closed case requires a note.
+        cause when it was late; reopening a closed case requires a note. Closing a
+        complaint or a claim also says how it ended: ``procede`` (JDH answers for the
+        product) or ``no_procede``, and whether a JDH process failed. Reopening keeps
+        that outcome until the next closing replaces it.
 
         Args:
             case_id (UUID): Case identifier.
             status_id (UUID): Target status.
             note (str | None): Message for the timeline.
             principal (Principal): The responsible or a manager.
+            resolution (str | None): ``procede`` or ``no_procede``, when closing.
+            internal_failure (bool): A JDH process failed (calls for a corrective action).
+            resolution_note (str | None): Why, in a few words.
 
         Returns:
             CaseView: The updated case.
@@ -1534,6 +1581,7 @@ class CaseTrackingService:
         if target.id == case.status.id:
             raise InvalidInputError("El caso ya está en ese estado")
         note_value = clean_optional(note, "nota", 2_000)
+        data: dict = {}
         if target.is_terminal:
             pending = [i for i in case.items if i.responded_on is None]
             if pending:
@@ -1542,7 +1590,10 @@ class CaseTrackingService:
                 )
             if any(i.is_late and not i.delay_cause for i in case.items):
                 raise InvalidInputError("Indica la causal de los documentos respondidos tarde")
+            data = self._resolve(case, resolution, internal_failure, resolution_note)
             case.closed_at = datetime.now(UTC)
+        elif resolution is not None:
+            raise InvalidInputError("El resultado del caso se indica al finalizarlo")
         elif case.is_closed:
             if note_value is None:
                 raise InvalidInputError("Explica en la nota por qué se reabre el caso")
@@ -1556,9 +1607,35 @@ class CaseTrackingService:
             note=note_value,
             from_status=previous.id,
             to_status=target.id,
+            data=data,
         )
         stored = await self.repository.save_case(case, [event])
         return await self._view(stored, principal, await self.managers.is_manager(principal))
+
+    @staticmethod
+    def _resolve(
+        case: TrackingCase,
+        resolution: str | None,
+        internal_failure: bool,
+        resolution_note: str | None,
+    ) -> dict:
+        """Set how a closing case ended; complaints and claims must say it."""
+
+        if resolution is None:
+            if case.request_type.code in RESOLUTION_REQUIRED_TYPES:
+                raise InvalidInputError(
+                    "Indica si el caso procede o no procede para finalizar una queja o un reclamo"
+                )
+            if internal_failure:
+                raise InvalidInputError("Indica si el caso procede o no procede")
+            return {}
+        if resolution not in RESOLUTIONS:
+            raise InvalidInputError("El resultado debe ser «procede» o «no_procede»")
+        case.resolution = resolution
+        case.internal_failure = internal_failure
+        case.resolution_note = clean_optional(resolution_note, "nota del resultado", 2_000)
+        case.resolved_at = datetime.now(UTC)
+        return {"resolution": resolution, "internal_failure": internal_failure}
 
     async def mark_read(self, case_id: UUID, principal: Principal) -> CaseView:
         """Record that someone opened the case.
