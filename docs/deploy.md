@@ -53,11 +53,13 @@ la red del borde.
 `deploy/deploy.sh` corre en este orden:
 
 1. Toma el lock `~/apps/.deploy.lock`, el mismo que usan la UI y el borde.
-2. Construye la imagen.
-3. Levanta las dependencias.
-4. Corre `alembic upgrade head`.
-5. Levanta `platform-api`.
-6. Verifica a través de Caddy que `GET /api/v1/users/me` responda 401. Un 502 significa que el API
+2. Respalda la base y el almacenamiento (`deploy/backup.sh pre-deploy`), salvo en el primer
+   despliegue, cuando aún no hay base.
+3. Construye la imagen.
+4. Levanta las dependencias.
+5. Corre `alembic upgrade head`.
+6. Levanta `platform-api`.
+7. Verifica a través de Caddy que `GET /api/v1/users/me` responda 401. Un 502 significa que el API
    no está. Va por el mismo salto que usa el proxy de infraestructura: http al Caddy local
    (`EDGE_HTTP`, por defecto `http://127.0.0.1`) con `Host: $PUBLIC_HOST` (por defecto
    `intranet.jdh.com.co`).
@@ -76,6 +78,47 @@ self-hosted runner, y el token dura una hora.
 ```bash
 deploy/setup-runner.sh <token>   # en el servidor, pide sudo
 ```
+
+## Respaldos
+
+El respaldo diario de la intranet (`INTRANET-JDH-API/deploy/scripts/backup.sh`) no cubre esta
+base. `deploy/backup.sh [etiqueta]` guarda en `~/backups/platform/<fecha>-<etiqueta>/`:
+
+- `internal_platform.dump`: la base (`pg_dump -Fc`).
+- `storage.tar.gz`: el volumen de RustFS (adjuntos de PQRSF, documentos, fotos).
+
+Conserva 14 diarios y 10 pre-deploy. Va en su propia carpeta: la limpieza del respaldo de la
+intranet borra toda carpeta `~/backups/*-daily` y contaría estas como suyas. Comparte el lock de
+despliegue, así que nunca corre en medio de un reinicio.
+
+Cron (una vez, `crontab -e` del usuario del servidor):
+
+```
+30 2 * * * ~/apps/JDH-INTERNAL-PLATFORM-API/deploy/backup.sh daily >> ~/backups/platform/backup.log 2>&1
+```
+
+Restaurar la base:
+
+```bash
+export PLATFORM_API_ENV=~/apps/platform/api.env
+C="docker compose -f deploy/compose.prod.yaml"
+$C stop api
+$C exec -T postgres pg_restore -U platform -d internal_platform --clean --if-exists \
+  < ~/backups/platform/<carpeta>/internal_platform.dump
+$C start api
+```
+
+Restaurar el almacenamiento (con `minio` detenido):
+
+```bash
+$C stop minio
+docker run --rm -v internal-platform-api_minio_data:/dst -v ~/backups/platform/<carpeta>:/in:ro \
+  alpine:3 sh -c 'rm -rf /dst/* /dst/.[!.]* && tar -xzf /in/storage.tar.gz -C /dst'
+$C start minio
+```
+
+Como el de la intranet, protege contra borrados y errores, no contra la pérdida del servidor:
+`~/backups` debe copiarse fuera de la VM.
 
 ## Primera carga
 

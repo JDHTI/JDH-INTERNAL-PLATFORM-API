@@ -36,6 +36,13 @@ flock 9
 docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 \
   || { echo "Missing network $EDGE_NETWORK: start the edge stack first" >&2; exit 1; }
 
+# Every deploy may migrate the database: back it up first (not on the very first deploy).
+if [[ -n $(docker ps -q --filter label=com.docker.compose.project=internal-platform-api \
+  --filter label=com.docker.compose.service=postgres) ]]; then
+  echo "> Backup"
+  PLATFORM_DEPLOY_LOCKED=1 bash deploy/backup.sh pre-deploy
+fi
+
 # The rate limiter trusts X-Forwarded-For only from the edge network (Caddy, and the UI
 # when it renders pages on the server): without it every person would share one bucket.
 if [[ -z ${RATE_LIMIT_TRUSTED_PROXY_IPS:-} ]]; then
