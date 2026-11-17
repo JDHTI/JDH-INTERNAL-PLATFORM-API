@@ -28,6 +28,7 @@ from app.modules.pqrsf.presentation.classification_router import (
 )
 from app.modules.pqrsf.presentation.deliveries_router import router as pqrsf_deliveries_router
 from app.modules.pqrsf.presentation.feedback_router import router as pqrsf_feedback_router
+from app.modules.pqrsf.presentation.improvement_router import router as pqrsf_improvement_router
 from app.modules.pqrsf.presentation.item_delivery_router import router as pqrsf_item_delivery_router
 from app.modules.pqrsf.presentation.router import admin_router as pqrsf_admin_router
 from app.modules.pqrsf.presentation.router import public_router as pqrsf_public_router
@@ -131,6 +132,7 @@ v1_router.include_router(pqrsf_deliveries_router, tags=["pqrsf-deliveries"])
 v1_router.include_router(pqrsf_item_delivery_router, tags=["pqrsf-tracking"])
 v1_router.include_router(pqrsf_classification_router, tags=["pqrsf-classification"])
 v1_router.include_router(pqrsf_supplier_messages_router, tags=["pqrsf-tracking"])
+v1_router.include_router(pqrsf_improvement_router, tags=["pqrsf-tracking"])
 
 # Register every versioned module explicitly here. Example:
 # from app.modules.orders.presentation.router import router as orders_router

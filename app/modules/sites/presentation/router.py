@@ -27,6 +27,10 @@ class SiteResponse(BaseModel):
     name: str
     # Letters the site puts in PQRSF consecutives (P26AC0001).
     abbreviation: str
+    # Printed on the improvement opportunity (P.06): city, address and its code (1181BOG).
+    city: str | None = None
+    address: str | None = None
+    om_code: str | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -46,6 +50,9 @@ class SiteUpdateRequest(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=150)
     abbreviation: str | None = Field(default=None, min_length=2, max_length=4)
+    city: str | None = Field(default=None, max_length=80)
+    address: str | None = Field(default=None, max_length=200)
+    om_code: str | None = Field(default=None, max_length=3)
     is_active: bool | None = None
 
 
@@ -106,7 +113,11 @@ async def update_site(
     _: UserModel = Depends(require_admin),  # noqa: B008
     service: SiteService = _service,
 ) -> SiteResponse:
-    """Change a site's display name, abbreviation or active state."""
+    """Change a site's display name, abbreviation, OM data or active state.
+
+    ``city``, ``address`` and ``om_code`` are what an improvement opportunity prints;
+    ``null`` clears them.
+    """
 
     return _response(
         await service.update_site(
@@ -115,6 +126,9 @@ async def update_site(
             payload.is_active,
             frozenset(payload.model_fields_set),
             abbreviation=payload.abbreviation,
+            city=payload.city,
+            address=payload.address,
+            om_code=payload.om_code,
         )
     )
 
