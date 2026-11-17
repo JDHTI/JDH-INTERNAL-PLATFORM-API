@@ -7,7 +7,7 @@ filtrado dinámico y CRUD. Esta primera entrega es solo backend, para validar
 resultados.
 
 Módulos: `commercial_masters` (espejo de los maestros del DWH) y
-`supplier_supports` (los apoyos). Migraciones `0017` a `0019`; reglas v2 en `0064` a `0067`.
+`supplier_supports` (los apoyos). Migraciones `0017` a `0019`; reglas v2 en `0066` a `0069`.
 
 ## Reglas v2 (2026-11-17)
 

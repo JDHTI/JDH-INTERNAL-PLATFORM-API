@@ -14,6 +14,7 @@ DWH; the job runs when the warehouse publishes the supply data (``abastecimiento
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,13 +22,13 @@ from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from app.core.errors import DependencyUnavailableError
 from app.modules.quotations.domain import pricing, vocabulary
 from app.modules.quotations.domain.entities import CostInfo
 from app.modules.quotations.domain.pricing import StockPlan
 from app.modules.supplier_supports.domain.entities import SupportCost
 
 ONE = Decimal(1)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -132,14 +133,17 @@ class SupportCostService:
 
         if not support_ids:
             return 0
-        targets = await self.repository.targets(support_ids)
-        if not targets:
-            return 0
         try:
+            targets = await self.repository.targets(support_ids)
+            if not targets:
+                return 0
             costs, *_ = await self.compute(targets)
-        except DependencyUnavailableError:
+            return await self.repository.save(costs, self._clock())
+        except Exception as exc:  # noqa: BLE001 - runs after the response; the job retries daily
+            logger.warning(
+                "supports costs: refresh of %d supports skipped: %s", len(support_ids), exc
+            )
             return 0
-        return await self.repository.save(costs, self._clock())
 
     async def cost_of(self, product_sku: str, customer_nit: str | None) -> SupportCost:
         """The cost a support of this SKU and customer would get (form preview).
