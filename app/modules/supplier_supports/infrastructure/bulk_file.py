@@ -9,6 +9,8 @@ from __future__ import annotations
 import csv
 import io
 import zipfile
+from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from typing import Any
 from xml.etree import ElementTree
 
@@ -16,6 +18,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from app.core.errors import InvalidInputError
 from app.modules.supplier_supports.application import normalize as n
@@ -180,20 +183,39 @@ class SpreadsheetSupportReader:
         return _xlsx_sheets(content, sheet)
 
 
-def template_headers(profile: Profile | None, full: bool = False) -> list[tuple[str, str]]:
+_CUSTOMER_COLUMNS = ("customer_nit", "customer_name", "customer_branch_id")
+# The «Validación» column the bulk load reads (``application.bulk.VALIDATION``).
+VALIDATION = "validation"
+VALIDATION_HEADER = "Validación"
+_UNIT_LABELS = {"unidad": "Unidad", "caja": "Caja", "kg": "Kg"}
+# Rows the dropdowns and date checks cover in an empty template.
+_VALIDATED_ROWS = 2000
+
+
+def template_headers(
+    profile: Profile | None, full: bool = False, groups: bool = False
+) -> list[tuple[str, str]]:
     """``(field, header)`` of every column of the template.
 
-    By default the short general template: the key (NIT, SKU, dates), the type and value of
-    the support and the optional fields suppliers send; costs, prices and names come from
-    the DWH and are never asked. ``full`` adds every field. With a profile the columns
-    follow the supplier's own layout: fields it fixes with a default are left out, the
-    fields it maps are added, and its first header replaces the general one.
+    By default the short general template (rules v2, in BI's order): Clase apoyo, Tipo
+    apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado JDH, Fecha Inicio,
+    Fecha Fin, NIT Cliente, Cliente, Sucursal, SKU JDH, SKU Proveedor and Observaciones;
+    costs, prices and margins come from the DWH and are never asked. ``full`` adds every
+    field. ``groups`` is the business-group upload: Grupo Empresarial instead of the
+    customer. With a profile the columns follow the supplier's own layout: fields it fixes
+    with a default are left out, the fields it maps are added, and its first header replaces
+    the general one.
     """
 
     columns: list[tuple[str, str]] = []
     mapped = set(profile.data.column_map) if profile is not None else set()
     for spec in fields.FIELD_SPECS:
-        if not spec.in_template or not (full or spec.core or spec.name in mapped):
+        wanted = full or spec.core or spec.name in mapped
+        if groups and spec.name == "customer_group":
+            wanted = True
+        if groups and spec.name in _CUSTOMER_COLUMNS:
+            wanted = False
+        if not spec.in_template or not wanted:
             continue
         if profile is not None and spec.name in profile.data.defaults:
             continue
@@ -204,23 +226,74 @@ def template_headers(profile: Profile | None, full: bool = False) -> list[tuple[
     return columns
 
 
-def template_workbook(profile: Profile | None = None, full: bool = False) -> bytes:
-    """The bulk template as an ``.xlsx``: the sheet to fill, the instructions and the values."""
+def _shown(name: str, value: Any) -> Any:
+    """A stored value as the template writes it (labels, percentages, plain dates)."""
+
+    if value is None or value == ():
+        return None
+    if name == "kind":
+        return vocabulary.KIND_LABELS.get(value, value)
+    if name == "calc_method":
+        return vocabulary.CALC_METHOD_LABELS.get(value, value)
+    if name == "value_unit":
+        return _UNIT_LABELS.get(value, value)
+    if isinstance(value, tuple | list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _active_methods() -> list[str]:
+    methods = dict.fromkeys(m for ms in vocabulary.METHODS_BY_KIND.values() for m in ms)
+    return [vocabulary.CALC_METHOD_LABELS[method] for method in methods]
+
+
+def template_workbook(
+    profile: Profile | None = None,
+    full: bool = False,
+    *,
+    groups: bool = False,
+    rows: Sequence[Mapping[str, Any]] = (),
+    validation: bool = False,
+) -> bytes:
+    """The bulk template as an ``.xlsx``: the sheet to fill, the instructions and the values.
+
+    Clase apoyo, Tipo apoyo and Unidad valor are dropdowns, and the dates only take dates.
+    ``rows`` pre-fills it (the download with data: ``field -> stored value``) and
+    ``validation`` adds the «Validación» column (Sí / No) for the supplier to confirm each
+    support; the file goes back through the same bulk load.
+    """
 
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = TEMPLATE_SHEET
-    columns = template_headers(profile, full)
+    columns = template_headers(profile, full, groups)
     defaults = profile.data.defaults if profile else {}
     required = {"calc_method", "supplier_code"} - set(defaults)
+    if groups:
+        required.add("customer_group")
     if profile is not None:
         required.discard("supplier_code")
-    for index, (name, header) in enumerate(columns, start=1):
+    headers = [header for _, header in columns]
+    if validation:
+        headers.append(VALIDATION_HEADER)
+    for index, header in enumerate(headers, start=1):
+        name = columns[index - 1][0] if index <= len(columns) else VALIDATION
         cell = sheet.cell(row=1, column=index, value=header)
         cell.font = _HEADER_FONT
         cell.fill = _REQUIRED_FILL if name in required else _HEADER_FILL
         sheet.column_dimensions[get_column_letter(index)].width = max(14, len(header) + 4)
     sheet.freeze_panes = "A2"
+    for row_number, record in enumerate(rows, start=2):
+        for index, (name, _) in enumerate(columns, start=1):
+            value = _shown(name, record.get(name))
+            cell = sheet.cell(row=row_number, column=index, value=value)
+            spec = fields.FIELDS[name]
+            if spec.type == fields.DATE and value is not None:
+                cell.number_format = "dd/mm/yyyy"
+            elif spec.type == fields.FRACTION and value is not None:
+                cell.number_format = "0.00%"
 
     guide = book.create_sheet("Instrucciones")
     guide.append(["Carga masiva de apoyos"])
@@ -232,7 +305,18 @@ def template_workbook(profile: Profile | None = None, full: bool = False) -> byt
         "si no, lo crea. Una columna que no venga en el archivo conserva el valor guardado.",
         "Solo se escribe lo que se negocia: el costo, el precio lista, el margen y los nombres "
         "salen del DWH y se calculan en la plataforma.",
-        "Tipo de apoyo: " + "; ".join(vocabulary.CALC_METHOD_LABELS.values()) + ".",
+        "Clase apoyo: "
+        + "; ".join(vocabulary.KIND_LABELS[kind] for kind in vocabulary.ACTIVE_KINDS)
+        + ". Tipo apoyo: "
+        + "; ".join(_active_methods())
+        + " (listas desplegables).",
+        "Unidad valor: Unidad o Caja. Un valor en pesos por caja se divide por la unidad de "
+        "empaque del maestro de productos (vacía = 1).",
+        "No se permiten dos apoyos de la misma clase, cliente, sucursal y referencia con "
+        "vigencias que se cruzan: al cargar se elige si se vence o se anula el anterior.",
+        "Validación (descarga con datos): Sí = el proveedor lo confirma (se actualiza con lo "
+        "que traiga la fila), No = se vence ayer con la observación de la fila, vacía = no se "
+        "toca.",
         "Antes de guardar se simula: si una sola fila tiene un error no se guarda ninguna, "
         "y el reporte dice qué corregir y en qué fila, y qué apoyos se crean, cambian, "
         "quedan igual o ya no vienen.",
@@ -269,23 +353,81 @@ def template_workbook(profile: Profile | None = None, full: bool = False) -> byt
     for letter, width in zip("ABCDE", (22, 26, 12, 70, 60), strict=True):
         guide.column_dimensions[letter].width = width
 
-    values = book.create_sheet("Valores")
-    lists = (
-        ("Tipo de apoyo", tuple(vocabulary.CALC_METHOD_LABELS.values())),
-        ("Clase de apoyo", vocabulary.KINDS),
-        ("Quién financia", vocabulary.FUNDINGS),
-        ("Unidad del costo", vocabulary.VALUE_UNITS),
-        ("Forma de liquidación", vocabulary.SETTLEMENTS),
-    )
-    for column, (title, items) in enumerate(lists, start=1):
-        values.cell(row=1, column=column, value=title).font = Font(bold=True)
-        values.column_dimensions[get_column_letter(column)].width = 26
-        for row, item in enumerate(items, start=2):
-            values.cell(row=row, column=column, value=item)
-
+    _add_checks(book, sheet, columns, validation, len(rows))
     buffer = io.BytesIO()
     book.save(buffer)
     return buffer.getvalue()
+
+
+# The «Valores» sheet: one column per dropdown (title, then the values).
+_LISTS = (
+    ("kind", "Clase apoyo"),
+    ("calc_method", "Tipo apoyo"),
+    ("value_unit", "Unidad valor"),
+    (VALIDATION, VALIDATION_HEADER),
+    ("funding", "Quién financia"),
+    ("settlement_method", "Forma de liquidación"),
+)
+
+
+def _list_values(name: str) -> list[str]:
+    if name == "kind":
+        return [vocabulary.KIND_LABELS[kind] for kind in vocabulary.ACTIVE_KINDS]
+    if name == "calc_method":
+        return _active_methods()
+    if name == "value_unit":
+        return ["Unidad", "Caja"]
+    if name == VALIDATION:
+        return ["Sí", "No"]
+    if name == "funding":
+        return list(vocabulary.FUNDINGS)
+    return list(vocabulary.SETTLEMENTS)
+
+
+def _add_checks(
+    book: Any, sheet: Any, columns: Sequence[tuple[str, str]], validation: bool, filled: int
+) -> None:
+    """Dropdowns from the «Valores» sheet and date checks on the rows to fill."""
+
+    values = book.create_sheet("Valores")
+    ranges: dict[str, str] = {}
+    for column, (name, title) in enumerate(_LISTS, start=1):
+        items = _list_values(name)
+        letter = get_column_letter(column)
+        values.cell(row=1, column=column, value=title).font = Font(bold=True)
+        values.column_dimensions[letter].width = 30
+        for row, item in enumerate(items, start=2):
+            values.cell(row=row, column=column, value=item)
+        ranges[name] = f"Valores!${letter}$2:${letter}${len(items) + 1}"
+    last = max(filled + 1, 1) + _VALIDATED_ROWS
+    names = [name for name, _ in columns] + ([VALIDATION] if validation else [])
+    for index, name in enumerate(names, start=1):
+        letter = get_column_letter(index)
+        target = f"{letter}2:{letter}{last}"
+        if name in ranges:
+            check = DataValidation(
+                type="list",
+                formula1=ranges[name],
+                allow_blank=True,
+                showErrorMessage=True,
+                errorTitle="Valor no válido",
+                error="Elige un valor de la lista",
+            )
+        elif fields.FIELDS.get(name) is not None and fields.FIELDS[name].type == fields.DATE:
+            check = DataValidation(
+                type="date",
+                operator="between",
+                formula1="DATE(2000,1,1)",
+                formula2="DATE(2100,12,31)",
+                allow_blank=True,
+                showErrorMessage=True,
+                errorTitle="Fecha no válida",
+                error="Escribe una fecha (dd/mm/aaaa). Fecha Fin vacía = sin fecha final.",
+            )
+        else:
+            continue
+        sheet.add_data_validation(check)
+        check.add(target)
 
 
 __all__ = ["SpreadsheetSupportReader", "template_headers", "template_workbook"]

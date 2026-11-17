@@ -268,6 +268,46 @@ class SupportBulkService:
 
         return await self.profiles.find(supplier_code) if supplier_code else None
 
+    async def export_rows(self, principal: Principal, supplier_code: str) -> list[dict[str, Any]]:
+        """The supports in force or programmed of one supplier, as template rows.
+
+        The download with data: the supplier confirms each one in the «Validación» column and
+        the file comes back through :meth:`load`. Voided and expired supports, the classes
+        kept apart and the supports born from internal requests are left out.
+
+        Raises:
+            ForbiddenError: If the caller is not a manager.
+            InvalidInputError: If the supplier does not exist.
+        """
+
+        if not await self.supports.can_manage(principal):
+            raise ForbiddenError("No tienes permiso para gestionar apoyos de proveedores")
+        code = n.clean_text(supplier_code)
+        found = await self.supports.masters.commercial_suppliers_by_code([code] if code else [])
+        if not code or code not in found:
+            raise InvalidInputError(f"Proveedor comercial desconocido: {supplier_code}")
+        today = self.supports.calendar.today()
+        stored = await self.supports.live_for_suppliers(principal, [found[code]])
+        chosen = sorted(
+            (
+                support
+                for support in stored
+                if support.internal_request_id is None
+                and support.data.kind in vocabulary.ACTIVE_KINDS
+                and (support.data.valid_to is None or support.data.valid_to >= today)
+            ),
+            key=lambda support: (
+                support.data.customer_nit or "",
+                support.data.product_sku or support.data.supplier_sku or "",
+                support.data.valid_from or today,
+            ),
+        )
+        return [
+            {spec.name: getattr(support.data, spec.name, None) for spec in fields.FIELD_SPECS}
+            | {"supplier_code": code}
+            for support in chosen
+        ]
+
     async def load(
         self,
         principal: Principal,

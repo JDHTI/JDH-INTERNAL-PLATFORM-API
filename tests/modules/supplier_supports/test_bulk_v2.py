@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 from datetime import date
 from decimal import Decimal
 
+import openpyxl
 import pytest
 
 from app.core.errors import InvalidInputError
+from app.modules.supplier_supports.infrastructure.bulk_file import template_workbook
 
 HEADER = "Clase apoyo,Tipo apoyo,Valor apoyo,Fecha Inicio,Fecha Fin,NIT,SKU JDH\n"
 ROW = "Apoyo táctico,% Apoyo en Costo,5%,01/07/2026,31/12/2026,800116299,1128\n"
@@ -70,6 +73,61 @@ async def test_validation_no_expires_blank_skips_and_si_updates(bulk, repo, mana
     assert repo.items[by_sku["8749"]].data.supplier_value == Decimal("0.06")
     bad = await load(bulk, manager, header + ROW.replace("\n", ",Tal vez,\n"))
     assert bad.blocked and "escribe Sí o No" in bad.errors[0].message
+
+
+def test_the_short_template_has_bi_order_dropdowns_and_date_checks() -> None:
+    book = openpyxl.load_workbook(io.BytesIO(template_workbook()))
+    sheet = book["Apoyos"]
+
+    headers = [cell.value for cell in sheet[1]]
+    assert headers == [
+        "Clase apoyo",
+        "Tipo apoyo",
+        "Valor apoyo",
+        "Unidad valor",
+        "Excepción margen mínimo autorizado JDH",
+        "Fecha Inicio",
+        "Fecha Fin",
+        "NIT Cliente",
+        "Cliente",
+        "Sucursal",
+        "SKU JDH",
+        "SKU Proveedor",
+        "Observaciones",
+    ]
+    checks = {str(item.sqref).split(":")[0]: item for item in sheet.data_validations.dataValidation}
+    assert checks["A2"].type == "list" and checks["B2"].type == "list"
+    assert checks["D2"].type == "list" and checks["F2"].type == "date"
+    assert "Apoyo táctico" in [cell.value for cell in book["Valores"]["A"]]
+    grouped = openpyxl.load_workbook(io.BytesIO(template_workbook(groups=True)))["Apoyos"]
+    group_headers = [cell.value for cell in grouped[1]]
+    assert "Grupo Empresarial" in group_headers and "NIT Cliente" not in group_headers
+
+
+async def test_the_download_with_data_goes_back_with_its_validation(bulk, repo, manager) -> None:
+    await load(bulk, manager, HEADER + ROW + ROW.replace("1128", "8749"), apply=True)
+    rows = await bulk.export_rows(manager, "233")
+    book = openpyxl.load_workbook(io.BytesIO(template_workbook(rows=rows, validation=True)))
+    sheet = book["Apoyos"]
+    headers = [cell.value for cell in sheet[1]]
+    assert headers[-1] == "Validación" and sheet.max_row == 3
+    assert sheet.cell(row=2, column=1).value == "Apoyo táctico"
+    column = headers.index("Validación") + 1
+    sheet.cell(row=2, column=column, value="No")
+    sheet.cell(row=2, column=headers.index("Observaciones") + 1, value="Sin apoyo 2027")
+    sheet.cell(row=3, column=column, value="Sí")
+    buffer = io.BytesIO()
+    book.save(buffer)
+
+    report = await bulk.load(
+        manager, "validado.xlsx", buffer.getvalue(), supplier_code="233", apply=True
+    )
+
+    assert report.errors == [] and report.to_retire == 1 and report.unchanged == 1
+    expired = next(item for item in repo.items.values() if item.data.product_sku == "1128")
+    assert expired.data.valid_to == date(2026, 10, 8)
+    with pytest.raises(InvalidInputError, match="desconocido"):
+        await bulk.export_rows(manager, "000")
 
 
 async def test_a_business_group_row_becomes_one_support_per_customer(bulk, repo, manager) -> None:

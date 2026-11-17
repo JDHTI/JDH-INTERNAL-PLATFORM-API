@@ -157,16 +157,48 @@ async def bulk_template(
         default=False,
         description="Every field instead of the short general template",
     ),
+    groups: bool = Query(
+        default=False,
+        description="The business-group upload: Grupo Empresarial instead of the customer",
+    ),
     _: Principal = _principal,
     service: SupportBulkService = _service,
 ) -> Response:
-    """The bulk file as an ``.xlsx``: columns to fill, instructions and the valid values."""
+    """The bulk file as an ``.xlsx``: columns to fill (Clase, Tipo and Unidad as dropdowns,
+    dates checked), instructions and the valid values."""
 
     profile = await service.template_profile(supplier_code)
     return Response(
-        content=template_workbook(profile, full),
+        content=template_workbook(profile, full, groups=groups),
         media_type=_XLSX,
         headers={"Content-Disposition": 'attachment; filename="carga-apoyos.xlsx"'},
+    )
+
+
+@router.get(
+    "/bulk/export",
+    summary="Download a supplier's supports to validate",
+    response_class=Response,
+    responses={200: {"content": {_XLSX: {}}}},
+)
+@inject
+async def bulk_export(
+    supplier_code: str = Query(min_length=1, max_length=20),
+    principal: Principal = _principal,
+    service: SupportBulkService = _service,
+) -> Response:
+    """The supplier's supports in force or programmed in the general template, with a
+    «Validación» column (Sí / No) for the supplier to confirm them. Upload it back with
+    ``POST /bulk``: Sí updates, No expires yesterday with the row's observation, blank skips.
+    Managers only."""
+
+    rows = await service.export_rows(principal, supplier_code)
+    return Response(
+        content=template_workbook(None, False, rows=rows, validation=True),
+        media_type=_XLSX,
+        headers={
+            "Content-Disposition": f'attachment; filename="apoyos-{supplier_code.strip()}.xlsx"'
+        },
     )
 
 
