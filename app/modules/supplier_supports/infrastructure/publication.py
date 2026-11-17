@@ -28,6 +28,7 @@ from app.infrastructure.database import Database
 from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel
 from app.modules.dwh_publish.domain.entities import OutboxEvent, OutboxItem
 from app.modules.dwh_publish.infrastructure.outbox import enqueue
+from app.modules.supplier_supports.domain.vocabulary import ACTIVE_KINDS
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportCostModel,
     SupplierSupportLoadModel,
@@ -37,6 +38,7 @@ from app.modules.supplier_supports.infrastructure.models import (
 
 SUPPORT_TOPIC = "supplier_support"
 LOAD_TOPIC = "supplier_support_load"
+DELETE_TOPIC = "supplier_support_delete"
 SCHEMA = "plataforma"
 
 S = SupplierSupportModel
@@ -116,7 +118,8 @@ def support_payload(
         "vigencia_desde": _plain(model.valid_from),
         "vigencia_hasta": _plain(model.valid_to),
         "estado": model.status,
-        "habilitado": model.is_enabled,
+        # Rebates and budgets are kept apart (rules v2): never shown as in force.
+        "habilitado": model.is_enabled and model.kind in ACTIVE_KINDS,
         "origen": model.last_origin,
         "carga_id": _plain(model.last_load_id),
         "creado_en": _plain(model.created_at),
@@ -406,10 +409,61 @@ class LoadTopic:
             return [OutboxEvent(LOAD_TOPIC, model.id, 1, load_payload(model)) for model in models]
 
 
-def build_topics(supports: SupportTopic, loads: LoadTopic) -> dict[str, Any]:
+class DeleteTopic:
+    """Supports deleted from the platform (the discontinued classes, rules v2).
+
+    The warehouse writer has no ``DELETE``: it calls ``plataforma.borrar_apoyo_proveedor``
+    (``SECURITY DEFINER``, owned by the DWH team), which deletes only the discontinued classes
+    and appends a ``borrado`` row to the history, atomically. The event's version is above
+    the last one published, so a repeated or late event changes nothing. Never reconciled:
+    a deleted support has nothing to compare.
+    """
+
+    name = DELETE_TOPIC
+
+    async def write(self, connection: Any, events: Sequence[OutboxItem]) -> None:
+        """Delete each support at its version (idempotent)."""
+
+        for item in events:
+            await connection.fetch(
+                f"SELECT * FROM {SCHEMA}.borrar_apoyo_proveedor($1::uuid, $2::bigint, $3::text, "
+                "$4::timestamptz)",
+                item.entity_id,
+                item.version,
+                item.payload.get("borrado_por") or "plataforma",
+                datetime.fromisoformat(item.payload["borrado_en"]),
+            )
+
+    async def remote_versions(self, connection: Any) -> dict[UUID, int]:
+        return {}
+
+    async def local_versions(self) -> dict[UUID, int]:
+        return {}
+
+    async def snapshots(self, ids: Sequence[UUID]) -> list[OutboxEvent]:
+        return []
+
+
+def delete_event(support_id: UUID, version: int, actor: str, when: datetime) -> OutboxEvent:
+    """The event that deletes a support from the warehouse (its version + 1)."""
+
+    return OutboxEvent(
+        DELETE_TOPIC,
+        support_id,
+        version,
+        {"id": str(support_id), "borrado_por": actor, "borrado_en": when.isoformat()},
+    )
+
+
+def build_topics(
+    supports: SupportTopic, loads: LoadTopic, deletes: DeleteTopic | None = None
+) -> dict[str, Any]:
     """Topic name -> topic, for the publisher."""
 
-    return {supports.name: supports, loads.name: loads}
+    topics: dict[str, Any] = {supports.name: supports, loads.name: loads}
+    if deletes is not None:
+        topics[deletes.name] = deletes
+    return topics
 
 
 __all__ = [

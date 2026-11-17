@@ -192,6 +192,7 @@ from app.modules.supplier_supports.infrastructure.profiles_repository import (
     SqlAlchemyProfileRepository,
 )
 from app.modules.supplier_supports.infrastructure.publication import (
+    DeleteTopic,
     LoadTopic,
     SupportTopic,
     build_topics,
@@ -654,6 +655,7 @@ class V1Container(containers.DeclarativeContainer):
         build_topics,
         supports=providers.Factory(SupportTopic, database=database),
         loads=providers.Factory(LoadTopic, database=database),
+        deletes=providers.Factory(DeleteTopic),
     )
     dwh_publish_settings = providers.Singleton(
         PublishSettings,

@@ -18,6 +18,7 @@ from app.modules.commercial_masters.infrastructure.models import (
     ProductModel,
 )
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, ProductInfo
+from app.modules.supplier_supports.domain.vocabulary import ACTIVE_KINDS
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportCostModel,
     SupplierSupportModel,
@@ -76,6 +77,8 @@ class SqlAlchemyAgreementSource:
             .where(
                 S.status != "anulado",
                 S.is_enabled.is_(True),
+                # Rules v2: only the three classes apply; rebates and budgets wait apart.
+                S.kind.in_(ACTIVE_KINDS),
                 # The special conditions of the workbook stay documented, not applied: some
                 # cannot be automated (docs/condiciones-especiales.md).
                 or_(S.source.is_(None), ~S.source.ilike(SPECIAL_CONDITIONS_SOURCE)),
