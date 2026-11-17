@@ -19,7 +19,11 @@ https://intranet.jdh.com.co → proxy de infra (TLS) → http → intranet-caddy
 | --- | --- | --- |
 | `intranet-jdh` (borde, INTRANET-JDH-API) | `caddy`, `cms`, `postgres` (`intranet_jdh`, `intranet_cms`) | `intranet-jdh_default` |
 | `internal-platform` (UI) | `ui` (`platform-ui`) | `intranet-jdh_default` |
-| `internal-platform-api` (este repo, `deploy/compose.prod.yaml`) | `api` (`platform-api`), `postgres`, `redis`, `minio`, `clamav` | propia; solo `api` se une a `intranet-jdh_default` |
+| `internal-platform-api` (este repo, `deploy/compose.prod.yaml`) | `api` (`platform-api`), `postgres`, `redis`, `minio`, `clamav`, `gotenberg` | propia; solo `api` se une a `intranet-jdh_default` |
+
+`gotenberg` convierte a PDF los Word que llena la plataforma, como la OM del P.06. El API lo
+alcanza en `http://gotenberg:3000`. Si no responde, la OM queda en Word y el PDF se reintenta.
+No es una dependencia dura del API.
 
 - **Puertos.** Las dependencias del API no publican puertos.
 - **Volúmenes.** Los datos de la plataforma viven en los volúmenes `internal-platform-api_*`.
@@ -139,6 +143,20 @@ $C run --rm api poetry run python scripts/set-owner.py --email analista.ti@jdh.c
 
 La importación simula si no se le pasa `--apply`. La migración `0041` ya deja como owner a
 `PLATFORM_OWNER_EMAIL` si existe. Si la primera carga ocurre después, `set-owner.py` lo cubre.
+
+### Plantilla de la OM (una vez)
+
+La plantilla del P.06 viene con el código y se carga al bucket desde el contenedor. Si ya hay
+una activa, no hace nada; `--force` la reemplaza:
+
+```bash
+docker exec platform-api python -m app.modules.pqrsf.templates --kind om --version V02
+```
+
+Después, Calidad configura tres cosas en la plataforma:
+- el siguiente consecutivo de OM: `PUT /api/v1/pqrsf/om/settings`;
+- el código de 3 letras, la ciudad y la dirección de cada sede, en la administración de sedes;
+- las versiones nuevas del formato: `POST /api/v1/pqrsf/templates/om`.
 
 ## Pendiente
 

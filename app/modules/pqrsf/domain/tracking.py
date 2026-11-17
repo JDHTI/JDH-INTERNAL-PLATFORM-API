@@ -28,6 +28,11 @@ _PREFIX_PATTERN = re.compile(r"^[A-Z]{1,5}$")
 READ_STATUS_CODE = "leida"
 IN_PROGRESS_STATUS_CODE = "en_curso"
 
+# How a case ended: JDH answers for the product, or not.
+RESOLUTIONS = {"procede": "Procede", "no_procede": "No procede"}
+# Request types whose closing must say how it ended (salidas no conformes).
+RESOLUTION_REQUIRED_TYPES = frozenset({"queja", "reclamo"})
+
 
 class EventType:
     """Kinds of entries in the PQRSF history."""
@@ -48,11 +53,14 @@ class EventType:
     INBOX_OPENED = "inbox_opened"
 
 
-# Access records say who looked, not what changed: they are the only history
-# that is purged, and a repeat within the window is not recorded again.
+# Access records say who looked, not what changed; a repeat within the window is not
+# recorded again. Only inbox visits are purged after the retention: openings of a case
+# are kept for analytics.
 ACCESS_EVENT_TYPES = frozenset({EventType.VIEWED, EventType.INBOX_OPENED})
 ACCESS_RETENTION = timedelta(days=90)
 ACCESS_REPEAT_WINDOW = timedelta(minutes=30)
+# Openings of a case: kept and shown apart («Aperturas»), never in the case timeline.
+CASE_OPENING_TYPES = frozenset({EventType.READ, EventType.VIEWED})
 
 
 @dataclass
@@ -264,6 +272,15 @@ class TrackingCase:
     # When an email from the client or a supplier joined the case and nobody who works it
     # has opened it since; ``None`` once seen. The status and the due date do not change.
     news_at: datetime | None = None
+    # How the case ended, set when a complaint or a claim is finished: ``procede`` (JDH
+    # answers for the product) or ``no_procede``, and whether a JDH process failed (which
+    # calls for a corrective action). Kept when the case is reopened.
+    resolution: str | None = None
+    internal_failure: bool = False
+    resolution_note: str | None = None
+    resolved_at: datetime | None = None
+    # When an improvement opportunity (OM, P.06) was sent to the supplier; set on its own.
+    om_sent_at: datetime | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -292,6 +309,10 @@ class CaseFilters:
     due_today: bool = False
     # Only cases with an email nobody who works them has opened yet.
     with_news: bool = False
+    # How the case ended (``procede`` / ``no_procede``), a JDH process failure, an OM sent.
+    resolution: str | None = None
+    internal_failure: bool | None = None
+    om_sent: bool | None = None
     received_from: date | None = None
     received_to: date | None = None
     query: str | None = None
@@ -347,6 +368,8 @@ class CaseSummary:
     by_type: list[CountBucket]
     # Open cases with news nobody who works them has seen.
     with_news: int = 0
+    # Cases with an improvement opportunity sent to the supplier.
+    om_sent: int = 0
 
 
 @dataclass(frozen=True)

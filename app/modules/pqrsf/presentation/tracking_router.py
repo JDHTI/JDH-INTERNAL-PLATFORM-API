@@ -271,6 +271,13 @@ class CaseResponse(BaseModel):
     first_read_at: datetime | None
     # An email from the client or a supplier nobody who works the case has opened yet.
     news_at: datetime | None = None
+    # How the case ended (set when finishing it) and whether a JDH process failed.
+    resolution: Literal["procede", "no_procede"] | None = None
+    internal_failure: bool = False
+    resolution_note: str | None = None
+    resolved_at: datetime | None = None
+    # When an improvement opportunity (OM) went to the supplier.
+    om_sent_at: datetime | None = None
     closed_at: datetime | None
     legacy: dict | None
     items: list[CaseItemResponse]
@@ -377,6 +384,7 @@ class CaseSummaryResponse(BaseModel):
     due_today: int
     unassigned: int
     with_news: int = 0
+    om_sent: int = 0
     by_status: list[CountBucketResponse]
     by_type: list[CountBucketResponse]
 
@@ -439,10 +447,14 @@ class AssignRequest(BaseModel):
 
 
 class StatusChangeRequest(BaseModel):
-    """Target status."""
+    """Target status; closing a complaint or a claim also says how it ended."""
 
     status_id: UUID
     note: str | None = Field(default=None, max_length=2_000)
+    # Only when finishing: required for complaints and claims.
+    resolution: Literal["procede", "no_procede"] | None = None
+    internal_failure: bool = False
+    resolution_note: str | None = Field(default=None, max_length=2_000)
 
 
 class DeleteCaseRequest(BaseModel):
@@ -626,6 +638,11 @@ def _case(view: CaseView) -> CaseResponse:
         request_id=case.request_id,
         first_read_at=case.first_read_at,
         news_at=case.news_at,
+        resolution=case.resolution,
+        internal_failure=case.internal_failure,
+        resolution_note=case.resolution_note,
+        resolved_at=case.resolved_at,
+        om_sent_at=case.om_sent_at,
         closed_at=case.closed_at,
         legacy=case.legacy,
         items=[_item(item, view.overdue_item_ids) for item in case.items],
@@ -724,6 +741,7 @@ def _summary(value: CaseSummary) -> CaseSummaryResponse:
         due_today=value.due_today,
         unassigned=value.unassigned,
         with_news=value.with_news,
+        om_sent=value.om_sent,
         by_status=[
             CountBucketResponse.model_validate(b, from_attributes=True) for b in value.by_status
         ],
@@ -744,6 +762,9 @@ def _filters(
     overdue: bool = False,
     due_today: bool = False,
     with_news: bool = False,
+    resolution: Literal["procede", "no_procede"] | None = None,
+    internal_failure: bool | None = None,
+    om_sent: bool | None = None,
     received_from: date | None = None,
     received_to: date | None = None,
     q: str | None = Query(default=None, max_length=100),
@@ -762,6 +783,9 @@ def _filters(
         overdue=overdue,
         due_today=due_today,
         with_news=with_news,
+        resolution=resolution,
+        internal_failure=internal_failure,
+        om_sent=om_sent,
         received_from=received_from,
         received_to=received_to,
         query=q.strip() if q and q.strip() else None,
@@ -1100,9 +1124,64 @@ async def get_case(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> CaseDetailResponse:
-    """Return the case, its timeline and the public intake record."""
+    """Return the case, its timeline and the public intake record.
+
+    The timeline leaves out who opened the case (``read``, ``viewed``): see
+    ``GET /cases/{case_id}/openings``.
+    """
 
     return _detail(await service.get_case(case_id, principal))
+
+
+class PersonOpeningsResponse(BaseModel):
+    """How one person opened the case."""
+
+    user: PersonResponse | None
+    user_id: UUID
+    first_opened_at: datetime
+    last_opened_at: datetime
+    # Visits recorded; a repeat within 30 minutes counts once.
+    visits: int
+
+
+class CaseOpeningsResponse(BaseModel):
+    """Who opened the case (newest first) and each opening; kept apart from the timeline."""
+
+    people: list[PersonOpeningsResponse]
+    entries: list[CaseEventResponse]
+
+
+@router.get(
+    "/cases/{case_id}/openings",
+    response_model=CaseOpeningsResponse,
+    summary="Who opened the case",
+)
+@inject
+async def case_openings(
+    case_id: UUID,
+    principal: Principal = _principal,
+    service: CaseTrackingService = _tracking,
+) -> CaseOpeningsResponse:
+    """Who opened the case and when, for anyone who can see it.
+
+    Each person's first and last opening and visit count, then every opening newest first.
+    The first opening by the responsible (``read``) carries the move to «Leída».
+    """
+
+    value = await service.case_openings(case_id, principal)
+    return CaseOpeningsResponse(
+        people=[
+            PersonOpeningsResponse(
+                user=_person(person.user),
+                user_id=person.user_id,
+                first_opened_at=person.first_opened_at,
+                last_opened_at=person.last_opened_at,
+                visits=person.visits,
+            )
+            for person in value.people
+        ],
+        entries=[_event(entry) for entry in value.entries],
+    )
 
 
 @router.patch("/cases/{case_id}", response_model=CaseResponse, summary="Update case")
@@ -1140,9 +1219,23 @@ async def change_case_status(
     principal: Principal = _principal,
     service: CaseTrackingService = _tracking,
 ) -> CaseResponse:
-    """Move the case to another status (responsible or managers)."""
+    """Move the case to another status (responsible or managers).
 
-    return _case(await service.change_status(case_id, body.status_id, body.note, principal))
+    Finishing a complaint or a claim requires ``resolution`` (``procede`` or ``no_procede``)
+    and takes ``internal_failure`` (a JDH process failed) and ``resolution_note``.
+    """
+
+    return _case(
+        await service.change_status(
+            case_id,
+            body.status_id,
+            body.note,
+            principal,
+            resolution=body.resolution,
+            internal_failure=body.internal_failure,
+            resolution_note=body.resolution_note,
+        )
+    )
 
 
 @router.post("/cases/{case_id}/read", response_model=CaseResponse, summary="Mark case as read")

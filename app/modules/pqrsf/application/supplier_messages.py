@@ -36,6 +36,18 @@ from app.modules.pqrsf.domain.tracking import TrackingCase
 MESSAGE_ATTACHMENT_LIMIT = 25 * 1024 * 1024
 
 
+class OmAttachments(Protocol):
+    """The OM a message can carry (implemented by the OM service)."""
+
+    async def for_sending(self, case: TrackingCase, om_id: UUID):  # noqa: ANN201
+        """The OM of the case and its PDF (``(om, OmFile)``)."""
+        ...
+
+    async def mark_sent(self, case, om, principal: Principal, recipients: Sequence[str]) -> None:
+        """Record that the OM left for the supplier."""
+        ...
+
+
 class SupplierTracking(Protocol):
     """What supplier messages need from case tracking."""
 
@@ -77,6 +89,7 @@ class SupplierMessageService:
         contacts: SupplierContactRepository,
         wake: Callable[[], None] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        oms: OmAttachments | None = None,
     ) -> None:
         """Create the service.
 
@@ -89,8 +102,10 @@ class SupplierMessageService:
             contacts (SupplierContactRepository): Addresses already used per supplier.
             wake (Callable[[], None] | None): Wakes the sender so the email leaves at once.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
+            oms (OmAttachments | None): The OMs, so an improvement message carries one.
         """
 
+        self.oms = oms
         self.tracking = tracking
         self.files = files
         self.emails = emails
@@ -114,6 +129,7 @@ class SupplierMessageService:
         include_evidence: bool = False,
         include_case_data: bool = True,
         cc: Sequence[str] = (),
+        om_id: UUID | None = None,
     ) -> SupplierMessageResult:
         """Email a supplier from an open case and record it in the timeline.
 
@@ -134,6 +150,8 @@ class SupplierMessageService:
             include_case_data (bool): Add client, site and products to the email.
             cc (Sequence[str]): People of the organization copied (up to 5). Each address
                 gets one copy, on the first email.
+            om_id (UUID | None): An improvement opportunity of the case: its PDF goes
+                attached (only with ``kind=improvement``) and it is marked as sent.
 
         Returns:
             SupplierMessageResult: The timeline entry, the files and the queued emails.
@@ -151,9 +169,19 @@ class SupplierMessageService:
         code = clean_optional(supplier_code, "código del proveedor", 40) or ""
         name = clean_optional(supplier_name, "proveedor", 200)
 
+        om = None
+        if om_id is not None:
+            if kind != "improvement":
+                raise InvalidInputError("La OM se envía con un mensaje de oportunidad de mejora")
+            if self.oms is None:
+                raise InvalidInputError("El envío de la OM no está disponible")
+            om, om_file = await self.oms.for_sending(case, om_id)
         request = await self.requests.get_request(case.request_id) if case.request_id else None
         evidence = list(request.attachments) if include_evidence and request else []
         accepted, rejected = await self.files.accept_files(files)
+        if om is not None:
+            # The generated PDF is trusted: it skips the upload rules and goes first.
+            accepted.insert(0, (om_file.filename, "pdf", om_file.content_type, om_file.content))
         size = sum(len(item[3]) for item in accepted) + sum(a.size_bytes for a in evidence)
         if size > MESSAGE_ATTACHMENT_LIMIT:
             raise InvalidInputError("Los adjuntos de un mensaje no pueden superar 25 MB en total")
@@ -170,6 +198,8 @@ class SupplierMessageService:
             "evidence_ids": [str(a.id) for a in evidence],
             "notification_ids": [str(value) for value in notification_ids],
         }
+        if om is not None:
+            data["om_id"], data["om_code"] = str(om.id), om.code
         if rejected:
             data["rejected_files"] = rejected
         try:
@@ -218,6 +248,8 @@ class SupplierMessageService:
                 for recipient in recipients
             ]
         )
+        if om is not None and self.oms is not None:
+            await self.oms.mark_sent(case, om, principal, recipients)
         if self.wake is not None:
             self.wake()
         return SupplierMessageResult(event, attachments, rejected, queued)

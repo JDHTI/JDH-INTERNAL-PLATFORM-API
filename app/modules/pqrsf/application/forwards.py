@@ -1,8 +1,9 @@
-"""Pass a supplier's answer on to the customer, by hand, from a mailbox nobody reads.
+"""Pass a supplier's answer on to the customer, by hand; answers to it are not followed.
 
-Whoever works the case decides: nothing is forwarded on its own. The email leaves from
-the no-reply mailbox (``MAIL_NOREPLY_SENDER``) so the customer's answers never reach the
-case, and the email says so at the top.
+Whoever works the case decides: nothing is forwarded on its own. The email says at the top
+that it is automatic and not answered. It leaves from ``MAIL_NOREPLY_SENDER`` when there is
+one, otherwise from the PQRSF mailbox; either way the intake leaves answers to its subject
+(«Novedad caso …») out of the platform.
 """
 
 from __future__ import annotations
@@ -14,12 +15,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from app.core.errors import (
-    ConflictError,
-    DependencyUnavailableError,
-    InvalidInputError,
-    NotFoundError,
-)
+from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.identity.domain.principal import Principal
 from app.modules.mail.layout import BrandedEmail, render_html, render_text
 from app.modules.pqrsf.application import notification_templates as templates
@@ -117,7 +113,7 @@ class CustomerForwardService:
             tracking (ForwardTracking): Access rules and the case timeline.
             emails (EmailRepository): The received email and its files.
             notifications (NotificationRepository): The outbox the email goes through.
-            noreply_sender (str): Mailbox nobody reads; empty turns forwarding off.
+            noreply_sender (str): Mailbox nobody reads; empty sends from ``mailbox``.
             mailbox (str): The PQRSF mailbox, where the customer can write instead.
             clock (Callable[[], datetime]): Current instant (replaced in tests).
         """
@@ -125,7 +121,7 @@ class CustomerForwardService:
         self.tracking = tracking
         self.emails = emails
         self.notifications = notifications
-        self.noreply_sender = noreply_sender.strip()
+        self.sender = noreply_sender.strip() or mailbox
         self.mailbox = mailbox
         self.clock = clock
 
@@ -158,7 +154,6 @@ class CustomerForwardService:
             ForbiddenError: The caller cannot work the case.
             InvalidInputError: Not a supplier's answer, or no requester email.
             ConflictError: The case is finished, or the email was already forwarded.
-            DependencyUnavailableError: No no-reply mailbox is configured.
         """
 
         prepared = await self._prepare(case_id, event_id, note, principal)
@@ -221,10 +216,6 @@ class CustomerForwardService:
         to = (case.requester_email or "").strip()
         if "@" not in to:
             raise InvalidInputError("El caso no tiene un correo del solicitante")
-        if not self.noreply_sender:
-            raise DependencyUnavailableError(
-                "El envío al cliente necesita la cuenta no-reply (MAIL_NOREPLY_SENDER)"
-            )
         cleaned = clean_multiline(note, "nota", NOTE_LIMIT) if note else None
 
         message_id = (source.data or {}).get("message_id")
@@ -238,7 +229,7 @@ class CustomerForwardService:
         subject, content = templates.customer_forward(case, text, cleaned, self.mailbox)
         preview = ForwardPreview(
             to=to,
-            sender=self.noreply_sender,
+            sender=self.sender,
             subject=subject,
             content=content,
             attachments=[a.original_filename for a in files],

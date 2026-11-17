@@ -7,6 +7,10 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.modules.commercial_masters.domain.employee_prices import (
+    EmployeePriceProduct,
+    WarehouseCost,
+)
 from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     Customer,
@@ -25,6 +29,12 @@ class ManagerPolicy(Protocol):
     """Decides who may create and edit commercial data (see ``AreaManagerPolicy``)."""
 
     async def is_manager(self, principal: Principal) -> bool: ...
+
+
+class WarehouseCostSource(Protocol):
+    """Average inventory costs by warehouse, from the data warehouse."""
+
+    async def warehouse_costs(self, warehouse: str) -> list[WarehouseCost]: ...
 
 
 class WarehouseSource(Protocol):
@@ -148,3 +158,5 @@ class CommercialMasterRepository(Protocol):
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]
     ) -> tuple[int, list[SupplierProductCode]]: ...
+
+    async def employee_price_products(self) -> list[EmployeePriceProduct]: ...

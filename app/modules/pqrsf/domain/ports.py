@@ -39,6 +39,7 @@ from app.modules.pqrsf.domain.feedback import (
     FeedbackPage,
     FeedbackSummary,
 )
+from app.modules.pqrsf.domain.improvement import DocumentTemplate, ImprovementOpportunity, Signer
 from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.sales import InvoiceSeller
@@ -353,6 +354,10 @@ class CaseRepository(Protocol):
 
     async def clear_news(self, case_id: UUID) -> bool:
         """Clear the news flag; ``True`` when the case had news."""
+        ...
+
+    async def set_om_sent(self, case_id: UUID, at: datetime) -> None:
+        """Mark that an improvement opportunity went to the supplier (first time kept)."""
         ...
 
     async def list_events(self, case_id: UUID) -> list[CaseEvent]:
@@ -768,4 +773,76 @@ class BinaryStorage(Protocol):
 
     async def delete_object(self, key: str) -> None:
         """Delete an object during cleanup."""
+        ...
+
+
+class ImprovementRepository(Protocol):
+    """Templates in the bucket, the OM consecutive and the OMs of the cases."""
+
+    async def list_templates(self, kind: str) -> list[DocumentTemplate]:
+        """Every version of a template, newest first."""
+        ...
+
+    async def get_template(self, template_id: UUID) -> DocumentTemplate | None:
+        """One template version."""
+        ...
+
+    async def active_template(self, kind: str) -> DocumentTemplate | None:
+        """The version in use for a kind."""
+        ...
+
+    async def add_template(self, template: DocumentTemplate) -> DocumentTemplate:
+        """Store a new version and make it the active one."""
+        ...
+
+    async def take_om_number(self) -> int:
+        """The next OM number, taken (the counter moves on)."""
+        ...
+
+    async def next_om_number(self) -> int:
+        """The number the next OM will take, without taking it."""
+        ...
+
+    async def set_next_om_number(self, value: int, user_id: UUID) -> None:
+        """Where the OM consecutive goes on (Calidad's last number + 1)."""
+        ...
+
+    async def list_for_case(self, case_id: UUID) -> list[ImprovementOpportunity]:
+        """The OMs of a case, oldest first."""
+        ...
+
+    async def get(self, om_id: UUID) -> ImprovementOpportunity | None:
+        """One OM."""
+        ...
+
+    async def save(self, om: ImprovementOpportunity) -> ImprovementOpportunity:
+        """Insert or update an OM; a second OM for the same supplier is a conflict."""
+        ...
+
+
+class WordRenderer(Protocol):
+    """Fills a Word template (docxtpl)."""
+
+    def marks(self, template: bytes) -> set[str]:
+        """The marks a template uses; raises when it is not a valid template."""
+        ...
+
+    def render(self, template: bytes, context: dict, photos: Sequence[bytes]) -> bytes:
+        """The filled document."""
+        ...
+
+
+class PdfConverter(Protocol):
+    """Turns an office document into a PDF."""
+
+    async def to_pdf(self, filename: str, content: bytes) -> bytes:
+        """The PDF; raises ``DependencyUnavailableError`` when the converter is down."""
+        ...
+
+
+class SignerDirectory(Protocol):
+    """Who a platform user is, to sign a document."""
+
+    async def signer(self, user_id: UUID) -> Signer | None:
+        """Name, position, email and phone from the directory."""
         ...

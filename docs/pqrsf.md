@@ -401,8 +401,9 @@ Catálogo configurable (`code`, `name`, `color`, `sort_order`, `is_initial`, `is
 |---|---|
 | Leída automática | `POST /cases/{id}/read` al abrir el detalle: si quien abre es el responsable y es la primera vez, fija `first_read_at` y pasa de inicial a `leida` |
 | Novedad | Un correo del cliente o del proveedor que se une al caso fija `news_at` («Novedad»), sin tocar el estado ni el plazo. Se limpia cuando lo abre su responsable o un gestor (`POST /cases/{id}/read`); quien solo sigue el caso no la limpia |
-| En curso automática | Al registrar la primera respuesta de un documento, `recibida`/`leida` pasa a `en_curso` |
+| En curso automática | Cualquier trabajo de quien trabaja el caso (responsable o gestor) pasa `recibida`/`leida` a `en_curso`, con un `status_changed` que dice qué lo movió: un seguimiento o respuesta al cliente, un mensaje al proveedor, enviar al cliente la respuesta del proveedor, editar el caso, o agregar, editar, responder o quitar un documento. No lo mueven abrir el caso, asignarlo, un cambio manual de estado, los correos que llegan ni el comentario de quien solo sigue el caso (quien lo radicó o el vendedor) |
 | Cerrar | Exige respuesta en todos los documentos y causal en los tardíos. Fija `closed_at` |
+| Resultado | Finalizar una queja o un reclamo exige `resolution`: `procede` (JDH responde por el producto) o `no_procede`, con `internal_failure` (falló un proceso de JDH, lo que pide una acción correctiva) y `resolution_note`. Queda en el caso (`resolved_at`) y en el `status_changed` del cierre. Reabrir lo conserva hasta el siguiente cierre. En peticiones es opcional; fuera del cierre da `422`. Filtros `resolution` e `internal_failure`; columnas «Resultado» y «Fallo interno» al final del CSV |
 | Reabrir | Exige nota. Un caso cerrado es de solo lectura salvo comentarios y estado |
 
 ### Tiempos de respuesta (SLA)
@@ -436,8 +437,15 @@ reglas. Un responsable debe haber iniciado sesión una vez.
   historial del módulo. No se edita ni se borra.
 - **Caso eliminado:** se registra el evento `deleted` con motivo, y sus eventos pierden solo el
   vínculo.
-- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos. Se
-  purgan a los 90 días.
+- **Registros de acceso** (`viewed`, `inbox_opened`): uno por persona y caso cada 30 minutos.
+  - Las visitas a la bandeja (`inbox_opened`) se purgan a los 90 días.
+  - Las aperturas de un caso (`read`, `viewed`) se conservan para analítica.
+- **Aperturas fuera de la línea de tiempo:** el detalle del caso no trae `read` ni `viewed`. Se
+  consultan en `GET /pqrsf/cases/{id}/openings`, con el mismo permiso de ver el caso:
+  - `people[]`: `{user, user_id, first_opened_at, last_opened_at, visits}`, de la más reciente
+    a la más antigua;
+  - `entries[]`: cada apertura como evento, de la más nueva a la más antigua. La primera
+    apertura del responsable (`read`) trae el paso a «Leída».
 - **Consultas:** `GET /pqrsf/activity` (gestores, paginado por `before`) y
   `GET /pqrsf/activity/last-seen`.
 
@@ -456,8 +464,8 @@ Cada evento (detalle del caso y `/pqrsf/activity`) trae, además de `event_type`
 | Evento | Se lee |
 |---|---|
 | `created` (formulario / correo / interno) | Sistema · Creó el caso desde el formulario público / desde un correo de x@y / Ana · Creó el caso |
-| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída |
-| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja |
+| `read` | Ana · Abrió el caso por primera vez · Recibida → Leída (solo en aperturas y en `/activity`) |
+| `viewed` / `inbox_opened` | Ana · Abrió el caso / Entró a la bandeja (solo en aperturas y en `/activity`) |
 | `assigned` | Asignó el caso a Juan / Tomó el caso / Quitó el responsable / asignación automática |
 | `status_changed` | Cambió el estado / Finalizó el caso / Reabrió el caso, con el chip de estados |
 | `updated` | Editó el asunto y la sede |
@@ -681,6 +689,7 @@ Descripción:
 | Misma conversación y caso finalizado | Caso nuevo con `related_case` |
 | `Tipo: Sugerencia` / `Felicitación` | Se guarda como sugerencia y se agradece en el hilo |
 | Enviado por `pqrsf@`/`info@`, automático, `bulk`, `no-reply` | Ignorado |
+| Respuesta a «Novedad caso …» (respuesta del proveedor enviada al cliente, sección 9) | Ignorado, aunque traiga el radicado |
 
 Cada mensaje se guarda con su `Internet-Message-Id` único: un correo repetido no abre dos casos.
 
@@ -735,7 +744,7 @@ Todo sale desde `pqrsf@jdh.com.co` por una cola (`pqrsf_notifications`). Un work
 | Acuse por correo | Caso abierto desde el buzón | Remitente, en el hilo |
 | Actualización al cliente | Comentario con `reply_to_client` | Solicitante |
 | Agradecimiento | Sugerencia o felicitación | Remitente |
-| Novedad caso (respuesta del proveedor) | Alguien la envía a mano desde el caso (sección 9) | Solicitante, desde la cuenta no-reply |
+| Novedad caso (respuesta del proveedor) | Alguien la envía a mano desde el caso (sección 9) | Solicitante; sus respuestas no se siguen |
 | Certificados / documento del caso | Sección 10 | Solicitante |
 | Mensaje al proveedor | Sección 9 | Proveedor |
 | `daily_summary` (17:30) | Días hábiles | Miembros de Calidad: casos abiertos y vencidos |
@@ -819,27 +828,110 @@ sale sola.
 - **Errores:**
   - `404` si el evento no es un correo del caso;
   - `422` si es del cliente o el caso no tiene correo del solicitante;
-  - `409` si ya se envió o el caso está finalizado;
-  - `503` sin cuenta no-reply.
-- **Correo:** asunto fijo «Novedad caso {radicado}».
-  - Sale de `MAIL_NOREPLY_SENDER`, con la plantilla JDH (kind `customer_forward`).
-  - Lleva arriba, en un recuadro, que es un correo automático y que sus respuestas no se leen ni
-    se procesan, y dice que escriba a `pqrsf@` con el radicado si necesita agregar algo.
+  - `409` si ya se envió o el caso está finalizado.
+- **Correo:** asunto fijo «Novedad caso {radicado}», con la plantilla JDH (kind
+  `customer_forward`).
+  - Es un correo nuevo, no una respuesta dentro de un hilo.
+  - Sale de `pqrsf@`, o de `MAIL_NOREPLY_SENDER` si algún día se configura.
+  - Lleva arriba, en un recuadro, que es un correo automático y que sus respuestas no se
+    procesan, y dice que escriba a `pqrsf@` con el radicado si necesita agregar algo.
   - Incluye el texto del proveedor sin el historial citado, la nota (si hay) y los adjuntos de
     ese correo.
-  - Como sale de otra cuenta, la respuesta del cliente nunca llega al caso.
+- **Respuestas del cliente a este correo:** no se siguen.
+  - El buzón reconoce el asunto «Novedad caso …», aunque traiga `RE:`, `RV:` o etiquetas como
+    `[PRUEBA para …]`, y deja el correo `ignored` sin tocar el caso, aunque traiga el radicado.
+  - El correo queda en el buzón `pqrsf@`, pero no entra a la plataforma.
 - **Una sola vez:** la cola usa `customer_forward:{event_id}`; dos clics a la vez envían un correo.
 - **Línea de tiempo:** evento `forwarded_to_customer` («Envió al cliente la respuesta de …») con
   `source_event_id`, `from`, `to`, `notification_id` y `file_ids`.
 - **En el `email_received` del detalle:** la API expone estos campos.
   - `sender_role`: `supplier`, `customer` o `external`.
   - `forwardable`: `true` solo si es del proveedor, no se ha enviado, el caso está abierto, tiene
-    correo del solicitante, quien consulta lo trabaja y hay cuenta no-reply.
+    correo del solicitante y quien consulta lo trabaja.
   - `forwarded_at`, `forwarded_by` y `forwarded_to`.
 - **Pruebas:** con `PQRSF_NOTIFY_REDIRECT` llega a esa dirección como los demás correos. La vista
   previa muestra el mismo HTML que recibirá el cliente.
 
-La OM con formato (DOCX/PDF) y el registro del resultado (procede o no procede) van en la fase 3.
+### Oportunidad de mejora (OM, P.06.F.04)
+
+La OM es el formato con el que Calidad escala al proveedor una falla de fabricante. La
+plataforma la llena desde el caso, la guarda en Word (editable) y en PDF, y la envía al
+proveedor adjunta a un mensaje de oportunidad de mejora.
+
+**Plantilla:**
+- Es un Word con marcas `{{ … }}` que se guarda en el bucket, en
+  `pqrsf/templates/om/{id}.docx`.
+- Cada subida es una versión nueva y queda una sola activa (`pqrsf_document_templates`).
+- La V02 del formato viene con el código, en `app/modules/pqrsf/assets/templates/om-p06-v02.docx`.
+  Se arma con `scripts/build-om-template.py` a partir del P.06 que llena Calidad.
+- La primera carga al bucket se hace después del despliegue:
+
+  ```
+  docker exec platform-api python -m app.modules.pqrsf.templates --kind om --version V02
+  ```
+- Las siguientes versiones las sube un gestor con `POST /pqrsf/templates/om` (multipart `file`,
+  `version_label`).
+  - Se rechaza si falta una marca o si trae una que no se conoce.
+  - Se rechaza si no se llena con valores de ejemplo.
+- Marcas: `code`, `city`, `address`, `report_date`, `channel`, `pickup_order`,
+  `document_number`, `document_date`, `classification`, `novelty`, `dependency`, `requester`,
+  `sales_executive`, `immediate_actions`, `customer`, `supplier`, `cause`, `description`,
+  `request_note`, `signer_name`, `signer_position`, `signer_email`, `signer_phone`.
+- Los productos van en una fila `{%tr for p in products %}` con `p.sku`, `p.description`,
+  `p.lot`, `p.expiry` y `p.quantity`. Las fotos van en `{% for photo in photos %}{{ photo }}{% endfor %}`.
+
+**Consecutivo:**
+- Es el número más el código de 3 letras de la sede, por ejemplo `1181BOG`.
+- El número es global (`pqrsf_om_sequence`). Calidad fija dónde sigue con
+  `PUT /pqrsf/om/settings {next_number}`, que debe ser mayor que toda OM ya generada.
+- El código de la sede, la ciudad y la dirección se configuran en la administración de sedes
+  (`city`, `address`, `om_code`).
+- La OM toma el número la primera vez que se genera; generarla de nuevo lo conserva.
+
+**De dónde sale cada campo:**
+
+| Campo del P.06 | Fuente |
+|---|---|
+| Ciudad, dirección | Sede del caso |
+| Medio de recibo | Origen del caso (formulario web, correo, registro interno) |
+| Orden de recogida | `pickup_order_number` |
+| Documento No / Fecha | Facturas de los productos del proveedor; fecha de entrega del caso (los dos editables) |
+| Clasificación | Letra del tipo (Q, R, P…) |
+| Novedad / Causa | Asunto y causal del caso |
+| Dependencia, usuario, ejecutivo, cliente, descripción | Del caso |
+| Proveedor y tabla de productos | Productos del caso de ese proveedor |
+| Acciones inmediatas | Lo que escribe el gestor; si la OR se pidió, se sugiere «Se aprobó la orden de recogida…» |
+| Nota final | Por defecto «Es conveniente enviar una respuesta formal…» |
+| Registro fotográfico | Hasta 6 fotos de la solicitud del cliente |
+| Firma | Quien genera la OM: nombre, cargo y celular del directorio |
+
+**Endpoints** (`/pqrsf/cases/{case_id}/improvement-opportunities`):
+
+| Método | Ruta | Qué hace | Quién |
+|---|---|---|---|
+| GET | `` | Las OM del caso | Quien ve el caso |
+| POST | `` | Genera o regenera la OM de un proveedor: `{supplier_code, supplier_name?, immediate_actions?, request_note?, evidence_ids[], document_number?, document_date?}` | Quien trabaja el caso abierto |
+| GET | `/{om_id}/document?format=pdf\|docx&inline=` | Descarga el PDF o el Word | Quien ve el caso |
+| PUT | `/{om_id}/document` | Sube un Word editado a mano (multipart `file`); vuelve a generar el PDF y marca `edited` | Quien trabaja el caso |
+| POST | `/{om_id}/pdf` | Reintenta el PDF si el conversor estaba caído | Quien trabaja el caso |
+
+**PDF:**
+- Lo hace Gotenberg (`GOTENBERG_URL`), LibreOffice en su propio contenedor.
+- Si no responde, la OM queda con el Word, `has_pdf` es `false` y se reintenta con `…/pdf`.
+
+**Envío:**
+- `POST /cases/{id}/supplier-messages` con `kind=improvement` y `om_id`.
+- Adjunta el PDF (`OM 1181BOG.pdf`) como archivo del caso, marca la OM `sent` y registra el
+  evento `om_sent` («Envió la OM 1181BOG a …»).
+- Fija en el caso `om_sent_at` («OM enviada»), que es una marca y no un estado. La bandeja
+  filtra por `om_sent` y el resumen la cuenta.
+- Una OM enviada no se regenera ni se reemplaza.
+
+**Línea de tiempo:**
+- `om_generated`: «Generó / Volvió a generar / Subió una versión editada de la OM 1181BOG para
+  PARMALAT».
+- `om_sent`.
+- Generar la OM cuenta como trabajo («En curso» automático).
 
 ---
 
@@ -1014,7 +1106,8 @@ saca de las ventas del DWH; no se le pide al cliente.
 | `MAIL_INTAKE_ENABLED` | `false` | Lectura del buzón |
 | `MAIL_INTAKE_OPEN_CASES` | `false` | `false`: el buzón solo da seguimiento (sección 7). `true`: también abre casos con la plantilla |
 | `MAIL_CC_DOMAINS` | `jdh.com.co` | Dominios de las personas que se pueden copiar (CC) |
-| `MAIL_NOREPLY_SENDER` | vacío | Cuenta que nadie lee para enviar al cliente la respuesta de un proveedor. La app de Graph necesita `Mail.Send` sobre ella (agregarla a la *Application Access Policy*). Vacío apaga ese envío |
+| `GOTENBERG_URL` | vacío (`http://gotenberg:3000` en Docker) | Conversor a PDF de la OM; vacío deja solo el Word |
+| `MAIL_NOREPLY_SENDER` | vacío | Opcional: cuenta que nadie lee para enviar al cliente la respuesta de un proveedor (la app de Graph necesitaría `Mail.Send` sobre ella). Vacío la envía desde `pqrsf@`; las respuestas no se siguen en ningún caso |
 | `MAIL_GRAPH_TENANT_ID` / `MAIL_GRAPH_CLIENT_ID` / `MAIL_GRAPH_CLIENT_SECRET` | — | App de Entra del buzón (el **valor** del secreto) |
 | `MAIL_PQRSF_INBOX` / `MAIL_IGNORED_SENDERS` | `pqrsf@jdh.com.co` / `info@jdh.com.co` | Buzones |
 | `MAIL_INTAKE_SINCE`, `MAIL_POLL_INTERVAL_SECONDS`, `MAIL_MAX_ATTEMPTS`, `MAIL_MAX_ATTACHMENTS`, `MAIL_MAX_ATTACHMENT_MB`, `MAIL_MAX_TOTAL_ATTACHMENT_MB`, `MAIL_ATTACHMENT_EXTENSIONS` | ver `.env.example` | Correo entrante |
@@ -1081,6 +1174,8 @@ de la UI.
 | I-8 | Mensajes al proveedor y contactos | [x] | [x] |
 | I-9 | Ejecutivo comercial desde la factura (DWH) | [x] | [x] |
 | I-9 | Respaldo por el vendedor del cliente | [ ] | — |
+| I-10 | Resultado al finalizar (procede / no procede, fallo interno) y OM P.06 (plantilla en el bucket, Word y PDF, consecutivo por sede, envío y marca «OM enviada») | [x] | [ ] |
+| I-11 | Planes de acción (P.04) como módulo aparte, enlazado al caso | [ ] | [ ] |
 | — | UI de certificados, solicitudes de documentos y respuesta con archivo (hecha en `Lovealone1/pqrsf-certificates-ui`, sin fusionar en master) | [x] | [ ] |
 
 ### Fases siguientes

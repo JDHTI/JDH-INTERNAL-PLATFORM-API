@@ -30,6 +30,9 @@ CLASSIFICATION = "classification"
 EVENT_SUPPLIER_MESSAGE = "supplier_message"
 # A supplier's answer (an ``email_received`` event) passed on to the customer by hand.
 EVENT_FORWARDED_TO_CUSTOMER = "forwarded_to_customer"
+# The improvement opportunity (OM, P.06): generated (or generated again) and sent.
+EVENT_OM_GENERATED = "om_generated"
+EVENT_OM_SENT = "om_sent"
 SUPPLIER_MESSAGE_KINDS = {
     "request": "una solicitud de información",
     "response": "una respuesta",
@@ -178,6 +181,18 @@ def describe(
         return EventSummary(kind, name, f"Envió {what} a {target}", COMMUNICATION)
     if event_type == EVENT_EMAIL_RECEIVED:
         return _email(data, context)
+    if event_type == EVENT_OM_GENERATED:
+        code = data.get("code") or ""
+        supplier = f" para {data['supplier_name']}" if data.get("supplier_name") else ""
+        verb = "Volvió a generar" if data.get("again") else "Generó"
+        if data.get("edited"):
+            verb = "Subió una versión editada de"
+        return EventSummary(kind, name, f"{verb} la OM {code}{supplier}", DOCUMENTS)
+    if event_type == EVENT_OM_SENT:
+        target = _join(data.get("to", [])) or "el proveedor"
+        return EventSummary(
+            kind, name, f"Envió la OM {data.get('code') or ''} a {target}", COMMUNICATION
+        )
     if event_type == EVENT_FORWARDED_TO_CUSTOMER:
         source = data.get("from") or "el proveedor"
         return EventSummary(kind, name, f"Envió al cliente la respuesta de {source}", COMMUNICATION)

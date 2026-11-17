@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -194,6 +195,10 @@ class ProductModel(Base):
     margin_mass_food: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     margin_market: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     margin_salsamentarias: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
+    # Margin of the JDH employee price list (MDE1 cost); 13 % for every product by default.
+    margin_employee: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 6), server_default=text("0.130000")
+    )
     margin_notes: Mapped[str | None] = mapped_column(Text)
     margin_source: Mapped[str | None] = mapped_column(String(20))
     margin_updated_by: Mapped[str | None] = mapped_column(String(320))

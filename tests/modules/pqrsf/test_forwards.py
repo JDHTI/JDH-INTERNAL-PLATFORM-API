@@ -3,17 +3,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.errors import (
-    ConflictError,
-    DependencyUnavailableError,
-    ForbiddenError,
-    InvalidInputError,
-)
+from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.mail.layout import BrandedEmail, render_html
 from app.modules.pqrsf.application.forwards import CustomerForwardService
 from app.modules.pqrsf.application.notification_templates import AUTOMATIC_NOTICE
 from app.modules.pqrsf.application.notifications import NotificationService
-from app.modules.pqrsf.domain.email import CaseAttachment, EmailMessage
+from app.modules.pqrsf.domain.email import CaseAttachment, EmailMessage, is_forward_reply
 from app.modules.pqrsf.domain.notifications import CUSTOMER_FORWARD
 from app.modules.pqrsf.domain.tracking import CaseEvent
 from tests.modules.pqrsf.test_notifications import FakeHolidays, FakeOutbox, FakeTeam, OpenCases
@@ -39,9 +34,8 @@ class FakeEmails:
 
 
 class World:
-    def __init__(self, noreply: str = "no-reply@jdh.com.co") -> None:
+    def __init__(self, noreply: str = "") -> None:
         self.s = Setup()
-        self.s.service.customer_forwarding = bool(noreply)
         self.emails = FakeEmails()
         self.outbox = FakeOutbox()
         self.service = CustomerForwardService(
@@ -196,15 +190,15 @@ async def test_what_cannot_be_forwarded() -> None:
     assert w.outbox.items == []
 
 
-@pytest.mark.asyncio
-async def test_without_a_no_reply_mailbox_nothing_is_forwardable() -> None:
-    w = World(noreply="")
-    case, supplier, _ = await w.case_with_answers()
-
-    views = _events(await w.s.service.get_case(case.id, w.s.admin))
-    assert views[supplier.id].forward.forwardable is False
-    with pytest.raises(DependencyUnavailableError):
-        await w.service.forward(case.id, supplier.id, None, w.s.admin)
+def test_answers_to_a_forward_are_recognized_by_the_subject() -> None:
+    assert is_forward_reply("Novedad caso Q26AC0001")
+    assert is_forward_reply("RE: Novedad caso Q26AC0001")
+    assert is_forward_reply("rv: RE:  novedad CASO Q26AC0001")
+    # The testing redirect adds a long tag.
+    assert is_forward_reply("RE: [PRUEBA para analista.ti@jdh.com.co] Novedad caso Q26AC0001")
+    assert not is_forward_reply("RE: Q26AC0001 seguimiento")
+    assert not is_forward_reply("Actualización de tu solicitud Q26AC0001")
+    assert not is_forward_reply("RE: [Q26AC0001] Solicitud de información: Novedad caso")
 
 
 @pytest.mark.asyncio
@@ -214,9 +208,10 @@ async def test_the_preview_shows_the_email_and_sends_nothing() -> None:
 
     preview = await w.service.preview(case.id, supplier.id, None, w.s.admin)
 
-    assert preview.to == "cliente@x.co" and preview.sender == "no-reply@jdh.com.co"
+    # Without a no-reply mailbox it leaves from the PQRSF one.
+    assert preview.to == "cliente@x.co" and preview.sender == "pqrsf@jdh.com.co"
     assert preview.subject == f"Novedad caso {case.code}"
-    assert "no lo respondas" in preview.html and "no se leen ni se procesan" in preview.html
+    assert "no lo respondas" in preview.html and "no se procesan" in preview.html
     assert preview.text.startswith("IMPORTANTE: Este es un correo automático")
     assert "Revisamos el lote 123." in preview.html
     assert preview.attachments == [f"de-{SUPPLIER}.pdf"]
@@ -246,12 +241,16 @@ class _Storage:
 
 
 @pytest.mark.asyncio
-async def test_the_forward_leaves_from_no_reply_in_the_jdh_layout() -> None:
-    w = World()
+@pytest.mark.parametrize(
+    ("noreply", "sender"),
+    [("", "pqrsf@jdh.com.co"), ("no-reply@jdh.com.co", "no-reply@jdh.com.co")],
+)
+async def test_the_forward_is_a_new_email_in_the_jdh_layout(noreply, sender) -> None:
+    w = World(noreply)
     case, supplier, _ = await w.case_with_answers()
     await w.service.forward(case.id, supplier.id, None, w.s.admin)
     mail = _Mail()
-    sender = NotificationService(
+    outbox_sender = NotificationService(
         repository=w.outbox,
         cases=OpenCases(w.s.cases),
         people=w.s.directory,
@@ -264,40 +263,15 @@ async def test_the_forward_leaves_from_no_reply_in_the_jdh_layout() -> None:
         emails=w.emails,
         storage=_Storage(),
         clock=lambda: NOW,
-        noreply_sender="no-reply@jdh.com.co",
+        noreply_sender=noreply,
     )
 
-    assert await sender.dispatch() == 1
+    assert await outbox_sender.dispatch() == 1
 
     (sent,) = mail.sent
-    assert sent["from"] == "no-reply@jdh.com.co" and sent["to"] == "cliente@x.co"
+    assert sent["from"] == sender and sent["to"] == "cliente@x.co"
     assert sent["html"] is True and AUTOMATIC_NOTICE.split(":")[0] in sent["text"]
     assert [f.name for f in sent["files"]] == [f"de-{SUPPLIER}.pdf", "jdh-logo.png"]
     assert (
         render_html(BrandedEmail.from_payload(w.outbox.items[0].payload["email"])) == sent["text"]
     )
-
-
-@pytest.mark.asyncio
-async def test_a_forward_without_no_reply_mailbox_is_not_sent_from_the_pqrsf_mailbox() -> None:
-    w = World()
-    case, supplier, _ = await w.case_with_answers()
-    await w.service.forward(case.id, supplier.id, None, w.s.admin)
-    mail = _Mail()
-    sender = NotificationService(
-        repository=w.outbox,
-        cases=OpenCases(w.s.cases),
-        people=w.s.directory,
-        team=FakeTeam([]),
-        mail=mail,
-        managers=w.s.managers,
-        holidays=FakeHolidays(),
-        mailbox="pqrsf@jdh.com.co",
-        area_slug="calidad",
-        emails=w.emails,
-        storage=_Storage(),
-        clock=lambda: NOW,
-    )
-
-    assert await sender.dispatch() == 0
-    assert mail.sent == [] and w.outbox.items[0].status == "pending"

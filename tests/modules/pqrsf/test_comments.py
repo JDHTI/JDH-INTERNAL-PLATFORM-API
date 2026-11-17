@@ -243,14 +243,14 @@ async def test_a_reply_answers_inside_the_clients_own_conversation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_reply_never_changes_the_status_of_the_case() -> None:
+async def test_a_reply_moves_the_case_to_en_curso_but_never_closes_it() -> None:
     env = Env()
     case = await env.case()
-    before = env.s.cases.cases[case.id].status
 
     await env.service.comment(case.id, "Parcial", env.s.admin, reply_to_client=True)
 
-    assert env.s.cases.cases[case.id].status == before and not env.s.cases.cases[case.id].closed_at
+    stored = env.s.cases.cases[case.id]
+    assert stored.status.code == "en_curso" and not stored.closed_at
 
 
 @pytest.mark.asyncio

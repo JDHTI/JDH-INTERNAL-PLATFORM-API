@@ -194,6 +194,10 @@ class FakeCases:
         case.news_at = None
         return had
 
+    async def set_om_sent(self, case_id, at):
+        case = self.cases[case_id]
+        case.om_sent_at = case.om_sent_at or at
+
     async def list_events(self, case_id):
         return [e for e in self.events if e.case_id == case_id]
 
@@ -1129,3 +1133,113 @@ async def test_a_failing_notice_does_not_lose_the_email() -> None:
 
     assert s.cases.cases[view.case.id].news_at is not None
     assert any(e.event_type == "email_received" for e in s.cases.events)
+
+
+async def _read_case(s: Setup):
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+    await s.service.mark_read(view.case.id, s.responsible)
+    assert s.cases.cases[view.case.id].status.code == "leida"
+    return view.case.id
+
+
+def _moves(s: Setup, case_id):
+    return [
+        e.note
+        for e in s.cases.events
+        if e.case_id == case_id
+        and e.event_type == EventType.STATUS_CHANGED
+        and e.to_status_id == s.en_curso.id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_comment_moves_a_read_case_to_en_curso() -> None:
+    s = Setup()
+    case_id = await _read_case(s)
+
+    await s.service.add_comment(case_id, "Llamé al cliente", s.responsible)
+    await s.service.add_comment(case_id, "Otra nota", s.responsible)
+
+    assert s.cases.cases[case_id].status.code == "en_curso"
+    # Once: the second comment finds it already en curso.
+    assert _moves(s, case_id) == ["Cambio automático al registrar un seguimiento"]
+
+
+@pytest.mark.asyncio
+async def test_a_comment_from_who_only_follows_the_case_does_not_move_it() -> None:
+    s = Setup()
+    case_id = await _read_case(s)
+
+    await s.service.add_comment(case_id, "¿Cómo va?", s.seller)
+
+    assert s.cases.cases[case_id].status.code == "leida"
+
+
+@pytest.mark.asyncio
+async def test_any_work_on_a_read_case_moves_it_to_en_curso() -> None:
+    s = Setup()
+
+    supplier = await _read_case(s)
+    await s.service.record_supplier_message(supplier, "Hola", s.responsible, {"to": ["p@x.co"]})
+    edited = await _read_case(s)
+    await s.service.update_case(
+        edited,
+        CaseChanges(fields=frozenset({"customer_name"}), customer_name="OTRO"),
+        s.responsible,
+    )
+    added = await _read_case(s)
+    await s.service.add_item(added, ItemInput(s.ficha.id), s.responsible)
+
+    for case_id, note in (
+        (supplier, "Cambio automático al escribir al proveedor"),
+        (edited, "Cambio automático al editar el caso"),
+        (added, "Cambio automático al agregar un documento"),
+    ):
+        assert s.cases.cases[case_id].status.code == "en_curso"
+        assert _moves(s, case_id) == [note]
+
+
+@pytest.mark.asyncio
+async def test_what_is_not_work_leaves_a_read_case_alone() -> None:
+    s = Setup()
+    case_id = await _read_case(s)
+
+    await s.service.assign(case_id, s.admin.user_id, None, s.admin)
+    await s.service.record_email(case_id, uuid.uuid4(), "cliente@x.co", "Hola", {})
+    await s.service.mark_read(case_id, s.admin)
+
+    assert s.cases.cases[case_id].status.code == "leida"
+
+
+@pytest.mark.asyncio
+async def test_openings_stay_out_of_the_timeline_and_are_listed_apart() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+    await s.service.assign(view.case.id, s.responsible.user_id, None, s.admin)
+    await s.service.mark_read(view.case.id, s.responsible)
+    await s.service.mark_read(view.case.id, s.seller)
+    await s.service.add_comment(view.case.id, "Nota", s.responsible)
+
+    detail = await s.service.get_case(view.case.id, s.seller)
+    types = [v.event.event_type for v in detail.events]
+    assert "read" not in types and "viewed" not in types
+    assert "comment" in types and "assigned" in types
+
+    openings = await s.service.case_openings(view.case.id, s.seller)
+    assert {p.user_id for p in openings.people} == {s.responsible.user_id, s.seller.user_id}
+    assert all(p.visits == 1 for p in openings.people)
+    kinds = {e.event.event_type for e in openings.entries}
+    assert kinds == {"read", "viewed"}
+    # The responsible's first opening tells the move to «Leída».
+    (read,) = [e for e in openings.entries if e.event.event_type == "read"]
+    assert read.summary.status_to == s.leida.name
+
+
+@pytest.mark.asyncio
+async def test_case_openings_need_access_to_the_case() -> None:
+    s = Setup()
+    view = await s.service.create_case(s.command(), s.seller)
+
+    with pytest.raises(ForbiddenError):
+        await s.service.case_openings(view.case.id, s.stranger)

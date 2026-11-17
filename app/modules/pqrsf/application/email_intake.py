@@ -34,6 +34,7 @@ from app.modules.pqrsf.domain.email import (
     find_case_code,
     fold,
     is_automatic,
+    is_forward_reply,
     match_name,
     parse_request,
     strip_quoted_reply,
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_REQUEST_TYPE = "peticion"
 # Why an email was left alone when the inbox only follows cases that already exist.
 FOLLOW_UP_ONLY = "El correo no continúa un caso abierto y el buzón solo da seguimiento"
+# Why an answer to a supplier's reply sent on to the customer was left alone.
+FORWARD_REPLY = "Responde a una novedad enviada al cliente: esas respuestas no se siguen"
 _EXCERPT = 500
 
 
@@ -249,6 +252,10 @@ class EmailIntakeService:
     async def _route(self, message: InboundMessage, row: EmailMessage) -> None:
         feedback_id = row.detail.get("feedback_id")
         if row.case_id is None and not feedback_id:
+            if is_forward_reply(message.subject):
+                # «Novedad caso …» told the customer its answers are not followed.
+                row.status, row.detail = IGNORED, {**row.detail, "reason": FORWARD_REPLY}
+                return
             reason = is_automatic(message.headers, message.sender_address, self.own_addresses)
             if reason:
                 row.status, row.detail = IGNORED, {**row.detail, "reason": reason}

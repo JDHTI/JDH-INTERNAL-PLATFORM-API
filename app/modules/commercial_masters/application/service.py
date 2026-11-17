@@ -21,6 +21,8 @@ from app.modules.commercial_masters.domain.entities import (
     clean_nit,
 )
 from app.modules.commercial_masters.domain.margins import (
+    EMPLOYEE_MARGIN_FIELD,
+    EMPLOYEE_MARGIN_LABEL,
     LIQUOR_TAX_FIELDS,
     MARGIN_FIELDS,
     MARGIN_LABELS,
@@ -59,9 +61,11 @@ EDITABLE_PRODUCT_FIELDS = frozenset(
         "liquor_tax",
         "liquor_tax_coast",
         "liquor_tax_group",
+        EMPLOYEE_MARGIN_FIELD,
         *MARGIN_FIELDS,
     }
 )
+_MARGIN_LABEL = {**MARGIN_LABELS, EMPLOYEE_MARGIN_FIELD: EMPLOYEE_MARGIN_LABEL}
 _TEXT_PRODUCT_FIELDS = frozenset(
     {
         "description",
@@ -314,10 +318,10 @@ class CommercialMasterService:
             raise InvalidInputError(f"Campos no editables: {', '.join(unknown)}")
         values: dict[str, Any] = {}
         for name, value in changes.items():
-            if name in MARGIN_FIELDS:
+            if name in _MARGIN_LABEL:
                 if value is not None and not Decimal(0) < value < _ONE:
                     raise InvalidInputError(
-                        f"{MARGIN_LABELS[name]} debe estar entre 0 y 1 (0.18 = 18 %); "
+                        f"{_MARGIN_LABEL[name]} debe estar entre 0 y 1 (0.18 = 18 %); "
                         "envía null para dejarlo sin margen"
                     )
             elif name in _TEXT_PRODUCT_FIELDS:
@@ -343,10 +347,12 @@ class CommercialMasterService:
         margins: Mapping[str, Decimal],
         notes: str | None,
         liquor_tax: LiquorTax | None,
+        employee_margin: Decimal | None = None,
     ) -> Product:
         """Set every margin of one product by hand, without a file.
 
-        All five margins are required. The liquor tax is stored only for the products that
+        All five channel margins are required. The employee margin is optional: ``None``
+        keeps the product's. The liquor tax is stored only for the products that
         pay it: a product that already pays it must keep the three values (Nacional, Costa
         and the tax group); one that does not may start paying it.
 
@@ -356,6 +362,8 @@ class CommercialMasterService:
             margins (Mapping[str, Decimal]): One fraction per margin column (0.18 = 18 %).
             notes (str | None): Notes of the margin; ``None`` or blank clears them.
             liquor_tax (LiquorTax | None): The liquor tax, or ``None`` when it does not apply.
+            employee_margin (Decimal | None): Margin of the employee price list, or ``None``
+                to keep it.
 
         Returns:
             Product: The updated product.
@@ -383,6 +391,12 @@ class CommercialMasterService:
                 )
             # Half up, as PostgreSQL rounds a numeric column.
             values[name] = value.quantize(_SIX_PLACES, ROUND_HALF_UP)
+        if employee_margin is not None:
+            if not Decimal(0) < employee_margin < _ONE:
+                raise InvalidInputError(
+                    f"{EMPLOYEE_MARGIN_LABEL} debe estar entre 0 y 1 (0.13 = 13 %)"
+                )
+            values[EMPLOYEE_MARGIN_FIELD] = employee_margin.quantize(_SIX_PLACES, ROUND_HALF_UP)
         values["margin_notes"] = _term(notes)
         product = await self.get_product(sku)
         pays_liquor_tax = any(getattr(product, name) is not None for name in LIQUOR_TAX_FIELDS)

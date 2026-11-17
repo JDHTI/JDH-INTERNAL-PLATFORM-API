@@ -12,6 +12,7 @@ from sqlalchemy import Select, bindparam, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.infrastructure.database import Base, Database
+from app.modules.commercial_masters.domain.employee_prices import EmployeePriceProduct
 from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     CommercialSupplierNit,
@@ -24,7 +25,7 @@ from app.modules.commercial_masters.domain.entities import (
     SupplierProductCode,
     clean_nit,
 )
-from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS
+from app.modules.commercial_masters.domain.margins import EMPLOYEE_MARGIN_FIELD, MARGIN_FIELDS
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CommercialSupplierNitModel,
@@ -39,6 +40,8 @@ from app.modules.masters.infrastructure.models import MasterDefinitionModel
 # Rows of an executemany upsert; SQLAlchemy splits it under asyncpg's parameter cap.
 _UPSERT_CHUNK = 1000
 IMPORT_ACTOR = "importacion"
+# Columns whose change stamps who set the margins and when.
+_STAMPED = frozenset({*MARGIN_FIELDS, EMPLOYEE_MARGIN_FIELD, "margin_notes"})
 _SYNC_TABLES: dict[str, tuple[type[Base], str]] = {
     "commercial_suppliers": (CommercialSupplierModel, "update"),
     "suppliers": (SupplierModel, "update"),
@@ -152,6 +155,7 @@ def _product(model: ProductModel) -> Product:
             mass_food=model.margin_mass_food,
             market=model.margin_market,
             salsamentarias=model.margin_salsamentarias,
+            employee=model.margin_employee,
             notes=model.margin_notes,
             source=model.margin_source,
             updated_by=model.margin_updated_by,
@@ -775,7 +779,7 @@ class SqlAlchemyCommercialMasterRepository:
                 return None
             for name, value in changes.items():
                 setattr(model, name, value)
-            if any(name in MARGIN_FIELDS or name == "margin_notes" for name in changes):
+            if any(name in _STAMPED for name in changes):
                 model.margin_source = "manual"
                 model.margin_updated_by = actor
                 model.margin_updated_at = now
@@ -809,7 +813,7 @@ class SqlAlchemyCommercialMasterRepository:
         if not rows:
             return 0
         columns = [name for name in rows[0] if name != "sku"]
-        stamp = any(name in MARGIN_FIELDS or name == "margin_notes" for name in columns)
+        stamp = any(name in _STAMPED for name in columns)
         values: dict[str, Any] = {name: bindparam(f"v_{name}") for name in columns}
         if stamp:
             source = "importacion" if actor == IMPORT_ACTOR else "manual"
@@ -843,6 +847,38 @@ class SqlAlchemyCommercialMasterRepository:
                 .all()
             )
         return [_product(model) for model in models]
+
+    async def employee_price_products(self) -> list[EmployeePriceProduct]:
+        """Every active product with what the employee price list needs, by SKU."""
+
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        ProductModel.sku,
+                        ProductModel.description,
+                        ProductModel.brand,
+                        ProductModel.inventory_unit,
+                        ProductModel.sales_vat_pct,
+                        ProductModel.margin_employee,
+                        ProductModel.is_active,
+                    )
+                    .where(ProductModel.is_active.is_(True))
+                    .order_by(ProductModel.sku)
+                )
+            ).all()
+        return [
+            EmployeePriceProduct(
+                sku=row.sku,
+                description=row.description,
+                brand=row.brand,
+                inventory_unit=row.inventory_unit,
+                vat_pct=row.sales_vat_pct,
+                margin=row.margin_employee,
+                is_active=row.is_active,
+            )
+            for row in rows
+        ]
 
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

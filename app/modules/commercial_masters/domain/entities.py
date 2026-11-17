@@ -110,6 +110,8 @@ class ProductMargins:
     """Margins of a product by channel, as fractions (0.18 = 18 %).
 
     ``None`` means no margin is defined for that channel (the margin master writes 0).
+    ``employee`` is the margin of the JDH employee price list, not a channel: it does not
+    count for :attr:`defined`.
     """
 
     list: Decimal | None = None
@@ -117,6 +119,7 @@ class ProductMargins:
     mass_food: Decimal | None = None
     market: Decimal | None = None
     salsamentarias: Decimal | None = None
+    employee: Decimal | None = None
     notes: str | None = None
     source: str | None = None
     updated_by: str | None = None

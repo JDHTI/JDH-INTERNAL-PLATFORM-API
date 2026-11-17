@@ -43,6 +43,11 @@ MASS_FOOD_TEAM = "masivo food"
 # Lists that fall back to Food service when the product has no margin of their own.
 _FALLBACK_TO_LIST = ("margin_mass_food", "margin_market")
 
+# Margin of the JDH employee price list. It is not a channel margin: no order or quotation
+# rule reads it, it is not in ``MARGIN_FIELDS`` and it does not make a product "have a margin".
+EMPLOYEE_MARGIN_FIELD = "margin_employee"
+EMPLOYEE_MARGIN_LABEL = "Margen Empleado JDH"
+
 # Liquor consumption tax per unit by regional (``IMPTOLIC``): Nacional and Costa, and the tax
 # group (``0503`` wine, ``0509`` spirits). The margin master keeps them in the ``IMPUESTOS``
 # table of ``Margen Proveedor-Impuestos``; some SKUs pay more on the Coast.
