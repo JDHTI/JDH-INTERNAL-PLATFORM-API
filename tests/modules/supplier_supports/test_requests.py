@@ -11,7 +11,12 @@ from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.pricing import derive
-from app.modules.supplier_supports.domain.requests import request_mode, validate_value
+from app.modules.supplier_supports.domain.requests import (
+    MARGIN_MODE,
+    legacy_mode,
+    request_mode,
+    validate_value,
+)
 from tests.modules.supplier_supports.conftest import FakeManagers, FixedCalendar, person
 
 
@@ -27,18 +32,17 @@ def test_invalid_net_cost(value):
         validate_value("costo_neto", Decimal(value))
 
 
-def test_all_other_methods_use_percentage():
-    assert request_mode("costo_neto") == "costo_neto"
-    for method in (
-        "pct_costo",
-        "pct_precio_lista",
-        "precio_neto",
-        "valor_unidad",
-        "puntos_margen",
-        "pct_ventas",
-        "margen_minimo",
-    ):
-        assert request_mode(method) == "porcentaje"
+def test_every_new_request_asks_for_the_authorized_minimum_margin():
+    for method in ("costo_neto", "pct_costo", "pct_precio_lista", "valor_precio_lista"):
+        assert request_mode(method) == MARGIN_MODE
+    # The earlier modes are kept to decide the requests still pending.
+    assert (legacy_mode("costo_neto"), legacy_mode("pct_costo")) == ("costo_neto", "porcentaje")
+
+
+@pytest.mark.parametrize("value", ["1", "-0.01", "1.5"])
+def test_invalid_minimum_margins(value):
+    with pytest.raises(InvalidInputError):
+        validate_value(MARGIN_MODE, Decimal(value))
 
 
 def test_the_old_jdh_net_cost_is_history_and_no_longer_moves_the_figures():

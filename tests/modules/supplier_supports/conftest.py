@@ -142,6 +142,10 @@ class FakeSupportRepository:
         self.traces: dict[UUID, Trace] = {}
         self.loads: list[LoadPlan] = []
 
+    async def pricing_context(self, product_sku, customer_nit):
+        margins = {"margin_list": Decimal("0.20"), "margin_wholesale": Decimal("0.12")}
+        return margins, Decimal("12"), "margin_list" if customer_nit else None, None
+
     async def overlapping(self, data: SupportData, exclude=()) -> list[Support]:
         return [
             item

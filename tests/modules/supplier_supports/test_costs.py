@@ -25,8 +25,10 @@ class FakeRepository:
         self._targets = targets
         self.saved = []
 
-    async def targets(self):
-        return self._targets
+    async def targets(self, support_ids=None):
+        if support_ids is None:
+            return self._targets
+        return [target for target in self._targets if target.support_id in set(support_ids)]
 
     async def save(self, costs, now):
         self.saved = list(costs)

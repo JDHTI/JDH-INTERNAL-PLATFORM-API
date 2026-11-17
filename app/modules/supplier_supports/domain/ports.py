@@ -73,6 +73,12 @@ class SupportRepository(Protocol):
         """Live supports of the same class and scope whose validity crosses ``data``'s."""
         ...
 
+    async def pricing_context(
+        self, product_sku: str | None, customer_nit: str | None
+    ) -> tuple[dict[str, Any], Any, str | None, str | None]:
+        """Product margins, pack factor, customer margin list and group (form preview)."""
+        ...
+
     async def supersede(
         self, items: Sequence[Supersede], actor: str, now: datetime
     ) -> list[Support]:

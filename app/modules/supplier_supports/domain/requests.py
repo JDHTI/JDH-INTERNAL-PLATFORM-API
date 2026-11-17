@@ -8,14 +8,30 @@ from uuid import UUID
 from app.core.errors import ConflictError, InvalidInputError
 from app.modules.supplier_supports.domain.validity import validity_on
 
+# Rules v2: JDH supports a support with an authorized minimum margin (Excepción margen
+# mínimo autorizado JDH, ``supported_margin_pct``). The JDH % and the JDH net cost are the
+# earlier modes: their pending requests can still be decided, no new one is created.
+MARGIN_MODE = "margen_minimo"
+LEGACY_MODES = ("porcentaje", "costo_neto")
+
 
 def request_mode(calc_method: str) -> str:
+    """Every new request asks for the authorized minimum margin, whatever the support type."""
+
+    return MARGIN_MODE
+
+
+def legacy_mode(calc_method: str) -> str:
+    """The mode a request had before rules v2 (to decide one still pending)."""
+
     return "costo_neto" if calc_method == "costo_neto" else "porcentaje"
 
 
 def validate_value(mode: str, value: Decimal) -> None:
     if not value.is_finite() or value.as_tuple().exponent < -6:
         raise InvalidInputError("El valor debe ser finito y tener máximo seis decimales")
+    if mode == MARGIN_MODE and not Decimal(0) <= value < Decimal(1):
+        raise InvalidInputError("El margen mínimo debe estar entre 0 y 1 (0.12 = 12 %)")
     if mode == "porcentaje" and not Decimal(-1) <= value <= Decimal(1):
         raise InvalidInputError("El porcentaje JDH debe estar entre -1 y 1 (0.05 = 5 %)")
     if mode == "costo_neto" and not Decimal(0) <= value < Decimal("1000000000000"):

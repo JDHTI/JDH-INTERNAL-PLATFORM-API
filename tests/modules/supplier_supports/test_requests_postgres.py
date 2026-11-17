@@ -74,7 +74,7 @@ async def storage():
         await database.dispose()
 
 
-async def propose(requests, support, value="70", actor=None):
+async def propose(requests, support, value="0.12", actor=None):
     actor = actor or person("sales")
     return await requests.create(
         support.id,
@@ -110,16 +110,17 @@ async def test_batch_same_client_across_branches_and_independent_proposals(stora
     )
     actor = person("sales")
     result = await requests.create_many(
-        [(support.id, 2, D(70), "Costo pactado"), (other.id, 1, D("0.05"), "Porcentaje pedido")],
+        [(support.id, 2, D("0.12"), "Margen pactado"), (other.id, 1, D("0.10"), "Margen pedido")],
         actor.user_id,
         actor.email,
         FixedCalendar().today(),
     )
     assert len(result) == 2
-    assert [item["mode"] for item in result] == ["costo_neto", "porcentaje"]
+    # Rules v2: every request asks for the authorized minimum margin.
+    assert [item["mode"] for item in result] == ["margen_minimo", "margen_minimo"]
     assert all(item["status"] == "pendiente" for item in result)
-    assert (await master.get(support.id)).data.jdh_net_cost is None
-    assert (await master.get(other.id)).data.jdh_pct is None
+    assert (await master.get(support.id)).data.supported_margin_pct is None
+    assert (await master.get(other.id)).data.supported_margin_pct is None
 
 
 @pytest.mark.parametrize(
@@ -137,11 +138,11 @@ async def test_batch_validates_every_row_before_saving(storage, failure):
     other = await master.create(uuid4(), data, "bi", datetime.now(UTC))
     actor = person("sales")
     rows = [
-        (support.id, 1, D(70), "Primera solicitud"),
+        (support.id, 1, D("0.12"), "Primera solicitud"),
         (
             other.id,
             99 if failure == "stale" else 1,
-            D(-1) if failure == "value" else D(65),
+            D(1) if failure == "value" else D("0.10"),
             "Segunda solicitud",
         ),
     ]
@@ -186,16 +187,16 @@ async def test_customer_search_omitted_surname_accents_nit_format_and_prefix(sto
 async def test_approval_cancellation_and_immutable_history(storage):
     database, master, requests, support = storage
     pending = await propose(requests, support)
-    assert (await master.get(support.id)).data.jdh_net_cost is None
+    assert (await master.get(support.id)).data.supported_margin_pct is None
     approved = await requests.decide(pending["id"], 1, 1, "bi", True, None, FixedCalendar().today())
     assert approved["status"] == "aprobada" and approved["decided_by"] == "bi"
     current = await master.get(support.id)
-    assert current.data.jdh_net_cost == 70 and current.data.supplier_value == 80
+    assert current.data.supported_margin_pct == D("0.12") and current.data.supplier_value == 80
     with pytest.raises(ConflictError):
         await requests.decide(pending["id"], 2, 2, "bi2", True, None, FixedCalendar().today())
     await requests.cancel(support.id, 2, "bi2", "Cancelar JDH")
     cancelled = await master.get(support.id)
-    assert cancelled.version == 3 and cancelled.data.jdh_net_cost is None
+    assert cancelled.version == 3 and cancelled.data.supported_margin_pct is None
     assert cancelled.data.supplier_value == 80 and cancelled.data.status == "activo"
     events = await requests.history(support.id)
     assert {e["event_type"] for e in events} >= {"creacion", "solicitada", "aprobada", "cancelada"}
@@ -210,14 +211,40 @@ async def test_approval_cancellation_and_immutable_history(storage):
         async with database.session_factory() as session:
             with pytest.raises(DBAPIError):
                 await session.execute(text(sql), {"id": support.id})
-    assert (await requests.get(pending["id"], None))["value"] == 70
-    new = await propose(requests, cancelled, "60")
+    assert (await requests.get(pending["id"], None))["value"] == D("0.12")
+    new = await propose(requests, cancelled, "0.10")
     assert new["status"] == "pendiente"
+
+
+async def test_a_request_pending_from_before_rules_v2_can_still_be_decided(storage):
+    database, master, requests, support = storage
+    pending = await propose(requests, support)
+    # A JDH net-cost request recorded before the rules changed (inserted as it was).
+    legacy = SupportRequestModel(
+        id=uuid4(),
+        support_id=support.id,
+        mode="costo_neto",
+        value=D(70),
+        reason="Antes de v2",
+        requested_by_id=uuid4(),
+        requested_by="ventas@jdh.com.co",
+        status="pendiente",
+        version=1,
+        support_version=1,
+        snapshot={},
+    )
+    async with database.session_factory() as session, session.begin():
+        session.add(legacy)
+
+    await requests.decide(legacy.id, 1, 1, "bi", True, None, FixedCalendar().today())
+
+    assert (await master.get(support.id)).data.jdh_net_cost == 70
+    assert (await requests.get(pending["id"], None))["status"] == "pendiente"
 
 
 async def test_concurrent_approvals_and_explicit_rereview(storage):
     _, master, requests, support = storage
-    first, second = await propose(requests, support), await propose(requests, support, "65")
+    first, second = await propose(requests, support), await propose(requests, support, "0.10")
     results = await asyncio.gather(
         requests.decide(first["id"], 1, 1, "bi1", True, None, FixedCalendar().today()),
         requests.decide(second["id"], 1, 1, "bi2", True, None, FixedCalendar().today()),
@@ -251,12 +278,12 @@ async def test_failed_audit_rolls_back_decision_and_master(storage, monkeypatch)
     with pytest.raises(DBAPIError):
         await requests.decide(pending["id"], 1, 1, "bi", True, None, FixedCalendar().today())
     current = await master.get(support.id)
-    assert current.version == 1 and current.data.jdh_net_cost is None
+    assert current.version == 1 and current.data.supported_margin_pct is None
     assert (await requests.get(pending["id"], None))["status"] == "pendiente"
     assert len(await requests.history(support.id)) == len(before)
 
 
-async def test_percentage_is_shared_without_changing_supplier(storage):
+async def test_the_minimum_margin_is_authorized_without_changing_the_supplier(storage):
     _, master, requests, support = storage
     support = await master.update(
         support.id,
@@ -274,16 +301,21 @@ async def test_percentage_is_shared_without_changing_supplier(storage):
     )
     assert sum(isinstance(result, ConflictError) for result in results) == 1
     current = await master.get(support.id)
-    assert current.data.jdh_pct == D("0.05") and current.data.supplier_value == D("0.1")
+    assert current.data.supported_margin_pct == D("0.05")
+    assert current.data.supplier_value == D("0.1")
     assert (await requests.get(second["id"], None))["status"] == "pendiente"
-    assert (await requests.get(first["id"], None))["snapshot"]["jdh_pct"] is None
+    assert (await requests.get(first["id"], None))["snapshot"]["supported_margin_pct"] is None
 
 
 async def test_stale_ineligible_and_rejection_do_not_change_master(storage):
     _, master, requests, support = storage
     pending = await propose(requests, support)
     changed = await master.update(
-        support.id, replace(support.data, jdh_net_cost=D(75)), 1, "admin", datetime.now(UTC)
+        support.id,
+        replace(support.data, supported_margin_pct=D("0.15")),
+        1,
+        "admin",
+        datetime.now(UTC),
     )
     with pytest.raises(ConflictError):
         await requests.decide(pending["id"], 1, 1, "bi", True, None, FixedCalendar().today())
@@ -291,7 +323,7 @@ async def test_stale_ineligible_and_rejection_do_not_change_master(storage):
         pending["id"], 1, None, "bi", False, "No autorizado", FixedCalendar().today()
     )
     assert rejected["status"] == "rechazada"
-    assert (await master.get(support.id)).data.jdh_net_cost == 75
+    assert (await master.get(support.id)).data.supported_margin_pct == D("0.15")
     assert any(
         e["event_type"] == "actualizacion_maestro" for e in await requests.history(support.id)
     )
@@ -324,20 +356,21 @@ async def test_http_permissions_mine_and_real_workflow(storage):
             root = "/api/v1"
             url = f"{root}/supplier-supports/{support.id}"
             response = await client.post(
-                url + "/requests", json={"version": 1, "value": "70", "reason": "Solicitud"}
+                url + "/requests", json={"version": 1, "value": "0.12", "reason": "Solicitud"}
             )
             assert response.status_code == 201, response.text
+            assert response.json()["mode"] == "margen_minimo"
             request_id = response.json()["id"]
             batch_item = {
                 "support_id": str(support.id),
                 "version": 1,
-                "value": "65",
+                "value": "0.10",
                 "reason": "Solicitud por selección",
             }
             batch_url = root + "/supplier-supports/requests/batch"
             batch = await client.post(batch_url, json={"items": [batch_item]})
             assert batch.status_code == 201, batch.text
-            assert len(batch.json()) == 1 and batch.json()[0]["value"] == "65"
+            assert len(batch.json()) == 1 and batch.json()[0]["value"] == "0.10"
             duplicate = await client.post(batch_url, json={"items": [batch_item, batch_item]})
             assert duplicate.status_code == 422
             request_url = f"{root}/supplier-support-requests/{request_id}"
@@ -365,16 +398,18 @@ async def test_http_permissions_mine_and_real_workflow(storage):
                 request_url + "/approve", json={"version": 1, "support_version": 1}
             )
             assert response.status_code == 200, response.text
-            assert response.json()["value"] == "70.000000"
+            assert response.json()["value"] == "0.120000"
             detail = (await client.get(url)).json()
-            assert detail["jdh_net_cost"] == "70.000000"
-            assert detail["derived"]["net_cost"] == "70.000000"
+            assert detail["supported_margin_pct"] == "0.120000"
+            # Precio Apoyado Mínimo = costo apoyado 8 per unit (80 per box of 10) / 0.88.
+            assert float(detail["derived"]["supported_price"]) == pytest.approx(8 / 0.88)
             history = await client.get(url + "/jdh-history")
             assert history.status_code == 200 and len(history.json()) >= 3
             response = await client.request(
                 "DELETE", url + "/jdh-support", json={"version": 2, "reason": "Cancelar"}
             )
-            assert response.status_code == 200 and response.json()["jdh_net_cost"] is None
+            assert response.status_code == 200
+            assert response.json()["supported_margin_pct"] is None
     async with database.session_factory() as session:
         model = await session.scalar(
             select(SupportRequestModel).where(SupportRequestModel.id == request_id)

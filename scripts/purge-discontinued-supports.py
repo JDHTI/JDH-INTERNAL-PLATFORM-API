@@ -12,9 +12,10 @@ What it does, all in one transaction:
 3. Deletes the supports (tiers, costs and document links go with them).
 
 The JDH history is immutable (trigger ``protect_support_jdh_history``). A support with a JDH
-request, or a JDH event written by a person, is never deleted: the script stops and lists
-them. The baseline events the system wrote by itself (``migracion`` of migration 0036 and the
-importer's ``actualizacion_maestro``) are not JDH decisions; with
+request or decision (``solicitada``, ``aprobada``, ``rechazada``, ``cancelada``) is never
+deleted: the script stops and lists them. The events the audit trigger writes by itself on
+every insert and edit (``creacion``, ``actualizacion_maestro``, and migration 0036's
+``migracion`` baseline) record the master, not a JDH decision; with
 ``--include-baseline-history`` they are deleted with their support (the backup keeps them),
 the trigger switched off only inside that transaction. A dry run unless ``--apply``.
 
@@ -55,11 +56,10 @@ from app.modules.supplier_supports.infrastructure.publication import (  # noqa: 
 
 S = SupplierSupportModel
 ACTOR = "purga-clases-descontinuadas"
-# JDH events the system wrote by itself: a baseline, not a decision of a person.
-_BASELINE = (
-    "(e.event_type = 'migracion' AND e.actor LIKE 'migracion:%') OR "
-    "(e.event_type = 'actualizacion_maestro' AND e.actor = 'importacion')"
-)
+# JDH events the audit trigger writes on every insert or edit of a support (and the
+# migration's baseline): a record of the master, not a JDH decision. The decisions are the
+# requests and their events (solicitada, aprobada, rechazada, cancelada).
+_BASELINE = "e.event_type IN ('migracion', 'creacion', 'actualizacion_maestro')"
 
 
 async def main(apply: bool, backup: Path, baseline: bool) -> int:

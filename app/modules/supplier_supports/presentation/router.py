@@ -9,7 +9,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
@@ -17,6 +17,7 @@ from app.core.errors import InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.application.internal_requests import InternalRequestService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import (
@@ -38,6 +39,7 @@ _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_se
 _principal = Depends(get_current_principal)
 _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 _internal = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
+_costs = Depends(Provide[ApplicationContainer.v1_container.supplier_support_cost_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -183,6 +185,8 @@ class RetireFilter(BaseModel):
     state: State | None = None
     needs_review: bool | None = None
     has_issues: bool | None = None
+    has_conflicts: bool | None = None
+    has_attachments: bool | None = None
 
 
 class SupportRetire(BaseModel):
@@ -410,6 +414,30 @@ def _tiers(items: list[TierBody]) -> tuple[Tier, ...]:
     )
 
 
+_HIDDEN_COST_FIELDS = {"reference_cost": None, "jdh_net_cost": None}
+_HIDDEN_DERIVED = ("cost", "net_cost_per")
+
+
+def _commercial(response: SupportResponse) -> SupportResponse:
+    """What Comercial sees: list price and supported prices, never the cost (BI only)."""
+
+    empty = MoneyPairResponse(box=None, unit=None)
+    derived = response.derived.model_copy(
+        update={
+            **dict.fromkeys(_HIDDEN_DERIVED, empty),
+            "net_cost": None,
+            "margin_order": None,
+            "cost_basis": None,
+        }
+    )
+    return response.model_copy(update={**_HIDDEN_COST_FIELDS, "dwh_cost": None, "derived": derived})
+
+
+def _shown(view: SupportView, sees_cost: bool) -> SupportResponse:
+    response = _response(view)
+    return response if sees_cost else _commercial(response)
+
+
 def _response(view: SupportView) -> SupportResponse:
     support, data = view.support, view.support.data
     values: dict[str, Any] = {
@@ -476,14 +504,16 @@ def _issue(issue: Issue) -> IssueResponse:
 @inject
 async def search_supports(
     body: SearchRequest,
-    _: Principal = _principal,
+    principal: Principal = _principal,
     service: SupplierSupportService = _service,
 ) -> SupportPageResponse:
-    """Filter supports with a dynamic tree of conditions, free text, validity and sorting."""
+    """Filter supports with a dynamic tree of conditions, free text, validity and sorting.
+    The cost is only for BI (managers of ``apoyos``); Comercial gets it empty."""
 
     page = await service.search(**body.model_dump())
+    sees_cost = await service.can_manage(principal)
     return SupportPageResponse(
-        items=[_response(view) for view in page.items],
+        items=[_shown(view, sees_cost) for view in page.items],
         total=page.total,
         page=page.page,
         size=page.size,
@@ -565,8 +595,10 @@ async def business_groups(
 @inject
 async def create_by_group(
     body: SupportCreate,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> list[SupportResponse]:
     """``customer_group`` names the group and ``customer_nit`` stays empty: one support per
     active customer of the group, each with the group's name. All or none. Managers only."""
@@ -578,6 +610,7 @@ async def create_by_group(
         on_overlap=body.on_overlap,
         overlap_reason=body.overlap_reason,
     )
+    background.add_task(costs.refresh, [view.support.id for view in views])
     return [_response(view) for view in views]
 
 
@@ -591,8 +624,10 @@ async def create_by_group(
 @inject
 async def create_support(
     body: SupportCreate,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> SupportResponse:
     """Create a support bound to a real supplier, product and client. Managers only."""
 
@@ -602,6 +637,30 @@ async def create_support(
         supplier_code=body.supplier_code,
         on_overlap=body.on_overlap,
         overlap_reason=body.overlap_reason,
+    )
+    background.add_task(costs.refresh, [view.support.id])
+    return _response(view)
+
+
+@router.post(
+    "/preview",
+    dependencies=[_READ_GATE],
+    response_model=SupportResponse,
+    summary="Figures of a support before saving it",
+)
+@inject
+async def preview_support(
+    body: SupportCreate,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
+) -> SupportResponse:
+    """The creation form's figures: DWH cost (the quoter's rule), list price at the
+    customer's optimal margin, Precio Apoyado Sugerido and Precio Apoyado Mínimo. The same
+    checks as creating (422 names the field); nothing is saved. Managers only."""
+
+    view = await service.preview(
+        principal, _data(body), supplier_code=body.supplier_code, cost=costs.cost_of
     )
     return _response(view)
 
@@ -616,8 +675,10 @@ async def create_support(
 @inject
 async def create_supports(
     body: SupportBatch,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> list[SupportResponse]:
     """Create up to 500 supports atomically-validated (all checked before any is saved)."""
 
@@ -627,6 +688,7 @@ async def create_supports(
         on_overlap=body.on_overlap,
         overlap_reason=body.overlap_reason,
     )
+    background.add_task(costs.refresh, [view.support.id for view in views])
     return [_response(view) for view in views]
 
 
@@ -672,12 +734,13 @@ async def retire_supports(
 @inject
 async def get_support(
     support_id: UUID,
-    _: Principal = _principal,
+    principal: Principal = _principal,
     service: SupplierSupportService = _service,
 ) -> SupportResponse:
-    """Return one support with names, validity, conflicts and derived values."""
+    """Return one support with names, validity, conflicts and derived values (the cost only
+    for BI)."""
 
-    return _response(await service.get(support_id))
+    return _shown(await service.get(support_id), await service.can_manage(principal))
 
 
 @router.patch(
@@ -690,8 +753,10 @@ async def get_support(
 async def update_support(
     support_id: UUID,
     body: SupportPatch,
+    background: BackgroundTasks,
     principal: Principal = _principal,
     service: SupplierSupportService = _service,
+    costs: SupportCostService = _costs,
 ) -> SupportResponse:
     """Change only the fields sent. A stale ``version`` is a 409. Managers only."""
 
@@ -708,6 +773,8 @@ async def update_support(
         on_overlap=body.on_overlap,
         overlap_reason=body.overlap_reason,
     )
+    if sent & {"product_sku", "supplier_sku", "customer_nit"}:
+        background.add_task(costs.refresh, [view.support.id])
     return _response(view)
 
 

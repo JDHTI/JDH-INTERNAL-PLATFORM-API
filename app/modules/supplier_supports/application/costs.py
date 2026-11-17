@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from app.core.errors import DependencyUnavailableError
 from app.modules.quotations.domain import pricing, vocabulary
 from app.modules.quotations.domain.entities import CostInfo
 from app.modules.quotations.domain.pricing import StockPlan
@@ -50,7 +51,7 @@ class BranchPlan:
 class CostRepository(Protocol):
     """Where the costs are kept."""
 
-    async def targets(self) -> list[CostTarget]: ...
+    async def targets(self, support_ids: Sequence[UUID] | None = None) -> list[CostTarget]: ...
 
     async def save(self, costs: Sequence[SupportCost], now: datetime) -> int: ...
 
@@ -115,6 +116,46 @@ class SupportCostService:
         """
 
         targets = await self.repository.targets()
+        costs, without, plans, clients = await self.compute(targets)
+        saved = await self.repository.save(costs, self._clock())
+        return {
+            "supports": len(targets),
+            "with_cost": saved - without,
+            "without_cost": without,
+            "plans": plans,
+            "clients": clients,
+        }
+
+    async def refresh(self, support_ids: Sequence[UUID]) -> int:
+        """Compute now the cost of these supports (a new or edited support does not wait for
+        the daily job). Best effort: the DWH being down leaves them for the job."""
+
+        if not support_ids:
+            return 0
+        targets = await self.repository.targets(support_ids)
+        if not targets:
+            return 0
+        try:
+            costs, *_ = await self.compute(targets)
+        except DependencyUnavailableError:
+            return 0
+        return await self.repository.save(costs, self._clock())
+
+    async def cost_of(self, product_sku: str, customer_nit: str | None) -> SupportCost:
+        """The cost a support of this SKU and customer would get (form preview).
+
+        Raises:
+            DependencyUnavailableError: If the DWH cannot be read.
+        """
+
+        costs, *_ = await self.compute([CostTarget(uuid4(), product_sku, customer_nit)])
+        return costs[0]
+
+    async def compute(
+        self, targets: Sequence[CostTarget]
+    ) -> tuple[list[SupportCost], int, list[str], int]:
+        """The cost of each target; also how many had none, the plans and the clients read."""
+
         nits = sorted({target.customer_nit for target in targets if target.customer_nit})
         branches = await self.warehouse.branches(nits) if nits else {}
         plans_of: dict[UUID, list[StockPlan]] = {}
@@ -153,14 +194,7 @@ class SupportCostService:
                 continue
             cost, plan, info, source = best
             costs.append(_cost(target, plan, info, cost, source))
-        saved = await self.repository.save(costs, self._clock())
-        return {
-            "supports": len(targets),
-            "with_cost": saved - without,
-            "without_cost": without,
-            "plans": sorted(skus_by_plan),
-            "clients": len(nits),
-        }
+        return costs, without, sorted(skus_by_plan), len(nits)
 
 
 def _cost(

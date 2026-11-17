@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.core.errors import (
+    ConflictError,
+    DependencyUnavailableError,
+    ForbiddenError,
+    InvalidInputError,
+    NotFoundError,
+)
 from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain import filters, overlap, vocabulary
@@ -21,6 +27,7 @@ from app.modules.supplier_supports.domain.entities import (
     LoadPlan,
     LoadResult,
     Support,
+    SupportCost,
     SupportData,
     SupportPage,
     SupportRow,
@@ -987,6 +994,53 @@ class SupplierSupportService:
         if not text or len(text) < 2:
             return []
         return await self.masters.business_groups(text, 20)
+
+    async def preview(
+        self,
+        principal: Principal,
+        data: SupportData,
+        *,
+        supplier_code: str | None,
+        cost: Callable[[str, str | None], Awaitable[SupportCost]] | None = None,
+    ) -> SupportView:
+        """The figures of a support before saving it (the creation form).
+
+        The same checks as a creation, the DWH cost with the quoter's rule (``cost``; without
+        it, or with the DWH down, the reference cost), the optimal margin of the customer's
+        list and the product master's pack factor. Nothing is written.
+        """
+
+        await self._require_manager(principal)
+        prepared = await self._prepare(data, supplier_code=supplier_code, strict=True)
+        margins, pack, field, group = await self.repository.pricing_context(
+            prepared.product_sku, prepared.customer_nit
+        )
+        dwh = None
+        if cost is not None and prepared.product_sku:
+            try:
+                dwh = await cost(prepared.product_sku, prepared.customer_nit)
+            except DependencyUnavailableError:
+                dwh = None
+        now = datetime.now(UTC)
+        row = SupportRow(
+            support=Support(
+                id=uuid4(),
+                data=prepared,
+                void_reason=None,
+                voided_at=None,
+                created_by=principal.email,
+                updated_by=principal.email,
+                version=0,
+                created_at=now,
+                updated_at=now,
+            ),
+            dwh_cost=dwh,
+            product_margins=margins,
+            product_pack_factor=pack,
+            customer_margin_field=field,
+            customer_business_group=group,
+        )
+        return self._view(row, self.calendar.today())
 
     async def group_members(self, groups: Sequence[str]) -> dict[str, list[tuple]]:
         """Active customers ``(nit, name)`` of each business group (by its name)."""

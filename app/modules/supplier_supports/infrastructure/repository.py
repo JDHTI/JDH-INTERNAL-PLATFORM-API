@@ -459,6 +459,31 @@ class SqlAlchemySupportRepository:
             grouped.setdefault(tier.support_id, []).append(tier)
         return grouped
 
+    async def pricing_context(
+        self, product_sku: str | None, customer_nit: str | None
+    ) -> tuple[dict[str, Any], Any, str | None, str | None]:
+        """``(product margins, pack factor, customer margin list, customer group)`` for a
+        support not saved yet (the form preview)."""
+
+        margins: dict[str, Any] = {}
+        pack = None
+        async with self.database.session_factory() as session:
+            if product_sku:
+                row = (
+                    await session.execute(
+                        select(
+                            ProductModel.pack_factor,
+                            *(getattr(ProductModel, name) for name in MARGIN_FIELDS),
+                        ).where(ProductModel.sku == product_sku)
+                    )
+                ).first()
+                if row is not None:
+                    pack, *values = row
+                    margins = dict(zip(MARGIN_FIELDS, values, strict=True))
+            profiles = await customer_profiles(session, [customer_nit] if customer_nit else [])
+        field, group = profiles.get(customer_nit or "", (None, None))
+        return margins, pack, field, group
+
     async def overlapping(self, data: SupportData, exclude: Sequence[UUID] = ()) -> list[Support]:
         """Live supports that cross ``data`` (same class and scope, validities that overlap)."""
 
