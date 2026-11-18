@@ -57,6 +57,11 @@ def normalize_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
         elif spec.type == fields.LIST:
             if scope := cells.split_list(value):
                 clean[name] = scope
+        elif spec.type == fields.FLAG:
+            try:
+                clean[name] = cells.flag(value)
+            except ValueError as exc:
+                raise InvalidInputError(f"{name}: {exc}") from exc
         else:
             text = n.clean_text(value)
             if text and spec.max_length and len(text) > spec.max_length:

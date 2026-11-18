@@ -131,6 +131,9 @@ class LoadPlan:
     # v2, ``on_overlap``) and those the supplier did not validate (``Validación = No``).
     # Items of ``overlap.Supersede``.
     retirements: tuple[Any, ...] = ()
+    # The DWH cost of the supports of the file, saved in the same transaction (items of
+    # ``SupportCost``).
+    costs: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)

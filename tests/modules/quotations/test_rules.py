@@ -11,6 +11,7 @@ from app.modules.quotations.domain.entities import (
     QuotationPolicy,
     ValueTaxKey,
 )
+from app.modules.quotations.presentation.router import _support
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
 
@@ -319,3 +320,36 @@ def test_stock_plan_and_family_follow_the_skill() -> None:
     assert pricing.family("10X") == pricing.SALSAMENTARIAS
     assert pricing.family("31A") == pricing.GENERAL
     assert pricing.regional("004") == "costa" and pricing.regional("009") == "nacional"
+
+
+def test_a_guaranteed_margin_is_priced_at_the_line_price() -> None:
+    # Cost 3.000, last sale 4.000 (25 %); the supplier guarantees 30 % at any price.
+    line = build([agreement(calc_method="precio_neto", target_margin_pct=Decimal("0.30"))])
+
+    assert line.support is not None and line.support.guaranteed_margin_pct == Decimal("0.3")
+    # At 4.000 it pays 3.000 - 4.000 x 70 % = 200: the margin with it is the guaranteed 30 %.
+    assert line.current_margin_with_support_pct == Decimal("0.3")
+    # Its margin is the product's (20 %), not the guarantee; no minimum price; the optimal
+    # one is the list price 3.000 / 0.8.
+    assert line.target_margin_pct == Decimal("0.2")
+    assert line.min_price is None and line.optimal_price == Decimal("3750")
+    cheaper = rules.reprice(line, Decimal("3500"))  # pays 550: still 30 %
+    assert cheaper.support_amount == Decimal("550.00")
+    assert cheaper.new_margin_with_support_pct == Decimal("0.3") and cheaper.compliance == "cumple"
+    dearer = rules.reprice(line, Decimal("5000"))  # already 40 %: pays nothing
+    assert dearer.support_amount == Decimal("0") and dearer.new_margin_with_support_pct == Decimal(
+        "0.4"
+    )
+
+
+def test_the_response_of_a_guaranteed_margin_carries_it_and_its_money_at_the_line_price() -> None:
+    line = rules.reprice(
+        build([agreement(calc_method="precio_neto", target_margin_pct=Decimal("0.30"))]),
+        Decimal("3500"),
+    )
+
+    shown = _support(line.support, line)
+
+    assert shown.guaranteed_margin_pct == Decimal("0.3")
+    # At 3.500 it pays 3.000 - 3.500 x 70 % = 550; at the list price 3.750 it would pay 375.
+    assert shown.amount == Decimal("550.00") and shown.list_amount == Decimal("375.00")

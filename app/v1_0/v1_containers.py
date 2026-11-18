@@ -646,15 +646,6 @@ class V1Container(containers.DeclarativeContainer):
         zone=dwh_publish_zone,
         defer_over=config.dwh_publish.defer_over_rows,
     )
-    supplier_support_bulk_service = providers.Factory(
-        SupportBulkService,
-        supports=supplier_support_service,
-        profiles=supplier_support_profile_service,
-        reader=supplier_support_file_reader,
-        max_upload_bytes=config.supplier_supports.max_upload_bytes,
-        max_rows=config.supplier_supports.max_bulk_rows,
-        quiet_hours=supplier_support_quiet_hours,
-    )
     # --- Publication to the DWH (plataforma schema): outbox, writer role, worker ---
     dwh_writer = providers.Singleton(
         WarehouseWriterConnection,
@@ -953,6 +944,17 @@ class V1Container(containers.DeclarativeContainer):
         SupportCostService,
         repository=providers.Factory(SqlAlchemyCostRepository, database=database),
         warehouse=supplier_support_cost_source,
+    )
+    # The bulk load assigns the DWH cost of its supports as part of the load (not the job).
+    supplier_support_bulk_service = providers.Factory(
+        SupportBulkService,
+        supports=supplier_support_service,
+        profiles=supplier_support_profile_service,
+        reader=supplier_support_file_reader,
+        max_upload_bytes=config.supplier_supports.max_upload_bytes,
+        max_rows=config.supplier_supports.max_bulk_rows,
+        quiet_hours=supplier_support_quiet_hours,
+        costs=supplier_support_cost_service,
     )
     # Programmed supports replace the previous one (daily job and the alerts).
     supplier_support_rollover_service = providers.Factory(

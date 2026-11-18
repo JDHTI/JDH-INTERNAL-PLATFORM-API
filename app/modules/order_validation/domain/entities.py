@@ -126,11 +126,15 @@ class AgreementCheck:
     detail: str
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
+    # The support brings $0 on this line (a supported cost above today's cost): it is checked
+    # and listed, but never the reason a line is released.
+    no_effect: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """JSON form stored with the line."""
 
         return {
+            "no_effect": self.no_effect,
             "support_id": str(self.support_id),
             "kind": self.kind,
             "calc_method": self.calc_method,
@@ -160,6 +164,7 @@ class AgreementCheck:
             detail=value.get("detail") or "",
             effective_margin_pct=_number(value.get("effective_margin_pct")),
             required_margin_pct=_number(value.get("required_margin_pct")),
+            no_effect=bool(value.get("no_effect")),
         )
 
 

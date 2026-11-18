@@ -17,11 +17,12 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from app.core.errors import ForbiddenError, InvalidInputError
+from app.core.errors import DependencyUnavailableError, ForbiddenError, InvalidInputError
 from app.modules.identity.domain.principal import Principal
 from app.modules.jobs.application.schedule import next_run_at
 from app.modules.supplier_supports.application import cells
 from app.modules.supplier_supports.application import normalize as n
+from app.modules.supplier_supports.application.costs import CostTarget, SupportCostService
 from app.modules.supplier_supports.application.profiles import (
     SupportProfileService,
     normalize_column_map,
@@ -41,7 +42,12 @@ from app.modules.supplier_supports.domain.bulk import (
     same_support,
     support_key,
 )
-from app.modules.supplier_supports.domain.entities import LoadPlan, Support, SupportData
+from app.modules.supplier_supports.domain.entities import (
+    LoadPlan,
+    Support,
+    SupportCost,
+    SupportData,
+)
 from app.modules.supplier_supports.domain.overlap import OVERLAP_ACTIONS, Supersede, overlaps
 from app.modules.supplier_supports.domain.ports import SupportFileReader
 from app.modules.supplier_supports.domain.profiles import Profile
@@ -160,6 +166,8 @@ def _default_value(name: str, value: Any) -> Any:
             return None
     if kind == fields.LIST:
         return tuple(value)
+    if kind == fields.FLAG:
+        return cells.flag(value)
     return value
 
 
@@ -184,6 +192,11 @@ def _convert(name: str, raw: Any, calc: str | None, values: dict[str, Any]) -> A
             }.get(name, spec.choices)
             raise _BadCell(f"valor no válido: {raw!r} (válidos: {', '.join(shown)})")
         return chosen
+    if spec.type == fields.FLAG:
+        try:
+            return cells.flag(raw)
+        except ValueError as exc:
+            raise _BadCell(str(exc)) from exc
     if spec.type == fields.TEXT:
         text = n.clean_text(raw)
         if text and spec.max_length and len(text) > spec.max_length:
@@ -242,6 +255,7 @@ class SupportBulkService:
         max_rows: int = 2000,
         quiet_hours: QuietHours | None = None,
         clock: Callable[[], datetime] | None = None,
+        costs: SupportCostService | None = None,
     ) -> None:
         """Create the service.
 
@@ -253,6 +267,8 @@ class SupportBulkService:
             max_rows (int): Most rows a file may hold.
             quiet_hours (QuietHours | None): When a big load may reach the DWH.
             clock (Callable[[], datetime] | None): Current instant, for tests.
+            costs (SupportCostService | None): The DWH cost of each support the load writes,
+                saved with the load; ``None`` leaves the cost to the daily job (tests).
         """
 
         self.supports = supports
@@ -262,6 +278,7 @@ class SupportBulkService:
         self.max_rows = max_rows
         self.quiet_hours = quiet_hours
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.costs = costs
 
     async def template_profile(self, supplier_code: str | None) -> Profile | None:
         """The profile whose layout the template should follow, if the supplier has one."""
@@ -302,11 +319,28 @@ class SupportBulkService:
                 support.data.valid_from or today,
             ),
         )
-        return [
-            {spec.name: getattr(support.data, spec.name, None) for spec in fields.FIELD_SPECS}
-            | {"supplier_code": code}
-            for support in chosen
-        ]
+        masters = self.supports.masters
+        products = await masters.products_by_sku(
+            sorted({item.data.product_sku for item in chosen if item.data.product_sku})
+        )
+        customers = await masters.customers(
+            sorted({item.data.customer_nit for item in chosen if item.data.customer_nit})
+        )
+        rows = []
+        for support in chosen:
+            row = {spec.name: getattr(support.data, spec.name, None) for spec in fields.FIELD_SPECS}
+            row["supplier_code"] = code
+            # What comes from the masters is read again, so an old support goes out current.
+            product = products.get(support.data.product_sku or "")
+            if product is not None:
+                row["supplier_sku"] = product.supplier_sku or row["supplier_sku"]
+                row["brand"] = product.brand or row["brand"]
+            customer = customers.get(support.data.customer_nit or "")
+            if customer is not None:
+                row["customer_name"] = customer.name or row["customer_name"]
+                row["customer_group"] = customer.business_group or row["customer_group"]
+            rows.append(row)
+        return rows
 
     async def load(
         self,
@@ -409,7 +443,7 @@ class SupportBulkService:
                     skipped += 1  # a blank «Validación» leaves the row alone
                     continue
             support, row_supplier, problems, given = self._support(
-                number, row_cells, effective_defaults, code, filename
+                number, row_cells, effective_defaults, code, filename, "kind" in positions
             )
             issues.extend(problems)
             if support is not None and not problems:
@@ -535,7 +569,21 @@ class SupportBulkService:
         not_before = (
             self.quiet_hours.not_before(writes, self._clock()) if self.quiet_hours else None
         )
+        costs: list[SupportCost] = []
+        costs_missing = 0
         if apply and not blocked and (writes or unchanged):
+            # The cost of every support the file brings (created, updated or unchanged) is
+            # part of the load: read from the DWH now and saved with the supports. Without
+            # the DWH the load is not saved.
+            costs, costs_missing = await self._costs(
+                [(support_id, item) for support_id, item in creates]
+                + [(support_id, item) for support_id, _, item in updates]
+                + [
+                    (support.id, support.data)
+                    for action, support, _ in valid.values()
+                    if action == UNCHANGED and support is not None
+                ]
+            )
             result = await self.supports.apply_load(
                 principal,
                 LoadPlan(
@@ -554,6 +602,7 @@ class SupportBulkService:
                     missing=len(missing),
                     publish_not_before=not_before,
                     retirements=tuple(retirements.values()),
+                    costs=tuple(costs),
                 ),
             )
             load_id = result.load_id
@@ -620,7 +669,35 @@ class SupportBulkService:
             retired=retired,
             skipped=skipped,
             group_supports=sum(1 for row in accepted.values() if row.from_group),
+            costs_assigned=len(costs) - costs_missing if load_id is not None else 0,
+            costs_missing=costs_missing if load_id is not None else 0,
         )
+
+    async def _costs(
+        self, supports: Sequence[tuple[UUID, SupportData]]
+    ) -> tuple[list[SupportCost], int]:
+        """The DWH cost of each support with a JDH SKU (the quoter's rule, as the daily job),
+        and how many have no cost in the DWH.
+
+        Raises:
+            DependencyUnavailableError: If the DWH cannot be read; nothing is saved.
+        """
+
+        targets = [
+            CostTarget(support_id, data.product_sku, data.customer_nit)
+            for support_id, data in supports
+            if data.product_sku and data.status != "anulado"
+        ]
+        if self.costs is None or not targets:
+            return [], 0
+        try:
+            costs, missing, *_ = await self.costs.compute(targets)
+        except DependencyUnavailableError as exc:
+            raise DependencyUnavailableError(
+                "No se pudo leer el costo de los apoyos en el datawarehouse: la carga no se "
+                "guardó. Intenta de nuevo en unos minutos."
+            ) from exc
+        return costs, missing
 
     async def _expand_groups(
         self, rows: Sequence[_Row], required: bool
@@ -792,11 +869,14 @@ class SupportBulkService:
         defaults: Mapping[str, Any],
         supplier_code: str | None,
         filename: str,
+        kind_column: bool = False,
     ) -> tuple[SupportData | None, str | None, list[RowIssue], frozenset[str]]:
         """The support of one row, its supplier, its problems and the fields it gives.
 
         A cell that reads as "nothing" (``INDEFINIDO`` in the end date) still counts as given:
-        it clears that field when the row updates a stored support.
+        it clears that field when the row updates a stored support. The class is deduced only
+        when the file has no Clase apoyo column (a supplier's own layout); with the column
+        (the template) a blank class is an error, as the template marks it required.
         """
 
         values: dict[str, Any] = {}
@@ -845,8 +925,25 @@ class SupportBulkService:
         ):
             # The short template has one margin column: for a minimum margin it is that margin.
             values["min_margin_pct"] = values["supported_margin_pct"]
-        if not values.get("kind") and "kind" not in row_cells and values.get("calc_method"):
-            values["kind"] = _default_kind(values)
+        if (
+            values.get("calc_method") == "precio_neto"
+            and values.get("target_margin_pct") is None
+            and values.get("supported_margin_pct") is not None
+        ):
+            # ... and for a % Margen Garantizado it is the guaranteed margin (no minimum price).
+            values["target_margin_pct"] = values.pop("supported_margin_pct")
+        if not values.get("kind") and "kind" not in row_cells:
+            if kind_column:
+                problems.append(
+                    RowIssue(
+                        number,
+                        "kind",
+                        "Falta la Clase apoyo: Apoyo táctico, Actividad descuento temporal o "
+                        "Excepción margen JDH",
+                    )
+                )
+            elif values.get("calc_method"):
+                values["kind"] = _default_kind(values)
         given = frozenset(name for name in values if name != "supplier_code")
         if problems:
             return None, row_supplier, problems, given
@@ -868,8 +965,8 @@ class SupportBulkService:
                     RowIssue(
                         row.number,
                         None,
-                        f"Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha "
-                        f"inicio) que la fila {seen[key]}",
+                        f"Fila repetida: misma llave (proveedor, NIT, SKU y fecha inicio) que "
+                        f"la fila {seen[key]}",
                     )
                 )
             else:

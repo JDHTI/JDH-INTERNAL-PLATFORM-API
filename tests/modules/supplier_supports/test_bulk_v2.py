@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -91,13 +92,22 @@ def test_the_short_template_has_bi_order_dropdowns_and_date_checks() -> None:
         "NIT Cliente",
         "Cliente",
         "Sucursal",
+        "Grupo Empresarial",
         "SKU JDH",
         "SKU Proveedor",
-        "Observaciones",
+        "Regional",
+        "Unidad Negocio",
+        "Canal",
+        "Bodega",
     ]
     checks = {str(item.sqref).split(":")[0]: item for item in sheet.data_validations.dataValidation}
     assert checks["A2"].type == "list" and checks["B2"].type == "list"
     assert checks["D2"].type == "list" and checks["F2"].type == "date"
+    # The empty date cells are already dates, so what is typed there is a date.
+    assert {sheet[f"{column}{row}"].number_format for column in "FG" for row in (2, 500)} == {
+        "dd/mm/yyyy"
+    }
+    assert sheet["H2"].number_format == "General"
     assert "Apoyo táctico" in [cell.value for cell in book["Valores"]["A"]]
     grouped = openpyxl.load_workbook(io.BytesIO(template_workbook(groups=True)))["Apoyos"]
     group_headers = [cell.value for cell in grouped[1]]
@@ -110,8 +120,13 @@ async def test_the_download_with_data_goes_back_with_its_validation(bulk, repo, 
     book = openpyxl.load_workbook(io.BytesIO(template_workbook(rows=rows, validation=True)))
     sheet = book["Apoyos"]
     headers = [cell.value for cell in sheet[1]]
-    assert headers[-1] == "Validación" and sheet.max_row == 3
-    assert sheet.cell(row=2, column=1).value == "Apoyo táctico"
+    assert headers[-2:] == ["Observaciones", "Validación"]
+    assert [row[0] for row in sheet.iter_rows(min_row=2, values_only=True) if row[0]] == [
+        "Apoyo táctico",
+        "Apoyo táctico",
+    ]
+    start = sheet.cell(row=2, column=headers.index("Fecha Inicio") + 1)
+    assert start.value.date() == date(2026, 7, 1) and start.number_format == "dd/mm/yyyy"
     column = headers.index("Validación") + 1
     sheet.cell(row=2, column=column, value="No")
     sheet.cell(row=2, column=headers.index("Observaciones") + 1, value="Sin apoyo 2027")
@@ -128,6 +143,30 @@ async def test_the_download_with_data_goes_back_with_its_validation(bulk, repo, 
     assert expired.data.valid_to == date(2026, 10, 8)
     with pytest.raises(InvalidInputError, match="desconocido"):
         await bulk.export_rows(manager, "000")
+
+
+async def test_the_key_is_supplier_nit_sku_and_start(bulk, repo, manager) -> None:
+    await load(bulk, manager, HEADER + ROW, apply=True)
+    # Another class, same supplier, NIT, SKU and start: the same support, updated.
+    header = HEADER.replace("\n", ",Referencia externa\n")
+    other = ROW.replace("Apoyo táctico", "Actividad descuento temporal").replace("\n", ",AC-9\n")
+
+    report = await load(bulk, manager, header + other, apply=True)
+
+    assert report.errors == [] and (report.to_create, report.to_update) == (0, 1)
+    (saved,) = repo.items.values()
+    assert (saved.data.kind, saved.data.external_ref) == ("actividad_temporal", "AC-9")
+
+
+async def test_the_supplier_sku_comes_from_the_product_master(bulk, repo, lookup, manager) -> None:
+    lookup.products["1128"] = replace(lookup.products["1128"], supplier_sku="FAM-77")
+    header = HEADER.replace("\n", ",SKU Proveedor\n")
+
+    report = await load(bulk, manager, header + ROW.replace("\n", ",OTRO\n"), apply=True)
+
+    assert report.errors == [] and report.to_create == 1
+    (saved,) = repo.items.values()
+    assert (saved.data.product_sku, saved.data.supplier_sku) == ("1128", "FAM-77")
 
 
 async def test_a_business_group_row_becomes_one_support_per_customer(bulk, repo, manager) -> None:

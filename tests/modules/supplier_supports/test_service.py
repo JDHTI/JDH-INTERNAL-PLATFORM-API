@@ -1,5 +1,6 @@
 """Supplier supports use cases: validation, bindings to the masters, permissions, versions."""
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -63,9 +64,9 @@ async def test_create_normalizes_scope_and_nit(service, manager) -> None:
         ({"product_sku": "9999"}, "Referencia JDH desconocida"),
         ({"customer_nit": "111"}, "NIT de cliente desconocido"),
         ({"valid_to": date(2026, 1, 1)}, "anterior"),
-        ({"calc_method": "pct_costo", "supplier_value": D("5")}, "entre 0 y 1"),
-        ({"supplier_value": None}, "requiere supplier_value"),
-        ({"calc_method": "precio_neto", "target_margin_pct": None}, "margen garantizado"),
+        ({"calc_method": "pct_costo", "supplier_value": D("5")}, "entre 0 % y 100 %"),
+        ({"supplier_value": None}, "necesita el «Valor apoyo»"),
+        ({"calc_method": "precio_neto", "target_margin_pct": None}, "«Margen garantizado»"),
         ({"reference_cost": D("0")}, "mayor que cero"),
         ({"tiers": (Tier("unidades", D("10"), D("5"), D("1")),)}, "escala"),
     ],
@@ -73,6 +74,39 @@ async def test_create_normalizes_scope_and_nit(service, manager) -> None:
 async def test_create_rejects_invalid_data(service, manager, changes, message) -> None:
     with pytest.raises(InvalidInputError, match=message):
         await service.create(manager, tactic(**changes), supplier_code="233")
+
+
+async def test_a_margin_exception_takes_its_margin_from_the_field_the_form_shows(
+    service, manager
+) -> None:
+    exception = SupportData(
+        kind="excepcion_margen",
+        calc_method="margen_minimo",
+        product_sku="1128",
+        supported_margin_pct=D("0.10"),
+    )
+
+    created = (await service.create(manager, exception, supplier_code="233")).support
+
+    # «Excepción margen mínimo autorizado JDH» is the exception's margin: both fields agree.
+    saved = created.data
+    assert (saved.min_margin_pct, saved.supported_margin_pct) == (D("0.10"), D("0.10"))
+    edited = (
+        await service.update(
+            manager,
+            created.id,
+            expected_version=created.version,
+            changes={"min_margin_pct": D("0.12")},
+        )
+    ).support.data
+    assert (edited.min_margin_pct, edited.supported_margin_pct) == (D("0.12"), D("0.12"))
+    # Without either, the error names the field the person sees.
+    with pytest.raises(InvalidInputError) as caught:
+        await service.create(
+            manager, replace(exception, supported_margin_pct=None), supplier_code="233"
+        )
+    assert caught.value.field == "supported_margin_pct"
+    assert "«Excepción margen mínimo autorizado JDH»" in caught.value.detail
 
 
 async def test_unknown_supplier_and_missing_supplier_are_rejected(service, manager) -> None:

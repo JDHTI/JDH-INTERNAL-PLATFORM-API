@@ -7,7 +7,11 @@ from datetime import date, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.modules.commercial_masters.domain.entities import CommercialSupplier, ProductRef
+from app.modules.commercial_masters.domain.entities import (
+    CommercialSupplier,
+    CustomerRef,
+    ProductRef,
+)
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain.attachments import (
     Attachment,
@@ -135,6 +139,8 @@ class MasterLookup(Protocol):
     ) -> dict[UUID, tuple[str, str]]: ...
 
     async def customer_names(self, nits: Sequence[str]) -> dict[str, str]: ...
+
+    async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]: ...
 
     async def products_by_supplier_sku(
         self, supplier_id: UUID, supplier_skus: Sequence[str]

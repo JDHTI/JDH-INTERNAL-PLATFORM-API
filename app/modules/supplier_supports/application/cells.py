@@ -38,6 +38,29 @@ def percent(raw: Any) -> Decimal:
     return value
 
 
+_YES = {"si", "s", "x", "true", "1", "yes", "verdadero"}
+_NO = {"no", "n", "false", "0", "falso"}
+
+
+def flag(raw: Any) -> bool:
+    """A yes/no cell: Sí, No, true, false, 1, 0 (``True``/``False`` as they are).
+
+    Raises:
+        ValueError: If it reads as neither.
+    """
+
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int | float) and raw in (0, 1):
+        return bool(raw)
+    text = n.fold(raw)
+    if text in _YES:
+        return True
+    if text in _NO:
+        return False
+    raise ValueError(f"escribe Sí o No, no {raw!r}")
+
+
 def choice(raw: Any, allowed: tuple[str, ...]) -> str | None:
     """The closed value a cell spells (case, accents and spaces do not matter), if any."""
 

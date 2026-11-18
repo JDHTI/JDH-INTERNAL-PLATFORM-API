@@ -14,6 +14,7 @@ from app.modules.commercial_masters.domain.employee_prices import (
 from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     Customer,
+    CustomerRef,
     LegalSupplier,
     Page,
     Product,
@@ -154,6 +155,8 @@ class CommercialMasterRepository(Protocol):
     ) -> dict[UUID, tuple[str, str]]: ...
 
     async def existing_customer_nits(self, nits: Sequence[str]) -> dict[str, str]: ...
+
+    async def customers_by_nit(self, nits: Sequence[str]) -> dict[str, CustomerRef]: ...
 
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

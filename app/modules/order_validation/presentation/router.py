@@ -102,6 +102,8 @@ class CheckResponse(BaseModel):
     detail: str
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
+    # The support brings $0 on this line: listed, never the reason the line is released.
+    no_effect: bool = False
 
 
 class LineResponse(BaseModel):
@@ -127,7 +129,7 @@ class LineResponse(BaseModel):
     support_id: UUID | None
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
-    margin_basis: Literal["lista", "mayoristas", "salsamentarias"] | None
+    margin_basis: Literal["lista", "mayoristas", "salsamentarias", "masivo_food", "market"] | None
     liquor_tax_value: Decimal | None
     liquor_tax: bool
     liquor_tax_amount: Decimal | None
@@ -299,6 +301,7 @@ def _check(item: AgreementCheck) -> CheckResponse:
         detail=item.detail,
         effective_margin_pct=item.effective_margin_pct,
         required_margin_pct=item.required_margin_pct,
+        no_effect=item.no_effect,
     )
 
 

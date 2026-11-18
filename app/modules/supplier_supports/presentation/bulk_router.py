@@ -111,6 +111,10 @@ class BulkReportResponse(BaseModel):
     retired: list[UUID] = []
     skipped: int = 0
     group_supports: int = 0
+    # Applied: the DWH cost is assigned by the load itself, in the same transaction. Supports
+    # of the file (with a JDH SKU) that got a cost, and those the DWH has no cost for.
+    costs_assigned: int = 0
+    costs_missing: int = 0
 
 
 def _json_object(text: str | None, name: str) -> dict[str, Any]:
@@ -218,7 +222,10 @@ async def bulk_export(
         '`{"kind": "tactico_cliente"}`, `{"supplier_value": ["% APOYO"]}`. '
         "Rules v2: a row that crosses a live support of the same class and scope is an error "
         "unless `on_overlap` (vencer_anterior / anular_anterior); a «Validación» column "
-        "(download with data) loads Sí rows, expires No rows' supports and skips blank ones."
+        "(download with data) loads Sí rows, expires No rows' supports and skips blank ones. "
+        "Applied, the load assigns the DWH cost of every support of the file in the same "
+        "transaction (`costs_assigned`, `costs_missing`); if the DWH cannot be read nothing is "
+        "saved (503)."
     ),
 )
 @inject
@@ -234,7 +241,8 @@ async def bulk_load(
     principal: Principal = _principal,
     service: SupportBulkService = _service,
 ) -> BulkReportResponse:
-    """Simulate the load of a file and, with ``apply`` and no errors, write every row."""
+    """Simulate the load of a file and, with ``apply`` and no errors, write every row with
+    the DWH cost of each support (same transaction; without the DWH nothing is saved, 503)."""
 
     return await _load(
         file,
@@ -272,7 +280,7 @@ async def bulk_load_groups(
     principal: Principal = _principal,
     service: SupportBulkService = _service,
 ) -> BulkReportResponse:
-    """Simulate or write a business-group file."""
+    """Simulate or write a business-group file (with the DWH cost, as ``/bulk``)."""
 
     return await _load(
         file,

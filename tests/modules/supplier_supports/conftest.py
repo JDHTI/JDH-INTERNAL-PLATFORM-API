@@ -11,7 +11,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
-from app.modules.commercial_masters.domain.entities import CommercialSupplier, ProductRef
+from app.modules.commercial_masters.domain.entities import (
+    CommercialSupplier,
+    CustomerRef,
+    ProductRef,
+)
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
 from app.modules.supplier_supports.application.bulk import SupportBulkService
@@ -70,11 +74,13 @@ class FakeLookup:
             "3474": SKU_3474,
             "1001": SKU_1001,
         }
-        self.customers = {
+        self.names_by_nit = {
             "800116299": "LIMPIEZA Y MANTENIMIENTO DE ANTIOQUIA SAS",
             "900430148": "GODDARD CATERING GROUP COLOMBIA",
             "830012863": "GODDARD CATERING GROUP BOGOTA",
         }
+        # Branch ids by NIT as the master writes them; a NIT not listed has only 001.
+        self.branches = {"800116299": ("001", "002", "015")}
         # A supplier's own codes: Familia's 72163 is JDH 1128; 99999 maps to two products.
         self.supplier_codes = {
             (FAMILIA_ID, "72163"): [SKU_1128],
@@ -118,7 +124,17 @@ class FakeLookup:
         return {item: self.names[item] for item in ids if item in self.names}
 
     async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
-        return {nit: self.customers[nit] for nit in nits if nit in self.customers}
+        return {nit: self.names_by_nit[nit] for nit in nits if nit in self.names_by_nit}
+
+    async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
+        groups = {nit: name.title() for name, items in self.groups.items() for nit, _ in items}
+        return {
+            nit: CustomerRef(
+                nit, self.names_by_nit[nit], groups.get(nit), self.branches.get(nit, ("001",))
+            )
+            for nit in nits
+            if nit in self.names_by_nit
+        }
 
 
 def _matches(node, data: SupportData) -> bool:

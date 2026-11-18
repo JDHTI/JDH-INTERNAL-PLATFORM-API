@@ -6,6 +6,7 @@ Runs with ``SUPPORT_REQUEST_TEST_DATABASE_URL``.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -17,8 +18,12 @@ from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel
 from app.modules.dwh_publish.infrastructure.models import DwhOutboxModel
-from app.modules.supplier_supports.domain.entities import SupportData
+from app.modules.supplier_supports.domain.entities import LoadPlan, SupportCost, SupportData
 from app.modules.supplier_supports.domain.overlap import Supersede
+from app.modules.supplier_supports.infrastructure.models import (
+    SupplierSupportCostModel,
+    SupplierSupportLoadModel,
+)
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
 
 pytestmark = pytest.mark.skipif(
@@ -51,6 +56,65 @@ def tactic(supplier_id, **values) -> SupportData:
         "valid_to": date(2026, 12, 31),
     }
     return SupportData(**{**base, **values})
+
+
+async def test_a_bulk_load_saves_its_costs_in_the_same_transaction(storage) -> None:
+    repo, database, supplier_id = storage
+    now = datetime.now(UTC)
+    first, second = uuid4(), uuid4()
+    costs = (
+        SupportCost(
+            first,
+            "SKU-OVERLAP",
+            "lista1-mayor",
+            "Lista 1",
+            Decimal("1000"),
+            "cotizacion",
+            Decimal("1000"),
+            Decimal("980"),
+            date(2026, 11, 18),
+        ),
+        SupportCost(second, "SKU-OVERLAP", "lista1-mayor", "Lista 1", None, None, None, None, None),
+    )
+    plan = LoadPlan(
+        load_id=uuid4(),
+        file_name="apoyos.xlsx",
+        file_sha256="0" * 64,
+        supplier_code=None,
+        sheet="Apoyos",
+        rows_read=2,
+        creates=(
+            (first, tactic(supplier_id)),
+            (second, tactic(supplier_id, customer_nit="900430148")),
+        ),
+        costs=costs,
+    )
+
+    await repo.apply_load(plan, "bi", now)
+
+    async with database.session_factory() as session:
+        rows = (
+            await session.execute(
+                select(
+                    SupplierSupportCostModel.support_id, SupplierSupportCostModel.unit_cost
+                ).where(SupplierSupportCostModel.support_id.in_([first, second]))
+            )
+        ).all()
+    assert dict(rows) == {first: Decimal("1000"), second: None}
+
+    # A cost of a support that is not written makes the whole load fail: nothing is saved.
+    orphan = replace(
+        plan, load_id=uuid4(), creates=(), costs=(replace(costs[0], support_id=uuid4()),)
+    )
+    with pytest.raises(ConflictError):
+        await repo.apply_load(orphan, "bi", now)
+    async with database.session_factory() as session:
+        saved = await session.scalar(
+            select(func.count())
+            .select_from(SupplierSupportLoadModel)
+            .where(SupplierSupportLoadModel.id == orphan.load_id)
+        )
+    assert saved == 0
 
 
 async def test_a_new_support_expires_the_one_it_crosses_in_one_transaction(storage) -> None:

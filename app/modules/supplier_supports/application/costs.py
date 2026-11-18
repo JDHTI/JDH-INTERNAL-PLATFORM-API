@@ -5,8 +5,10 @@ highest of the supplier's quotation in force and the inventory average cost, per
 unit, rounded up to pesos. Which warehouses: the client's price list (or billing operation
 center) gives them, as when quoting that client; a client with several branches gets the
 highest of their plans; a support for every client uses list 1, the highest among its
-warehouses. The price lists' factor (1,004) is not applied: the support's cost is the
-purchase cost the supplier's percentage is negotiated on.
+warehouses. The cost carries the factor of the client's list family, as the quoter's
+(``pricing.COST_FACTOR``: 1,004, none for the wholesale lists; BI, 2026-11-18), so the
+master, the preview and the order validator use the quoter's very cost. The family is the
+list's when the skill names it, else the client's margin list's.
 
 The result is stored locally (``supplier_support_costs``) so the screens never wait for the
 DWH; the job runs when the warehouse publishes the supply data (``abastecimiento``).
@@ -22,6 +24,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import pricing, vocabulary
 from app.modules.quotations.domain.entities import CostInfo
 from app.modules.quotations.domain.pricing import StockPlan
@@ -56,6 +59,10 @@ class CostRepository(Protocol):
 
     async def save(self, costs: Sequence[SupportCost], now: datetime) -> int: ...
 
+    async def margin_fields(self, nits: Sequence[str]) -> dict[str, str]:
+        """``{nit: margin list field}`` of the clients (``customer_margin_field``)."""
+        ...
+
 
 class CostWarehouse(Protocol):
     """What the DWH says about clients and costs."""
@@ -80,12 +87,27 @@ GENERAL_PLAN = pricing.stock_plan(vocabulary.GENERAL_PRICE_LIST, None)
 def client_plans(branches: Sequence[BranchPlan]) -> list[StockPlan]:
     """The plans of a client's active branches (all of them if none is active)."""
 
+    return [plan for plan, _ in client_options(branches)]
+
+
+def client_options(
+    branches: Sequence[BranchPlan], basis: str | None = None
+) -> list[tuple[StockPlan, Decimal]]:
+    """The plans of a client's active branches, each with the cost factor of its list family
+    (the list's when the skill names it, else ``basis``, the client's margin list)."""
+
     chosen = [branch for branch in branches if branch.is_active] or list(branches)
-    plans: dict[str, StockPlan] = {}
+    options: dict[str, tuple[StockPlan, Decimal]] = {}
     for branch in chosen:
         plan = pricing.stock_plan(branch.price_list_id, branch.billing_center)
-        plans.setdefault(plan_key(plan), plan)
-    return list(plans.values()) or [GENERAL_PLAN]
+        options.setdefault(plan_key(plan), (plan, cost_factor(branch.price_list_id, basis)))
+    return list(options.values()) or [(GENERAL_PLAN, cost_factor(None, basis))]
+
+
+def cost_factor(price_list_id: str | None, basis: str | None) -> Decimal:
+    """The quoter's factor on the cost of a list family (1,004; 1 for the wholesale lists)."""
+
+    return pricing.COST_FACTOR.get(pricing.family(price_list_id, basis), ONE)
 
 
 class SupportCostService:
@@ -162,16 +184,20 @@ class SupportCostService:
 
         nits = sorted({target.customer_nit for target in targets if target.customer_nit})
         branches = await self.warehouse.branches(nits) if nits else {}
-        plans_of: dict[UUID, list[StockPlan]] = {}
+        fields = await self.repository.margin_fields(nits) if nits else {}
+        plans_of: dict[UUID, list[tuple[StockPlan, Decimal]]] = {}
         skus_by_plan: dict[str, tuple[StockPlan, set[str]]] = {}
         for target in targets:
-            plans = (
-                client_plans(branches.get(target.customer_nit, []))
+            options = (
+                client_options(
+                    branches.get(target.customer_nit, []),
+                    BASIS.get(fields.get(target.customer_nit, ""), "lista"),
+                )
                 if target.customer_nit
-                else [GENERAL_PLAN]
+                else [(GENERAL_PLAN, cost_factor(None, None))]
             )
-            plans_of[target.support_id] = plans
-            for plan in plans:
+            plans_of[target.support_id] = options
+            for plan, _ in options:
                 skus_by_plan.setdefault(plan_key(plan), (plan, set()))[1].add(target.product_sku)
 
         infos: dict[str, dict[str, CostInfo]] = {}
@@ -183,12 +209,12 @@ class SupportCostService:
         for target in targets:
             best: tuple[Decimal, StockPlan, CostInfo, str] | None = None
             fallback: tuple[StockPlan, CostInfo | None] | None = None
-            for plan in plans_of[target.support_id]:
+            for plan, factor in plans_of[target.support_id]:
                 info = infos[plan_key(plan)].get(target.product_sku)
                 fallback = fallback or (plan, info)
                 if info is None:
                     continue
-                cost, source = pricing.effective_cost(info.quote_cost, info.inventory_cost, ONE)
+                cost, source = pricing.effective_cost(info.quote_cost, info.inventory_cost, factor)
                 if cost is not None and source and (best is None or cost > best[0]):
                     best = (cost, plan, info, source)
             if best is None:
@@ -225,6 +251,8 @@ __all__ = [
     "BranchPlan",
     "CostTarget",
     "SupportCostService",
+    "client_options",
     "client_plans",
+    "cost_factor",
     "plan_key",
 ]

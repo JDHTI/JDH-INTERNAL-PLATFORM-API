@@ -16,9 +16,14 @@ from app.core.errors import (
     InvalidInputError,
     NotFoundError,
 )
-from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
+from app.modules.commercial_masters.domain.entities import (
+    CustomerRef,
+    ProductRef,
+    clean_nit,
+    nit_check_digit,
+)
 from app.modules.identity.domain.principal import Principal
-from app.modules.supplier_supports.domain import filters, overlap, vocabulary
+from app.modules.supplier_supports.domain import fields, filters, overlap, vocabulary
 from app.modules.supplier_supports.domain.entities import (
     Checked,
     Conflict,
@@ -75,7 +80,7 @@ _VALUE_REQUIRED = (
     "valor_unidad",
     "valor_precio_lista",
     "costo_neto",
-    "precio_neto",
+    # Not precio_neto: a guaranteed margin has no value, only target_margin_pct.
     "puntos_margen",
     "pct_ventas",
 )
@@ -171,7 +176,8 @@ class FieldError(InvalidInputError):
     """An invalid input that belongs to one field of the support (the bulk report names it)."""
 
     def __init__(self, detail: str, field: str) -> None:
-        super().__init__(detail)
+        # ``field`` also goes in the 422 body, so the form marks the input to fix.
+        super().__init__(detail, extra={"field": field})
         self.field = field
 
 
@@ -207,6 +213,26 @@ def _with_base_filters(
     return filters.Group("all", (*base, group)) if base else group
 
 
+def _label(name: str) -> str:
+    """How the form and the template name a field (its code when the catalog has none)."""
+
+    spec = fields.FIELDS.get(name)
+    return spec.label if spec is not None else name
+
+
+def _branch_in(branch: str, branches: Sequence[str]) -> str | None:
+    """The master's spelling of a branch id: ``1`` and ``1.0`` (a number in Excel) are ``001``."""
+
+    text = branch.strip()
+    if text in branches:
+        return text
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    if not text.isdigit():
+        return None
+    return next((item for item in branches if item.isdigit() and int(item) == int(text)), None)
+
+
 class PrefetchedMasters:
     """The masters of a whole file read once, so checking N rows is 3 queries, not 3N.
 
@@ -219,12 +245,12 @@ class PrefetchedMasters:
         self._asked: dict[str, set[str]] = {"suppliers": set(), "products": set(), "nits": set()}
         self._suppliers: dict[str, UUID] = {}
         self._products: dict[str, ProductRef] = {}
-        self._customers: dict[str, str] = {}
+        self._customers: dict[str, CustomerRef] = {}
 
     async def load(self, codes: set[str], skus: set[str], nits: set[str]) -> None:
         await self.commercial_suppliers_by_code(sorted(codes))
         await self.products_by_sku(sorted(skus))
-        await self.customer_names(sorted(nits))
+        await self.customers(sorted(nits))
 
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         missing = [code for code in codes if code not in self._asked["suppliers"]]
@@ -240,12 +266,15 @@ class PrefetchedMasters:
             self._asked["products"].update(missing)
         return {sku: self._products[sku] for sku in skus if sku in self._products}
 
-    async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
+    async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
         missing = [nit for nit in nits if nit not in self._asked["nits"]]
         if missing:
-            self._customers.update(await self.masters.customer_names(missing))
+            self._customers.update(await self.masters.customers(missing))
             self._asked["nits"].update(missing)
         return {nit: self._customers[nit] for nit in nits if nit in self._customers}
+
+    async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
+        return {nit: item.name for nit, item in (await self.customers(nits)).items()}
 
     async def commercial_supplier_names(self, ids: Sequence[UUID]) -> dict[UUID, tuple[str, str]]:
         return await self.masters.commercial_supplier_names(ids)
@@ -303,35 +332,51 @@ class SupplierSupportService:
         ):
             if value not in allowed:
                 raise FieldError(
-                    f"{name} inválido: {value!r} (válidos: {', '.join(allowed)})", name
+                    f"{_label(name)}: valor no válido {value!r} (válidos: {', '.join(allowed)})",
+                    name,
                 )
         if data.settlement_method and data.settlement_method not in vocabulary.SETTLEMENTS:
             raise FieldError(
-                f"settlement_method inválido: {data.settlement_method!r}", "settlement_method"
+                f"{_label('settlement_method')}: valor no válido {data.settlement_method!r}",
+                "settlement_method",
             )
         if data.value_unit and data.value_unit not in vocabulary.VALUE_UNITS:
-            raise FieldError(f"value_unit inválido: {data.value_unit!r}", "value_unit")
+            raise FieldError(
+                f"{_label('value_unit')}: valor no válido {data.value_unit!r}", "value_unit"
+            )
         if data.valid_from and data.valid_to and data.valid_to < data.valid_from:
-            raise FieldError("La vigencia final no puede ser anterior a la inicial", "valid_to")
+            raise FieldError("La Fecha Fin no puede ser anterior a la Fecha Inicio", "valid_to")
+        method = vocabulary.CALC_METHOD_LABELS.get(data.calc_method, data.calc_method)
         if data.calc_method in _VALUE_REQUIRED and data.supplier_value is None:
-            raise FieldError(f"{data.calc_method} requiere supplier_value", "supplier_value")
+            raise FieldError(
+                f"El tipo «{method}» necesita el «{_label('supplier_value')}»", "supplier_value"
+            )
         if data.calc_method == "margen_minimo" and data.min_margin_pct is None:
-            raise FieldError("margen_minimo requiere min_margin_pct", "min_margin_pct")
+            # The shown field: _normalize copies it to min_margin_pct.
+            raise FieldError(
+                "La Excepción margen JDH necesita el margen mínimo autorizado: escríbelo en "
+                f"«{_label('supported_margin_pct')}»",
+                "supported_margin_pct",
+            )
         if data.calc_method == "precio_neto" and data.target_margin_pct is None:
             raise FieldError(
-                "precio_neto requiere target_margin_pct (margen garantizado)", "target_margin_pct"
+                f"El tipo «{method}» necesita el «{_label('target_margin_pct')}»",
+                "target_margin_pct",
             )
         if data.calc_method in _PCT_METHODS and data.supplier_value is not None:
             if not Decimal(0) <= data.supplier_value <= Decimal(1):
                 raise FieldError(
-                    "El porcentaje debe expresarse entre 0 y 1 (0.05 = 5%)", "supplier_value"
+                    f"«{_label('supplier_value')}»: el porcentaje debe estar entre 0 % y 100 %",
+                    "supplier_value",
                 )
         elif data.supplier_value is not None and data.supplier_value < 0:
-            raise FieldError("El valor del proveedor no puede ser negativo", "supplier_value")
+            raise FieldError(
+                f"«{_label('supplier_value')}» no puede ser negativo", "supplier_value"
+            )
         for name in ("target_margin_pct", "list_margin_pct", "supported_margin_pct"):
             value = getattr(data, name)
             if value is not None and not Decimal(0) <= value < Decimal(1):
-                raise FieldError(f"{name} debe estar entre 0 y 1", name)
+                raise FieldError(f"«{_label(name)}» debe estar entre 0 % y 100 %", name)
         if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
             raise FieldError("jdh_pct debe estar entre -1 y 1", "jdh_pct")
         if data.jdh_net_cost is not None:
@@ -369,6 +414,16 @@ class SupplierSupportService:
             changes[name] = _clean(getattr(data, name))
         for name in _ARRAY_FIELDS:
             changes[name] = _normalize_scope(getattr(data, name))
+        if data.calc_method == "margen_minimo":
+            # The form and the template show one JDH margin, «Excepción margen mínimo autorizado
+            # JDH» (supported_margin_pct); for a margin exception it is the exception's margin.
+            # Either field is accepted and both are kept equal, the shown one winning.
+            shown = changes.get("supported_margin_pct", data.supported_margin_pct)
+            stored = changes.get("min_margin_pct", data.min_margin_pct)
+            if shown is not None:
+                changes["min_margin_pct"] = shown
+            elif stored is not None:
+                changes["supported_margin_pct"] = stored
         return replace(data, **changes)
 
     async def _resolve(
@@ -420,7 +475,7 @@ class SupplierSupportService:
         if previous is not None and previous.product_sku == data.product_sku:
             product_id = previous.product_id
         elif data.product_sku:
-            product = (await lookup.products_by_sku([data.product_sku])).get(data.product_sku)
+            product = await self._product_of(data.product_sku, lookup)
             if product is None:
                 if strict:
                     raise FieldError(
@@ -430,21 +485,43 @@ class SupplierSupportService:
                 issues.append(Issue("sku_sin_cruce", data.product_sku, "product_sku"))
             else:
                 product_id = product.id
-                brand = brand or product.brand
-                data = self._fill_unit(data, product)
+                brand = product.brand or brand
+                data = self._fill_unit(replace(data, product_sku=product.sku), product)
         else:
             product_id = None
 
-        if data.customer_nit and (previous is None or previous.customer_nit != data.customer_nit):
-            known = await lookup.customer_names([data.customer_nit])
-            if data.customer_nit not in known:
+        if data.customer_nit and (
+            previous is None
+            or (previous.customer_nit, previous.customer_branch_id)
+            != (data.customer_nit, data.customer_branch_id)
+        ):
+            customer = await self._customer_of(data.customer_nit, lookup)
+            if customer is None:
                 if strict:
                     raise FieldError(
                         f"NIT de cliente desconocido: {data.customer_nit}", "customer_nit"
                     )
                 issues.append(Issue("nit_sin_cruce", data.customer_nit, "customer_nit"))
-            elif not data.customer_name:
-                data = replace(data, customer_name=known[data.customer_nit] or None)
+            else:
+                branch = data.customer_branch_id
+                if branch is not None:
+                    known_branch = _branch_in(branch, customer.branches)
+                    if known_branch is None and strict:
+                        shown = ", ".join(customer.branches[:10]) or "ninguna"
+                        raise FieldError(
+                            f"La sucursal {branch} no existe para el NIT {customer.nit} "
+                            f"(sucursales: {shown})",
+                            "customer_branch_id",
+                        )
+                    branch = known_branch or branch
+                # The customer's name and business group are the master's, not typed.
+                data = replace(
+                    data,
+                    customer_nit=customer.nit,
+                    customer_name=customer.name or data.customer_name,
+                    customer_group=customer.business_group or data.customer_group,
+                    customer_branch_id=branch,
+                )
 
         status = data.status
         if issues and status == "activo" and not strict:
@@ -458,6 +535,28 @@ class SupplierSupportService:
             issues=tuple(unique),
             status=status,
         )
+
+    @staticmethod
+    async def _product_of(sku: str, lookup: MasterLookup) -> ProductRef | None:
+        """The product of a JDH SKU; ``012014`` is ``12014`` (JDH SKUs have no leading zeros)."""
+
+        bare = sku.lstrip("0") if sku.isdigit() else sku
+        found = await lookup.products_by_sku(list(dict.fromkeys([sku, bare])) if bare else [sku])
+        return found.get(sku) or (found.get(bare) if bare else None)
+
+    @staticmethod
+    async def _customer_of(nit: str, lookup: MasterLookup) -> CustomerRef | None:
+        """The customer of a NIT, written with or without its verification digit.
+
+        The master stores NITs without it. A NIT that is not there but whose last digit is the
+        DIAN check digit of the rest (``8001162991``, from ``800116299-1``) is read as the rest.
+        """
+
+        candidates = [nit]
+        if len(nit) > 5 and nit_check_digit(nit[:-1]) == nit[-1]:
+            candidates.append(nit[:-1])
+        found = await lookup.customers(candidates)
+        return next((found[item] for item in candidates if item in found), None)
 
     @staticmethod
     async def _jdh_sku_of(
@@ -488,11 +587,14 @@ class SupplierSupportService:
 
     @staticmethod
     def _fill_unit(data: SupportData, product: ProductRef) -> SupportData:
-        """Complete the pack factor and the unit of the cost from the product master.
+        """Complete the supplier's SKU, the pack factor and the unit of the cost from the
+        product master.
 
-        The pack factor falls back to the warehouse's. When the sheet did not say whether
-        its cost is per box or per unit, it is inferred against the warehouse's average
-        unit cost; a person who set the unit keeps it (provenance ``manual``).
+        The supplier's SKU is the master's whenever it has one (BI, 2026-11-18: it is pulled
+        from the master, not typed). The pack factor falls back to the warehouse's. When the
+        sheet did not say whether its cost is per box or per unit, it is inferred against the
+        warehouse's average unit cost; a person who set the unit keeps it (provenance
+        ``manual``).
         """
 
         pack = data.pack_factor or product.pack_factor
@@ -503,7 +605,13 @@ class SupplierSupportService:
                 unit, source = guess, "inferido_dwh"
         elif source == "desconocido":
             source = "manual"
-        return replace(data, pack_factor=pack, value_unit=unit, unit_basis_source=source)
+        return replace(
+            data,
+            supplier_sku=product.supplier_sku or data.supplier_sku,
+            pack_factor=pack,
+            value_unit=unit,
+            unit_basis_source=source,
+        )
 
     async def _prepare(
         self,
@@ -1130,6 +1238,11 @@ class SupplierSupportService:
             values["issues"] = ()
         if "value_unit" in values:
             values["unit_basis_source"] = "manual" if values["value_unit"] else "desconocido"
+        if "min_margin_pct" in values and "supported_margin_pct" not in values:
+            # An exception edited by its other margin field: both stay equal (see _normalize).
+            exception = values.get("calc_method", current.data.calc_method) == "margen_minimo"
+            if exception:
+                values["supported_margin_pct"] = values["min_margin_pct"]
         merged = replace(current.data, **values)
         prepared = await self._prepare(
             merged, supplier_code=supplier_code, strict=True, previous=current.data

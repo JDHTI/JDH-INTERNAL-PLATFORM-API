@@ -31,7 +31,12 @@ from app.modules.order_validation.domain.entities import (
     ProductInfo,
 )
 from app.modules.supplier_supports.domain import pricing
-from app.modules.supplier_supports.domain.pricing import per_unit, unit_amount
+from app.modules.supplier_supports.domain.pricing import (
+    GUARANTEED_METHOD,
+    guaranteed_share,
+    per_unit,
+    unit_amount,
+)
 from app.modules.supplier_supports.domain.validity import validity_on
 from app.modules.supplier_supports.domain.vocabulary import PROMO_WAREHOUSES
 
@@ -154,7 +159,6 @@ _HOW = {
     "valor_unidad": "{money} en costo por unidad",
     "valor_precio_lista": "{money} sobre el precio lista por unidad",
     "costo_neto": "costo apoyado {money} por unidad",
-    "precio_neto": "precio apoyado {money} con margen garantizado",
 }
 
 
@@ -162,6 +166,7 @@ def share_of_cost(
     agreement: Agreement,
     cost: Decimal | None = None,
     target: Decimal | None = None,
+    margin: Decimal | None = None,
 ) -> tuple[Decimal | None, str]:
     """Supplier amount ($ Apoyo) as a share of the cost, and how it was obtained.
 
@@ -171,10 +176,23 @@ def share_of_cost(
     file prices are not in inventory units). Without either, the references stored with the
     support decide, as before.
 
+    A % Margen Garantizado pays what is missing to reach its margin at the price sold: from
+    the line's ``margin`` without the support it is ``max(0, (g − m) / (1 − m))`` of the cost
+    (the margin with it is ``max(m, g)``); without a sale margin, at the list price
+    (``target``).
+
     Returns:
         tuple[Decimal | None, str]: The share, or ``None`` with the reason it is unknown.
     """
 
+    if agreement.calc_method == GUARANTEED_METHOD:
+        guaranteed = agreement.target_margin_pct
+        if guaranteed is None:
+            return None, "el margen garantizado no tiene margen"
+        share = guaranteed_share(margin if margin is not None else target, guaranteed)
+        if share is None:
+            return None, "sin margen de venta ni margen objetivo para el margen garantizado"
+        return share, f"margen garantizado {pct(guaranteed)}"
     value = agreement.supplier_value
     if value is None:
         return None, "el apoyo no tiene valor"
@@ -233,21 +251,21 @@ def _share_from_references(agreement: Agreement) -> tuple[Decimal | None, str]:
         return max(ZERO, ONE - value / cost), f"costo neto pactado {value:,.2f}"
     if method in ("valor_unidad", "valor_precio_lista"):
         return value / cost, f"{value:,.2f} por unidad de costo"
-    if method == "precio_neto":
-        if agreement.target_margin_pct is None:
-            return None, "el precio neto no tiene margen garantizado"
-        amount = cost - value * (ONE - agreement.target_margin_pct)
-        return max(ZERO, amount / cost), f"precio neto pactado {value:,.2f}"
     return None, f"método {method} sin importe por unidad"
 
 
 def required_margin(agreement: Agreement, reference: Decimal | None) -> Decimal | None:
     """Margin the line must reach with the support: JDH's authorized minimum when the support
-    has one (rules v2), else the one agreed, else the product's optimal margin."""
+    has one (rules v2), else the one agreed, else the product's optimal margin.
 
+    The margin of a % Margen Garantizado is what the supplier guarantees, not a target: its
+    line is held to JDH's minimum or the product's margin, as any other type.
+    """
+
+    agreed = None if agreement.calc_method == GUARANTEED_METHOD else agreement.target_margin_pct
     for value in (
         agreement.supported_margin_pct,
-        agreement.target_margin_pct,
+        agreed,
         agreement.min_margin_pct,
         agreement.list_margin_pct,
         reference,
@@ -355,7 +373,7 @@ def check(
     if method not in AMOUNT_METHODS:
         return _outcome(agreement, "no_evaluable", f"Método {method} no evaluable por pedido")
 
-    share, how = share_of_cost(agreement, target=reference)
+    share, how = share_of_cost(agreement, target=reference, margin=margin)
     if share is None:
         return _outcome(agreement, "no_evaluable", f"No se puede evaluar: {how}")
     required = required_margin(agreement, reference)
@@ -366,7 +384,16 @@ def check(
             f"Apoyo de {how}, pero sin margen objetivo para comparar",
         )
     effective = margin + share * (ONE - margin)
-    return _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
+    result = _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
+    if share <= ZERO:
+        # A supported cost above today's cost (or a zero value) brings no money: checked and
+        # listed, but never the reason a line is released (BI, 2026-11-18).
+        return replace(
+            result,
+            no_effect=True,
+            detail=f"Apoyo sin efecto: aporta $0 ({how}). {result.detail}",
+        )
+    return result
 
 
 def _outcome(
@@ -520,7 +547,11 @@ def _decide(
     checks = tuple(check(item, line, reference) for item in applicable)
     label = _BASIS_LABEL.get(basis or "", "margen del producto")
 
-    active_ok = [item for item in checks if item.outcome == "cumple" and not item.needs_review]
+    # A support without effect ($0) never releases a line: the line stands on its own margin.
+    effective_checks = [item for item in checks if not item.no_effect]
+    active_ok = [
+        item for item in effective_checks if item.outcome == "cumple" and not item.needs_review
+    ]
     if active_ok:
         best = _closest(active_ok)
         return _result(vocabulary.READY, "cumple_con_apoyo", best.detail, best, checks)
@@ -535,13 +566,14 @@ def _decide(
             checks=checks,
         )
 
-    in_review = [item for item in checks if item.outcome == "cumple"]
+    in_review = [item for item in effective_checks if item.outcome == "cumple"]
     if in_review:
         best = _closest(in_review)
         detail = f"{best.detail}, pero el apoyo está pendiente de revisión"
         return _result(vocabulary.PENDING, "acuerdo_en_revision", detail, best, checks)
 
-    failed = [item for item in checks if item.outcome == "no_cumple"]
+    # Below its own margin, a support without effect does not bring it there either.
+    failed = [item for item in checks if item.outcome == "no_cumple" or item.no_effect]
     if failed:
         best = _closest(failed)
         return _result(vocabulary.PENDING, "no_cumple_acuerdo", best.detail, best, checks)

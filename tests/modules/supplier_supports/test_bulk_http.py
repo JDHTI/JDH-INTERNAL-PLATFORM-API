@@ -61,7 +61,9 @@ def test_form_schema_is_not_swallowed_by_the_support_id_route(client) -> None:
     body = response.json()
     names = {item["name"] for item in body["fields"]}
     assert {"kind", "calc_method", "supplier_value", "product_sku", "regionals"} <= names
-    assert body["methods"]["precio_neto"]["requires"] == ["supplier_value", "target_margin_pct"]
+    # A guaranteed margin asks only for the margin: it has no value (BI, 2026-11-18).
+    assert body["methods"]["precio_neto"]["requires"] == ["target_margin_pct"]
+    assert body["methods"]["precio_neto"]["value_kind"] == "none"
     assert body["methods"]["pct_costo"]["value_kind"] == "percent"
     kind = next(item for item in body["fields"] if item["name"] == "kind")
     assert "tactico_cliente" in kind["choices"]

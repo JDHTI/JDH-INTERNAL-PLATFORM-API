@@ -104,11 +104,7 @@ async def test_rows_repeated_in_the_file_are_flagged(bulk, manager) -> None:
     report = await load(bulk, manager, header + line + line)
 
     assert [(issue.row_number, issue.message) for issue in report.errors] == [
-        (
-            3,
-            "Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha inicio) "
-            "que la fila 2",
-        )
+        (3, "Fila repetida: misma llave (proveedor, NIT, SKU y fecha inicio) que la fila 2")
     ]
 
 
@@ -285,7 +281,7 @@ async def test_template_follows_the_profile_layout(profiles, manager) -> None:
     assert "Tipo apoyo" in general and "Valor apoyo" in general
     assert "NIT Cliente" in general and "SKU JDH" in general and "Fecha Inicio" in general
     assert "Costo Referencia" not in general and "Precio Lista Referencia" not in general
-    # Rules v2: the short template in BI's order; never costs or prices.
+    # Rules v2: the short template is BI's list in BI's order and nothing else.
     assert general == [
         "Clase apoyo",
         "Tipo apoyo",
@@ -297,10 +293,17 @@ async def test_template_follows_the_profile_layout(profiles, manager) -> None:
         "NIT Cliente",
         "Cliente",
         "Sucursal",
+        "Grupo Empresarial",
         "SKU JDH",
         "SKU Proveedor",
-        "Observaciones",
+        "Regional",
+        "Unidad Negocio",
+        "Canal",
+        "Bodega",
     ]
+    # The download with data adds the promotional warehouses and the reason of a «Validación» No.
+    validated = [header for _, header in template_headers(None, validation=True)]
+    assert validated == [*general, "Bodega promocional", "Observaciones"]
     full = [header for _, header in template_headers(None, full=True)]
     assert "Costo Referencia" in full and "Grupo Empresarial" in full
 

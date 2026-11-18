@@ -145,11 +145,18 @@ El costo de un apoyo **siempre** sale del DWH, con la regla del cotizador
 - **Bodegas**: las de la lista de precios del cliente (o de su centro de facturación), como al
   cotizarle. Un cliente con varias sucursales activas toma el **mayor** de sus planes. Un apoyo
   para todos los clientes usa la lista 1: el mayor entre sus 17 bodegas.
-- **Sin el factor 1,004** de las listas: el porcentaje del proveedor se negocia sobre el costo de
-  compra.
+- **Con el factor de la familia de lista del cliente** (BI, 2026-11-18): el mismo costo del
+  cotizador (`pricing.COST_FACTOR`): × 1,004 en Food service, Masivo food, Salsamentarias y
+  Market; × 1 en mayoristas. Se redondea hacia arriba y luego se aplica el factor. La familia es
+  la de la lista de precios del cliente cuando el skill la nombra; si no, la de su lista de margen
+  (`customer_margin_field`). Un apoyo para todos usa la familia general (× 1,004). Ejemplo: NIT
+  900635048, SKU 9951: 189.944 × 1,004 = 190.703,78, igual que el cotizador.
+  - Este costo con factor es el que usan el maestro (precio de lista, precios apoyados, $ Apoyo y
+    margen recompuesto), el `/preview`, el validador de pedidos y `costo_dwh_unidad` en el DWH.
 
-Lo calcula el job `supplier-supports-costs` cuando el DWH publica `abastecimiento` (L–V, respaldo
-diario) y lo guarda en `supplier_support_costs`; las pantallas no consultan el DWH. Corrida de
+Lo calcula la carga masiva al aplicarse, para sus apoyos, en la misma transacción. Además, el job
+`supplier-supports-costs` lo actualiza para todos cuando el DWH publica `abastecimiento` (L–V,
+respaldo diario). Se guarda en `supplier_support_costs`; las pantallas no consultan el DWH. Corrida de
 prueba (10-nov-2026, base de desarrollo): 13.022 apoyos en 6 s, 12.963 con costo, 8 planes.
 
 En las cifras (`derived`) el costo del DWH reemplaza al costo de referencia cuando se puede llevar

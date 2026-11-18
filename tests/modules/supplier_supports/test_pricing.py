@@ -8,6 +8,8 @@ import pytest
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.pricing import (
     derive,
+    guaranteed_amount,
+    guaranteed_share,
     minimum_price,
     supplier_amount,
     unit_amount,
@@ -61,17 +63,35 @@ def test_each_type_gives_the_supplier_money_and_the_suggested_price(method, valu
     assert result.margin_recomposed == (price - D("4920") + amount) / price
 
 
-def test_guaranteed_margin_starts_from_an_agreed_supported_price() -> None:
-    # PA 5.000 agreed with 18 % guaranteed: $Apoyo = Costo - PA x (1 - 18 %) = 820.
+def test_a_guaranteed_margin_is_shown_at_the_list_price() -> None:
+    # Cost 4.920 at 18 % -> PL 6.000. The supplier guarantees 25 % at whatever price: at PL
+    # it pays 4.920 - 6.000 x 75 % = 420 and the margin is 25 %. It has no value of its own.
     result = derive(
-        data(calc_method="precio_neto", supplier_value=D("5000"), target_margin_pct=D("0.18")),
+        data(calc_method="precio_neto", supplier_value=D("5000"), target_margin_pct=D("0.25")),
         dwh_unit_cost=D("4920"),
         product_margin=D("0.18"),
     )
 
-    assert result.supplier_amount == D("820.00")
-    assert result.suggested_price == D("5000")
-    assert round(result.margin_recomposed, 6) == D("0.18")
+    assert result.supplier_amount == D("420.00")
+    assert result.suggested_price == D("6000")
+    assert round(result.margin_recomposed, 6) == D("0.25")
+    assert result.supported_price is None  # no minimum price: it covers any price
+    # A guarantee under the list margin pays nothing there: the margin stays at 18 %.
+    low = derive(
+        data(calc_method="precio_neto", target_margin_pct=D("0.10")),
+        dwh_unit_cost=D("4920"),
+        product_margin=D("0.18"),
+    )
+    assert low.supplier_amount == D("0") and round(low.margin_recomposed, 6) == D("0.18")
+    assert not low.support_above_cost
+
+
+def test_a_guaranteed_margin_pays_what_is_missing_at_the_price_sold() -> None:
+    # The user's example: sold at 10.000 with 10 % margin (cost 9.000); 14 % guaranteed.
+    assert guaranteed_amount(D("9000"), D("10000"), D("0.14")) == D("400.00")
+    assert guaranteed_share(D("0.10"), D("0.14")) * D("9000") == pytest.approx(D("400"))
+    # At 12.000 the margin is already 25 %: nothing to pay.
+    assert guaranteed_amount(D("9000"), D("12000"), D("0.14")) == D("0")
 
 
 @pytest.mark.parametrize(

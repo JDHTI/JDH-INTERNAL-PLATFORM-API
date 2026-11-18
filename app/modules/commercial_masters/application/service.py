@@ -13,6 +13,7 @@ from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     Customer,
+    CustomerRef,
     LegalSupplier,
     Page,
     Product,
@@ -570,6 +571,7 @@ class MasterLookup:
                 brand=product.brand,
                 commercial_supplier_code=product.commercial_supplier_code,
                 is_active=product.is_active,
+                supplier_sku=product.supplier_sku,
             )
             for product in page.items
         ]
@@ -610,6 +612,11 @@ class MasterLookup:
         """``{nit: legal name}`` of NITs that exist among the customers."""
 
         return await self.repository.existing_customer_nits(list(dict.fromkeys(nits)))
+
+    async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
+        """Name, business group and branches of the NITs that exist among the customers."""
+
+        return await self.repository.customers_by_nit(list(dict.fromkeys(nits)))
 
     async def save_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

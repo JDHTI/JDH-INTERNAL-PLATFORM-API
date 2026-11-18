@@ -15,6 +15,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 import openpyxl
+from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
@@ -27,9 +28,15 @@ from app.modules.supplier_supports.domain.profiles import Profile
 
 EXTENSIONS = ("xlsx", "xlsm", "csv")
 TEMPLATE_SHEET = "Apoyos"
-_HEADER_FILL = PatternFill("solid", start_color="1F3A5F")
+# Header colors, white bold text on all three (contrast 6.6, 5.0 and 11.8 to 1):
+# red = required in every row, orange = required for some types, blue = optional.
+_REQUIRED_COLOR, _BY_TYPE_COLOR, _OPTIONAL_COLOR = "B3261E", "B45309", "1F3A5F"
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
-_REQUIRED_FILL = PatternFill("solid", start_color="B3261E")
+
+
+def _fill(color: str) -> PatternFill:
+    return PatternFill("solid", start_color=color, end_color=color)
+
 
 Sheet = tuple[str, list[list[Any]]]
 
@@ -184,33 +191,40 @@ class SpreadsheetSupportReader:
 
 
 _CUSTOMER_COLUMNS = ("customer_nit", "customer_name", "customer_branch_id")
+# The download with data adds these to the short template: the reason of a «Validación» No
+# and whether each support applies in the promotional warehouses.
+_EXPORT_ONLY = ("notes", "promo_warehouses")
 # The «Validación» column the bulk load reads (``application.bulk.VALIDATION``).
 VALIDATION = "validation"
 VALIDATION_HEADER = "Validación"
 _UNIT_LABELS = {"unidad": "Unidad", "caja": "Caja", "kg": "Kg"}
-# Rows the dropdowns and date checks cover in an empty template.
+# Rows the dropdowns, date checks and date format cover below the filled ones.
 _VALIDATED_ROWS = 2000
+_DATE_FORMAT = "dd/mm/yyyy"
 
 
 def template_headers(
-    profile: Profile | None, full: bool = False, groups: bool = False
+    profile: Profile | None, full: bool = False, groups: bool = False, validation: bool = False
 ) -> list[tuple[str, str]]:
     """``(field, header)`` of every column of the template.
 
-    By default the short general template (rules v2, in BI's order): Clase apoyo, Tipo
-    apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado JDH, Fecha Inicio,
-    Fecha Fin, NIT Cliente, Cliente, Sucursal, SKU JDH, SKU Proveedor and Observaciones;
-    costs, prices and margins come from the DWH and are never asked. ``full`` adds every
-    field. ``groups`` is the business-group upload: Grupo Empresarial instead of the
-    customer. With a profile the columns follow the supplier's own layout: fields it fixes
-    with a default are left out, the fields it maps are added, and its first header replaces
-    the general one.
+    By default the short general template, in BI's order and with nothing else (2026-11-18):
+    Clase apoyo, Tipo apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado
+    JDH, Fecha Inicio, Fecha Fin, NIT Cliente, Cliente, Sucursal, Grupo Empresarial, SKU JDH,
+    SKU Proveedor, Regional, Unidad Negocio, Canal and Bodega; costs, prices and margins come
+    from the DWH and are never asked. ``validation`` (the download with data) adds
+    Observaciones, the reason of a «Validación» No. ``full`` adds every field. ``groups`` is
+    the business-group upload: Grupo Empresarial without the customer columns. With a profile
+    the columns follow the supplier's own layout: fields it fixes with a default are left
+    out, the fields it maps are added, and its first header replaces the general one.
     """
 
     columns: list[tuple[str, str]] = []
     mapped = set(profile.data.column_map) if profile is not None else set()
     for spec in fields.FIELD_SPECS:
-        wanted = full or spec.core or spec.name in mapped
+        wanted = (
+            full or spec.core or spec.name in mapped or (validation and spec.name in _EXPORT_ONLY)
+        )
         if groups and spec.name == "customer_group":
             wanted = True
         if groups and spec.name in _CUSTOMER_COLUMNS:
@@ -226,11 +240,59 @@ def template_headers(
     return columns
 
 
+# The bulk load reads these from the one margin column of the short template when the file has
+# no column of their own (``application.bulk``: minimum margin and guaranteed margin).
+_STANDS_IN = {"min_margin_pct": "supported_margin_pct", "target_margin_pct": "supported_margin_pct"}
+
+
+def column_requirements(
+    columns: Sequence[tuple[str, str]], defaults: Mapping[str, Any], groups: bool = False
+) -> dict[str, tuple[str, ...]]:
+    """Which columns the bulk load requires, from the rules it validates with.
+
+    ``field -> ()`` when every row needs it (:data:`fields.REQUIRED_ALWAYS`, and Grupo
+    Empresarial in the business-group upload); ``field -> calc methods`` when only those types
+    need it (:func:`fields.methods_requiring`); optional columns are left out. A calc method
+    fixed by the supplier's profile turns its fields into always required.
+    """
+
+    names = {name for name, _ in columns}
+    always = set(fields.REQUIRED_ALWAYS) | ({"customer_group"} if groups else set())
+    fixed = defaults.get("calc_method")
+    by_type: dict[str, tuple[str, ...]] = {}
+    for name, methods in fields.methods_requiring().items():
+        target = name if name in names else _STANDS_IN.get(name)
+        if target is None or target not in names:
+            continue
+        if fixed is not None:
+            if fixed in methods:
+                always.add(target)
+            continue
+        by_type[target] = tuple(dict.fromkeys((*by_type.get(target, ()), *methods)))
+    return by_type | {name: () for name in always & names}
+
+
+def _requirement_text(methods: tuple[str, ...] | None) -> str:
+    """The «Obligatorio» cell of the instructions for a column."""
+
+    if methods is None:
+        return ""
+    if not methods:
+        return "Sí"
+    labels = vocabulary.CALC_METHOD_LABELS
+    others = [method for method in fields.active_methods() if method not in methods]
+    if len(others) < len(methods):
+        return "Sí, salvo con Tipo apoyo " + " o ".join(labels[item] for item in others)
+    return "Con Tipo apoyo " + " o ".join(labels[item] for item in methods)
+
+
 def _shown(name: str, value: Any) -> Any:
     """A stored value as the template writes it (labels, percentages, plain dates)."""
 
     if value is None or value == ():
         return None
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
     if name == "kind":
         return vocabulary.KIND_LABELS.get(value, value)
     if name == "calc_method":
@@ -245,8 +307,7 @@ def _shown(name: str, value: Any) -> Any:
 
 
 def _active_methods() -> list[str]:
-    methods = dict.fromkeys(m for ms in vocabulary.METHODS_BY_KIND.values() for m in ms)
-    return [vocabulary.CALC_METHOD_LABELS[method] for method in methods]
+    return [vocabulary.CALC_METHOD_LABELS[method] for method in fields.active_methods()]
 
 
 def template_workbook(
@@ -268,13 +329,9 @@ def template_workbook(
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = TEMPLATE_SHEET
-    columns = template_headers(profile, full, groups)
+    columns = template_headers(profile, full, groups, validation)
     defaults = profile.data.defaults if profile else {}
-    required = {"calc_method", "supplier_code"} - set(defaults)
-    if groups:
-        required.add("customer_group")
-    if profile is not None:
-        required.discard("supplier_code")
+    required = column_requirements(columns, defaults, groups)
     headers = [header for _, header in columns]
     if validation:
         headers.append(VALIDATION_HEADER)
@@ -282,27 +339,46 @@ def template_workbook(
         name = columns[index - 1][0] if index <= len(columns) else VALIDATION
         cell = sheet.cell(row=1, column=index, value=header)
         cell.font = _HEADER_FONT
-        cell.fill = _REQUIRED_FILL if name in required else _HEADER_FILL
+        methods = required.get(name)
+        color = (
+            _OPTIONAL_COLOR
+            if methods is None
+            else _REQUIRED_COLOR
+            if not methods
+            else _BY_TYPE_COLOR
+        )
+        cell.fill = _fill(color)
+        if methods:
+            cell.comment = Comment(f"Obligatorio: {_requirement_text(methods)}.", "Plataforma")
         sheet.column_dimensions[get_column_letter(index)].width = max(14, len(header) + 4)
     sheet.freeze_panes = "A2"
     for row_number, record in enumerate(rows, start=2):
         for index, (name, _) in enumerate(columns, start=1):
             value = _shown(name, record.get(name))
             cell = sheet.cell(row=row_number, column=index, value=value)
-            spec = fields.FIELDS[name]
-            if spec.type == fields.DATE and value is not None:
-                cell.number_format = "dd/mm/yyyy"
-            elif spec.type == fields.FRACTION and value is not None:
+            if fields.FIELDS[name].type == fields.FRACTION and value is not None:
                 cell.number_format = "0.00%"
 
     guide = book.create_sheet("Instrucciones")
     guide.append(["Carga masiva de apoyos"])
     guide["A1"].font = Font(bold=True, size=14)
     intro = [
-        "Una fila por apoyo. Las columnas en rojo son obligatorias; el resto es opcional.",
-        "Llave del apoyo: proveedor + NIT cliente + SKU JDH (o SKU proveedor) + fecha inicio "
-        "(+ número de acuerdo si lo hay). Si la llave ya existe, la fila actualiza ese apoyo; "
-        "si no, lo crea. Una columna que no venga en el archivo conserva el valor guardado.",
+        "Una fila por apoyo. El color del encabezado dice si la columna es obligatoria (ver "
+        "los colores abajo y la columna Obligatorio de la tabla).",
+        "Llave del apoyo: proveedor + NIT cliente + SKU JDH + fecha inicio. Si la llave ya "
+        "existe, la fila actualiza ese apoyo; si no, lo crea. Una columna que no venga en el "
+        "archivo conserva el valor guardado. La fecha inicio es parte de la llave pero no es "
+        "obligatoria: vacía = desde siempre.",
+        "Desde el NIT se toman del maestro de clientes el nombre del cliente y su grupo "
+        "empresarial; la sucursal debe ser una del NIT (1 y 001 son la misma). El NIT puede "
+        "venir con o sin dígito de verificación.",
+        "Desde el SKU JDH se toman del maestro de productos el SKU Proveedor, la marca y la "
+        "unidad de empaque. Solo si la fila no trae SKU JDH, el SKU Proveedor se usa para "
+        "encontrarlo: si no corresponde a ninguno, o a varios, la fila falla.",
+        "La columna Excepción margen mínimo autorizado JDH es el margen de la Excepción margen "
+        "JDH y el margen garantizado del % Margen Garantizado; en los demás tipos, el margen "
+        "mínimo que da el precio apoyado mínimo.",
+        "Grupo Empresarial (sin NIT): la fila crea un apoyo por cada cliente activo del grupo.",
         "Solo se escribe lo que se negocia: el costo, el precio lista, el margen y los nombres "
         "salen del DWH y se calculan en la plataforma.",
         "Clase apoyo: "
@@ -322,8 +398,11 @@ def template_workbook(
         "quedan igual o ya no vienen.",
         "Los porcentajes pueden escribirse como 5 %, 5 o 0,05. Los campos de alcance vacíos "
         "significan «todos».",
-        "Fechas: dd/mm/aaaa o aaaa-mm-dd. Fecha final INDEFINIDO o UFN = sin fecha final.",
-        "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla.",
+        "Fechas: las columnas de fecha ya tienen formato dd/mm/aaaa; también se lee "
+        "aaaa-mm-dd. Fecha Fin vacía, INDEFINIDO o UFN = sin fecha final.",
+        "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla. El "
+        "proveedor es el que se elige al subir (o la columna Cod. Proveedor si el archivo la "
+        "trae).",
     ]
     if profile is not None:
         intro.insert(
@@ -333,6 +412,21 @@ def template_workbook(
         )
     for line in intro:
         guide.append([line])
+    guide.append([])
+    for color, title, meaning in (
+        (_REQUIRED_COLOR, "Rojo", "Obligatoria en toda fila."),
+        (
+            _BY_TYPE_COLOR,
+            "Naranja",
+            "Obligatoria según el Tipo apoyo: la columna Obligatorio de la tabla (y la nota "
+            "del encabezado) dice con cuáles.",
+        ),
+        (_OPTIONAL_COLOR, "Azul", "Opcional. Vacía en un campo de alcance = todos."),
+    ):
+        guide.append([title, meaning])
+        swatch = guide.cell(row=guide.max_row, column=1)
+        swatch.fill = _fill(color)
+        swatch.font = _HEADER_FONT
     guide.append([])
     guide.append(["Campo", "Encabezado", "Obligatorio", "Descripción", "Valores válidos"])
     for cell in guide[guide.max_row]:
@@ -345,12 +439,12 @@ def template_workbook(
             [
                 spec.name,
                 headers[spec.name],
-                "Sí" if spec.name in required else "",
+                _requirement_text(required.get(spec.name)),
                 spec.help,
                 ", ".join(spec.choices),
             ]
         )
-    for letter, width in zip("ABCDE", (22, 26, 12, 70, 60), strict=True):
+    for letter, width in zip("ABCDE", (22, 26, 30, 70, 60), strict=True):
         guide.column_dimensions[letter].width = width
 
     _add_checks(book, sheet, columns, validation, len(rows))
@@ -365,6 +459,7 @@ _LISTS = (
     ("calc_method", "Tipo apoyo"),
     ("value_unit", "Unidad valor"),
     (VALIDATION, VALIDATION_HEADER),
+    ("promo_warehouses", "Bodega promocional"),
     ("funding", "Quién financia"),
     ("settlement_method", "Forma de liquidación"),
 )
@@ -377,7 +472,7 @@ def _list_values(name: str) -> list[str]:
         return _active_methods()
     if name == "value_unit":
         return ["Unidad", "Caja"]
-    if name == VALIDATION:
+    if name in (VALIDATION, "promo_warehouses"):
         return ["Sí", "No"]
     if name == "funding":
         return list(vocabulary.FUNDINGS)
@@ -387,7 +482,8 @@ def _list_values(name: str) -> list[str]:
 def _add_checks(
     book: Any, sheet: Any, columns: Sequence[tuple[str, str]], validation: bool, filled: int
 ) -> None:
-    """Dropdowns from the «Valores» sheet and date checks on the rows to fill."""
+    """Dropdowns from the «Valores» sheet, and date checks and the date format on the rows to
+    fill (filled or not), so a typed date is a date and not a text."""
 
     values = book.create_sheet("Valores")
     ranges: dict[str, str] = {}
@@ -414,6 +510,8 @@ def _add_checks(
                 error="Elige un valor de la lista",
             )
         elif fields.FIELDS.get(name) is not None and fields.FIELDS[name].type == fields.DATE:
+            for row in range(2, last + 1):
+                sheet.cell(row=row, column=index).number_format = _DATE_FORMAT
             check = DataValidation(
                 type="date",
                 operator="between",
@@ -430,4 +528,9 @@ def _add_checks(
         check.add(target)
 
 
-__all__ = ["SpreadsheetSupportReader", "template_headers", "template_workbook"]
+__all__ = [
+    "SpreadsheetSupportReader",
+    "column_requirements",
+    "template_headers",
+    "template_workbook",
+]

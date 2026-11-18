@@ -15,13 +15,19 @@ of the product master (a missing factor counts as 1, the SKU itself is the box).
   $ Apoyo en Costo              valor_unidad        $
   $ Apoyo en Precio Lista       valor_precio_lista  $
   $ Costo Apoyado               costo_neto          Costo − $CostoApoyado
-  % Margen Garantizado          precio_neto         Costo − PA × (1 − %MG), PA given
+  % Margen Garantizado          precio_neto         max(0, Costo − P × (1 − %MG)) at the price P
   ============================  ==================  ==========================================
 
-- **Suggested supported price (PA)** = PL − $Apoyo (the price given for % Margen Garantizado).
+- **Suggested supported price (PA)** = PL − $Apoyo.
 - **Recomposed margin** = (PA − Costo + $Apoyo) / PA.
 - **Minimum supported price** (JDH's authorized minimum margin ``m``, an exception) =
   (Costo − $Apoyo) / (1 − m); for $ Costo Apoyado that is $CostoApoyado / (1 − m).
+- **% Margen Garantizado** (BI, 2026-11-18): the supplier guarantees the margin %MG whatever
+  the price; it pays what is missing to reach it at the price actually sold, so the margin
+  with the support is max(margin without it, %MG). It has no value of its own
+  (``supplier_value`` is not used). Without a sale price (the master, the preview) it is shown
+  at the list price: PA = PL, $ Apoyo = max(0, Costo − PL × (1 − %MG)), recomposed margin =
+  max(optimal margin, %MG), and there is no minimum price.
 
 Example (BI): cost 4.920, PL 6.000, 10 % on the list price → $Apoyo 600, PA 5.400,
 recomposed margin (5.400 − 4.920 + 600) / 5.400 = 20 %.
@@ -38,9 +44,30 @@ ONE = Decimal(1)
 ZERO = Decimal(0)
 
 # Types whose value is money (per unit or per box), not a fraction.
-MONEY_METHODS = ("valor_unidad", "valor_precio_lista", "costo_neto", "precio_neto")
+MONEY_METHODS = ("valor_unidad", "valor_precio_lista", "costo_neto")
+# The supplier guarantees a margin: its money depends on the price sold, it has no value.
+GUARANTEED_METHOD = "precio_neto"
 # Types that bring supplier money per unit.
-AMOUNT_METHODS = ("pct_costo", "pct_precio_lista", *MONEY_METHODS)
+AMOUNT_METHODS = ("pct_costo", "pct_precio_lista", *MONEY_METHODS, GUARANTEED_METHOD)
+
+
+def guaranteed_amount(
+    cost: Decimal | None, price: Decimal | None, guaranteed_margin: Decimal | None
+) -> Decimal | None:
+    """What a % Margen Garantizado pays at ``price``: ``max(0, cost − price × (1 − g))``."""
+
+    if cost is None or price is None or guaranteed_margin is None or price <= 0:
+        return None
+    return max(ZERO, cost - price * (ONE - guaranteed_margin))
+
+
+def guaranteed_share(margin: Decimal | None, guaranteed_margin: Decimal | None) -> Decimal | None:
+    """The same as a share of the cost, from the margin without the support ``m``:
+    ``max(0, (g − m) / (1 − m))``, which leaves the margin at ``max(m, g)``. No units."""
+
+    if margin is None or guaranteed_margin is None or margin >= ONE:
+        return None
+    return max(ZERO, (guaranteed_margin - margin) / (ONE - margin))
 
 
 def _div(numerator: Decimal | None, denominator: Decimal | None) -> Decimal | None:
@@ -86,6 +113,7 @@ def unit_amount(
     value_unit: str | None = None,
     pack_factor: Decimal | None = None,
     guaranteed_margin: Decimal | None = None,
+    sale_price: Decimal | None = None,
 ) -> Decimal | None:
     """The supplier's money per inventory unit ($ Apoyo), or ``None`` when it has none.
 
@@ -97,12 +125,17 @@ def unit_amount(
         value_unit (str | None): ``caja`` when a money value is per box.
         pack_factor (Decimal | None): Units per box (product master; missing = 1).
         guaranteed_margin (Decimal | None): The guaranteed margin of a % Margen Garantizado.
+        sale_price (Decimal | None): The price sold at, per inventory unit; a % Margen
+            Garantizado without it is taken at the list price.
 
     Returns:
         Decimal | None: The amount; ``None`` for margin-only exceptions, rebates over sales,
         or when a reference it needs is missing.
     """
 
+    if calc_method == GUARANTEED_METHOD:
+        price = sale_price if sale_price is not None else list_price
+        return guaranteed_amount(cost, price, guaranteed_margin)
     if value is None:
         return None
     money = per_unit(value, value_unit, pack_factor) if calc_method in MONEY_METHODS else value
@@ -114,10 +147,6 @@ def unit_amount(
         return money
     if calc_method == "costo_neto":
         return cost - money if cost is not None else None
-    if calc_method == "precio_neto":
-        if cost is None or guaranteed_margin is None:
-            return None
-        return cost - money * (ONE - guaranteed_margin)
     return None
 
 
@@ -125,16 +154,15 @@ def suggested_price(
     calc_method: str,
     amount: Decimal | None,
     list_price: Decimal | None,
-    *,
-    agreed_price: Decimal | None = None,
 ) -> Decimal | None:
     """Precio Apoyado Sugerido: the list price minus the supplier's money.
 
-    For % Margen Garantizado the supported price is agreed beforehand (``agreed_price``).
+    A % Margen Garantizado is sold at the list price: the supplier tops the margin up to the
+    guaranteed one at whatever price, so it does not lower the price.
     """
 
-    if calc_method == "precio_neto":
-        return agreed_price
+    if calc_method == GUARANTEED_METHOD:
+        return list_price
     if amount is None or list_price is None:
         return None
     price = list_price - amount
@@ -234,12 +262,7 @@ def derive(
     net_cost = cost - amount if cost is not None and amount is not None else None
     if method in ("margen_minimo", "puntos_margen"):
         net_cost = cost
-    price = suggested_price(
-        method,
-        amount,
-        listed,
-        agreed_price=per_unit(data.supplier_value, data.value_unit, pack),
-    )
+    price = suggested_price(method, amount, listed)
 
     min_margin = data.min_margin_pct
     if method == "puntos_margen" and data.supplier_value is not None:
@@ -247,7 +270,8 @@ def derive(
         min_margin = base - data.supplier_value if base is not None else min_margin
 
     floor_margin = authorized_margin(data)
-    min_price = minimum_price(net_cost, floor_margin)
+    # A guaranteed margin has no minimum price: the supplier covers any price down to it.
+    min_price = None if method == GUARANTEED_METHOD else minimum_price(net_cost, floor_margin)
     # The recomposed margin is the one the support leaves at the price it is sold at: the
     # Precio Apoyado Mínimo when JDH authorized a minimum margin, else the suggested price.
     # Never at the list price (BI, 2026-11-18).

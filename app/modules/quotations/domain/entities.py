@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from app.modules.quotations.domain import vocabulary
+from app.modules.supplier_supports.domain.pricing import guaranteed_amount
 
 
 @dataclass(frozen=True)
@@ -273,11 +274,23 @@ class AppliedSupport:
     valid_to: date | None = None
     # JDH's authorized minimum margin (rules v2): the floor of the line's minimum price.
     authorized_margin_pct: Decimal | None = None
+    # A % Margen Garantizado: the supplier pays what is missing to this margin at the price
+    # sold, so its money is :meth:`amount_at` the line's price (``amount`` is at list price).
+    guaranteed_margin_pct: Decimal | None = None
+
+    def amount_at(self, cost: Decimal | None, price: Decimal | None) -> Decimal | None:
+        """The supplier's money per unit at ``price``."""
+
+        if self.guaranteed_margin_pct is None:
+            return self.amount
+        found = guaranteed_amount(cost, price, self.guaranteed_margin_pct)
+        return None if found is None else found.quantize(Decimal("0.01"))
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe form, for storage."""
 
         return {
+            "guaranteed_margin_pct": _text(self.guaranteed_margin_pct),
             "support_id": str(self.support_id),
             "kind": self.kind,
             "calc_method": self.calc_method,
@@ -311,6 +324,7 @@ class AppliedSupport:
             valid_from=date.fromisoformat(data["valid_from"]) if data.get("valid_from") else None,
             valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
             authorized_margin_pct=_decimal(data.get("authorized_margin_pct")),
+            guaranteed_margin_pct=_decimal(data.get("guaranteed_margin_pct")),
         )
 
 
@@ -504,11 +518,16 @@ class QuotationLine:
 
     @property
     def support_amount(self) -> Decimal:
-        """Money of the support per unit (0 without one)."""
+        """Money of the support per unit at the line's price (new, else last); 0 without one.
 
-        if self.support is None or self.support.amount is None:
+        A % Margen Garantizado pays what is missing to its margin at that price.
+        """
+
+        if self.support is None:
             return Decimal(0)
-        return self.support.amount
+        price = self.new_price if self.new_price is not None else self.last_price
+        found = self.support.amount_at(self.cost, price)
+        return Decimal(0) if found is None else found
 
 
 @dataclass(frozen=True)

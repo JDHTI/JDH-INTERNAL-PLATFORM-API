@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.modules.supplier_supports.domain import vocabulary
 
 # How a value is typed in the form and read from a file.
-TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST = (
+TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST, FLAG = (
     "text",
     "sku",
     "nit",
@@ -21,6 +21,7 @@ TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST = (
     "fraction",
     "choice",
     "list",
+    "flag",
 )
 
 GROUP_IDENTITY = "Identidad"
@@ -49,6 +50,8 @@ class FieldSpec:
     max_length: int | None = None
     # Whether the short general template (the default download) carries it.
     core: bool = False
+    # Whether ``form-schema`` lists it (the creation form has its own control otherwise).
+    in_form: bool = True
 
 
 FIELD_SPECS: tuple[FieldSpec, ...] = (
@@ -137,6 +140,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         help="Nombre del grupo empresarial: crea un apoyo por cada cliente activo del grupo "
         "(sin NIT).",
         max_length=200,
+        core=True,
     ),
     FieldSpec(
         "product_sku",
@@ -154,7 +158,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_SCOPE,
         SKU,
         ("referencia proveedor", "sku proveedor", "ref proveedor", "codigo proveedor sku", "ref"),
-        help="Código del producto en el proveedor; se usa si no hay SKU JDH.",
+        help="Se toma del maestro de productos con el SKU JDH. Solo si no hay SKU JDH, se usa "
+        "para encontrarlo. No es parte de la llave.",
         max_length=100,
         core=True,
     ),
@@ -166,14 +171,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("regionales", "c o", "centro de operacion"),
         help="Varias separadas por coma, barra o punto y coma. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "business_units",
-        "Unidad de Negocio",
+        "Unidad Negocio",
         GROUP_SCOPE,
         LIST,
-        ("unidades de negocio", "un", "u n"),
+        ("unidad de negocio", "unidades de negocio", "un", "u n"),
         help="Varias separadas por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "channels",
@@ -182,8 +189,21 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("canales",),
         help="Varios separados por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
-    FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50),
+    FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50, core=True),
+    FieldSpec(
+        "promo_warehouses",
+        "Bodega promocional",
+        GROUP_SCOPE,
+        FLAG,
+        ("bodegas promocionales", "incluir bodegas promocionales", "aplica en promocion"),
+        ("Sí", "No"),
+        "Sí = el apoyo también aplica en las bodegas promocionales (grupo 23); No = no hay "
+        "doble apoyo sobre un producto en promoción. Vacía = el valor elegido para la carga "
+        "(No si no se eligió).",
+        in_form=False,
+    ),
     FieldSpec(
         "calc_method",
         "Tipo apoyo",
@@ -241,8 +261,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "excepcion margen minimo",
             "margen minimo autorizado jdh",
         ),
-        help="Margen mínimo que JDH autoriza sobre el apoyo: da el Precio Apoyado Mínimo = "
-        "(costo − apoyo) / (1 − margen). En una Excepción margen JDH es su margen.",
+        help="Obligatorio en una Excepción margen JDH: es su margen mínimo autorizado. En los "
+        "demás tipos es opcional y da el Precio Apoyado Mínimo = (costo − apoyo) / (1 − margen). "
+        "En la plantilla, con % Margen Garantizado es el margen garantizado.",
         core=True,
     ),
     FieldSpec(
@@ -346,7 +367,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_VALIDITY,
         DATE,
         ("vigencia inicial", "fecha inicial", "vigencia desde", "inicio", "desde"),
-        help="dd/mm/aaaa o aaaa-mm-dd. Forma parte de la llave del apoyo.",
+        help="dd/mm/aaaa o aaaa-mm-dd. Forma parte de la llave del apoyo (proveedor, NIT, "
+        "SKU JDH y fecha inicio).",
         core=True,
     ),
     FieldSpec(
@@ -412,8 +434,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_TRACE,
         TEXT,
         ("observacion", "notas", "comentarios", "obervaciones"),
+        help="Solo en la descarga con datos: el motivo de una Validación No.",
         max_length=2000,
-        core=True,
     ),
 )
 
@@ -437,6 +459,7 @@ _ORDER = (
     "business_units",
     "channels",
     "warehouse",
+    "promo_warehouses",
 )
 FIELD_SPECS = tuple(
     sorted(
@@ -497,11 +520,12 @@ METHOD_RULES: dict[str, MethodRule] = {
         "$ Costo apoyado pactado: $ Apoyo = costo − costo apoyado.",
     ),
     "precio_neto": MethodRule(
-        "money",
-        ("supplier_value", "target_margin_pct"),
-        (*_COMMON, "target_margin_pct"),
-        "% Margen garantizado: el valor es el precio apoyado ya definido y el margen objetivo "
-        "es el margen garantizado. $ Apoyo = costo − precio apoyado × (1 − margen).",
+        "none",
+        ("target_margin_pct",),
+        ("reference_cost", "reference_list_price", "pack_factor", "target_margin_pct"),
+        "% Margen Garantizado: el proveedor garantiza ese margen a cualquier precio de venta y "
+        "pone lo que falte: $ Apoyo = máx(0, costo − precio × (1 − margen)). No lleva valor; "
+        "el margen con el apoyo queda en máx(margen sin apoyo, margen garantizado).",
     ),
     "puntos_margen": MethodRule(
         "percent",
@@ -512,10 +536,37 @@ METHOD_RULES: dict[str, MethodRule] = {
     "pct_ventas": MethodRule(
         "percent", ("supplier_value",), (), "Rebate sobre ventas; se liquida por periodo."
     ),
+    # The exception's margin is written in «Excepción margen mínimo autorizado JDH», the one JDH
+    # margin the form and the template show; min_margin_pct is still accepted (kept equal).
     "margen_minimo": MethodRule(
-        "none", ("min_margin_pct",), ("min_margin_pct",), "No usa valor del proveedor."
+        "none",
+        ("supported_margin_pct",),
+        ("supported_margin_pct",),
+        "Excepción margen JDH: no usa valor del proveedor; el margen mínimo autorizado es "
+        "obligatorio.",
     ),
 }
+
+
+# Required in every support: the form asks them and the bulk load rejects a row without them
+# (it deduces the class only for a file with no Clase apoyo column).
+REQUIRED_ALWAYS = ("kind", "calc_method")
+
+
+def active_methods() -> tuple[str, ...]:
+    """The calc methods of the classes that are still created, in their order."""
+
+    return tuple(dict.fromkeys(m for ms in vocabulary.METHODS_BY_KIND.values() for m in ms))
+
+
+def methods_requiring() -> dict[str, tuple[str, ...]]:
+    """``field -> active calc methods that require it`` (from :data:`METHOD_RULES`)."""
+
+    found: dict[str, list[str]] = {}
+    for method in active_methods():
+        for name in METHOD_RULES[method].requires:
+            found.setdefault(name, []).append(method)
+    return {name: tuple(methods) for name, methods in found.items()}
 
 
 def form_schema() -> dict[str, object]:
@@ -533,6 +584,7 @@ def form_schema() -> dict[str, object]:
                 "max_length": spec.max_length,
             }
             for spec in FIELD_SPECS
+            if spec.in_form
         ],
         "methods": {
             name: {
@@ -543,7 +595,7 @@ def form_schema() -> dict[str, object]:
             }
             for name, rule in METHOD_RULES.items()
         },
-        "required_always": ["kind", "calc_method"],
+        "required_always": list(REQUIRED_ALWAYS),
         # How each calc method reads in the general template's "Tipo de apoyo" column.
         "calc_method_labels": dict(vocabulary.CALC_METHOD_LABELS),
         "tiers": {"threshold_types": list(vocabulary.THRESHOLD_TYPES), "max": 20},
@@ -556,6 +608,9 @@ __all__ = [
     "FRACTION_FIELDS",
     "METHOD_RULES",
     "PERCENT_METHODS",
+    "REQUIRED_ALWAYS",
     "FieldSpec",
+    "active_methods",
     "form_schema",
+    "methods_requiring",
 ]

@@ -631,3 +631,41 @@ def test_a_full_margin_product_is_only_released_by_hand() -> None:
     assert alert.code == "margen_100" and alert.row_numbers == (3,)
     # It stays out of the order margin: it carries no cost.
     assert rules.order_margins(items)[0] == D("0.300000")
+
+
+def test_a_support_without_effect_is_never_the_reason_a_line_is_released() -> None:
+    # A supported cost above today's DWH cost brings $0 (costo apoyado 227.932,80 > 200.000).
+    idle = agreement(
+        calc_method="costo_neto",
+        supplier_value=D("227932.80"),
+        dwh_unit_cost=D("200000"),
+        supported_margin_pct=D("0.08"),
+    )
+
+    # The line reaches the product's margin on its own: that is the reason.
+    own = decide([idle], reference=D("0.08"))
+    assert own.status == "listo_para_liberar" and own.reason == "cumple_margen_lista"
+    (checked,) = own.checks
+    assert checked.no_effect and checked.detail.startswith("Apoyo sin efecto: aporta $0")
+    assert checked.as_dict()["no_effect"] is True
+    # Below it, the support's 8 % does not release it: it brings no money.
+    short = decide([idle], reference=D("0.16"))
+    assert short.status == "pendiente_validacion" and short.reason == "no_cumple_acuerdo"
+    assert short.support_id == idle.id
+
+
+def test_a_guaranteed_margin_tops_the_line_up_to_it() -> None:
+    # The line sells at 10 % without the support; the supplier guarantees 14 %.
+    guarantee = agreement(calc_method="precio_neto", target_margin_pct=D("0.14"))
+
+    met = decide([guarantee], reference=D("0.12"))
+    assert met.reason == "cumple_con_apoyo" and met.effective_margin_pct == D("0.140000")
+    # The target is the product's margin (or JDH's minimum), never the guarantee itself.
+    assert met.required_margin_pct == D("0.120000")
+    short = decide([guarantee], reference=D("0.16"))
+    assert short.reason == "no_cumple_acuerdo" and short.effective_margin_pct == D("0.140000")
+    authorized = replace(guarantee, supported_margin_pct=D("0.13"))
+    assert decide([authorized], reference=D("0.16")).reason == "cumple_con_apoyo"
+    # Under the line's own margin it pays nothing: without effect, never the reason.
+    idle = decide([replace(guarantee, target_margin_pct=D("0.08"))], reference=D("0.16"))
+    assert idle.reason == "no_cumple_acuerdo" and idle.checks[0].no_effect
