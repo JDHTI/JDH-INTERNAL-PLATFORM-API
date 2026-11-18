@@ -9,8 +9,24 @@ Módulo `supplier_supports` (con un puerto hacia `quotations`). Migración `0062
 
 ## Reglas
 
-- **Origen:** solo una cotización de cliente (`kind = cotizacion`). Las actualizaciones de lista y
-  las listas principales no lo ofrecen.
+- **Margen menor que el actual** (BI, 2026-11-18): el margen pedido de cada referencia debe ser
+  **menor** que su margen actual para el cliente. El margen actual es el margen óptimo del producto
+  en la lista de margen del cliente: Market Apartadó, Masivo food, Mayoristas o Food service, el
+  mismo objetivo del cotizador. Pedir igual o más es 422, y también si el producto no tiene margen
+  en esa lista. Cada referencia guarda ese margen (`target_margin_pct`, migración `0070`).
+- **Origen:**
+  - **desde el cotizador**, en una referencia de una cotización de cliente (`kind = cotizacion`).
+    Las actualizaciones de lista y las listas principales no lo ofrecen;
+  - **desde el panel de solicitudes**, por **cliente (NIT) y referencia**, sin cotización
+    (BI, 2026-11-18):
+    - primero se consulta el margen actual
+      (`GET /internal-support-requests/target-margins?customer_nit=&sku=`);
+    - luego se pide uno menor (`POST /internal-support-requests`);
+    - todas las referencias de una solicitud deben ser del mismo proveedor;
+    - hay una solicitud pendiente por cliente y referencia;
+    - el NIT acepta el dígito de verificación;
+    - pide quien cotiza o quien pide apoyos JDH (`solicitudes-apoyos` en Comercial), nunca un
+      aprobador.
 - **Alcance:** el NIT de la cotización y una o varias referencias del mismo proveedor que estén en
   ella. Nunca lista de precios, canal, regional ni unidad de negocio. Un cliente temporal (sin NIT
   de SIESA) no puede pedir.
@@ -53,11 +69,13 @@ vence** (`expire_missing`), porque no viene en el archivo del proveedor.
 
 ## API (`/api/v1`)
 
-Márgenes como fracciones (`"0.16"`) y fechas `YYYY-MM-DD`. Gate de lectura: `cotizador`, `apoyos`
-o `aprobacion-apoyos-internos`.
+Márgenes como fracciones (`"0.16"`) y fechas `YYYY-MM-DD`. Gate de lectura: `cotizador`, `apoyos`,
+`aprobacion-apoyos-internos` o `solicitudes-apoyos`.
 
 | Método y ruta | Uso |
 | --- | --- |
+| `GET /internal-support-requests/target-margins?customer_nit=&sku=&sku=` | El margen actual de cada referencia para el cliente: `{customer_nit, customer_name, items: [{sku, description, supplier_code, margin_field, margin_label, margin_pct}]}`. Las referencias desconocidas no vienen; 422 si el cliente no existe |
+| `POST /internal-support-requests` | Pedir desde el panel: `{customer_nit, requested_for?, agreed_with, reason, items: [{sku, requested_margin_pct}]}`. Sin cotización (`quotation_id` nulo). 422 si un margen no es menor que el actual o las referencias son de varios proveedores; 409 si una referencia ya está pendiente para ese cliente |
 | `POST /quotations/{id}/support-requests` | Pedir: `{version, supplier_code, requested_for?, agreed_with, reason, items: [{sku, requested_margin_pct}]}`. `requested_for` vacío = hoy (Bogotá). 409 si cambió la `version` de la cotización o una referencia ya está pendiente |
 | `GET /internal-support-requests?mine&status&q&page&size` | `{items, total, page, size}`, las más nuevas primero. `mine=true`: las propias; sin `mine` solo los aprobadores. `q` busca por NIT, cliente, proveedor, solicitante, SKU o `#número` |
 | `GET /internal-support-requests/{id}` | Una solicitud: su autor o un aprobador (404 para el resto) |
@@ -66,7 +84,9 @@ o `aprobacion-apoyos-internos`.
 
 La solicitud guarda, por referencia, cómo estaba la línea al pedir: `cost`, `quoted_price` (precio
 de la oferta), `margin_pct` (margen que deja, con los apoyos vigentes) y `min_margin_pct`. Además
-`requested_margin_pct`, `approved_margin_pct` y `support_id` (el apoyo creado).
+`target_margin_pct` (el margen actual contra el que se comparó), `requested_margin_pct`,
+`approved_margin_pct` y `support_id` (el apoyo creado). Una solicitud del panel solo trae
+descripción, unidad y `target_margin_pct`.
 
 Además:
 

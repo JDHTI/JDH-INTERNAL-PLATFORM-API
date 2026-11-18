@@ -372,6 +372,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/send` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/support-requests` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/uploaded` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |

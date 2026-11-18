@@ -285,10 +285,17 @@ solo para cotización (un cliente temporal puede tener solo productos locales).
 
 ## Estados
 
+**Flujo sin bloqueos hasta el cliente** (BI, 2026-11-18): comercial y BI arman la cotización,
+ven y descargan la oferta en borrador y la envían al cliente (`POST /quotations/{id}/send`) sin
+pasar por validación; la regla de margen nunca bloquea. Solo **actualizar o crear una lista de
+precios** (`/confirm`) pasa por la validación de BI. `/send` necesita al menos una referencia en
+la oferta; 409 si la cotización ya está en validación o cargada.
+
 | Estado | Etiqueta | Quién | Qué pasa |
 | --- | --- | --- | --- |
 | `borrador` | Borrador | asesor | edita precios, márgenes, referencias; cualquier cambio vuelve aquí |
-| `pendiente_validacion` | Pendiente de validación | asesor confirma (`/confirm`) | queda bloqueada para editar precios; elige actualización o creación y la fecha de activación |
+| `enviada` | Enviada al cliente | asesor o BI (`/send`) | la oferta salió al cliente **sin validación**; sigue editable (una edición la vuelve a borrador y guarda `sent_at`/`sent_by` del último envío) |
+| `pendiente_validacion` | Pendiente de validación | asesor pide la lista (`/confirm`, desde borrador o enviada) | queda bloqueada para editar precios; elige actualización o creación y la fecha de activación |
 | `pendiente_carga` | Pendiente de carga | BI valida (`/validate`) | da el código de una lista nueva; se liberan el Excel y el plano |
 | `cargada` | Cargada | BI marca (`/uploaded`) | los archivos se cargaron en SIESA; guarda `uploaded_by` y `uploaded_at` |
 
@@ -387,7 +394,8 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/customers` | Clientes para cotizar: `scope=mine` (defecto) o `all`, `q`, `page`, `size` (≤ 100) |
 | `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30), billing_center_code?, with_history?: true}` (`with_history: false` empieza vacía) o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
 | `GET /quotations/billing-centers` | `[{code, name, regional, regional_label}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`) |
-| `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
+| `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `enviada`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
+| `POST /quotations/{id}/send` | `{version}` → `enviada`: la oferta va al cliente sin validación (asesor o BI); sigue editable. 422 sin referencias en la oferta; 409 si está en validación o cargada |
 | `GET /quotations/{id}` | Cotización completa |
 | `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price?, margin_pct?, quantity?}]}`. `quantity` (texto o número; `null` la quita) va sola o con `new_price`, nunca con `margin_pct`. Un lote con **solo** cantidades se acepta en cualquier estado, no cambia el estado y sube la versión; uno que toca precios sigue las reglas de siempre. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
 | `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}`. Una referencia `LOC-<n>` no se busca en SIESA: va en `not_found` |
