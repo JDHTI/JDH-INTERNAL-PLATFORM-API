@@ -5,13 +5,13 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.modules.quotations.domain import pricing, rules
-from app.modules.quotations.presentation.router import _support
 from app.modules.quotations.domain.entities import (
     ItemInfo,
     ListPrice,
     QuotationPolicy,
     ValueTaxKey,
 )
+from app.modules.quotations.presentation.router import _support
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
 
