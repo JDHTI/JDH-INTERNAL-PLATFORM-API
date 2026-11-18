@@ -167,6 +167,9 @@ class Profiles:
     async def signer(self, user_id):
         return SimpleNamespace(name="Cristian Garzón", position="Analista de Calidad")
 
+    async def names(self, user_ids):
+        return {uid: f"Persona {str(uid)[:4]}" for uid in user_ids}
+
 
 class Bucket:
     def __init__(self) -> None:

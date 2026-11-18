@@ -103,7 +103,7 @@ la acción cuando el caso se finalizó con `internal_failure`.
 | GET | `/export` | El Excel con el diseño del P.04.F.02 (una fila por corrección, causa o actividad) |
 | POST | `` | Crea una acción: `origin`, `process_id` y `action_type` son obligatorios |
 | POST | `/from-case/{case_id}` | Crea la acción desde un caso |
-| GET / PATCH / DELETE | `/{id}` | Detalle (con evidencias, historial y número de acciones anteriores del cliente), edición del encabezado, borrado |
+| GET / PATCH / DELETE | `/{id}` | Detalle (con evidencias, historial y número de acciones anteriores del cliente), edición del encabezado, borrado. Cada corrección y actividad trae `responsible_users` (`{id, display_name}`) junto a `responsible_user_ids` |
 | PUT | `/{id}/corrections`, `/{id}/causes`, `/{id}/activities` | Reemplazan la sección. Una fila con `id` conserva su avance y su calificación |
 | POST | `/{id}/rows/{row_id}/done` | Marca una corrección o actividad realizada (`{done, evidence_note?}`): su responsable o Calidad |
 | POST | `/{id}/activities/{activity_id}/rating` | Califica la eficacia (`{effective, note?}`) de una actividad realizada: Calidad |

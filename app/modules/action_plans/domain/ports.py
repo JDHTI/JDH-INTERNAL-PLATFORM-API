@@ -165,6 +165,10 @@ class Profiles(Protocol):
         """The person as the directory shows them, or ``None``."""
         ...
 
+    async def names(self, user_ids: Sequence[UUID]) -> dict[UUID, str]:
+        """Name of each user that exists (the email when it has none)."""
+        ...
+
 
 class Bell(Protocol):
     """The intranet bell (and Web Push)."""

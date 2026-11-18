@@ -102,6 +102,13 @@ class PermissionsResponse(BaseModel):
     can_manage: bool
 
 
+class PersonResponse(BaseModel):
+    """A responsible user with their name (``None`` when the user no longer exists)."""
+
+    id: UUID
+    display_name: str | None
+
+
 class CorrectionResponse(BaseModel):
     """An immediate correction."""
 
@@ -109,6 +116,7 @@ class CorrectionResponse(BaseModel):
     description: str
     responsible_text: str | None
     responsible_user_ids: list[UUID]
+    responsible_users: list[PersonResponse]
     due_on: date | None
     evidence_note: str | None
     done: bool
@@ -130,6 +138,7 @@ class ActivityResponse(BaseModel):
     description: str
     responsible_text: str | None
     responsible_user_ids: list[UUID]
+    responsible_users: list[PersonResponse]
     due_on: date | None
     evidence_note: str | None
     follow_up_text: str | None
@@ -378,7 +387,20 @@ def _summary_fields(plan: ActionPlan, today: date) -> dict:
     }
 
 
-def _plan(plan: ActionPlan, today: date) -> PlanResponse:
+def _row(model: type[BaseModel], row, people: dict[UUID, str], **extra) -> BaseModel:
+    """A correction or activity with its responsibles named."""
+
+    named = {"responsible_users", *extra}
+    return model(
+        **{k: getattr(row, k) for k in model.model_fields if k not in named},
+        responsible_users=[
+            PersonResponse(id=uid, display_name=people.get(uid)) for uid in row.responsible_user_ids
+        ],
+        **extra,
+    )
+
+
+def _plan(plan: ActionPlan, today: date, people: dict[UUID, str]) -> PlanResponse:
     legacy = plan.legacy or {}
     return PlanResponse(
         **_summary_fields(plan, today),
@@ -396,16 +418,10 @@ def _plan(plan: ActionPlan, today: date) -> PlanResponse:
         previous_attempt_id=plan.previous_attempt_id,
         imported=bool(legacy.get("source")),
         import_issues=list(legacy.get("issues") or []),
-        corrections=[
-            CorrectionResponse.model_validate(c, from_attributes=True) for c in plan.corrections
-        ],
+        corrections=[_row(CorrectionResponse, c, people) for c in plan.corrections],
         causes=[CauseResponse.model_validate(c, from_attributes=True) for c in plan.causes],
         activities_detail=[
-            ActivityResponse(
-                **{k: getattr(a, k) for k in ActivityResponse.model_fields if k != "overdue"},
-                overdue=a.is_overdue(today),
-            )
-            for a in plan.activities
+            _row(ActivityResponse, a, people, overdue=a.is_overdue(today)) for a in plan.activities
         ],
         created_at=plan.created_at,
         updated_at=plan.updated_at,
@@ -427,7 +443,7 @@ def _file(value: PlanFile) -> FileResponse:
 
 def _detail(value: PlanDetail, today: date) -> PlanDetailResponse:
     return PlanDetailResponse(
-        plan=_plan(value.plan, today),
+        plan=_plan(value.plan, today, value.people),
         access=AccessResponse(
             can_manage=value.access.can_manage, is_responsible=value.access.is_responsible
         ),

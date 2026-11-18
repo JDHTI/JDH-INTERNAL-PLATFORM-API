@@ -154,6 +154,8 @@ class PlanDetail:
     files: list[PlanFile]
     events: list[PlanEvent]
     similar: int
+    # Name of each responsible user of the corrections and activities.
+    people: dict[UUID, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -328,6 +330,7 @@ class ActionPlanService:
             await self.repository.list_files(plan.id),
             await self.repository.list_events(plan.id),
             similar,
+            await self.profiles.names(sorted(plan.responsible_ids(), key=str)),
         )
 
     async def export_plans(self, filters: PlanFilters, principal: Principal) -> list[ActionPlan]:
