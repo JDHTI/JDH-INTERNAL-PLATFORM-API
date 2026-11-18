@@ -52,7 +52,21 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 | % Apoyo en Precio Lista | PL × % (su valor absoluto se resta al costo) | PL − $ Apoyo |
 | $ Apoyo en Costo / en Precio Lista | $ | PL − $ Apoyo |
 | $ Costo Apoyado | costo − $ costo apoyado | PL − $ Apoyo |
-| % Margen Garantizado | costo − PA × (1 − % garantizado) | el PA pactado |
+| % Margen Garantizado | máx(0, costo − precio de venta × (1 − g)); sin precio de venta, al PL | PL |
+
+- **% Margen Garantizado** (BI, 2026-11-18): el proveedor garantiza el margen `g` a **cualquier**
+  precio de venta y pone lo que falte; no fija precio ni valor (`supplier_value` no se usa, solo
+  `target_margin_pct`). El margen con apoyo queda en máx(margen sin apoyo, g). Ejemplo del
+  usuario: vendido a 10.000 con margen 10 % (costo 9.000) y g = 14 % → el proveedor pone 400.
+  - En el maestro y el `/preview` (no hay precio de venta) se muestra al precio de lista:
+    PA = PL, $ Apoyo = máx(0, costo − PL × (1 − g)), margen recompuesto = máx(margen óptimo, g).
+    No tiene Precio Apoyado Mínimo.
+  - En el cotizador, el apoyo se calcula al precio de la línea (el nuevo, o el último si no hay
+    nuevo): `guaranteed_margin_pct` en el apoyo aplicado. El precio óptimo es el de lista y no
+    hay precio mínimo, porque el proveedor cubre cualquier precio hasta g; la línea se juzga por
+    su margen con apoyo. El objetivo es el del producto (o el mínimo JDH), no g.
+  - En el validador: ver [validador-pedidos.md](validador-pedidos.md#apoyos-reglas-v2).
+  - En producción no había ninguno guardado con un PA (18-nov-2026): no hubo migración.
 
 - Margen recompuesto = (precio − costo + $ Apoyo) / precio, donde el precio es el **Precio
   Apoyado Mínimo** si hay margen mínimo JDH y si no el **precio apoyado sugerido**; nunca el
@@ -214,7 +228,7 @@ Histórico: las fórmulas vigentes están en «Reglas v2» arriba.
 | `pct_precio_lista` | fracción del precio lista | `lista × valor` |
 | `valor_unidad` | monto fijo por unidad (o caja) | `valor` |
 | `costo_neto` | costo apoyado pactado | `costo − valor` |
-| `precio_neto` | precio neto pactado; `target_margin_pct` es el margen garantizado | `costo − precio × (1 − margen)` |
+| `precio_neto` | no lleva valor; `target_margin_pct` es el margen garantizado | `máx(0, costo − precio de venta × (1 − margen))` |
 | `puntos_margen` | puntos de margen que se restan al margen lista | — (margen mínimo = `list_margin_pct − valor`) |
 | `pct_ventas` | rebate sobre ventas | — (se liquida por periodo) |
 | `margen_minimo` | no usa `supplier_value`; usa `min_margin_pct` | — |

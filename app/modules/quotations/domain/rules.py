@@ -50,6 +50,7 @@ from app.modules.quotations.domain.entities import (
     SupportOption,
     ValueTaxKey,
 )
+from app.modules.supplier_supports.domain.pricing import GUARANTEED_METHOD
 
 ZERO = Decimal(0)
 ONE = Decimal(1)
@@ -126,13 +127,15 @@ def supported_price(
 
     The list price is the cost at ``target`` and the customer keeps exactly the support:
     ``cost / (1 − target) − support``. Without money (a margin exception) it is the price at
-    ``target``; a % Margen Garantizado is priced at its guaranteed margin over the net cost,
-    which is its agreed supported price.
+    ``target``. A % Margen Garantizado is the list price itself: the supplier tops the margin
+    up to the guaranteed one at whatever price, so it does not lower the price.
     """
 
     if cost is None or target is None or target >= ONE:
         return None
-    if not support or calc_method == "precio_neto":
+    if calc_method == GUARANTEED_METHOD:
+        return price_at_margin(cost, ZERO, target, family)
+    if not support:
         return price_at_margin(cost, support, target, family)
     price = cost / (ONE - target) - support
     if price <= 0:
@@ -156,7 +159,10 @@ def price_for_margin(line: QuotationLine, target: Decimal, family: str) -> Decim
     peso must not turn a valid margin into one below the minimum.
     """
 
-    price = price_at_margin(line.cost, line.support_amount, target, family)
+    guaranteed = line.support is not None and line.support.guaranteed_margin_pct is not None
+    # A guaranteed margin is never below its margin: the price for a target is the one at it.
+    amount = ZERO if guaranteed else line.support_amount
+    price = price_at_margin(line.cost, amount, target, family)
     if price is None:
         return None
     floor = line.min_margin_pct
@@ -352,6 +358,11 @@ def _applied(
         valid_from=agreement.valid_from,
         valid_to=agreement.valid_to,
         authorized_margin_pct=ratio(agreement.supported_margin_pct),
+        guaranteed_margin_pct=(
+            ratio(agreement.target_margin_pct)
+            if agreement.calc_method == GUARANTEED_METHOD
+            else None
+        ),
     )
 
 
@@ -523,11 +534,15 @@ def pick_list_support(
     problems: list[str] = []
 
     def prices(
-        amount: Decimal, target: Decimal | None, authorized: Decimal | None = None
+        amount: Decimal,
+        target: Decimal | None,
+        authorized: Decimal | None = None,
+        method: str | None = None,
     ) -> tuple[Decimal | None, Decimal | None]:
         floor = authorized if authorized is not None else minimum_margin(target, policy)
-        low = minimum_price(cost, amount, floor)
-        optimal = supported_price(cost, amount, target, family)
+        # A guaranteed margin has no minimum price (the supplier covers any price).
+        low = None if method == GUARANTEED_METHOD else minimum_price(cost, amount, floor)
+        optimal = supported_price(cost, amount, target, family, method)
         if optimal is not None and low is not None:
             optimal = max(optimal, low)
         return low, optimal
@@ -567,7 +582,7 @@ def pick_list_support(
                 continue
             amount = money(share * cost) if cost is not None else None
             required = target = _list_target(agreement, product_target)
-            low, optimal = prices(amount or ZERO, target, agreement.supported_margin_pct)
+            low, optimal = prices(amount or ZERO, target, agreement.supported_margin_pct, method)
             option = replace(
                 base,
                 detail=f"Apoyo de {how}",
@@ -772,8 +787,15 @@ def build_line(
         last_price = money(base_price)
     else:
         last_price = money(sale.net_price) if sale else None
-    current_with_support = margin(last_price, cost_value, amount)
-    min_price = minimum_price(cost_value, amount, floor)
+    guaranteed = support is not None and support.guaranteed_margin_pct is not None
+    current_with_support = margin(
+        last_price,
+        cost_value,
+        (support.amount_at(cost_value, last_price) or ZERO) if guaranteed else amount,
+    )
+    # A guaranteed margin has no minimum price: the supplier covers any price down to its
+    # margin (BI, 2026-11-18); the line is judged by its margin with the support.
+    min_price = None if guaranteed else minimum_price(cost_value, amount, floor)
     optimal = supported_price(
         cost_value, amount, target, price_family, support.calc_method if support else None
     )
@@ -926,7 +948,10 @@ def reprice(line: QuotationLine, new_price: Decimal | None) -> QuotationLine:
         line,
         new_price=price,
         new_margin_pct=margin(price, line.cost),
-        new_margin_with_support_pct=margin(price, line.cost, line.support_amount),
+        # Read at the new price: a % Margen Garantizado's money depends on it.
+        new_margin_with_support_pct=margin(
+            price, line.cost, replace(line, new_price=price).support_amount
+        ),
         variation_pct=variation(price, line.last_price),
     )
     return replace(priced, compliance=compliance(priced))

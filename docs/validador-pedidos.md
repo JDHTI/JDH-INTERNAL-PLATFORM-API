@@ -34,21 +34,23 @@ pendiente con `datos_incompletos`. Límites: `ORDER_VALIDATION_MAX_UPLOAD_MB` (1
 
 ### Margen de referencia: el del producto para el canal
 
-Cada producto trae un margen por canal ([margen por producto](margenes-productos.md)). La
-línea se compara con el que corresponde a su **canal** (el `CANAL` del archivo; si no lo
-trae, el del cliente en el maestro):
+Cada producto trae un margen por lista de unidad de negocio ([margen por producto](margenes-productos.md)).
+Un cliente del maestro usa su lista (`customer_margin_field`, la mayoría de sus sucursales
+activas), en este orden:
 
-| Canal | Margen del producto |
+| Cliente | Margen del producto (`margin_basis`) |
 | --- | --- |
-| `MAYORISTAS Y DISTRIBUIDORES`, `SUBDISTRIBUIDOR` | Margen Mayoristas |
-| `SALSAMENTARIAS` | Margen Salsamentarias |
-| Cualquier otro | Margen Lista 1 |
+| Centro de facturación 200 | Margen Market Apartadó (`market`) |
+| Equipo del vendedor «MASIVO FOOD» | Margen Masivo Food (`masivo_food`) |
+| Canal `MAYORISTAS Y DISTRIBUIDORES`, `SUBDISTRIBUIDOR` o `SALSAMENTARIAS` | Margen Mayoristas (`mayoristas`) |
+| Cualquier otro | Margen Lista 1, Food service (`lista`) |
 
-Margen Masivo Food y Margen Market Apartadó se cargan y se muestran, pero **ninguna regla
-los aplica por ahora**. Un producto sin margen para ese canal no se puede comparar y se
-dice en el detalle.
+Masivo food y Market caen en Margen Lista 1 cuando el producto no tiene ese margen. Si la línea
+del archivo trae `CANAL`, decide entre Food service y Mayoristas. Un cliente que no está en el
+maestro se decide solo por el canal del archivo. Un producto sin margen para esa lista no se puede
+comparar y se dice en el detalle.
 
-### Apoyos
+### Apoyos (reglas v2)
 
 El reporte trae precio y margen, no costo. Con las fórmulas del maestro
 (`margen = 1 − costo / precio`) el costo es `precio × (1 − margen)` y el margen que
@@ -58,24 +60,41 @@ devuelve un apoyo es
 margen con apoyo = margen + apoyo / precio = margen + (apoyo / costo) × (1 − margen)
 ```
 
-Cada apoyo se reduce a **apoyo / costo** usando solo valores del propio apoyo, así la
-unidad del apoyo (caja o unidad) nunca se mezcla con la del pedido:
+Cada apoyo se reduce a **apoyo / costo**, así la unidad del apoyo (caja o unidad) nunca se mezcla
+con la del pedido.
+- **El costo** es el costo DWH del apoyo (`supplier_support_costs`), el mismo del cotizador, con el
+  factor de la familia de lista. Sin él, valen las referencias guardadas en el apoyo.
+- **El precio de lista (PL)** es ese costo al margen del producto: `costo / (1 − margen)`.
+- Los valores por caja se dividen por el factor de empaque del maestro de productos (vacío = 1).
 
-| `calc_method` | apoyo / costo | Se compara contra |
-| --- | --- | --- |
-| `pct_costo` | `supplier_value` | margen objetivo |
-| `costo_neto` | `1 − supplier_value / reference_cost` | margen objetivo |
-| `valor_unidad` | `supplier_value / reference_cost` | margen objetivo |
-| `precio_neto` | `(reference_cost − precio × (1 − margen garantizado)) / reference_cost` | margen objetivo |
-| `pct_precio_lista` | `supplier_value × lista / costo` de referencia; sin referencias, `supplier_value` sobre el precio del pedido (se queda corto, nunca de más) | margen objetivo |
-| `margen_minimo` | — | margen de la línea ≥ `min_margin_pct` |
-| `puntos_margen` | — | margen de la línea ≥ margen lista − puntos |
-| `pct_ventas` | no evaluable: el rebate se liquida por periodo | — |
+| `calc_method` | $ Apoyo (÷ costo) |
+| --- | --- |
+| `pct_costo` | costo × % |
+| `pct_precio_lista` | PL × % |
+| `valor_unidad`, `valor_precio_lista` | $ por unidad |
+| `costo_neto` | costo − $ costo apoyado |
+| `precio_neto` (% Margen Garantizado) | `máx(0, (g − m) / (1 − m))` del costo: lo que falta para llegar al margen garantizado `g` desde el margen de la línea `m`. El margen con apoyo queda en `máx(m, g)`. No usa `supplier_value` |
+| `margen_minimo` | — (margen de la línea ≥ `min_margin_pct`) |
+| `puntos_margen` | — (margen de la línea ≥ margen lista − puntos) |
+| `pct_ventas` | no evaluable: el rebate se liquida por periodo |
 
-**Margen objetivo**: `target_margin_pct` del apoyo; si no, `min_margin_pct`; si no,
-`list_margin_pct` del apoyo; si no, el margen del producto para el canal. Sin ninguno, el
-apoyo no es evaluable. Si el apoyo tiene `min_quantity` y la cantidad pedida es menor, no
-cumple.
+**Margen objetivo**:
+- el mínimo autorizado JDH (`supported_margin_pct`);
+- si no, el `target_margin_pct` del apoyo. En un % Margen Garantizado ese es el margen
+  garantizado: no es objetivo y se salta;
+- si no, `min_margin_pct`;
+- si no, `list_margin_pct`;
+- si no, el margen del producto para el cliente.
+
+Sin ninguno, el apoyo no es evaluable. Si el apoyo tiene `min_quantity` y la cantidad pedida es
+menor, no cumple.
+
+**Apoyo sin efecto** (BI, 2026-11-18): un apoyo que en la línea aporta $0 se evalúa y se lista
+(`no_effect`, detalle «Apoyo sin efecto: aporta $0 …»), pero **nunca es el motivo de
+liberación**. Es el caso de un costo apoyado por encima del costo de hoy, o de un margen
+garantizado por debajo del margen de la línea.
+- Si la línea alcanza su propio margen, el motivo es `cumple_margen_lista`.
+- Si no lo alcanza, el apoyo no la sube y queda `no_cumple_acuerdo`.
 
 **Qué apoyos aplican**: del mismo proveedor comercial (o sin proveedor y con la misma
 referencia), no anulados ni desactivados, vigentes **en la fecha del pedido** y con el
@@ -107,8 +126,8 @@ y documentadas, pero el validador las ignora.
 | `acuerdo_vencido` | pendiente | un apoyo cubriría la línea, pero no en la fecha del pedido |
 | `sin_acuerdo` | pendiente | ningún apoyo cubre la línea |
 
-Cada línea trae además `margin_basis` (`lista`, `mayoristas` o `salsamentarias`: con cuál
-margen del producto se comparó) y todos los apoyos evaluados (`checks`). Las líneas se
+Cada línea trae además `margin_basis` (`lista`, `mayoristas`, `salsamentarias`, `masivo_food` o
+`market`: con cuál margen del producto se comparó) y todos los apoyos evaluados (`checks`). Las líneas se
 resumen en dos grupos: **sin apoyo** (`sin_acuerdo`, `without_support_line_count` del pedido) y
 **cumplen** (las listas, `ready_line_count`, con su descripción detallada en `detail`).
 

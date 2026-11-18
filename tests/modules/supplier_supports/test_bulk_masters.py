@@ -86,7 +86,9 @@ def test_the_instructions_explain_the_colors_and_which_types_require_a_column() 
 
     assert rows["Rojo"][1] == "Obligatoria en toda fila."
     assert (swatches["Rojo"], swatches["Naranja"], swatches["Azul"]) == (RED, ORANGE, BLUE)
-    assert rows["supplier_value"][2] == "Sí, salvo con Tipo apoyo Margen mínimo autorizado"
+    assert rows["supplier_value"][2] == (
+        "Sí, salvo con Tipo apoyo % Margen Garantizado o Margen mínimo autorizado"
+    )
     assert rows["supported_margin_pct"][2] == (
         "Con Tipo apoyo % Margen Garantizado o Margen mínimo autorizado"
     )

@@ -519,11 +519,12 @@ METHOD_RULES: dict[str, MethodRule] = {
         "$ Costo apoyado pactado: $ Apoyo = costo − costo apoyado.",
     ),
     "precio_neto": MethodRule(
-        "money",
-        ("supplier_value", "target_margin_pct"),
-        (*_COMMON, "target_margin_pct"),
-        "% Margen garantizado: el valor es el precio apoyado ya definido y el margen objetivo "
-        "es el margen garantizado. $ Apoyo = costo − precio apoyado × (1 − margen).",
+        "none",
+        ("target_margin_pct",),
+        ("reference_cost", "reference_list_price", "pack_factor", "target_margin_pct"),
+        "% Margen Garantizado: el proveedor garantiza ese margen a cualquier precio de venta y "
+        "pone lo que falte: $ Apoyo = máx(0, costo − precio × (1 − margen)). No lleva valor; "
+        "el margen con el apoyo queda en máx(margen sin apoyo, margen garantizado).",
     ),
     "puntos_margen": MethodRule(
         "percent",

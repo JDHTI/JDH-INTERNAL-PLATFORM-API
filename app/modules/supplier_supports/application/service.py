@@ -80,7 +80,7 @@ _VALUE_REQUIRED = (
     "valor_unidad",
     "valor_precio_lista",
     "costo_neto",
-    "precio_neto",
+    # Not precio_neto: a guaranteed margin has no value, only target_margin_pct.
     "puntos_margen",
     "pct_ventas",
 )
