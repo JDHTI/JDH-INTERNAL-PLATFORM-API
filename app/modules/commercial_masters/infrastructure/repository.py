@@ -127,6 +127,7 @@ def _product_ref(row: ProductModel) -> ProductRef:
         is_active=row.is_active,
         pack_factor=row.pack_factor if row.pack_factor and row.pack_factor > 0 else None,
         avg_unit_cost=row.avg_unit_cost,
+        supplier_sku=(row.supplier_sku or "").strip() or None,
     )
 
 

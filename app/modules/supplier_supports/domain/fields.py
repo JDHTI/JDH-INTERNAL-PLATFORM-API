@@ -137,6 +137,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         help="Nombre del grupo empresarial: crea un apoyo por cada cliente activo del grupo "
         "(sin NIT).",
         max_length=200,
+        core=True,
     ),
     FieldSpec(
         "product_sku",
@@ -154,7 +155,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_SCOPE,
         SKU,
         ("referencia proveedor", "sku proveedor", "ref proveedor", "codigo proveedor sku", "ref"),
-        help="Código del producto en el proveedor; se usa si no hay SKU JDH.",
+        help="Se toma del maestro de productos con el SKU JDH. Solo si no hay SKU JDH, se usa "
+        "para encontrarlo. No es parte de la llave.",
         max_length=100,
         core=True,
     ),
@@ -166,14 +168,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("regionales", "c o", "centro de operacion"),
         help="Varias separadas por coma, barra o punto y coma. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "business_units",
-        "Unidad de Negocio",
+        "Unidad Negocio",
         GROUP_SCOPE,
         LIST,
-        ("unidades de negocio", "un", "u n"),
+        ("unidad de negocio", "unidades de negocio", "un", "u n"),
         help="Varias separadas por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
     FieldSpec(
         "channels",
@@ -182,8 +186,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         LIST,
         ("canales",),
         help="Varios separados por coma o barra. TODOS = sin restricción.",
+        core=True,
     ),
-    FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50),
+    FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50, core=True),
     FieldSpec(
         "calc_method",
         "Tipo apoyo",
@@ -346,7 +351,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_VALIDITY,
         DATE,
         ("vigencia inicial", "fecha inicial", "vigencia desde", "inicio", "desde"),
-        help="dd/mm/aaaa o aaaa-mm-dd. Forma parte de la llave del apoyo.",
+        help="dd/mm/aaaa o aaaa-mm-dd. Forma parte de la llave del apoyo (proveedor, NIT, "
+        "SKU JDH y fecha inicio).",
         core=True,
     ),
     FieldSpec(
@@ -412,8 +418,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_TRACE,
         TEXT,
         ("observacion", "notas", "comentarios", "obervaciones"),
+        help="Solo en la descarga con datos: el motivo de una Validación No.",
         max_length=2000,
-        core=True,
     ),
 )
 

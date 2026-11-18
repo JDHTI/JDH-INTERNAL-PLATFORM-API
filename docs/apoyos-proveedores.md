@@ -91,10 +91,14 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   observación obligatoria; todo o nada.
 - `POST /supplier-supports/preview`: las cifras del formulario antes de guardar.
 - Un apoyo nuevo o editado trae su costo DWH en segundo plano, sin esperar el job.
-- Plantilla (`GET /bulk/template`): Clase apoyo, Tipo apoyo, Valor apoyo, Unidad valor,
-  Excepción margen mínimo autorizado JDH, Fecha Inicio, Fecha Fin, NIT Cliente, Cliente,
-  Sucursal, SKU JDH, SKU Proveedor, Observaciones; Clase, Tipo y Unidad con lista desplegable y
-  fechas validadas. `?groups=true` cambia el cliente por Grupo Empresarial.
+- Plantilla (`GET /bulk/template`), solo estas columnas y en este orden (BI, 2026-11-18): Clase
+  apoyo, Tipo apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado JDH, Fecha
+  Inicio, Fecha Fin, NIT Cliente, Cliente, Sucursal, Grupo Empresarial, SKU JDH, SKU Proveedor,
+  Regional, Unidad Negocio, Canal, Bodega. Clase, Tipo y Unidad con lista desplegable; las
+  columnas de fecha ya tienen formato `dd/mm/aaaa` y validación de fecha (también en la descarga
+  con datos). `?groups=true` quita las columnas del cliente.
+- Llave de la carga: proveedor + NIT + SKU JDH + fecha inicio. El SKU Proveedor se toma del
+  maestro de productos (solo sin SKU JDH sirve para encontrarlo).
 - **Descarga con datos** (`GET /bulk/export?supplier_code=`): los apoyos vigentes y programados
   del proveedor con la columna **Validación**; al subirla, Sí actualiza, No vence ayer con la
   observación de la fila, vacía no toca.
@@ -340,18 +344,27 @@ Un solo formato para todos los proveedores, basado en la propuesta TI v0.3
 (`Plantilla_Apoyos_Proveedor_v0_3.xlsx`). **El proveedor solo escribe lo que se negocia**; lo que
 ya existe en el DWH no se pide y lo calculado no se diligencia:
 
-La plantilla corta (la que se descarga por defecto) trae solo estas columnas. **Obligatorio: el
-`Tipo de apoyo`**; el proveedor se elige en la Suite al subir.
+La plantilla corta (la que se descarga por defecto) trae solo estas columnas, en este orden y sin
+ninguna otra (BI, 2026-11-18). **Obligatorio: el `Tipo apoyo`**; el proveedor se elige en la Suite
+al subir.
 
 | Columna | Cuándo |
 | --- | --- |
-| `Fecha Inicio`, `Fecha Fin` | Fecha Fin `INDEFINIDO` = sin fin. La fecha inicio es parte de la llave |
-| `NIT Cliente` | Vacío = todos los clientes |
-| `SKU JDH` (o `SKU Proveedor`) | Vacío = todo el portafolio |
-| `Tipo de apoyo` | `% sobre costo`, `% sobre precio lista`, `Costo apoyado`, `Precio apoyado sin IVA`, `$ por unidad`, `Margen mínimo` (o el código) |
-| `Valor apoyo` | El valor según el tipo (no se usa con `Margen mínimo`) |
-| `Margen apoyado` | Opcional: hasta qué margen se autoriza bajar el producto (ver abajo). Con `Margen mínimo` es ese margen |
-| `Observaciones` | Opcional |
+| `Clase apoyo` | Apoyo táctico, Actividad descuento temporal o Excepción margen JDH (lista). Vacía se deduce |
+| `Tipo apoyo` | Los seis tipos de las reglas v2 (lista) |
+| `Valor apoyo` | El valor según el tipo |
+| `Unidad valor` | Unidad o Caja (lista); la caja se divide por el factor de empaque del maestro |
+| `Excepción margen mínimo autorizado JDH` | Opcional: da el precio apoyado mínimo |
+| `Fecha Inicio`, `Fecha Fin` | Formato de fecha ya aplicado. Fecha Fin vacía o `INDEFINIDO` = sin fin. La fecha inicio es parte de la llave |
+| `NIT Cliente`, `Cliente` | Vacío = todos los clientes. El nombre sale del maestro si se deja vacío |
+| `Sucursal` | Vacía = todas |
+| `Grupo Empresarial` | Sin NIT: un apoyo por cada cliente activo del grupo |
+| `SKU JDH` | Vacío = todo el portafolio |
+| `SKU Proveedor` | Se toma del maestro de productos; solo sin SKU JDH sirve para encontrarlo |
+| `Regional`, `Unidad Negocio`, `Canal` | Varias separadas por coma. Vacío = todas |
+| `Bodega` | Vacía = todas |
+
+La descarga con datos suma `Observaciones` (el motivo de una Validación No) y `Validación`.
 
 **Margen apoyado.** Reemplaza al `% Apoyo JDH` en la plantilla. Se calcula así:
 
@@ -370,9 +383,9 @@ y el panel de solicitudes JDH siguen funcionando como antes.
 Todo lo demás es **opcional y no va en la plantilla corta**: `% Apoyo JDH`, `Unidad del valor`
 (caja o unidad; vacío se infiere del DWH), `Margen garantizado` (obligatorio con `Precio apoyado
 sin IVA`), `Autorizado por` (quién autorizó comercialmente el apoyo, texto libre),
-`Volumen Comprometido` y `Referencia externa` (n.º de acuerdo; hoy solo Kimberly), `Regional`,
-`Unidad de Negocio`, `Canal`, `Grupo Cliente`, `Forma de liquidación`, `Cod. Proveedor`. Se leen
-igual si el archivo las trae y están en la plantilla completa (`full=true`).
+`Volumen Comprometido` y `Referencia externa` (n.º de acuerdo; hoy solo Kimberly), `Forma de
+liquidación`, `Cod. Proveedor`. Se leen igual si el archivo las trae y están en la plantilla
+completa (`full=true`).
 
 | Del DWH (no se pide) | Calculado (no se diligencia) |
 | --- | --- |
@@ -392,8 +405,10 @@ ninguna, aunque se pida `apply=true` (`blocked`). El reporte dice todos los erro
 (fila, campo y motivo) para corregir y volver a subir. Los maestros de todo el archivo se
 consultan una sola vez (3 consultas, no 3 por fila).
 
-**Actualiza por llave.** Llave = proveedor + clase + NIT cliente + SKU JDH (o SKU proveedor sin
-SKU JDH) + referencia externa + fecha inicio. Cada fila:
+**Actualiza por llave.** Llave = proveedor + NIT cliente + SKU JDH + fecha inicio (BI,
+2026-11-18). La clase, la referencia externa y el SKU proveedor no son parte de ella: una fila que
+los cambia actualiza el mismo apoyo. El SKU proveedor solo ocupa el lugar del SKU JDH cuando el
+maestro no lo pudo resolver. Cada fila:
 
 - **crea** el apoyo si la llave no existe;
 - **actualiza** el existente si algo cambió, **solo con las columnas que trae el archivo**: una

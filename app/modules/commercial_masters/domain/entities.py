@@ -180,6 +180,8 @@ class ProductRef:
     is_active: bool
     pack_factor: Decimal | None = None
     avg_unit_cost: Decimal | None = None
+    # The supplier's own code of the product (the product master's).
+    supplier_sku: str | None = None
 
 
 @dataclass(frozen=True)

@@ -570,6 +570,7 @@ class MasterLookup:
                 brand=product.brand,
                 commercial_supplier_code=product.commercial_supplier_code,
                 is_active=product.is_active,
+                supplier_sku=product.supplier_sku,
             )
             for product in page.items
         ]

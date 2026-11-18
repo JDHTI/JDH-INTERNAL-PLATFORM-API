@@ -23,20 +23,21 @@ JDH_FIELDS = frozenset({"jdh_pct", "jdh_net_cost"})
 
 
 def support_key(data: SupportData) -> tuple[Any, ...]:
-    """The natural key of a support: supplier + class + client + product + agreement + start.
+    """The natural key of a support: supplier + client (NIT) + JDH SKU + start date (BI,
+    2026-11-18).
 
-    The client and the product are the NIT and the JDH SKU (the supplier's SKU only when
-    there is no JDH SKU). The start date is part of the key, so a renewal with a new start is
-    a new support and the previous one is closed; changing only the end date is an update.
+    The class, the agreement number and the supplier's SKU are not part of it: a row that
+    changes them updates the same support. The supplier's SKU only stands in for a JDH SKU
+    the master could not resolve. The start date is part of the key, so a renewal with a new
+    start is a new support and the previous one is closed; changing only the end date is an
+    update.
     """
 
     return (
         data.commercial_supplier_id,
-        data.kind,
         data.customer_nit,
         data.product_sku,
         None if data.product_sku else data.supplier_sku,
-        data.external_ref,
         data.valid_from,
     )
 

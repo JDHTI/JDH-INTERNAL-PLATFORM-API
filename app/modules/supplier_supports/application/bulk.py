@@ -868,8 +868,8 @@ class SupportBulkService:
                     RowIssue(
                         row.number,
                         None,
-                        f"Fila repetida: misma llave (proveedor, NIT, SKU, acuerdo y fecha "
-                        f"inicio) que la fila {seen[key]}",
+                        f"Fila repetida: misma llave (proveedor, NIT, SKU y fecha inicio) que "
+                        f"la fila {seen[key]}",
                     )
                 )
             else:

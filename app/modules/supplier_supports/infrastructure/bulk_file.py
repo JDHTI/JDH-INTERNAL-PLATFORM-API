@@ -188,29 +188,31 @@ _CUSTOMER_COLUMNS = ("customer_nit", "customer_name", "customer_branch_id")
 VALIDATION = "validation"
 VALIDATION_HEADER = "Validación"
 _UNIT_LABELS = {"unidad": "Unidad", "caja": "Caja", "kg": "Kg"}
-# Rows the dropdowns and date checks cover in an empty template.
+# Rows the dropdowns, date checks and date format cover below the filled ones.
 _VALIDATED_ROWS = 2000
+_DATE_FORMAT = "dd/mm/yyyy"
 
 
 def template_headers(
-    profile: Profile | None, full: bool = False, groups: bool = False
+    profile: Profile | None, full: bool = False, groups: bool = False, validation: bool = False
 ) -> list[tuple[str, str]]:
     """``(field, header)`` of every column of the template.
 
-    By default the short general template (rules v2, in BI's order): Clase apoyo, Tipo
-    apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado JDH, Fecha Inicio,
-    Fecha Fin, NIT Cliente, Cliente, Sucursal, SKU JDH, SKU Proveedor and Observaciones;
-    costs, prices and margins come from the DWH and are never asked. ``full`` adds every
-    field. ``groups`` is the business-group upload: Grupo Empresarial instead of the
-    customer. With a profile the columns follow the supplier's own layout: fields it fixes
-    with a default are left out, the fields it maps are added, and its first header replaces
-    the general one.
+    By default the short general template, in BI's order and with nothing else (2026-11-18):
+    Clase apoyo, Tipo apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado
+    JDH, Fecha Inicio, Fecha Fin, NIT Cliente, Cliente, Sucursal, Grupo Empresarial, SKU JDH,
+    SKU Proveedor, Regional, Unidad Negocio, Canal and Bodega; costs, prices and margins come
+    from the DWH and are never asked. ``validation`` (the download with data) adds
+    Observaciones, the reason of a «Validación» No. ``full`` adds every field. ``groups`` is
+    the business-group upload: Grupo Empresarial without the customer columns. With a profile
+    the columns follow the supplier's own layout: fields it fixes with a default are left
+    out, the fields it maps are added, and its first header replaces the general one.
     """
 
     columns: list[tuple[str, str]] = []
     mapped = set(profile.data.column_map) if profile is not None else set()
     for spec in fields.FIELD_SPECS:
-        wanted = full or spec.core or spec.name in mapped
+        wanted = full or spec.core or spec.name in mapped or (validation and spec.name == "notes")
         if groups and spec.name == "customer_group":
             wanted = True
         if groups and spec.name in _CUSTOMER_COLUMNS:
@@ -268,7 +270,7 @@ def template_workbook(
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = TEMPLATE_SHEET
-    columns = template_headers(profile, full, groups)
+    columns = template_headers(profile, full, groups, validation)
     defaults = profile.data.defaults if profile else {}
     required = {"calc_method", "supplier_code"} - set(defaults)
     if groups:
@@ -289,10 +291,7 @@ def template_workbook(
         for index, (name, _) in enumerate(columns, start=1):
             value = _shown(name, record.get(name))
             cell = sheet.cell(row=row_number, column=index, value=value)
-            spec = fields.FIELDS[name]
-            if spec.type == fields.DATE and value is not None:
-                cell.number_format = "dd/mm/yyyy"
-            elif spec.type == fields.FRACTION and value is not None:
+            if fields.FIELDS[name].type == fields.FRACTION and value is not None:
                 cell.number_format = "0.00%"
 
     guide = book.create_sheet("Instrucciones")
@@ -300,9 +299,12 @@ def template_workbook(
     guide["A1"].font = Font(bold=True, size=14)
     intro = [
         "Una fila por apoyo. Las columnas en rojo son obligatorias; el resto es opcional.",
-        "Llave del apoyo: proveedor + NIT cliente + SKU JDH (o SKU proveedor) + fecha inicio "
-        "(+ número de acuerdo si lo hay). Si la llave ya existe, la fila actualiza ese apoyo; "
-        "si no, lo crea. Una columna que no venga en el archivo conserva el valor guardado.",
+        "Llave del apoyo: proveedor + NIT cliente + SKU JDH + fecha inicio. Si la llave ya "
+        "existe, la fila actualiza ese apoyo; si no, lo crea. Una columna que no venga en el "
+        "archivo conserva el valor guardado.",
+        "SKU Proveedor: se toma del maestro de productos con el SKU JDH. Solo si la fila no "
+        "trae SKU JDH, el SKU Proveedor se usa para encontrarlo.",
+        "Grupo Empresarial (sin NIT): la fila crea un apoyo por cada cliente activo del grupo.",
         "Solo se escribe lo que se negocia: el costo, el precio lista, el margen y los nombres "
         "salen del DWH y se calculan en la plataforma.",
         "Clase apoyo: "
@@ -322,7 +324,8 @@ def template_workbook(
         "quedan igual o ya no vienen.",
         "Los porcentajes pueden escribirse como 5 %, 5 o 0,05. Los campos de alcance vacíos "
         "significan «todos».",
-        "Fechas: dd/mm/aaaa o aaaa-mm-dd. Fecha final INDEFINIDO o UFN = sin fecha final.",
+        "Fechas: las columnas de fecha ya tienen formato dd/mm/aaaa; también se lee "
+        "aaaa-mm-dd. Fecha Fin vacía, INDEFINIDO o UFN = sin fecha final.",
         "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla.",
     ]
     if profile is not None:
@@ -387,7 +390,8 @@ def _list_values(name: str) -> list[str]:
 def _add_checks(
     book: Any, sheet: Any, columns: Sequence[tuple[str, str]], validation: bool, filled: int
 ) -> None:
-    """Dropdowns from the «Valores» sheet and date checks on the rows to fill."""
+    """Dropdowns from the «Valores» sheet, and date checks and the date format on the rows to
+    fill (filled or not), so a typed date is a date and not a text."""
 
     values = book.create_sheet("Valores")
     ranges: dict[str, str] = {}
@@ -414,6 +418,8 @@ def _add_checks(
                 error="Elige un valor de la lista",
             )
         elif fields.FIELDS.get(name) is not None and fields.FIELDS[name].type == fields.DATE:
+            for row in range(2, last + 1):
+                sheet.cell(row=row, column=index).number_format = _DATE_FORMAT
             check = DataValidation(
                 type="date",
                 operator="between",

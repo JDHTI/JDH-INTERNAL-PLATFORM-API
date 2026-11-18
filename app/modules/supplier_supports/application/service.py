@@ -488,11 +488,14 @@ class SupplierSupportService:
 
     @staticmethod
     def _fill_unit(data: SupportData, product: ProductRef) -> SupportData:
-        """Complete the pack factor and the unit of the cost from the product master.
+        """Complete the supplier's SKU, the pack factor and the unit of the cost from the
+        product master.
 
-        The pack factor falls back to the warehouse's. When the sheet did not say whether
-        its cost is per box or per unit, it is inferred against the warehouse's average
-        unit cost; a person who set the unit keeps it (provenance ``manual``).
+        The supplier's SKU is the master's whenever it has one (BI, 2026-11-18: it is pulled
+        from the master, not typed). The pack factor falls back to the warehouse's. When the
+        sheet did not say whether its cost is per box or per unit, it is inferred against the
+        warehouse's average unit cost; a person who set the unit keeps it (provenance
+        ``manual``).
         """
 
         pack = data.pack_factor or product.pack_factor
@@ -503,7 +506,13 @@ class SupplierSupportService:
                 unit, source = guess, "inferido_dwh"
         elif source == "desconocido":
             source = "manual"
-        return replace(data, pack_factor=pack, value_unit=unit, unit_basis_source=source)
+        return replace(
+            data,
+            supplier_sku=product.supplier_sku or data.supplier_sku,
+            pack_factor=pack,
+            value_unit=unit,
+            unit_basis_source=source,
+        )
 
     async def _prepare(
         self,
