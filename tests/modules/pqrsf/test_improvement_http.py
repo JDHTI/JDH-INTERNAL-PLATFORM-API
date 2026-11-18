@@ -11,6 +11,8 @@ from app.modules.pqrsf.application.improvement_opportunities import OmFile
 from app.modules.pqrsf.domain.improvement import (
     DocumentTemplate,
     ImprovementOpportunity,
+    OmHistory,
+    OmHistoryRow,
     Signer,
 )
 from tests.modules.pqrsf.test_comments_http import OpenRedis
@@ -76,6 +78,18 @@ class FakeOms:
 
     async def retry_pdf(self, case_id, om_id, principal):
         return _om()
+
+    async def history(self, filters, page, size, principal):
+        self.calls.append(("history", filters, page, size))
+        sent = _om(status="sent", sent_at=datetime(2026, 11, 10, 15, tzinfo=UTC))
+        answered = _om(id=uuid.uuid4(), status="sent", sent_at=NOW)
+        rows = [
+            OmHistoryRow(
+                sent, "Q26BG0001", "En curso", False, "Cafam", "Bogotá", None, ("a@p.co",)
+            ),
+            OmHistoryRow(answered, "Q26BG0002", "Finalizada", True, None, None, NOW, ()),
+        ]
+        return OmHistory(rows, 2, 0, 1, 1)
 
 
 @pytest.fixture
@@ -154,3 +168,28 @@ def test_the_om_consecutive_is_read_and_set(client, oms) -> None:
     assert client.put("/api/v1/pqrsf/om/settings", json={"next_number": 1500}).status_code == 200
     assert ("number", 1500) in oms.calls
     assert client.put("/api/v1/pqrsf/om/settings", json={"next_number": 0}).status_code == 422
+
+
+def test_the_history_lists_the_oms_with_their_case_and_reply(client, oms) -> None:
+    response = client.get(
+        "/api/v1/pqrsf/improvement-opportunities",
+        params={"status": "sent", "replied": "false", "supplier": " Parmalat ", "page": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["total"], body["awaiting_reply"], body["replied"]) == (2, 1, 1)
+    waiting, answered = body["items"]
+    assert waiting["case_code"] == "Q26BG0001" and waiting["sent_to"] == ["a@p.co"]
+    assert waiting["replied_at"] is None and waiting["days_waiting"] >= 7
+    assert answered["case_closed"] is True and answered["days_waiting"] is None
+    _, filters, page, size = next(c for c in oms.calls if c[0] == "history")
+    assert (filters.status, filters.replied, filters.supplier, page, size) == (
+        "sent",
+        False,
+        "Parmalat",
+        2,
+        25,
+    )
+    bad = client.get("/api/v1/pqrsf/improvement-opportunities", params={"status": "lost"})
+    assert bad.status_code == 422

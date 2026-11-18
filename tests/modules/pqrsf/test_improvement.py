@@ -23,7 +23,7 @@ from app.modules.pqrsf.application.improvement_opportunities import (
 from app.modules.pqrsf.application.supplier_messages import SupplierMessageService
 from app.modules.pqrsf.domain.email import CaseAttachment
 from app.modules.pqrsf.domain.entities import ClaimedProduct, PqrsfAttachment
-from app.modules.pqrsf.domain.improvement import Signer
+from app.modules.pqrsf.domain.improvement import OmFilters, OmHistoryRow, Signer
 from app.modules.pqrsf.infrastructure.word_renderer import DocxTemplateRenderer
 from app.modules.pqrsf.templates import BUNDLED
 from app.modules.sites.domain.entities import Site, clean_om_code
@@ -102,6 +102,15 @@ class OmStore:
                 raise ConflictError("duplicada")
         self.oms[om.id] = replace(om)
         return replace(om)
+
+    async def history(self, filters, offset, limit):
+        self.asked = (filters, offset, limit)
+        rows = [
+            OmHistoryRow(om, "Q26MD0001", "En curso", False, "Cliente", "Medellín")
+            for om in self.oms.values()
+            if filters.status in (None, om.status)
+        ]
+        return rows[offset : offset + limit], len(rows), {"draft": 1, "awaiting": 2, "replied": 3}
 
 
 class Bucket:
@@ -523,3 +532,25 @@ def test_the_site_om_code_takes_three_letters() -> None:
     assert clean_om_code("") is None
     with pytest.raises(InvalidInputError):
         clean_om_code("BG")
+
+
+# --- History ---
+
+
+@pytest.mark.asyncio
+async def test_the_history_is_for_who_reads_pqrsf_and_pages_the_oms() -> None:
+    w = World()
+    case = await w.case()
+    await w.service.generate(case.id, OmCommand(supplier_code="P1"), w.s.admin)
+    await w.service.generate(case.id, OmCommand(supplier_code="P2"), w.s.admin)
+
+    with pytest.raises(ForbiddenError):
+        await w.service.history(OmFilters(), 1, 25, w.s.seller)
+    with pytest.raises(InvalidInputError):
+        await w.service.history(OmFilters(status="perdida"), 1, 25, w.s.admin)
+
+    result = await w.service.history(OmFilters(status="draft"), 2, 1, w.s.admin)
+
+    assert result.total == 2 and len(result.rows) == 1
+    assert (result.drafts, result.awaiting_reply, result.replied) == (1, 2, 3)
+    assert w.store.asked[1:] == (1, 1)

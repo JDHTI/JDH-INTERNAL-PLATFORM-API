@@ -35,12 +35,15 @@ from app.modules.pqrsf.domain.entities import clean_multiline, clean_optional
 from app.modules.pqrsf.domain.improvement import (
     DEFAULT_REQUEST_NOTE,
     MAX_PHOTOS,
+    OM_DRAFT,
     OM_SENT,
     TEMPLATE_FIELDS,
     TEMPLATE_KIND_OM,
     TEMPLATE_MAX_BYTES,
     DocumentTemplate,
     ImprovementOpportunity,
+    OmFilters,
+    OmHistory,
     clean_template_kind,
     om_code,
     om_context,
@@ -273,6 +276,26 @@ class ImprovementOpportunityService:
             raise InvalidInputError("El consecutivo de la OM debe estar entre 1 y 9.999.999")
         await self.repository.set_next_om_number(value, principal.user_id)
         return value
+
+    # --- History (follow-up across cases) ---
+
+    async def history(
+        self, filters: OmFilters, page: int, size: int, principal: Principal
+    ) -> OmHistory:
+        """Every OM, newest first, to follow up which suppliers have not answered yet.
+
+        For whoever reads PQRSF (Calidad). Each row says when its supplier first wrote
+        back after it was sent; the totals count drafts, sent and waiting, and answered.
+        """
+
+        if not await self.managers.can_read(principal):
+            raise ForbiddenError("Solo quien consulta PQRSF ve el historial de oportunidades")
+        if page < 1 or not 1 <= size <= 100:
+            raise InvalidInputError("Página desde 1 y tamaño entre 1 y 100")
+        if filters.status not in (None, OM_DRAFT, OM_SENT):
+            raise InvalidInputError("Estado de OM no válido")
+        rows, total, counts = await self.repository.history(filters, (page - 1) * size, size)
+        return OmHistory(rows, total, counts["draft"], counts["awaiting"], counts["replied"])
 
     # --- OMs of a case ---
 

@@ -915,6 +915,20 @@ proveedor adjunta a un mensaje de oportunidad de mejora.
 | PUT | `/{om_id}/document` | Sube un Word editado a mano (multipart `file`); vuelve a generar el PDF y marca `edited` | Quien trabaja el caso |
 | POST | `/{om_id}/pdf` | Reintenta el PDF si el conversor estaba caído | Quien trabaja el caso |
 
+**Historial para el seguimiento:** `GET /pqrsf/improvement-opportunities`.
+- **Quién:** quien consulta PQRSF (Calidad).
+- **Qué lista:** todas las OM de todos los casos, primero las enviadas más recientes y los
+  borradores arriba.
+- **Cada fila trae:** la OM, el radicado y el estado del caso, cliente, sede, a quién se envió
+  (`sent_to`) y `replied_at`.
+- **Respuesta del proveedor (`replied_at`):** el primer correo del caso, posterior al envío, de
+  una de esas direcciones.
+- **Días de espera (`days_waiting`):** los días sin respuesta.
+- **Filtros:** `status` (`draft`, `sent`), `replied` (`false` = enviadas que esperan
+  respuesta), `site_id`, `supplier`, `q` (OM, radicado, cliente o proveedor), `sent_from`,
+  `sent_to` y `page`/`size`.
+- **Totales:** `drafts`, `awaiting_reply` y `replied`.
+
 **PDF:**
 - Lo hace Gotenberg (`GOTENBERG_URL`), LibreOffice en su propio contenedor.
 - Si no responde, la OM queda con el Word, `has_pdf` es `false` y se reintenta con `…/pdf`.

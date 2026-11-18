@@ -6,9 +6,10 @@ from datetime import date, datetime
 from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -27,9 +28,11 @@ from app.modules.pqrsf.domain.improvement import (
     TEMPLATE_MAX_BYTES,
     DocumentTemplate,
     ImprovementOpportunity,
+    OmFilters,
 )
 
 router = APIRouter(prefix="/pqrsf")
+_LOCAL = ZoneInfo("America/Bogota")
 _READ_GATE = Depends(require_permission("pqrsf"))
 _oms = Depends(Provide[ApplicationContainer.v1_container.pqrsf_om_service])
 _principal = Depends(get_current_principal)
@@ -273,6 +276,107 @@ async def set_om_settings(
 
     return OmSettingsResponse(
         next_number=await service.set_next_number(payload.next_number, principal)
+    )
+
+
+# --- History (follow-up across cases) ---
+
+
+class OmHistoryItemResponse(OmResponse):
+    """An OM of the history, with its case and whether the supplier answered."""
+
+    case_code: str
+    case_status: str
+    case_closed: bool
+    customer_name: str | None
+    site_name: str | None
+    sent_to: list[str]
+    replied_at: datetime | None
+    # Days since it was sent with no answer yet (``None`` when answered or not sent).
+    days_waiting: int | None
+
+
+class OmHistoryResponse(BaseModel):
+    """A page of the OM history and its totals by state."""
+
+    items: list[OmHistoryItemResponse]
+    total: int
+    page: int
+    size: int
+    drafts: int
+    awaiting_reply: int
+    replied: int
+
+
+@router.get(
+    "/improvement-opportunities",
+    response_model=OmHistoryResponse,
+    summary="History of the improvement opportunities (all cases)",
+    dependencies=[_READ_GATE],
+)
+@inject
+async def om_history(
+    status_filter: Literal["draft", "sent"] | None = Query(default=None, alias="status"),
+    site_id: UUID | None = None,
+    supplier: str | None = Query(default=None, max_length=100),
+    q: str | None = Query(default=None, max_length=100),
+    replied: bool | None = None,
+    sent_from: date | None = None,
+    sent_to: date | None = None,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=25, ge=1, le=100),
+    principal: Principal = _principal,
+    service: ImprovementOpportunityService = _oms,
+) -> OmHistoryResponse:
+    """Every OM, newest sent first, to follow up the suppliers (who reads PQRSF).
+
+    ``replied=false`` lists the sent OMs still waiting for the supplier; a reply is the
+    first email on the case, after the OM was sent, from one of its recipients.
+    """
+
+    result = await service.history(
+        OmFilters(
+            status=status_filter,
+            site_id=site_id,
+            supplier=supplier.strip() if supplier and supplier.strip() else None,
+            query=q.strip() if q and q.strip() else None,
+            replied=replied,
+            sent_from=sent_from,
+            sent_to=sent_to,
+        ),
+        page,
+        size,
+        principal,
+    )
+    today = datetime.now(_LOCAL).date()
+    items = []
+    for row in result.rows:
+        waiting = (
+            (today - row.om.sent_at.astimezone(_LOCAL).date()).days
+            if row.om.sent_at and row.replied_at is None
+            else None
+        )
+        items.append(
+            OmHistoryItemResponse(
+                **_om(row.om).model_dump(),
+                case_code=row.case_code,
+                case_status=row.case_status,
+                case_closed=row.case_closed,
+                customer_name=row.customer_name,
+                site_name=row.site_name,
+                sent_to=list(row.sent_to),
+                replied_at=row.replied_at,
+                days_waiting=waiting,
+            )
+        )
+    return OmHistoryResponse(
+        items=items,
+        total=result.total,
+        page=page,
+        size=size,
+        drafts=result.drafts,
+        awaiting_reply=result.awaiting_reply,
+        replied=result.replied,
     )
 
 

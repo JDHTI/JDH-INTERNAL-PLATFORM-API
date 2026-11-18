@@ -39,7 +39,13 @@ from app.modules.pqrsf.domain.feedback import (
     FeedbackPage,
     FeedbackSummary,
 )
-from app.modules.pqrsf.domain.improvement import DocumentTemplate, ImprovementOpportunity, Signer
+from app.modules.pqrsf.domain.improvement import (
+    DocumentTemplate,
+    ImprovementOpportunity,
+    OmFilters,
+    OmHistoryRow,
+    Signer,
+)
 from app.modules.pqrsf.domain.item_delivery import ItemDelivery
 from app.modules.pqrsf.domain.notifications import Notification
 from app.modules.pqrsf.domain.sales import InvoiceSeller
@@ -817,6 +823,12 @@ class ImprovementRepository(Protocol):
 
     async def save(self, om: ImprovementOpportunity) -> ImprovementOpportunity:
         """Insert or update an OM; a second OM for the same supplier is a conflict."""
+        ...
+
+    async def history(
+        self, filters: OmFilters, offset: int, limit: int
+    ) -> tuple[list[OmHistoryRow], int, dict[str, int]]:
+        """OMs across cases with their case and the supplier's reply, and counts by state."""
         ...
 
 

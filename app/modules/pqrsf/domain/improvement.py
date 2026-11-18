@@ -135,6 +135,45 @@ class ImprovementOpportunity:
         return f"OM {self.code}.{extension}"
 
 
+@dataclass(frozen=True)
+class OmFilters:
+    """Filters of the OM history; ``replied`` asks whether the supplier already answered."""
+
+    status: str | None = None
+    site_id: UUID | None = None
+    supplier: str | None = None
+    query: str | None = None
+    replied: bool | None = None
+    sent_from: date | None = None
+    sent_to: date | None = None
+
+
+@dataclass(frozen=True)
+class OmHistoryRow:
+    """An OM with its case and whether its supplier answered after it was sent."""
+
+    om: ImprovementOpportunity
+    case_code: str
+    case_status: str
+    case_closed: bool
+    customer_name: str | None
+    site_name: str | None
+    # First email from one of the OM's recipients after it was sent.
+    replied_at: datetime | None = None
+    sent_to: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OmHistory:
+    """A page of the OM history and its totals by state."""
+
+    rows: list[OmHistoryRow]
+    total: int
+    drafts: int
+    awaiting_reply: int
+    replied: int
+
+
 def om_code(number: int, site_code: str) -> str:
     """The OM consecutive: the number and the site's three letters (``1181BOG``)."""
 

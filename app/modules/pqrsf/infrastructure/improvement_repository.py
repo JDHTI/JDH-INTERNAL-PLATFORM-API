@@ -4,21 +4,28 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
 from app.modules.pqrsf.domain.improvement import (
     DocumentTemplate,
     ImprovementOpportunity,
+    OmFilters,
+    OmHistoryRow,
     Signer,
 )
 from app.modules.pqrsf.infrastructure.models import (
+    CaseEventModel,
+    CaseModel,
+    CaseStatusModel,
     DocumentTemplateModel,
     ImprovementOpportunityModel,
     OmSequenceModel,
 )
+from app.modules.sites.infrastructure.models import SiteModel
 
 
 def _template(model: DocumentTemplateModel) -> DocumentTemplate:
@@ -72,6 +79,33 @@ def _om(model: ImprovementOpportunityModel) -> ImprovementOpportunity:
         created_at=model.created_at,
         updated_at=model.updated_at,
     )
+
+
+def _om_conditions(filters: OmFilters) -> list:
+    """Filters of the history that do not depend on the reply."""
+
+    om = ImprovementOpportunityModel
+    conditions: list = []
+    if filters.site_id:
+        conditions.append(CaseModel.site_id == filters.site_id)
+    if filters.supplier:
+        pattern = f"%{filters.supplier.strip()}%"
+        conditions.append(or_(om.supplier_name.ilike(pattern), om.supplier_code.ilike(pattern)))
+    if filters.query:
+        pattern = f"%{filters.query.strip()}%"
+        conditions.append(
+            or_(
+                om.code.ilike(pattern),
+                CaseModel.code.ilike(pattern),
+                CaseModel.customer_name.ilike(pattern),
+                om.supplier_name.ilike(pattern),
+            )
+        )
+    if filters.sent_from:
+        conditions.append(func.date(om.sent_at) >= filters.sent_from)
+    if filters.sent_to:
+        conditions.append(func.date(om.sent_at) <= filters.sent_to)
+    return conditions
 
 
 class SqlAlchemyImprovementRepository:
@@ -202,6 +236,129 @@ class SqlAlchemyImprovementRepository:
         async with self.database.session_factory() as session:
             model = await session.get(ImprovementOpportunityModel, om_id)
             return _om(model) if model else None
+
+    async def history(
+        self, filters: OmFilters, offset: int, limit: int
+    ) -> tuple[list[OmHistoryRow], int, dict[str, int]]:
+        """OMs across cases, newest first, with their case and the supplier's reply.
+
+        Returns:
+            tuple: The page, the total of the filters and the counts by state (``draft``,
+                ``awaiting``, ``replied``) of the filters without status and reply.
+        """
+
+        om = ImprovementOpportunityModel
+        sent = aliased(CaseEventModel)
+        reply = aliased(CaseEventModel)
+        replied_at = (
+            select(func.min(reply.created_at))
+            .where(
+                reply.case_id == om.case_id,
+                reply.event_type == "email_received",
+                om.sent_at.is_not(None),
+                reply.created_at > om.sent_at,
+                func.lower(reply.data["from"].astext).in_(
+                    select(func.lower(func.jsonb_array_elements_text(sent.data["to"]))).where(
+                        sent.case_id == om.case_id,
+                        sent.event_type == "om_sent",
+                        sent.data["om_id"].astext == cast(om.id, String),
+                    )
+                ),
+            )
+            .correlate(om)
+            .scalar_subquery()
+            .label("replied_at")
+        )
+        sent_to = (
+            select(sent.data["to"])
+            .where(
+                sent.case_id == om.case_id,
+                sent.event_type == "om_sent",
+                sent.data["om_id"].astext == cast(om.id, String),
+            )
+            .order_by(sent.created_at.desc())
+            .limit(1)
+            .correlate(om)
+            .scalar_subquery()
+            .label("sent_to")
+        )
+        base = [*_om_conditions(filters)]
+        rows_query = (
+            select(
+                om,
+                CaseModel.code.label("case_code"),
+                CaseStatusModel.name.label("case_status"),
+                CaseStatusModel.is_terminal.label("case_closed"),
+                CaseModel.customer_name.label("customer_name"),
+                SiteModel.name.label("site_name"),
+                replied_at,
+                sent_to,
+            )
+            .join(CaseModel, CaseModel.id == om.case_id)
+            .join(CaseStatusModel, CaseStatusModel.id == CaseModel.status_id)
+            .outerjoin(SiteModel, SiteModel.id == CaseModel.site_id)
+            .where(*base)
+        )
+        if filters.status:
+            rows_query = rows_query.where(om.status == filters.status)
+        page = rows_query.subquery()
+        conditions = []
+        if filters.replied is True:
+            conditions.append(page.c.replied_at.is_not(None))
+        elif filters.replied is False:
+            conditions.extend([page.c.status == "sent", page.c.replied_at.is_(None)])
+        async with self.database.session_factory() as session:
+            total = await session.scalar(select(func.count()).select_from(page).where(*conditions))
+            ids = (
+                (
+                    await session.execute(
+                        select(page.c.id)
+                        .where(*conditions)
+                        .order_by(page.c.sent_at.desc().nulls_first(), page.c.created_at.desc())
+                        .offset(offset)
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            found = (await session.execute(rows_query.where(om.id.in_(ids)))).all() if ids else []
+            everything = (
+                select(om.status, replied_at)
+                .join(CaseModel, CaseModel.id == om.case_id)
+                .outerjoin(SiteModel, SiteModel.id == CaseModel.site_id)
+                .where(*base)
+                .subquery()
+            )
+            counts = (
+                await session.execute(
+                    select(
+                        func.count().filter(everything.c.status == "draft"),
+                        func.count().filter(
+                            everything.c.status == "sent", everything.c.replied_at.is_(None)
+                        ),
+                        func.count().filter(everything.c.replied_at.is_not(None)),
+                    )
+                )
+            ).one()
+        by_id = {
+            model.id: OmHistoryRow(
+                om=_om(model),
+                case_code=code,
+                case_status=status_name,
+                case_closed=bool(closed),
+                customer_name=customer,
+                site_name=site,
+                replied_at=answered,
+                sent_to=tuple(addresses or ()),
+            )
+            for model, code, status_name, closed, customer, site, answered, addresses in found
+        }
+        return (
+            [by_id[i] for i in ids if i in by_id],
+            int(total or 0),
+            {"draft": int(counts[0]), "awaiting": int(counts[1]), "replied": int(counts[2])},
+        )
 
     async def save(self, om: ImprovementOpportunity) -> ImprovementOpportunity:
         """Insert or update an OM."""
