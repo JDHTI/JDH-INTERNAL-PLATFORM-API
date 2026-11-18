@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Response, UploadFile
 from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
@@ -22,6 +22,7 @@ from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.bulk import SupportBulkService
+from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.domain import fields
 from app.modules.supplier_supports.domain.bulk import BulkReport
 from app.modules.supplier_supports.infrastructure.bulk_file import template_workbook
@@ -29,6 +30,7 @@ from app.modules.supplier_supports.infrastructure.bulk_file import template_work
 router = APIRouter(dependencies=[Depends(require_permission("apoyos"))])
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_bulk_service])
 _principal = Depends(get_current_principal)
+_costs = Depends(Provide[ApplicationContainer.v1_container.supplier_support_cost_service])
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 OnOverlap = Literal["vencer_anterior", "anular_anterior"]
 _OverlapQuery = Annotated[
@@ -223,6 +225,7 @@ async def bulk_export(
 )
 @inject
 async def bulk_load(
+    background: BackgroundTasks,
     file: UploadFile = File(...),  # noqa: B008
     apply: bool = Query(default=False),
     supplier_code: str | None = Query(default=None, max_length=20),
@@ -233,10 +236,12 @@ async def bulk_load(
     column_map: str | None = Form(default=None),
     principal: Principal = _principal,
     service: SupportBulkService = _service,
+    costs: SupportCostService = _costs,
 ) -> BulkReportResponse:
-    """Simulate the load of a file and, with ``apply`` and no errors, write every row."""
+    """Simulate the load of a file and, with ``apply`` and no errors, write every row. The
+    supports created or updated get their DWH cost right after (background)."""
 
-    return await _load(
+    report = await _load(
         file,
         service,
         principal,
@@ -249,6 +254,8 @@ async def bulk_load(
         column_map,
         groups=False,
     )
+    _refresh_costs(background, costs, report)
+    return report
 
 
 @router.post(
@@ -262,6 +269,7 @@ async def bulk_load(
 )
 @inject
 async def bulk_load_groups(
+    background: BackgroundTasks,
     file: UploadFile = File(...),  # noqa: B008
     apply: bool = Query(default=False),
     supplier_code: str | None = Query(default=None, max_length=20),
@@ -271,10 +279,11 @@ async def bulk_load_groups(
     column_map: str | None = Form(default=None),
     principal: Principal = _principal,
     service: SupportBulkService = _service,
+    costs: SupportCostService = _costs,
 ) -> BulkReportResponse:
-    """Simulate or write a business-group file."""
+    """Simulate or write a business-group file (the DWH cost follows, as in ``/bulk``)."""
 
-    return await _load(
+    report = await _load(
         file,
         service,
         principal,
@@ -287,6 +296,20 @@ async def bulk_load_groups(
         column_map,
         groups=True,
     )
+    _refresh_costs(background, costs, report)
+    return report
+
+
+def _refresh_costs(
+    background: BackgroundTasks, costs: SupportCostService, report: BulkReportResponse
+) -> None:
+    """An applied load does not wait for the daily job: its supports get their DWH cost now
+    (best effort; the job covers whatever fails)."""
+
+    if report.applied:
+        ids = list(dict.fromkeys([*report.created, *report.updated]))
+        if ids:
+            background.add_task(costs.refresh, ids)
 
 
 async def _load(
