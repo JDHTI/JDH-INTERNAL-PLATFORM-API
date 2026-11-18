@@ -146,9 +146,12 @@ def supported_price(
 def _list_target(agreement: Agreement, product_target: Decimal | None) -> Decimal | None:
     """The margin the list price is set at: the support's own target, else the product's.
 
-    JDH's authorized minimum (``supported_margin_pct``) is a floor, never the target.
+    JDH's authorized minimum (``supported_margin_pct``) is a floor, never the target; so is a
+    guaranteed margin, whose list price is the product's.
     """
 
+    if agreement.calc_method == GUARANTEED_METHOD:
+        return product_target
     return required_margin(replace(agreement, supported_margin_pct=None), product_target)
 
 
@@ -771,6 +774,10 @@ def build_line(
     if support is not None and support.authorized_margin_pct is not None:
         # JDH authorized going down to this margin with the support (Precio Apoyado Mínimo).
         floor = support.authorized_margin_pct
+    elif support is not None and support.guaranteed_margin_pct is not None:
+        # The supplier guarantees this margin at any price: it is the line's floor, and the
+        # margin with the support never falls under it, so the line passes (BI, 2026-11-18).
+        floor = support.guaranteed_margin_pct
     # The liquor tax SIESA has in the customer's list; else the margin master's value for
     # the customer's regional (the Coast pays more on some SKUs).
     tax_amount = None

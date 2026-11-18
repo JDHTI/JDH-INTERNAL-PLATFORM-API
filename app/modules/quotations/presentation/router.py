@@ -61,7 +61,7 @@ _principal = Depends(get_current_principal)
 _KIND = Query(default="cotizacion")
 _LIST_KIND = Query(default="lista")
 
-Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada"]
+Status = Literal["borrador", "enviada", "pendiente_validacion", "pendiente_carga", "cargada"]
 Kind = Literal["cotizacion", "lista", "principal"]
 ListKind = Literal["lista", "principal"]
 ReviewStatus = Literal["sin_marcar", "por_validar", "validada"]
@@ -531,6 +531,9 @@ class SummaryResponse(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+    # The last time the offer went to the customer, and who sent it (kept after later edits).
+    sent_at: datetime | None = None
+    sent_by: str | None = None
     confirmed_at: datetime | None
     validated_at: datetime | None
     uploaded_at: datetime | None
@@ -787,6 +790,8 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "created_by": quotation.created_by,
         "created_at": quotation.created_at,
         "updated_at": quotation.updated_at,
+        "sent_at": quotation.sent_at,
+        "sent_by": quotation.sent_by,
         "confirmed_at": quotation.confirmed_at,
         "validated_at": quotation.validated_at,
         "uploaded_at": quotation.uploaded_at,
@@ -1389,10 +1394,31 @@ async def refresh_quotation(
 
 
 @router.post(
+    "/{quotation_id}/send",
+    dependencies=[_READ_GATE],
+    response_model=QuotationResponse,
+    summary="Send the offer to the customer (no validation)",
+)
+@inject
+async def send_quotation(
+    quotation_id: UUID,
+    body: VersionRequest,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> QuotationResponse:
+    """Comercial or BI sends the offer to the customer without validation: the quotation is
+    ``enviada`` (from ``borrador`` or ``enviada``) and stays editable; an edit takes it back to
+    ``borrador``. Only ``/confirm`` (update or create a price list) goes to validation. Needs
+    one line in the offer; the margin rule never blocks."""
+
+    return await _respond(service, await service.send(principal, quotation_id, body.version))
+
+
+@router.post(
     "/{quotation_id}/confirm",
     dependencies=[_READ_GATE],
     response_model=QuotationResponse,
-    summary="Send to validation",
+    summary="Ask to update or create the price list (to validation)",
 )
 @inject
 async def confirm_quotation(
@@ -1401,9 +1427,10 @@ async def confirm_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """The advisor closes the draft: it needs one priced active line (the rule no longer
-    blocks; the validator sees what breaks it). ``actualizacion`` writes to the customer's
-    list; ``creacion`` creates a list whose code the validator gives (list 1 and temporary
+    """Ask to take the quotation to a price list, from ``borrador`` or ``enviada``: the only
+    step that goes to validation. It needs one priced active line (the rule does not block;
+    the validator sees what breaks it). ``actualizacion`` writes to the customer's list;
+    ``creacion`` creates a list whose code the validator gives (list 1 and temporary
     customers always go by creation). The quotation is ``pendiente_validacion``."""
 
     return await _respond(

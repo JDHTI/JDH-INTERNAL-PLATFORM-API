@@ -81,7 +81,9 @@ con la del pedido.
 **Margen objetivo**:
 - el mínimo autorizado JDH (`supported_margin_pct`);
 - si no, el `target_margin_pct` del apoyo. En un % Margen Garantizado ese es el margen
-  garantizado: no es objetivo y se salta;
+  garantizado, y la línea siempre llega con el apoyo («pasa derecho», BI 2026-11-18). Si no paga
+  nada porque la línea ya está en ese margen o por encima, se cumple igual: no es un apoyo sin
+  efecto;
 - si no, `min_margin_pct`;
 - si no, `list_margin_pct`;
 - si no, el margen del producto para el cliente.

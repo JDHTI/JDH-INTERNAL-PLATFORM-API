@@ -654,18 +654,18 @@ def test_a_support_without_effect_is_never_the_reason_a_line_is_released() -> No
     assert short.support_id == idle.id
 
 
-def test_a_guaranteed_margin_tops_the_line_up_to_it() -> None:
-    # The line sells at 10 % without the support; the supplier guarantees 14 %.
+def test_a_guaranteed_margin_lets_the_line_pass_at_any_price() -> None:
+    # The line sells at 10 % without the support; the supplier guarantees 14 %, which is the
+    # line's target (BI, 2026-11-18): the product asks 16 %, but the guarantee passes it.
     guarantee = agreement(calc_method="precio_neto", target_margin_pct=D("0.14"))
 
-    met = decide([guarantee], reference=D("0.12"))
-    assert met.reason == "cumple_con_apoyo" and met.effective_margin_pct == D("0.140000")
-    # The target is the product's margin (or JDH's minimum), never the guarantee itself.
-    assert met.required_margin_pct == D("0.120000")
-    short = decide([guarantee], reference=D("0.16"))
-    assert short.reason == "no_cumple_acuerdo" and short.effective_margin_pct == D("0.140000")
-    authorized = replace(guarantee, supported_margin_pct=D("0.13"))
-    assert decide([authorized], reference=D("0.16")).reason == "cumple_con_apoyo"
-    # Under the line's own margin it pays nothing: without effect, never the reason.
-    idle = decide([replace(guarantee, target_margin_pct=D("0.08"))], reference=D("0.16"))
-    assert idle.reason == "no_cumple_acuerdo" and idle.checks[0].no_effect
+    topped = decide([guarantee], reference=D("0.16"))
+    assert topped.reason == "cumple_con_apoyo" and topped.effective_margin_pct == D("0.140000")
+    assert topped.required_margin_pct == D("0.140000")
+    # Already over the guarantee it pays nothing, and the line still passes with it.
+    over = decide([guarantee], reference=D("0.20"), margin_pct=D("0.17"))
+    assert over.reason == "cumple_con_apoyo" and not over.checks[0].no_effect
+    assert over.effective_margin_pct == D("0.170000")
+    # JDH's authorized minimum, when there is one, is the target instead.
+    authorized = replace(guarantee, supported_margin_pct=D("0.15"))
+    assert decide([authorized], reference=D("0.16")).reason == "no_cumple_acuerdo"

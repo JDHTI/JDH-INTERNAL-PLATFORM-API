@@ -13,7 +13,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
-from app.modules.commercial_masters.domain.entities import clean_nit
+from app.modules.commercial_masters.domain.entities import (
+    TargetMargin,
+    clean_nit,
+    nit_check_digit,
+)
+from app.modules.commercial_masters.domain.margins import MARGIN_LABELS
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.internal_requests import (
@@ -54,6 +59,34 @@ def _margin(value: Decimal, sku: str) -> Decimal:
             f"El margen de {sku} debe ser una fracción entre 0 y 1 (0.16 = 16 %)"
         )
     return value.quantize(Decimal("0.000001"))
+
+
+def _pct(value: Decimal) -> str:
+    return f"{value * 100:.2f}".replace(".", ",") + " %"
+
+
+def _below_target(sku: str, asked: Decimal, target: TargetMargin | None) -> Decimal:
+    """The product's optimal margin on the customer's list, which ``asked`` must be under.
+
+    Raises:
+        InvalidInputError: The SKU is unknown, has no margin on that list, or the margin asked
+            is not lower (BI, 2026-11-18: only a lower margin is requested).
+    """
+
+    if target is None:
+        raise InvalidInputError(f"Referencia JDH desconocida: {sku}")
+    label = MARGIN_LABELS.get(target.margin_field, target.margin_field)
+    if target.margin_pct is None:
+        raise InvalidInputError(
+            f"La referencia {sku} no tiene {label} en el maestro de márgenes: no hay un margen "
+            "actual para pedir uno menor"
+        )
+    if asked >= target.margin_pct:
+        raise InvalidInputError(
+            f"El margen pedido para {sku} ({_pct(asked)}) debe ser menor que su margen actual "
+            f"({_pct(target.margin_pct)}, {label})"
+        )
+    return target.margin_pct
 
 
 class InternalRequestLinks:
@@ -105,6 +138,7 @@ class InternalRequestService:
         quotations: QuotationAccess,
         masters: MasterLookup,
         calendar: Calendar,
+        requesters: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
@@ -113,8 +147,10 @@ class InternalRequestService:
             links (InternalRequestLinks): Who reviews.
             quotations (QuotationAccess): The quoter (the quotation, read with the caller's
                 permission; whether the caller quotes).
-            masters (MasterLookup): Suppliers and products of the master.
+            masters (MasterLookup): Suppliers, products, customers and margins of the master.
             calendar (Calendar): Bogotá calendar (the default order date).
+            requesters (ManagerPolicy | None): Who asks JDH supports from the requests panel
+                (``solicitudes-apoyos``); they may ask by customer and SKU too.
         """
 
         self.repository = repository
@@ -122,6 +158,7 @@ class InternalRequestService:
         self.quotations = quotations
         self.masters = masters
         self.calendar = calendar
+        self.requesters = requesters
 
     # ------------------------------------------------------------ access
 
@@ -193,6 +230,7 @@ class InternalRequestService:
             raise InvalidInputError("Una referencia está repetida en la solicitud")
         request_items: list[RequestItem] = []
         supplier_name: str | None = None
+        targets = await self.masters.target_margins(nit, skus)
         for sku, (_, margin) in zip(skus, items, strict=True):
             line = quotation.lines.get(sku)
             if line is None or line.is_local:
@@ -202,16 +240,18 @@ class InternalRequestService:
                     f"La referencia {sku} es de otro proveedor: todas deben ser de {code}"
                 )
             supplier_name = supplier_name or line.supplier_name
+            asked = _margin(margin, sku)
             request_items.append(
                 RequestItem(
                     sku=sku,
-                    requested_margin_pct=_margin(margin, sku),
+                    requested_margin_pct=asked,
                     description=line.description,
                     unit=line.unit,
                     cost=line.cost,
                     quoted_price=line.quoted_price,
                     margin_pct=line.margin_pct,
                     min_margin_pct=line.min_margin_pct,
+                    target_margin_pct=_below_target(sku, asked, targets.get(sku)),
                 )
             )
         new = NewRequest(
@@ -222,6 +262,123 @@ class InternalRequestService:
             commercial_supplier_id=supplier_id,
             supplier_code=code,
             supplier_name=supplier_name,
+            requested_for=requested_for or self.calendar.today(),
+            agreed_with=_text(agreed_with, "agreed_with", "con quién se acordó") or "",
+            reason=_text(reason, "reason", "el motivo") or "",
+            items=tuple(request_items),
+        )
+        return await self.repository.create(
+            new, principal.user_id, principal.email, datetime.now(UTC)
+        )
+
+    async def can_request_direct(self, principal: Principal) -> bool:
+        """Asks from the requests panel: quotes or asks JDH supports, and does not review."""
+
+        if await self.links.is_reviewer(principal):
+            return False
+        if await self.quotations.can_quote(principal):
+            return True
+        return self.requesters is not None and await self.requesters.is_manager(principal)
+
+    async def _customer(self, raw_nit: str) -> tuple[str, str | None]:
+        """The customer's NIT as the master writes it (with or without its check digit)."""
+
+        nit = clean_nit(raw_nit)
+        if not nit:
+            raise InvalidInputError("Escribe el NIT del cliente")
+        candidates = [nit]
+        if len(nit) > 5 and nit_check_digit(nit[:-1]) == nit[-1]:
+            candidates.append(nit[:-1])
+        found = await self.masters.customers(candidates)
+        for candidate in candidates:
+            if candidate in found:
+                return candidate, found[candidate].name or None
+        raise InvalidInputError(f"NIT de cliente desconocido: {raw_nit}")
+
+    async def targets(
+        self, principal: Principal, customer_nit: str, skus: Sequence[str]
+    ) -> tuple[str, str | None, list[TargetMargin]]:
+        """The current margin of each SKU for the customer (the product's optimal margin on
+        the customer's list), to ask a lower one. Unknown SKUs are left out.
+
+        Raises:
+            ForbiddenError: The caller neither asks nor reviews.
+            InvalidInputError: Unknown customer, or no SKU.
+        """
+
+        if not (
+            await self.can_request_direct(principal) or await self.links.is_reviewer(principal)
+        ):
+            raise ForbiddenError("No tienes permiso para pedir márgenes autorizados")
+        nit, name = await self._customer(customer_nit)
+        wanted = list(dict.fromkeys(sku.strip() for sku in skus if sku and sku.strip()))
+        if not 1 <= len(wanted) <= MAX_ITEMS:
+            raise InvalidInputError(f"Consulta entre 1 y {MAX_ITEMS} referencias")
+        found = await self.masters.target_margins(nit, wanted)
+        return nit, name, [found[sku] for sku in wanted if sku in found]
+
+    async def create_direct(
+        self,
+        principal: Principal,
+        *,
+        customer_nit: str,
+        requested_for: date | None,
+        agreed_with: str,
+        reason: str,
+        items: Sequence[tuple[str, Decimal]],
+    ) -> InternalRequest:
+        """Ask an authorized margin from the requests panel, by customer and SKU (BI,
+        2026-11-18): no quotation; every SKU of one supplier; each margin lower than the
+        product's current one for that customer. Approving creates the same margin exception
+        as a request from a quotation.
+
+        Raises:
+            ForbiddenError: The caller neither quotes nor asks JDH supports, or reviews.
+            ConflictError: A SKU is already pending for that customer.
+            InvalidInputError: A rule fails (customer, SKUs, supplier, margins, texts).
+        """
+
+        if not await self.can_request_direct(principal):
+            raise ForbiddenError("No tienes permiso para pedir márgenes autorizados")
+        nit, customer_name = await self._customer(customer_nit)
+        if not 1 <= len(items) <= MAX_ITEMS:
+            raise InvalidInputError(f"Pide entre 1 y {MAX_ITEMS} referencias")
+        skus = [sku.strip() for sku, _ in items]
+        if len(set(skus)) != len(skus):
+            raise InvalidInputError("Una referencia está repetida en la solicitud")
+        targets = await self.masters.target_margins(nit, skus)
+        codes = {(targets[sku].commercial_supplier_code or "") for sku in skus if sku in targets}
+        request_items: list[RequestItem] = []
+        for sku, (_, margin) in zip(skus, items, strict=True):
+            asked = _margin(margin, sku)
+            target = targets.get(sku)
+            current = _below_target(sku, asked, target)
+            request_items.append(
+                RequestItem(
+                    sku=sku,
+                    requested_margin_pct=asked,
+                    description=target.description if target else None,
+                    unit=target.unit if target else None,
+                    target_margin_pct=current,
+                )
+            )
+        if len(codes) != 1 or not next(iter(codes)):
+            raise InvalidInputError(
+                "Las referencias de una solicitud deben ser de un mismo proveedor comercial"
+            )
+        code = next(iter(codes)).strip()
+        supplier_id = (await self.masters.commercial_suppliers_by_code([code])).get(code)
+        if supplier_id is None:
+            raise InvalidInputError(f"Proveedor comercial desconocido: {code}")
+        names = await self.masters.commercial_supplier_names([supplier_id])
+        new = NewRequest(
+            quotation_id=None,
+            quotation_label=None,
+            customer_nit=nit,
+            customer_name=customer_name,
+            commercial_supplier_id=supplier_id,
+            supplier_code=code,
+            supplier_name=names.get(supplier_id, (code, None))[1],
             requested_for=requested_for or self.calendar.today(),
             agreed_with=_text(agreed_with, "agreed_with", "con quién se acordó") or "",
             reason=_text(reason, "reason", "el motivo") or "",

@@ -19,6 +19,7 @@ from app.modules.commercial_masters.domain.entities import (
     Product,
     ProductRef,
     SupplierProductCode,
+    TargetMargin,
     clean_nit,
 )
 from app.modules.commercial_masters.domain.margins import (
@@ -617,6 +618,12 @@ class MasterLookup:
         """Name, business group and branches of the NITs that exist among the customers."""
 
         return await self.repository.customers_by_nit(list(dict.fromkeys(nits)))
+
+    async def target_margins(self, nit: str | None, skus: Sequence[str]) -> dict[str, TargetMargin]:
+        """The optimal margin of each product on the customer's margin list (the quoter's
+        target); Food service without a known customer."""
+
+        return await self.repository.target_margins(nit, list(dict.fromkeys(skus)))
 
     async def save_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]

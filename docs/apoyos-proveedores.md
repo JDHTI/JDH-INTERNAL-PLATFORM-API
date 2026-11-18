@@ -61,10 +61,17 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   - En el maestro y el `/preview` (no hay precio de venta) se muestra al precio de lista:
     PA = PL, $ Apoyo = máx(0, costo − PL × (1 − g)), margen recompuesto = máx(margen óptimo, g).
     No tiene Precio Apoyado Mínimo.
+  - **El margen garantizado es el piso de la línea** (BI, 2026-11-18, «pasa derecho»):
+    - se parametriza en el apoyo (`target_margin_pct`, editable en la edición del apoyo);
+    - en el cotizador y en el validador la línea debe llegar a g, y con el apoyo siempre llega,
+      porque su margen es máx(m, g). Así pasa a cualquier precio;
+    - si hay un mínimo autorizado JDH (`supported_margin_pct`), manda ese;
+    - cuando no paga nada (la línea ya está en g o por encima), se cumple igual: no es un apoyo
+      sin efecto.
   - En el cotizador, el apoyo se calcula al precio de la línea (el nuevo, o el último si no hay
-    nuevo): `guaranteed_margin_pct` en el apoyo aplicado. El precio óptimo es el de lista y no
-    hay precio mínimo, porque el proveedor cubre cualquier precio hasta g; la línea se juzga por
-    su margen con apoyo. El objetivo es el del producto (o el mínimo JDH), no g.
+    nuevo): `guaranteed_margin_pct` en el apoyo aplicado; `amount` es lo que pone a ese precio y
+    `list_amount` al precio de lista. El precio óptimo es el de lista del producto y no hay precio
+    mínimo, porque el proveedor cubre cualquier precio hasta g.
   - En el validador: ver [validador-pedidos.md](validador-pedidos.md#apoyos-reglas-v2).
   - En producción no había ninguno guardado con un PA (18-nov-2026): no hubo migración.
 
