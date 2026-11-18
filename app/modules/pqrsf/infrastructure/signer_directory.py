@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 from uuid import UUID
 
@@ -48,3 +49,11 @@ class DirectorySigner:
         if user is None:
             return None
         return Signer(user_id, user.display_name or user.email, None, user.email, None)
+
+    async def names(self, user_ids: Sequence[UUID]) -> dict[UUID, str]:
+        """Name of each platform user that exists (the email when it has none)."""
+
+        if not user_ids:
+            return {}
+        users = await self.people.get_users(user_ids)
+        return {uid: user.display_name or user.email for uid, user in users.items()}

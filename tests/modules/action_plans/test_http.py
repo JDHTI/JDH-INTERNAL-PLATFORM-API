@@ -74,10 +74,18 @@ def test_calidad_creates_an_action_fills_its_plan_and_exports_it(client, world) 
 
     rows = client.put(
         f"/api/v1/action-plans/{plan['id']}/activities",
-        json=[{"description": "Capacitar", "due_on": "2026-11-01"}],
+        json=[
+            {
+                "description": "Capacitar",
+                "due_on": "2026-11-01",
+                "responsible_user_ids": [str(world.owner.user_id)],
+            }
+        ],
     ).json()
     activity = rows["plan"]["activities_detail"][0]
     assert activity["overdue"] is True and rows["plan"]["status"] == "en_proceso"
+    owner = str(world.owner.user_id)
+    assert activity["responsible_users"] == [{"id": owner, "display_name": f"Persona {owner[:4]}"}]
 
     done = client.post(
         f"/api/v1/action-plans/{plan['id']}/rows/{activity['id']}/done", json={"done": True}
