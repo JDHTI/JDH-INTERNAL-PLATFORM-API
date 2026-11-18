@@ -56,8 +56,9 @@ def test_headers_are_red_when_always_required_orange_by_type_and_blue_otherwise(
     assert exported["Validación"] == BLUE and exported["Observaciones"] == BLUE
     # The full template has a column per margin: the short one's stops being required.
     full = colors(template_workbook(full=True))
-    assert full["Margen garantizado"] == ORANGE and full["Margen Mínimo"] == ORANGE
-    assert full["Excepción margen mínimo autorizado JDH"] == BLUE
+    # The exception's margin is «Excepción margen mínimo autorizado JDH» in every template.
+    assert full["Margen garantizado"] == ORANGE and full["Margen Mínimo"] == BLUE
+    assert full["Excepción margen mínimo autorizado JDH"] == ORANGE
 
 
 async def test_a_type_fixed_by_the_profile_makes_its_fields_always_required(

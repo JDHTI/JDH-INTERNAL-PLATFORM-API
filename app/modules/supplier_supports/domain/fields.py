@@ -261,8 +261,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "excepcion margen minimo",
             "margen minimo autorizado jdh",
         ),
-        help="Margen mínimo que JDH autoriza sobre el apoyo: da el Precio Apoyado Mínimo = "
-        "(costo − apoyo) / (1 − margen). En una Excepción margen JDH es su margen.",
+        help="Obligatorio en una Excepción margen JDH: es su margen mínimo autorizado. En los "
+        "demás tipos es opcional y da el Precio Apoyado Mínimo = (costo − apoyo) / (1 − margen). "
+        "En la plantilla, con % Margen Garantizado es el margen garantizado.",
         core=True,
     ),
     FieldSpec(
@@ -535,8 +536,14 @@ METHOD_RULES: dict[str, MethodRule] = {
     "pct_ventas": MethodRule(
         "percent", ("supplier_value",), (), "Rebate sobre ventas; se liquida por periodo."
     ),
+    # The exception's margin is written in «Excepción margen mínimo autorizado JDH», the one JDH
+    # margin the form and the template show; min_margin_pct is still accepted (kept equal).
     "margen_minimo": MethodRule(
-        "none", ("min_margin_pct",), ("min_margin_pct",), "No usa valor del proveedor."
+        "none",
+        ("supported_margin_pct",),
+        ("supported_margin_pct",),
+        "Excepción margen JDH: no usa valor del proveedor; el margen mínimo autorizado es "
+        "obligatorio.",
     ),
 }
 

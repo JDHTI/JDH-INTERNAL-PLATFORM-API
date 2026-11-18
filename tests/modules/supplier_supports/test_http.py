@@ -120,13 +120,33 @@ def test_get_and_unknown_id(client) -> None:
 def test_validation_errors_are_422_with_a_spanish_detail(client) -> None:
     for changes, fragment in (
         ({"product_sku": "999999"}, "Referencia JDH desconocida"),
-        ({"supplier_value": "5"}, "entre 0 y 1"),
+        ({"supplier_value": "5"}, "entre 0 % y 100 %"),
         ({"supplier_code": "nope"}, "Proveedor comercial desconocido"),
         ({"customer_nit": "123"}, "NIT de cliente desconocido"),
     ):
         response = client.post(BASE, json={**NEW, **changes})
         assert response.status_code == 422 and fragment in response.json()["detail"]
     assert client.post(BASE, json={**NEW, "kind": "inventado"}).status_code == 422
+    # The field to fix travels with the message, so the form marks that input.
+    bad = client.post(BASE, json={**NEW, "supplier_value": "5"}).json()
+    assert bad["field"] == "supplier_value"
+
+
+def test_a_margin_exception_is_created_with_the_field_the_modal_shows(client) -> None:
+    exception = {
+        **NEW,
+        "kind": "excepcion_margen",
+        "calc_method": "margen_minimo",
+        "supplier_value": None,
+        "supported_margin_pct": "0.10",
+    }
+
+    created = client.post(BASE, json=exception)
+
+    assert created.status_code == 201, created.json()
+    missing = client.post(BASE, json={**exception, "supported_margin_pct": None})
+    assert missing.status_code == 422 and missing.json()["field"] == "supported_margin_pct"
+    assert "necesita el margen mínimo autorizado" in missing.json()["detail"]
 
 
 def test_patch_changes_only_what_is_sent_and_enforces_the_version(client) -> None:

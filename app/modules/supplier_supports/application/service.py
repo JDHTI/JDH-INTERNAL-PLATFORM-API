@@ -23,7 +23,7 @@ from app.modules.commercial_masters.domain.entities import (
     nit_check_digit,
 )
 from app.modules.identity.domain.principal import Principal
-from app.modules.supplier_supports.domain import filters, overlap, vocabulary
+from app.modules.supplier_supports.domain import fields, filters, overlap, vocabulary
 from app.modules.supplier_supports.domain.entities import (
     Checked,
     Conflict,
@@ -176,7 +176,8 @@ class FieldError(InvalidInputError):
     """An invalid input that belongs to one field of the support (the bulk report names it)."""
 
     def __init__(self, detail: str, field: str) -> None:
-        super().__init__(detail)
+        # ``field`` also goes in the 422 body, so the form marks the input to fix.
+        super().__init__(detail, extra={"field": field})
         self.field = field
 
 
@@ -210,6 +211,13 @@ def _with_base_filters(
                 raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
             base.append(filters.Condition(field_name, "in", values))
     return filters.Group("all", (*base, group)) if base else group
+
+
+def _label(name: str) -> str:
+    """How the form and the template name a field (its code when the catalog has none)."""
+
+    spec = fields.FIELDS.get(name)
+    return spec.label if spec is not None else name
 
 
 def _branch_in(branch: str, branches: Sequence[str]) -> str | None:
@@ -324,35 +332,51 @@ class SupplierSupportService:
         ):
             if value not in allowed:
                 raise FieldError(
-                    f"{name} inválido: {value!r} (válidos: {', '.join(allowed)})", name
+                    f"{_label(name)}: valor no válido {value!r} (válidos: {', '.join(allowed)})",
+                    name,
                 )
         if data.settlement_method and data.settlement_method not in vocabulary.SETTLEMENTS:
             raise FieldError(
-                f"settlement_method inválido: {data.settlement_method!r}", "settlement_method"
+                f"{_label('settlement_method')}: valor no válido {data.settlement_method!r}",
+                "settlement_method",
             )
         if data.value_unit and data.value_unit not in vocabulary.VALUE_UNITS:
-            raise FieldError(f"value_unit inválido: {data.value_unit!r}", "value_unit")
+            raise FieldError(
+                f"{_label('value_unit')}: valor no válido {data.value_unit!r}", "value_unit"
+            )
         if data.valid_from and data.valid_to and data.valid_to < data.valid_from:
-            raise FieldError("La vigencia final no puede ser anterior a la inicial", "valid_to")
+            raise FieldError("La Fecha Fin no puede ser anterior a la Fecha Inicio", "valid_to")
+        method = vocabulary.CALC_METHOD_LABELS.get(data.calc_method, data.calc_method)
         if data.calc_method in _VALUE_REQUIRED and data.supplier_value is None:
-            raise FieldError(f"{data.calc_method} requiere supplier_value", "supplier_value")
+            raise FieldError(
+                f"El tipo «{method}» necesita el «{_label('supplier_value')}»", "supplier_value"
+            )
         if data.calc_method == "margen_minimo" and data.min_margin_pct is None:
-            raise FieldError("margen_minimo requiere min_margin_pct", "min_margin_pct")
+            # The shown field: _normalize copies it to min_margin_pct.
+            raise FieldError(
+                "La Excepción margen JDH necesita el margen mínimo autorizado: escríbelo en "
+                f"«{_label('supported_margin_pct')}»",
+                "supported_margin_pct",
+            )
         if data.calc_method == "precio_neto" and data.target_margin_pct is None:
             raise FieldError(
-                "precio_neto requiere target_margin_pct (margen garantizado)", "target_margin_pct"
+                f"El tipo «{method}» necesita el «{_label('target_margin_pct')}»",
+                "target_margin_pct",
             )
         if data.calc_method in _PCT_METHODS and data.supplier_value is not None:
             if not Decimal(0) <= data.supplier_value <= Decimal(1):
                 raise FieldError(
-                    "El porcentaje debe expresarse entre 0 y 1 (0.05 = 5%)", "supplier_value"
+                    f"«{_label('supplier_value')}»: el porcentaje debe estar entre 0 % y 100 %",
+                    "supplier_value",
                 )
         elif data.supplier_value is not None and data.supplier_value < 0:
-            raise FieldError("El valor del proveedor no puede ser negativo", "supplier_value")
+            raise FieldError(
+                f"«{_label('supplier_value')}» no puede ser negativo", "supplier_value"
+            )
         for name in ("target_margin_pct", "list_margin_pct", "supported_margin_pct"):
             value = getattr(data, name)
             if value is not None and not Decimal(0) <= value < Decimal(1):
-                raise FieldError(f"{name} debe estar entre 0 y 1", name)
+                raise FieldError(f"«{_label(name)}» debe estar entre 0 % y 100 %", name)
         if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
             raise FieldError("jdh_pct debe estar entre -1 y 1", "jdh_pct")
         if data.jdh_net_cost is not None:
@@ -390,6 +414,16 @@ class SupplierSupportService:
             changes[name] = _clean(getattr(data, name))
         for name in _ARRAY_FIELDS:
             changes[name] = _normalize_scope(getattr(data, name))
+        if data.calc_method == "margen_minimo":
+            # The form and the template show one JDH margin, «Excepción margen mínimo autorizado
+            # JDH» (supported_margin_pct); for a margin exception it is the exception's margin.
+            # Either field is accepted and both are kept equal, the shown one winning.
+            shown = changes.get("supported_margin_pct", data.supported_margin_pct)
+            stored = changes.get("min_margin_pct", data.min_margin_pct)
+            if shown is not None:
+                changes["min_margin_pct"] = shown
+            elif stored is not None:
+                changes["supported_margin_pct"] = stored
         return replace(data, **changes)
 
     async def _resolve(
@@ -1204,6 +1238,11 @@ class SupplierSupportService:
             values["issues"] = ()
         if "value_unit" in values:
             values["unit_basis_source"] = "manual" if values["value_unit"] else "desconocido"
+        if "min_margin_pct" in values and "supported_margin_pct" not in values:
+            # An exception edited by its other margin field: both stay equal (see _normalize).
+            exception = values.get("calc_method", current.data.calc_method) == "margen_minimo"
+            if exception:
+                values["supported_margin_pct"] = values["min_margin_pct"]
         merged = replace(current.data, **values)
         prepared = await self._prepare(
             merged, supplier_code=supplier_code, strict=True, previous=current.data
