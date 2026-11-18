@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -59,35 +60,37 @@ class SqlAlchemyCostRepository:
     async def save(self, costs: Sequence[SupportCost], now: datetime) -> int:
         """Upsert the costs (one row per support)."""
 
-        rows = [
-            {
-                "support_id": cost.support_id,
-                "product_sku": cost.product_sku,
-                "plan_key": cost.plan_key,
-                "plan_label": cost.plan_label,
-                "unit_cost": cost.unit_cost,
-                "source": cost.source,
-                "quote_cost": cost.quote_cost,
-                "inventory_cost": cost.inventory_cost,
-                "snapshot_date": cost.snapshot_date,
-                "computed_at": now,
-            }
-            for cost in costs
-        ]
         async with self.database.session_factory() as session, session.begin():
-            for start in range(0, len(rows), _CHUNK):
-                statement = insert(C).values(rows[start : start + _CHUNK])
-                await session.execute(
-                    statement.on_conflict_do_update(
-                        index_elements=[C.support_id],
-                        set_={
-                            name: statement.excluded[name]
-                            for name in rows[0]
-                            if name != "support_id"
-                        },
-                    )
-                )
-        return len(rows)
+            return await upsert_costs(session, costs, now)
+
+
+async def upsert_costs(session: Any, costs: Sequence[SupportCost], now: datetime) -> int:
+    """Upsert the costs (one row per support) in the caller's transaction."""
+
+    rows = [
+        {
+            "support_id": cost.support_id,
+            "product_sku": cost.product_sku,
+            "plan_key": cost.plan_key,
+            "plan_label": cost.plan_label,
+            "unit_cost": cost.unit_cost,
+            "source": cost.source,
+            "quote_cost": cost.quote_cost,
+            "inventory_cost": cost.inventory_cost,
+            "snapshot_date": cost.snapshot_date,
+            "computed_at": now,
+        }
+        for cost in costs
+    ]
+    for start in range(0, len(rows), _CHUNK):
+        statement = insert(C).values(rows[start : start + _CHUNK])
+        await session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[C.support_id],
+                set_={name: statement.excluded[name] for name in rows[0] if name != "support_id"},
+            )
+        )
+    return len(rows)
 
 
 class WarehouseCostSource:
@@ -156,4 +159,4 @@ def _strip(value: object) -> str | None:
     return text or None
 
 
-__all__ = ["SqlAlchemyCostRepository", "WarehouseCostSource"]
+__all__ = ["SqlAlchemyCostRepository", "WarehouseCostSource", "upsert_costs"]

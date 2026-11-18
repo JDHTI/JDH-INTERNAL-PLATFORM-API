@@ -166,3 +166,7 @@ class BulkReport:
     load_id: UUID | None = None
     # A big load is published to the DWH from this moment (its quiet hours).
     publish_not_before: datetime | None = None
+    # Applied: supports of the file (created, updated or unchanged, with a JDH SKU) whose DWH
+    # cost the load saved, and those the DWH has no cost for.
+    costs_assigned: int = 0
+    costs_missing: int = 0

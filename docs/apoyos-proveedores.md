@@ -90,7 +90,15 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 - `POST /supplier-supports/retire`: anula o vence hasta 2.000 apoyos (elegidos o por filtro) con
   observación obligatoria; todo o nada.
 - `POST /supplier-supports/preview`: las cifras del formulario antes de guardar.
-- Un apoyo nuevo o editado trae su costo DWH en segundo plano, sin esperar el job.
+- Un apoyo nuevo o editado a mano trae su costo DWH en segundo plano, sin esperar el job.
+- **La carga masiva asigna el costo ella misma** (BI, 2026-11-18). Al aplicar, lee del DWH el
+  costo de cada apoyo del archivo (creado, actualizado o sin cambio, con SKU JDH), con la regla
+  del cotizador. Lo guarda en la misma transacción que los apoyos.
+  - Si el DWH no responde, la carga no se guarda (503) y se puede reintentar.
+  - El reporte trae `costs_assigned` y `costs_missing` (apoyos sin costo en el DWH).
+  - Volver a subir el mismo archivo recalcula el costo de sus apoyos.
+  - El job `supplier-supports-costs` sigue siendo solo la actualización diaria de los costos;
+    la carga no depende de él.
 - Plantilla (`GET /bulk/template`), solo estas columnas y en este orden (BI, 2026-11-18): Clase
   apoyo, Tipo apoyo, Valor apoyo, Unidad valor, Excepción margen mínimo autorizado JDH, Fecha
   Inicio, Fecha Fin, NIT Cliente, Cliente, Sucursal, Grupo Empresarial, SKU JDH, SKU Proveedor,

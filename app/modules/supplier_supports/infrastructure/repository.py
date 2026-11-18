@@ -55,6 +55,7 @@ from app.modules.supplier_supports.domain.filters import (
     SortKey,
 )
 from app.modules.supplier_supports.domain.overlap import Supersede, overlaps
+from app.modules.supplier_supports.infrastructure.costs import upsert_costs
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportAttachmentModel,
     SupplierSupportCostModel,
@@ -841,6 +842,8 @@ class SqlAlchemySupportRepository:
                     _stamp(model, actor, now, Trace("vencimiento", plan.load_id))
                     written.append(model)
                 await session.flush()
+                # The cost of the file's supports is part of the load (same transaction).
+                await upsert_costs(session, plan.costs, now)
                 await queue_supports(session, written, not_before=plan.publish_not_before)
                 await queue_load(session, load)
                 await session.commit()

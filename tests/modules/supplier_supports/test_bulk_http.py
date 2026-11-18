@@ -30,24 +30,8 @@ class AllowAll:
         return None
 
 
-class RecordingCosts:
-    """The DWH cost refresh, recorded instead of run."""
-
-    def __init__(self) -> None:
-        self.refreshed: list = []
-
-    async def refresh(self, support_ids):
-        self.refreshed.append(list(support_ids))
-        return len(support_ids)
-
-
 @pytest.fixture
-def costs():
-    return RecordingCosts()
-
-
-@pytest.fixture
-def client(service, bulk, profiles, costs):
+def client(service, bulk, profiles):
     app = create_app(Settings(ENVIRONMENT=Environment.TEST))
     app.dependency_overrides[get_current_principal] = lambda: person("comercial@jdh.com.co")
     container = app.state.container.v1_container
@@ -56,21 +40,10 @@ def client(service, bulk, profiles, costs):
         container.supplier_support_service.override(service),
         container.supplier_support_bulk_service.override(bulk),
         container.supplier_support_profile_service.override(profiles),
-        container.supplier_support_cost_service.override(costs),
         TestClient(app) as test_client,
     ):
         yield test_client
     app.dependency_overrides.clear()
-
-
-def test_an_applied_load_refreshes_the_dwh_cost_of_its_supports(client, costs) -> None:
-    simulated = upload(client)
-    assert simulated.status_code == 200 and costs.refreshed == []
-
-    applied = upload(client, apply="true")
-
-    assert applied.status_code == 200 and applied.json()["applied"]
-    assert [[str(item) for item in ids] for ids in costs.refreshed] == [applied.json()["created"]]
 
 
 def upload(client, content=FILE, name="apoyos.csv", **params):

@@ -17,11 +17,12 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from app.core.errors import ForbiddenError, InvalidInputError
+from app.core.errors import DependencyUnavailableError, ForbiddenError, InvalidInputError
 from app.modules.identity.domain.principal import Principal
 from app.modules.jobs.application.schedule import next_run_at
 from app.modules.supplier_supports.application import cells
 from app.modules.supplier_supports.application import normalize as n
+from app.modules.supplier_supports.application.costs import CostTarget, SupportCostService
 from app.modules.supplier_supports.application.profiles import (
     SupportProfileService,
     normalize_column_map,
@@ -41,7 +42,12 @@ from app.modules.supplier_supports.domain.bulk import (
     same_support,
     support_key,
 )
-from app.modules.supplier_supports.domain.entities import LoadPlan, Support, SupportData
+from app.modules.supplier_supports.domain.entities import (
+    LoadPlan,
+    Support,
+    SupportCost,
+    SupportData,
+)
 from app.modules.supplier_supports.domain.overlap import OVERLAP_ACTIONS, Supersede, overlaps
 from app.modules.supplier_supports.domain.ports import SupportFileReader
 from app.modules.supplier_supports.domain.profiles import Profile
@@ -242,6 +248,7 @@ class SupportBulkService:
         max_rows: int = 2000,
         quiet_hours: QuietHours | None = None,
         clock: Callable[[], datetime] | None = None,
+        costs: SupportCostService | None = None,
     ) -> None:
         """Create the service.
 
@@ -253,6 +260,8 @@ class SupportBulkService:
             max_rows (int): Most rows a file may hold.
             quiet_hours (QuietHours | None): When a big load may reach the DWH.
             clock (Callable[[], datetime] | None): Current instant, for tests.
+            costs (SupportCostService | None): The DWH cost of each support the load writes,
+                saved with the load; ``None`` leaves the cost to the daily job (tests).
         """
 
         self.supports = supports
@@ -262,6 +271,7 @@ class SupportBulkService:
         self.max_rows = max_rows
         self.quiet_hours = quiet_hours
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.costs = costs
 
     async def template_profile(self, supplier_code: str | None) -> Profile | None:
         """The profile whose layout the template should follow, if the supplier has one."""
@@ -552,7 +562,21 @@ class SupportBulkService:
         not_before = (
             self.quiet_hours.not_before(writes, self._clock()) if self.quiet_hours else None
         )
+        costs: list[SupportCost] = []
+        costs_missing = 0
         if apply and not blocked and (writes or unchanged):
+            # The cost of every support the file brings (created, updated or unchanged) is
+            # part of the load: read from the DWH now and saved with the supports. Without
+            # the DWH the load is not saved.
+            costs, costs_missing = await self._costs(
+                [(support_id, item) for support_id, item in creates]
+                + [(support_id, item) for support_id, _, item in updates]
+                + [
+                    (support.id, support.data)
+                    for action, support, _ in valid.values()
+                    if action == UNCHANGED and support is not None
+                ]
+            )
             result = await self.supports.apply_load(
                 principal,
                 LoadPlan(
@@ -571,6 +595,7 @@ class SupportBulkService:
                     missing=len(missing),
                     publish_not_before=not_before,
                     retirements=tuple(retirements.values()),
+                    costs=tuple(costs),
                 ),
             )
             load_id = result.load_id
@@ -637,7 +662,35 @@ class SupportBulkService:
             retired=retired,
             skipped=skipped,
             group_supports=sum(1 for row in accepted.values() if row.from_group),
+            costs_assigned=len(costs) - costs_missing if load_id is not None else 0,
+            costs_missing=costs_missing if load_id is not None else 0,
         )
+
+    async def _costs(
+        self, supports: Sequence[tuple[UUID, SupportData]]
+    ) -> tuple[list[SupportCost], int]:
+        """The DWH cost of each support with a JDH SKU (the quoter's rule, as the daily job),
+        and how many have no cost in the DWH.
+
+        Raises:
+            DependencyUnavailableError: If the DWH cannot be read; nothing is saved.
+        """
+
+        targets = [
+            CostTarget(support_id, data.product_sku, data.customer_nit)
+            for support_id, data in supports
+            if data.product_sku and data.status != "anulado"
+        ]
+        if self.costs is None or not targets:
+            return [], 0
+        try:
+            costs, missing, *_ = await self.costs.compute(targets)
+        except DependencyUnavailableError as exc:
+            raise DependencyUnavailableError(
+                "No se pudo leer el costo de los apoyos en el datawarehouse: la carga no se "
+                "guardó. Intenta de nuevo en unos minutos."
+            ) from exc
+        return costs, missing
 
     async def _expand_groups(
         self, rows: Sequence[_Row], required: bool
