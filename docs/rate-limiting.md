@@ -207,6 +207,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/dwh-publish/reconcile` | `relaxed` |  |
 | `POST` | `/v1/dwh-publish/retry` | `relaxed` |  |
 | `GET` | `/v1/internal-support-requests` | `read` |  |
+| `POST` | `/v1/internal-support-requests` | `relaxed` |  |
+| `GET` | `/v1/internal-support-requests/target-margins` | `read` |  |
 | `GET` | `/v1/internal-support-requests/{request_id}` | `read` |  |
 | `POST` | `/v1/internal-support-requests/{request_id}/approve` | `relaxed` |  |
 | `POST` | `/v1/internal-support-requests/{request_id}/reject` | `relaxed` |  |

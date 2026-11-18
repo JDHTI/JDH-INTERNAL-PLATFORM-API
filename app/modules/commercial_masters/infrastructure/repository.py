@@ -24,9 +24,15 @@ from app.modules.commercial_masters.domain.entities import (
     ProductMargins,
     ProductRef,
     SupplierProductCode,
+    TargetMargin,
     clean_nit,
 )
-from app.modules.commercial_masters.domain.margins import EMPLOYEE_MARGIN_FIELD, MARGIN_FIELDS
+from app.modules.commercial_masters.domain.margins import (
+    EMPLOYEE_MARGIN_FIELD,
+    MARGIN_FIELDS,
+    branches_margin_field,
+    margin_for,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CommercialSupplierNitModel,
@@ -814,6 +820,48 @@ class SqlAlchemyCommercialMasterRepository:
                 branches=tuple(sorted(item["branches"])),
             )
             for nit, item in found.items()
+        }
+
+    async def target_margins(self, nit: str | None, skus: Sequence[str]) -> dict[str, TargetMargin]:
+        """The optimal margin of each product on the customer's margin list (the quoter's
+        target): the majority of the customer's branches decides the list; without a known
+        customer, Food service."""
+
+        wanted = sorted({sku for sku in skus if sku})
+        if not wanted:
+            return {}
+        async with self.database.session_factory() as session:
+            field_name = "margin_list"
+            if nit:
+                branches = (
+                    await session.execute(
+                        select(
+                            CustomerModel.channel,
+                            CustomerModel.billing_center_code,
+                            CustomerModel.sales_team_class,
+                            CustomerModel.is_active,
+                        ).where(CustomerModel.nit == nit)
+                    )
+                ).all()
+                if branches:
+                    field_name = branches_margin_field(branches)
+            products = (
+                (await session.execute(select(ProductModel).where(ProductModel.sku.in_(wanted))))
+                .scalars()
+                .all()
+            )
+        return {
+            product.sku: TargetMargin(
+                sku=product.sku,
+                description=product.description,
+                commercial_supplier_code=product.commercial_supplier_code,
+                margin_field=field_name,
+                margin_pct=margin_for(
+                    {name: getattr(product, name) for name in MARGIN_FIELDS}, field_name
+                ),
+                unit=product.inventory_unit,
+            )
+            for product in products
         }
 
     async def get_product(self, sku: str) -> Product | None:

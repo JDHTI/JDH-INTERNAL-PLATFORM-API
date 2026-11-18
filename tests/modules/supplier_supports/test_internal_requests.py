@@ -392,3 +392,83 @@ async def test_the_quotation_line_shows_the_latest_request(requests_service, rep
 
     assert refs["1128"].status == APPROVED and refs["1128"].approved_margin_pct == D("0.140000")
     assert refs["8749"].approved_margin_pct is None
+
+
+PANEL = person("comercial@jdh.com.co")
+
+
+@pytest.fixture
+def panel_service(repo, access) -> InternalRequestService:
+    links = InternalRequestLinks(
+        repo, FakeManagers([REVIEWER.email]), FakeManagers([DESIGNATED.email])
+    )
+    return InternalRequestService(
+        repo, links, access, FakeLookup(), FixedCalendar(), FakeManagers([PANEL.email])
+    )
+
+
+async def test_a_request_from_a_quotation_asks_less_than_the_current_margin(
+    requests_service,
+) -> None:
+    request = await ask(requests_service, items=[("1128", D("0.16"))])
+
+    # The product's Food service margin for that customer, kept with the item.
+    assert request.items[0].target_margin_pct == D("0.18")
+    for same_or_more in (D("0.18"), D("0.19")):
+        with pytest.raises(
+            InvalidInputError, match=r"debe ser menor que su margen actual \(18,00 %"
+        ):
+            await ask(requests_service, items=[("8749", same_or_more)])
+
+
+async def test_the_panel_asks_by_customer_and_sku(panel_service) -> None:
+    nit, name, targets = await panel_service.targets(PANEL, "800116299-6", ["1128", "9999"])
+    assert (nit, [item.sku for item in targets]) == ("800116299", ["1128"])
+    assert targets[0].margin_pct == D("0.18") and name
+
+    request = await panel_service.create_direct(
+        PANEL,
+        customer_nit="800116299",
+        requested_for=None,
+        agreed_with="Gerente Familia",
+        reason="Licitación",
+        items=[("1128", D("0.15"))],
+    )
+
+    assert request.quotation_id is None and request.status == PENDING
+    assert (request.supplier_code, request.commercial_supplier_id) == ("233", FAMILIA_ID)
+    assert request.items[0].target_margin_pct == D("0.18")
+    assert request.items[0].description
+
+
+@pytest.mark.parametrize(
+    ("nit", "items", "message"),
+    [
+        ("800116299", [("1128", D("0.18"))], "debe ser menor"),  # same as the current one
+        ("900430148", [("1128", D("0.12"))], "Margen Mayoristas"),  # a wholesale customer: 10 %
+        ("800116299", [("1128", D("0.1")), ("8749", D("0.1"))], "mismo proveedor"),
+        ("800116299", [("9999", D("0.1"))], "Referencia JDH desconocida"),
+        ("800116299", [("1001", D("0.1"))], "no tiene Margen Food Service"),
+        ("111", [("1128", D("0.1"))], "NIT de cliente desconocido"),
+    ],
+)
+async def test_the_panel_refuses_a_margin_not_under_the_current_one(
+    panel_service, nit, items, message
+) -> None:
+    with pytest.raises(InvalidInputError, match=message):
+        await panel_service.create_direct(
+            PANEL,
+            customer_nit=nit,
+            requested_for=None,
+            agreed_with="x",
+            reason="y",
+            items=items,
+        )
+
+
+async def test_who_asks_from_the_panel(panel_service) -> None:
+    assert await panel_service.can_request_direct(PANEL)
+    assert await panel_service.can_request_direct(QUOTER)  # whoever quotes asks here too
+    assert not await panel_service.can_request_direct(REVIEWER)  # BI decides
+    with pytest.raises(ForbiddenError):
+        await panel_service.targets(person("otro@jdh.com.co"), "800116299", ["1128"])

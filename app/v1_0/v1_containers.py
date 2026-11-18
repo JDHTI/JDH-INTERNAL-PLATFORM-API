@@ -878,6 +878,8 @@ class V1Container(containers.DeclarativeContainer):
         quotations=providers.Factory(QuoterAccess, quotations=quotation_service),
         masters=master_lookup,
         calendar=pqrsf_calendar,
+        # Comercial asks an authorized margin from the requests panel too (by customer + SKU).
+        requesters=supplier_support_requester_policy,
     )
     list_review_service = providers.Factory(
         ListReviewService,
