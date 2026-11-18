@@ -298,6 +298,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/pqrsf/feedback/summary` | `read` |  |
 | `GET` | `/v1/pqrsf/feedback/{feedback_id}` | `read` |  |
 | `GET` | `/v1/pqrsf/feedback/{feedback_id}/files/{file_id}/download` | `read` |  |
+| `GET` | `/v1/pqrsf/improvement-opportunities` | `read` |  |
 | `GET` | `/v1/pqrsf/om/settings` | `read` |  |
 | `PUT` | `/v1/pqrsf/om/settings` | `relaxed` |  |
 | `GET` | `/v1/pqrsf/people` | `read` |  |
