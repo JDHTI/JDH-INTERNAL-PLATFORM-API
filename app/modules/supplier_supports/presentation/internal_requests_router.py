@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
+from app.modules.commercial_masters.domain.margins import MARGIN_LABELS
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.internal_requests import (
@@ -26,7 +27,13 @@ from app.modules.supplier_supports.application.internal_requests import (
 from app.modules.supplier_supports.domain.internal_requests import MAX_ITEMS, InternalRequest
 
 router = APIRouter(
-    dependencies=[Depends(require_permission("cotizador", "apoyos", "aprobacion-apoyos-internos"))]
+    dependencies=[
+        Depends(
+            require_permission(
+                "cotizador", "apoyos", "aprobacion-apoyos-internos", "solicitudes-apoyos"
+            )
+        )
+    ]
 )
 _service = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
 _principal = Depends(get_current_principal)
@@ -50,6 +57,37 @@ class CreateRequestBody(BaseModel):
     agreed_with: str = Field(min_length=1, max_length=300)
     reason: str = Field(min_length=1, max_length=1000)
     items: list[RequestItemBody] = Field(min_length=1, max_length=MAX_ITEMS)
+
+
+class DirectRequestBody(BaseModel):
+    """Ask an authorized margin by customer and SKU, from the requests panel (no quotation).
+    Every SKU must be of one supplier and each margin lower than its current one."""
+
+    customer_nit: str = Field(min_length=1, max_length=30)
+    # The order's date; empty = today (Bogotá).
+    requested_for: date | None = None
+    agreed_with: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=1000)
+    items: list[RequestItemBody] = Field(min_length=1, max_length=MAX_ITEMS)
+
+
+class TargetMarginResponse(BaseModel):
+    """The current margin of a SKU for a customer: the product's optimal margin on the
+    customer's list. A request must ask less."""
+
+    sku: str
+    description: str | None
+    supplier_code: str | None
+    margin_field: str
+    margin_label: str
+    # Null when the product has no margin on that list (it cannot be requested).
+    margin_pct: Decimal | None
+
+
+class TargetMarginsResponse(BaseModel):
+    customer_nit: str
+    customer_name: str | None
+    items: list[TargetMarginResponse]
 
 
 class ApproveItemBody(BaseModel):
@@ -84,6 +122,8 @@ class RequestItemResponse(BaseModel):
     margin_pct: Decimal | None
     # Minimum of the product or the rule on that line.
     min_margin_pct: Decimal | None
+    # The product's current (optimal) margin for the customer when it was asked.
+    target_margin_pct: Decimal | None = None
     requested_margin_pct: Decimal
     # Null when that SKU was not approved.
     approved_margin_pct: Decimal | None
@@ -155,6 +195,7 @@ def _response(request: InternalRequest) -> InternalRequestResponse:
                 quoted_price=item.quoted_price,
                 margin_pct=item.margin_pct,
                 min_margin_pct=item.min_margin_pct,
+                target_margin_pct=item.target_margin_pct,
                 requested_margin_pct=item.requested_margin_pct,
                 approved_margin_pct=item.approved_margin_pct,
                 support_id=item.support_id,
@@ -186,6 +227,68 @@ async def create_request(
             quotation_id,
             version=body.version,
             supplier_code=body.supplier_code,
+            requested_for=body.requested_for,
+            agreed_with=body.agreed_with,
+            reason=body.reason,
+            items=[(item.sku, item.requested_margin_pct) for item in body.items],
+        )
+    )
+
+
+@router.get(
+    "/internal-support-requests/target-margins",
+    response_model=TargetMarginsResponse,
+    summary="Current margin of SKUs for a customer, to ask a lower one",
+)
+@inject
+async def target_margins(
+    customer_nit: str = Query(min_length=1, max_length=30),
+    sku: list[str] = Query(min_length=1, max_length=MAX_ITEMS),  # noqa: B008
+    principal: Principal = _principal,
+    service: InternalRequestService = _service,
+) -> TargetMarginsResponse:
+    """The product's optimal margin on the customer's margin list (Market Apartadó, Masivo
+    food, Mayoristas or Food service), the one an authorized margin must be under. Unknown
+    SKUs are left out; 422 for an unknown customer."""
+
+    nit, name, found = await service.targets(principal, customer_nit, sku)
+    return TargetMarginsResponse(
+        customer_nit=nit,
+        customer_name=name,
+        items=[
+            TargetMarginResponse(
+                sku=item.sku,
+                description=item.description,
+                supplier_code=item.commercial_supplier_code,
+                margin_field=item.margin_field,
+                margin_label=MARGIN_LABELS.get(item.margin_field, item.margin_field),
+                margin_pct=item.margin_pct,
+            )
+            for item in found
+        ],
+    )
+
+
+@router.post(
+    "/internal-support-requests",
+    response_model=InternalRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Ask an authorized margin by customer and SKU (requests panel)",
+)
+@inject
+async def create_direct_request(
+    body: DirectRequestBody,
+    principal: Principal = _principal,
+    service: InternalRequestService = _service,
+) -> InternalRequestResponse:
+    """No quotation: one customer and SKUs of one supplier, each with a margin lower than its
+    current one (422 otherwise). Approving creates the margin exception, as from a quotation.
+    409 when a SKU is already pending for that customer."""
+
+    return _response(
+        await service.create_direct(
+            principal,
+            customer_nit=body.customer_nit,
             requested_for=body.requested_for,
             agreed_with=body.agreed_with,
             reason=body.reason,

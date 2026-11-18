@@ -15,6 +15,7 @@ from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     CustomerRef,
     ProductRef,
+    TargetMargin,
 )
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
@@ -81,6 +82,14 @@ class FakeLookup:
         }
         # Branch ids by NIT as the master writes them; a NIT not listed has only 001.
         self.branches = {"800116299": ("001", "002", "015")}
+        # Product margins by (SKU, list) and the list of each customer (Food service if not).
+        self.margins = {
+            ("1128", "margin_list"): Decimal("0.18"),
+            ("8749", "margin_list"): Decimal("0.18"),
+            ("1128", "margin_wholesale"): Decimal("0.10"),
+            ("3474", "margin_list"): Decimal("0.20"),
+        }
+        self.margin_fields = {"900430148": "margin_wholesale"}
         # A supplier's own codes: Familia's 72163 is JDH 1128; 99999 maps to two products.
         self.supplier_codes = {
             (FAMILIA_ID, "72163"): [SKU_1128],
@@ -125,6 +134,22 @@ class FakeLookup:
 
     async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
         return {nit: self.names_by_nit[nit] for nit in nits if nit in self.names_by_nit}
+
+    async def target_margins(self, nit, skus) -> dict[str, TargetMargin]:
+        # Mayoristas for the wholesale customer, Food service for every other.
+        field = self.margin_fields.get(nit or "", "margin_list")
+        return {
+            sku: TargetMargin(
+                sku,
+                self.products[sku].description,
+                self.products[sku].commercial_supplier_code,
+                field,
+                self.margins.get((sku, field)),
+                "UND",
+            )
+            for sku in skus
+            if sku in self.products
+        }
 
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
         groups = {nit: name.title() for name, items in self.groups.items() for nit, _ in items}

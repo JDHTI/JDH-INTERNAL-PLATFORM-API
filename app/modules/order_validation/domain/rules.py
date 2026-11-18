@@ -258,14 +258,14 @@ def required_margin(agreement: Agreement, reference: Decimal | None) -> Decimal 
     """Margin the line must reach with the support: JDH's authorized minimum when the support
     has one (rules v2), else the one agreed, else the product's optimal margin.
 
-    The margin of a % Margen Garantizado is what the supplier guarantees, not a target: its
-    line is held to JDH's minimum or the product's margin, as any other type.
+    For a % Margen Garantizado the one agreed is the guaranteed margin (BI, 2026-11-18): the
+    supplier guarantees it at any price, so a line it covers always reaches it ("pasa
+    derecho"), in the quoter and in the order validator.
     """
 
-    agreed = None if agreement.calc_method == GUARANTEED_METHOD else agreement.target_margin_pct
     for value in (
         agreement.supported_margin_pct,
-        agreed,
+        agreement.target_margin_pct,
         agreement.min_margin_pct,
         agreement.list_margin_pct,
         reference,
@@ -385,9 +385,10 @@ def check(
         )
     effective = margin + share * (ONE - margin)
     result = _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
-    if share <= ZERO:
+    if share <= ZERO and method != GUARANTEED_METHOD:
         # A supported cost above today's cost (or a zero value) brings no money: checked and
-        # listed, but never the reason a line is released (BI, 2026-11-18).
+        # listed, but never the reason a line is released (BI, 2026-11-18). A guaranteed margin
+        # that pays nothing is still met: the line is already at or over the guarantee.
         return replace(
             result,
             no_effect=True,

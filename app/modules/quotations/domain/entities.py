@@ -571,6 +571,9 @@ class Quotation:
     price_family: str = "generales"
     stock_source: str | None = None
     below_target_count: int = 0
+    # The last time the offer went to the customer (kept after later edits, as history).
+    sent_at: datetime | None = None
+    sent_by: str | None = None
     confirmed_at: datetime | None = None
     confirmed_by: str | None = None
     validated_at: datetime | None = None

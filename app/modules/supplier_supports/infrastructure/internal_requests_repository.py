@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
@@ -44,6 +44,7 @@ def _item(model: InternalSupportRequestItemModel) -> RequestItem:
         min_margin_pct=model.min_margin_pct,
         approved_margin_pct=model.approved_margin_pct,
         support_id=model.support_id,
+        target_margin_pct=model.target_margin_pct,
     )
 
 
@@ -103,24 +104,26 @@ class SqlAlchemyInternalRequestRepository:
     async def create(
         self, request: NewRequest, actor_id: UUID, actor: str, now: datetime
     ) -> InternalRequest:
-        """Store a request; a SKU already pending for the same quotation is a conflict."""
+        """Store a request; a SKU already pending for the same quotation (or, asked from the
+        panel, for the same customer) is a conflict."""
 
         skus = [item.sku for item in request.items]
+        from_quotation = request.quotation_id is not None
+        scope = (
+            R.quotation_id == request.quotation_id
+            if from_quotation
+            else and_(R.quotation_id.is_(None), R.customer_nit == request.customer_nit)
+        )
+        lock_key = str(request.quotation_id) if from_quotation else f"nit:{request.customer_nit}"
         async with self.database.session_factory() as session, session.begin():
-            # One pending request per SKU and quotation: two requests of the same quotation are
-            # written one after the other (transaction lock on the quotation).
-            await session.execute(
-                select(func.pg_advisory_xact_lock(func.hashtext(str(request.quotation_id))))
-            )
+            # One pending request per SKU and quotation (or customer): two requests of the same
+            # scope are written one after the other (transaction lock on it).
+            await session.execute(select(func.pg_advisory_xact_lock(func.hashtext(lock_key))))
             pending = (
                 await session.execute(
                     select(I.sku)
                     .join(R, R.id == I.request_id)
-                    .where(
-                        R.quotation_id == request.quotation_id,
-                        R.status == PENDING,
-                        I.sku.in_(skus),
-                    )
+                    .where(scope, R.status == PENDING, I.sku.in_(skus))
                 )
             ).scalars()
             repeated = sorted(set(pending))
@@ -128,7 +131,7 @@ class SqlAlchemyInternalRequestRepository:
                 raise ConflictError(
                     "Ya hay una solicitud pendiente para "
                     + ", ".join(repeated)
-                    + " en esta cotización"
+                    + (" en esta cotización" if from_quotation else " para este cliente")
                 )
             model = R(
                 id=uuid4(),
@@ -163,6 +166,7 @@ class SqlAlchemyInternalRequestRepository:
                     margin_pct=item.margin_pct,
                     min_margin_pct=item.min_margin_pct,
                     requested_margin_pct=item.requested_margin_pct,
+                    target_margin_pct=item.target_margin_pct,
                 )
                 for index, item in enumerate(request.items)
             ]

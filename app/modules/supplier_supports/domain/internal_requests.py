@@ -1,7 +1,9 @@
-"""Internal support requests: a supported margin asked from a customer quotation.
+"""Internal support requests (authorized margin): a supported margin for a customer.
 
 Whoever quotes asks, for the quotation's customer, a supported margin on one or more SKUs of
-one supplier. BI (or a designated reviewer) decides:
+one supplier; or it is asked from the requests panel by customer and SKU (no quotation). The
+margin asked must be lower than the product's optimal margin on the customer's list (BI,
+2026-11-18). BI (or a designated reviewer) decides:
 
 - ``persistente``: each approved SKU becomes a support with the reviewer's validity;
 - ``unica_vez``: the same support valid only on the order's date (``requested_for``);
@@ -46,6 +48,9 @@ class RequestItem:
     min_margin_pct: Decimal | None = None
     approved_margin_pct: Decimal | None = None
     support_id: UUID | None = None
+    # The product's optimal margin on the customer's list when it was asked: the margin asked
+    # must be lower (BI, 2026-11-18).
+    target_margin_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -80,9 +85,10 @@ class InternalRequest:
 
 @dataclass(frozen=True)
 class NewRequest:
-    """A request ready to be stored (checked by the service)."""
+    """A request ready to be stored (checked by the service). Without a quotation it was
+    asked from the requests panel, by customer and SKU."""
 
-    quotation_id: UUID
+    quotation_id: UUID | None
     quotation_label: str | None
     customer_nit: str
     customer_name: str | None

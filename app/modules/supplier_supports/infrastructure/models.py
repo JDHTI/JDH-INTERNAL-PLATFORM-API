@@ -543,3 +543,5 @@ class InternalSupportRequestItemModel(Base):
     support_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="SET NULL")
     )
+    # The product's optimal margin on the customer's list when it was asked (0070).
+    target_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))

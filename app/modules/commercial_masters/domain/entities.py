@@ -209,6 +209,20 @@ class CustomerRef:
 
 
 @dataclass(frozen=True)
+class TargetMargin:
+    """A product's optimal margin on a customer's margin list (the quoter's target)."""
+
+    sku: str
+    description: str | None
+    commercial_supplier_code: str | None
+    # ``margin_list``, ``margin_wholesale``, ``margin_mass_food`` or ``margin_market``.
+    margin_field: str
+    # ``None`` when the product has no margin on that list.
+    margin_pct: Decimal | None
+    unit: str | None = None
+
+
+@dataclass(frozen=True)
 class SupplierProductCode:
     """A supplier's own SKU for a JDH product."""
 

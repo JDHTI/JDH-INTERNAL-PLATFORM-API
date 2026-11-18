@@ -20,6 +20,7 @@ from app.modules.commercial_masters.domain.entities import (
     Product,
     ProductRef,
     SupplierProductCode,
+    TargetMargin,
 )
 from app.modules.identity.domain.principal import Principal
 
@@ -157,6 +158,10 @@ class CommercialMasterRepository(Protocol):
     async def existing_customer_nits(self, nits: Sequence[str]) -> dict[str, str]: ...
 
     async def customers_by_nit(self, nits: Sequence[str]) -> dict[str, CustomerRef]: ...
+
+    async def target_margins(
+        self, nit: str | None, skus: Sequence[str]
+    ) -> dict[str, TargetMargin]: ...
 
     async def upsert_supplier_product_codes(
         self, rows: Sequence[SupplierProductCode]
