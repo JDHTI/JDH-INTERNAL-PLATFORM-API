@@ -99,6 +99,32 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   con datos). `?groups=true` quita las columnas del cliente.
 - Llave de la carga: proveedor + NIT + SKU JDH + fecha inicio. El SKU Proveedor se toma del
   maestro de productos (solo sin SKU JDH sirve para encontrarlo).
+- **Colores de encabezado** (todas las plantillas y la descarga con datos), calculados con las
+  mismas reglas que valida la carga (`fields.REQUIRED_ALWAYS` y `METHOD_RULES`,
+  `bulk_file.column_requirements`):
+  - **rojo**: obligatoria en toda fila. Son Clase apoyo y Tipo apoyo, más Grupo Empresarial en
+    la subida por grupo;
+  - **naranja**: obligatoria según el tipo, con una nota en el encabezado y la columna
+    Obligatorio de la hoja Instrucciones;
+    - Valor apoyo: todos los tipos salvo Margen mínimo autorizado;
+    - Excepción margen mínimo autorizado JDH: Margen mínimo autorizado y % Margen Garantizado;
+  - **azul**: opcional. La fecha inicio es parte de la llave, pero vacía vale (sin inicio);
+  - si el perfil fija el tipo, sus campos pasan a rojo.
+- Con la columna Clase apoyo, una fila sin clase es error. Solo un archivo sin esa columna (el
+  formato propio de un proveedor) deduce la clase.
+- En la plantilla corta, la columna de margen es el margen garantizado de un % Margen
+  Garantizado (`target_margin_pct`) y el margen de la Excepción margen JDH.
+- **Derivados de los maestros** (carga simulada y aplicada, alta manual y descarga con datos):
+  - desde el NIT: nombre del cliente y grupo empresarial (los del maestro, no los escritos).
+    La sucursal debe ser una del NIT: `1`, `1.0` y `001` son la misma, y se guarda como `001`.
+    El NIT puede venir con dígito de verificación (`800116299-6` o `8001162996`): si no existe
+    y su último dígito es el DV DIAN del resto, se lee el resto;
+  - desde el SKU JDH: SKU Proveedor, marca y factor de empaque. `01128`, `1128` y `1128.0` son
+    el mismo SKU;
+  - desde el SKU Proveedor, solo sin SKU JDH: el SKU JDH. Es error si no hay o hay varios. Si
+    no hay coincidencia exacta, se ignoran los ceros a la izquierda (Excel convierte `0133` en
+    `133`);
+  - la lista de margen sale del NIT al calcular (`customer_margin_field`), no se guarda.
 - **Descarga con datos** (`GET /bulk/export?supplier_code=`): los apoyos vigentes y programados
   del proveedor con la columna **Validación**; al subirla, Sí actualiza, No vence ayer con la
   observación de la fila, vacía no toca.

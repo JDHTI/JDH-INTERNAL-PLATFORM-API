@@ -524,6 +524,27 @@ METHOD_RULES: dict[str, MethodRule] = {
 }
 
 
+# Required in every support: the form asks them and the bulk load rejects a row without them
+# (it deduces the class only for a file with no Clase apoyo column).
+REQUIRED_ALWAYS = ("kind", "calc_method")
+
+
+def active_methods() -> tuple[str, ...]:
+    """The calc methods of the classes that are still created, in their order."""
+
+    return tuple(dict.fromkeys(m for ms in vocabulary.METHODS_BY_KIND.values() for m in ms))
+
+
+def methods_requiring() -> dict[str, tuple[str, ...]]:
+    """``field -> active calc methods that require it`` (from :data:`METHOD_RULES`)."""
+
+    found: dict[str, list[str]] = {}
+    for method in active_methods():
+        for name in METHOD_RULES[method].requires:
+            found.setdefault(name, []).append(method)
+    return {name: tuple(methods) for name, methods in found.items()}
+
+
 def form_schema() -> dict[str, object]:
     """Fields (grouped, typed, with choices) and the rules of each calc method."""
 
@@ -549,7 +570,7 @@ def form_schema() -> dict[str, object]:
             }
             for name, rule in METHOD_RULES.items()
         },
-        "required_always": ["kind", "calc_method"],
+        "required_always": list(REQUIRED_ALWAYS),
         # How each calc method reads in the general template's "Tipo de apoyo" column.
         "calc_method_labels": dict(vocabulary.CALC_METHOD_LABELS),
         "tiers": {"threshold_types": list(vocabulary.THRESHOLD_TYPES), "max": 20},
@@ -562,6 +583,9 @@ __all__ = [
     "FRACTION_FIELDS",
     "METHOD_RULES",
     "PERCENT_METHODS",
+    "REQUIRED_ALWAYS",
     "FieldSpec",
+    "active_methods",
     "form_schema",
+    "methods_requiring",
 ]

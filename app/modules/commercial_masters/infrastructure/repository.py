@@ -17,6 +17,7 @@ from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     CommercialSupplierNit,
     Customer,
+    CustomerRef,
     LegalSupplier,
     Page,
     Product,
@@ -635,11 +636,11 @@ class SqlAlchemyCommercialMasterRepository:
             )
             for sku, product in coded.all():
                 found.setdefault(sku, {})[product.id] = product
+            code = select(CommercialSupplierModel.code).where(
+                CommercialSupplierModel.id == supplier_id
+            )
             missing = [sku for sku in wanted if sku not in found]
             if missing:
-                code = select(CommercialSupplierModel.code).where(
-                    CommercialSupplierModel.id == supplier_id
-                )
                 listed = await session.execute(
                     select(func.upper(func.trim(ProductModel.supplier_sku)), ProductModel).where(
                         ProductModel.commercial_supplier_code == code.scalar_subquery(),
@@ -648,6 +649,30 @@ class SqlAlchemyCommercialMasterRepository:
                 )
                 for sku, product in listed.all():
                     found.setdefault(sku, {})[product.id] = product
+            # A code typed as a number in Excel loses its leading zeros (0133 arrives as 133):
+            # what is still missing matches with the zeros left out on both sides.
+            loose = {sku.lstrip("0"): sku for sku in wanted if sku not in found and sku.lstrip("0")}
+            if loose:
+                coded_key = func.ltrim(
+                    func.upper(func.trim(SupplierProductCodeModel.supplier_sku)), "0"
+                )
+                listed_key = func.ltrim(func.upper(func.trim(ProductModel.supplier_sku)), "0")
+                coded = await session.execute(
+                    select(coded_key, ProductModel)
+                    .join(ProductModel, ProductModel.id == SupplierProductCodeModel.product_id)
+                    .where(
+                        SupplierProductCodeModel.commercial_supplier_id == supplier_id,
+                        coded_key.in_(list(loose)),
+                    )
+                )
+                listed = await session.execute(
+                    select(listed_key, ProductModel).where(
+                        ProductModel.commercial_supplier_code == code.scalar_subquery(),
+                        listed_key.in_(list(loose)),
+                    )
+                )
+                for key, product in (*coded.all(), *listed.all()):
+                    found.setdefault(loose[key], {})[product.id] = product
         return {
             sku: [_product_ref(product) for product in products.values()]
             for sku, products in found.items()
@@ -757,6 +782,39 @@ class SqlAlchemyCommercialMasterRepository:
                 .group_by(CustomerModel.nit)
             )
             return {nit: name or "" for nit, name in rows.all()}
+
+    async def customers_by_nit(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
+        """Name, business group and branch ids of each NIT that exists among the customers."""
+
+        if not nits:
+            return {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(
+                    CustomerModel.nit,
+                    CustomerModel.legal_name,
+                    CustomerModel.business_group,
+                    CustomerModel.branch_id,
+                ).where(CustomerModel.nit.in_(nits))
+            )
+            found: dict[str, dict[str, Any]] = {}
+            for nit, name, group, branch in rows.all():
+                item = found.setdefault(nit, {"names": set(), "groups": set(), "branches": set()})
+                if name:
+                    item["names"].add(name)
+                if group:
+                    item["groups"].add(group)
+                if branch:
+                    item["branches"].add(branch)
+        return {
+            nit: CustomerRef(
+                nit=nit,
+                name=min(item["names"], default=""),
+                business_group=min(item["groups"], default=None),
+                branches=tuple(sorted(item["branches"])),
+            )
+            for nit, item in found.items()
+        }
 
     async def get_product(self, sku: str) -> Product | None:
         """One product by SKU, with its margins."""

@@ -15,6 +15,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 import openpyxl
+from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.utils.exceptions import InvalidFileException
@@ -27,9 +28,15 @@ from app.modules.supplier_supports.domain.profiles import Profile
 
 EXTENSIONS = ("xlsx", "xlsm", "csv")
 TEMPLATE_SHEET = "Apoyos"
-_HEADER_FILL = PatternFill("solid", start_color="1F3A5F")
+# Header colors, white bold text on all three (contrast 6.6, 5.0 and 11.8 to 1):
+# red = required in every row, orange = required for some types, blue = optional.
+_REQUIRED_COLOR, _BY_TYPE_COLOR, _OPTIONAL_COLOR = "B3261E", "B45309", "1F3A5F"
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
-_REQUIRED_FILL = PatternFill("solid", start_color="B3261E")
+
+
+def _fill(color: str) -> PatternFill:
+    return PatternFill("solid", start_color=color, end_color=color)
+
 
 Sheet = tuple[str, list[list[Any]]]
 
@@ -228,6 +235,52 @@ def template_headers(
     return columns
 
 
+# The bulk load reads these from the one margin column of the short template when the file has
+# no column of their own (``application.bulk``: minimum margin and guaranteed margin).
+_STANDS_IN = {"min_margin_pct": "supported_margin_pct", "target_margin_pct": "supported_margin_pct"}
+
+
+def column_requirements(
+    columns: Sequence[tuple[str, str]], defaults: Mapping[str, Any], groups: bool = False
+) -> dict[str, tuple[str, ...]]:
+    """Which columns the bulk load requires, from the rules it validates with.
+
+    ``field -> ()`` when every row needs it (:data:`fields.REQUIRED_ALWAYS`, and Grupo
+    Empresarial in the business-group upload); ``field -> calc methods`` when only those types
+    need it (:func:`fields.methods_requiring`); optional columns are left out. A calc method
+    fixed by the supplier's profile turns its fields into always required.
+    """
+
+    names = {name for name, _ in columns}
+    always = set(fields.REQUIRED_ALWAYS) | ({"customer_group"} if groups else set())
+    fixed = defaults.get("calc_method")
+    by_type: dict[str, tuple[str, ...]] = {}
+    for name, methods in fields.methods_requiring().items():
+        target = name if name in names else _STANDS_IN.get(name)
+        if target is None or target not in names:
+            continue
+        if fixed is not None:
+            if fixed in methods:
+                always.add(target)
+            continue
+        by_type[target] = tuple(dict.fromkeys((*by_type.get(target, ()), *methods)))
+    return by_type | {name: () for name in always & names}
+
+
+def _requirement_text(methods: tuple[str, ...] | None) -> str:
+    """The «Obligatorio» cell of the instructions for a column."""
+
+    if methods is None:
+        return ""
+    if not methods:
+        return "Sí"
+    labels = vocabulary.CALC_METHOD_LABELS
+    others = [method for method in fields.active_methods() if method not in methods]
+    if len(others) < len(methods):
+        return "Sí, salvo con Tipo apoyo " + " o ".join(labels[item] for item in others)
+    return "Con Tipo apoyo " + " o ".join(labels[item] for item in methods)
+
+
 def _shown(name: str, value: Any) -> Any:
     """A stored value as the template writes it (labels, percentages, plain dates)."""
 
@@ -247,8 +300,7 @@ def _shown(name: str, value: Any) -> Any:
 
 
 def _active_methods() -> list[str]:
-    methods = dict.fromkeys(m for ms in vocabulary.METHODS_BY_KIND.values() for m in ms)
-    return [vocabulary.CALC_METHOD_LABELS[method] for method in methods]
+    return [vocabulary.CALC_METHOD_LABELS[method] for method in fields.active_methods()]
 
 
 def template_workbook(
@@ -272,11 +324,7 @@ def template_workbook(
     sheet.title = TEMPLATE_SHEET
     columns = template_headers(profile, full, groups, validation)
     defaults = profile.data.defaults if profile else {}
-    required = {"calc_method", "supplier_code"} - set(defaults)
-    if groups:
-        required.add("customer_group")
-    if profile is not None:
-        required.discard("supplier_code")
+    required = column_requirements(columns, defaults, groups)
     headers = [header for _, header in columns]
     if validation:
         headers.append(VALIDATION_HEADER)
@@ -284,7 +332,17 @@ def template_workbook(
         name = columns[index - 1][0] if index <= len(columns) else VALIDATION
         cell = sheet.cell(row=1, column=index, value=header)
         cell.font = _HEADER_FONT
-        cell.fill = _REQUIRED_FILL if name in required else _HEADER_FILL
+        methods = required.get(name)
+        color = (
+            _OPTIONAL_COLOR
+            if methods is None
+            else _REQUIRED_COLOR
+            if not methods
+            else _BY_TYPE_COLOR
+        )
+        cell.fill = _fill(color)
+        if methods:
+            cell.comment = Comment(f"Obligatorio: {_requirement_text(methods)}.", "Plataforma")
         sheet.column_dimensions[get_column_letter(index)].width = max(14, len(header) + 4)
     sheet.freeze_panes = "A2"
     for row_number, record in enumerate(rows, start=2):
@@ -298,12 +356,21 @@ def template_workbook(
     guide.append(["Carga masiva de apoyos"])
     guide["A1"].font = Font(bold=True, size=14)
     intro = [
-        "Una fila por apoyo. Las columnas en rojo son obligatorias; el resto es opcional.",
+        "Una fila por apoyo. El color del encabezado dice si la columna es obligatoria (ver "
+        "los colores abajo y la columna Obligatorio de la tabla).",
         "Llave del apoyo: proveedor + NIT cliente + SKU JDH + fecha inicio. Si la llave ya "
         "existe, la fila actualiza ese apoyo; si no, lo crea. Una columna que no venga en el "
-        "archivo conserva el valor guardado.",
-        "SKU Proveedor: se toma del maestro de productos con el SKU JDH. Solo si la fila no "
-        "trae SKU JDH, el SKU Proveedor se usa para encontrarlo.",
+        "archivo conserva el valor guardado. La fecha inicio es parte de la llave pero no es "
+        "obligatoria: vacía = desde siempre.",
+        "Desde el NIT se toman del maestro de clientes el nombre del cliente y su grupo "
+        "empresarial; la sucursal debe ser una del NIT (1 y 001 son la misma). El NIT puede "
+        "venir con o sin dígito de verificación.",
+        "Desde el SKU JDH se toman del maestro de productos el SKU Proveedor, la marca y la "
+        "unidad de empaque. Solo si la fila no trae SKU JDH, el SKU Proveedor se usa para "
+        "encontrarlo: si no corresponde a ninguno, o a varios, la fila falla.",
+        "La columna Excepción margen mínimo autorizado JDH es el margen de la Excepción margen "
+        "JDH y el margen garantizado del % Margen Garantizado; en los demás tipos, el margen "
+        "mínimo que da el precio apoyado mínimo.",
         "Grupo Empresarial (sin NIT): la fila crea un apoyo por cada cliente activo del grupo.",
         "Solo se escribe lo que se negocia: el costo, el precio lista, el margen y los nombres "
         "salen del DWH y se calculan en la plataforma.",
@@ -326,7 +393,9 @@ def template_workbook(
         "significan «todos».",
         "Fechas: las columnas de fecha ya tienen formato dd/mm/aaaa; también se lee "
         "aaaa-mm-dd. Fecha Fin vacía, INDEFINIDO o UFN = sin fecha final.",
-        "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla.",
+        "SKU JDH, NIT y proveedor deben existir en los maestros; si no, la fila falla. El "
+        "proveedor es el que se elige al subir (o la columna Cod. Proveedor si el archivo la "
+        "trae).",
     ]
     if profile is not None:
         intro.insert(
@@ -336,6 +405,21 @@ def template_workbook(
         )
     for line in intro:
         guide.append([line])
+    guide.append([])
+    for color, title, meaning in (
+        (_REQUIRED_COLOR, "Rojo", "Obligatoria en toda fila."),
+        (
+            _BY_TYPE_COLOR,
+            "Naranja",
+            "Obligatoria según el Tipo apoyo: la columna Obligatorio de la tabla (y la nota "
+            "del encabezado) dice con cuáles.",
+        ),
+        (_OPTIONAL_COLOR, "Azul", "Opcional. Vacía en un campo de alcance = todos."),
+    ):
+        guide.append([title, meaning])
+        swatch = guide.cell(row=guide.max_row, column=1)
+        swatch.fill = _fill(color)
+        swatch.font = _HEADER_FONT
     guide.append([])
     guide.append(["Campo", "Encabezado", "Obligatorio", "Descripción", "Valores válidos"])
     for cell in guide[guide.max_row]:
@@ -348,12 +432,12 @@ def template_workbook(
             [
                 spec.name,
                 headers[spec.name],
-                "Sí" if spec.name in required else "",
+                _requirement_text(required.get(spec.name)),
                 spec.help,
                 ", ".join(spec.choices),
             ]
         )
-    for letter, width in zip("ABCDE", (22, 26, 12, 70, 60), strict=True):
+    for letter, width in zip("ABCDE", (22, 26, 30, 70, 60), strict=True):
         guide.column_dimensions[letter].width = width
 
     _add_checks(book, sheet, columns, validation, len(rows))
@@ -436,4 +520,9 @@ def _add_checks(
         check.add(target)
 
 
-__all__ = ["SpreadsheetSupportReader", "template_headers", "template_workbook"]
+__all__ = [
+    "SpreadsheetSupportReader",
+    "column_requirements",
+    "template_headers",
+    "template_workbook",
+]

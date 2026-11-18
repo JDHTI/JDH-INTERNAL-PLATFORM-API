@@ -302,11 +302,28 @@ class SupportBulkService:
                 support.data.valid_from or today,
             ),
         )
-        return [
-            {spec.name: getattr(support.data, spec.name, None) for spec in fields.FIELD_SPECS}
-            | {"supplier_code": code}
-            for support in chosen
-        ]
+        masters = self.supports.masters
+        products = await masters.products_by_sku(
+            sorted({item.data.product_sku for item in chosen if item.data.product_sku})
+        )
+        customers = await masters.customers(
+            sorted({item.data.customer_nit for item in chosen if item.data.customer_nit})
+        )
+        rows = []
+        for support in chosen:
+            row = {spec.name: getattr(support.data, spec.name, None) for spec in fields.FIELD_SPECS}
+            row["supplier_code"] = code
+            # What comes from the masters is read again, so an old support goes out current.
+            product = products.get(support.data.product_sku or "")
+            if product is not None:
+                row["supplier_sku"] = product.supplier_sku or row["supplier_sku"]
+                row["brand"] = product.brand or row["brand"]
+            customer = customers.get(support.data.customer_nit or "")
+            if customer is not None:
+                row["customer_name"] = customer.name or row["customer_name"]
+                row["customer_group"] = customer.business_group or row["customer_group"]
+            rows.append(row)
+        return rows
 
     async def load(
         self,
@@ -409,7 +426,7 @@ class SupportBulkService:
                     skipped += 1  # a blank «Validación» leaves the row alone
                     continue
             support, row_supplier, problems, given = self._support(
-                number, row_cells, effective_defaults, code, filename
+                number, row_cells, effective_defaults, code, filename, "kind" in positions
             )
             issues.extend(problems)
             if support is not None and not problems:
@@ -792,11 +809,14 @@ class SupportBulkService:
         defaults: Mapping[str, Any],
         supplier_code: str | None,
         filename: str,
+        kind_column: bool = False,
     ) -> tuple[SupportData | None, str | None, list[RowIssue], frozenset[str]]:
         """The support of one row, its supplier, its problems and the fields it gives.
 
         A cell that reads as "nothing" (``INDEFINIDO`` in the end date) still counts as given:
-        it clears that field when the row updates a stored support.
+        it clears that field when the row updates a stored support. The class is deduced only
+        when the file has no Clase apoyo column (a supplier's own layout); with the column
+        (the template) a blank class is an error, as the template marks it required.
         """
 
         values: dict[str, Any] = {}
@@ -845,8 +865,25 @@ class SupportBulkService:
         ):
             # The short template has one margin column: for a minimum margin it is that margin.
             values["min_margin_pct"] = values["supported_margin_pct"]
-        if not values.get("kind") and "kind" not in row_cells and values.get("calc_method"):
-            values["kind"] = _default_kind(values)
+        if (
+            values.get("calc_method") == "precio_neto"
+            and values.get("target_margin_pct") is None
+            and values.get("supported_margin_pct") is not None
+        ):
+            # ... and for a % Margen Garantizado it is the guaranteed margin (no minimum price).
+            values["target_margin_pct"] = values.pop("supported_margin_pct")
+        if not values.get("kind") and "kind" not in row_cells:
+            if kind_column:
+                problems.append(
+                    RowIssue(
+                        number,
+                        "kind",
+                        "Falta la Clase apoyo: Apoyo táctico, Actividad descuento temporal o "
+                        "Excepción margen JDH",
+                    )
+                )
+            elif values.get("calc_method"):
+                values["kind"] = _default_kind(values)
         given = frozenset(name for name in values if name != "supplier_code")
         if problems:
             return None, row_supplier, problems, given

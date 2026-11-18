@@ -117,6 +117,9 @@ class CachedLookup:
     async def commercial_suppliers_by_name(self, query):
         return await self.lookup.commercial_suppliers_by_name(query)
 
+    async def customers(self, nits):
+        return await self.lookup.customers(nits)
+
     async def customer_names(self, nits):
         missing = [
             nit for nit in nits if nit not in self.customers and nit not in self.missing_customers

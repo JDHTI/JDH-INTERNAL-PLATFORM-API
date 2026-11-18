@@ -16,7 +16,12 @@ from app.core.errors import (
     InvalidInputError,
     NotFoundError,
 )
-from app.modules.commercial_masters.domain.entities import ProductRef, clean_nit
+from app.modules.commercial_masters.domain.entities import (
+    CustomerRef,
+    ProductRef,
+    clean_nit,
+    nit_check_digit,
+)
 from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain import filters, overlap, vocabulary
 from app.modules.supplier_supports.domain.entities import (
@@ -207,6 +212,19 @@ def _with_base_filters(
     return filters.Group("all", (*base, group)) if base else group
 
 
+def _branch_in(branch: str, branches: Sequence[str]) -> str | None:
+    """The master's spelling of a branch id: ``1`` and ``1.0`` (a number in Excel) are ``001``."""
+
+    text = branch.strip()
+    if text in branches:
+        return text
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    if not text.isdigit():
+        return None
+    return next((item for item in branches if item.isdigit() and int(item) == int(text)), None)
+
+
 class PrefetchedMasters:
     """The masters of a whole file read once, so checking N rows is 3 queries, not 3N.
 
@@ -219,12 +237,12 @@ class PrefetchedMasters:
         self._asked: dict[str, set[str]] = {"suppliers": set(), "products": set(), "nits": set()}
         self._suppliers: dict[str, UUID] = {}
         self._products: dict[str, ProductRef] = {}
-        self._customers: dict[str, str] = {}
+        self._customers: dict[str, CustomerRef] = {}
 
     async def load(self, codes: set[str], skus: set[str], nits: set[str]) -> None:
         await self.commercial_suppliers_by_code(sorted(codes))
         await self.products_by_sku(sorted(skus))
-        await self.customer_names(sorted(nits))
+        await self.customers(sorted(nits))
 
     async def commercial_suppliers_by_code(self, codes: Sequence[str]) -> dict[str, UUID]:
         missing = [code for code in codes if code not in self._asked["suppliers"]]
@@ -240,12 +258,15 @@ class PrefetchedMasters:
             self._asked["products"].update(missing)
         return {sku: self._products[sku] for sku in skus if sku in self._products}
 
-    async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
+    async def customers(self, nits: Sequence[str]) -> dict[str, CustomerRef]:
         missing = [nit for nit in nits if nit not in self._asked["nits"]]
         if missing:
-            self._customers.update(await self.masters.customer_names(missing))
+            self._customers.update(await self.masters.customers(missing))
             self._asked["nits"].update(missing)
         return {nit: self._customers[nit] for nit in nits if nit in self._customers}
+
+    async def customer_names(self, nits: Sequence[str]) -> dict[str, str]:
+        return {nit: item.name for nit, item in (await self.customers(nits)).items()}
 
     async def commercial_supplier_names(self, ids: Sequence[UUID]) -> dict[UUID, tuple[str, str]]:
         return await self.masters.commercial_supplier_names(ids)
@@ -420,7 +441,7 @@ class SupplierSupportService:
         if previous is not None and previous.product_sku == data.product_sku:
             product_id = previous.product_id
         elif data.product_sku:
-            product = (await lookup.products_by_sku([data.product_sku])).get(data.product_sku)
+            product = await self._product_of(data.product_sku, lookup)
             if product is None:
                 if strict:
                     raise FieldError(
@@ -430,21 +451,43 @@ class SupplierSupportService:
                 issues.append(Issue("sku_sin_cruce", data.product_sku, "product_sku"))
             else:
                 product_id = product.id
-                brand = brand or product.brand
-                data = self._fill_unit(data, product)
+                brand = product.brand or brand
+                data = self._fill_unit(replace(data, product_sku=product.sku), product)
         else:
             product_id = None
 
-        if data.customer_nit and (previous is None or previous.customer_nit != data.customer_nit):
-            known = await lookup.customer_names([data.customer_nit])
-            if data.customer_nit not in known:
+        if data.customer_nit and (
+            previous is None
+            or (previous.customer_nit, previous.customer_branch_id)
+            != (data.customer_nit, data.customer_branch_id)
+        ):
+            customer = await self._customer_of(data.customer_nit, lookup)
+            if customer is None:
                 if strict:
                     raise FieldError(
                         f"NIT de cliente desconocido: {data.customer_nit}", "customer_nit"
                     )
                 issues.append(Issue("nit_sin_cruce", data.customer_nit, "customer_nit"))
-            elif not data.customer_name:
-                data = replace(data, customer_name=known[data.customer_nit] or None)
+            else:
+                branch = data.customer_branch_id
+                if branch is not None:
+                    known_branch = _branch_in(branch, customer.branches)
+                    if known_branch is None and strict:
+                        shown = ", ".join(customer.branches[:10]) or "ninguna"
+                        raise FieldError(
+                            f"La sucursal {branch} no existe para el NIT {customer.nit} "
+                            f"(sucursales: {shown})",
+                            "customer_branch_id",
+                        )
+                    branch = known_branch or branch
+                # The customer's name and business group are the master's, not typed.
+                data = replace(
+                    data,
+                    customer_nit=customer.nit,
+                    customer_name=customer.name or data.customer_name,
+                    customer_group=customer.business_group or data.customer_group,
+                    customer_branch_id=branch,
+                )
 
         status = data.status
         if issues and status == "activo" and not strict:
@@ -458,6 +501,28 @@ class SupplierSupportService:
             issues=tuple(unique),
             status=status,
         )
+
+    @staticmethod
+    async def _product_of(sku: str, lookup: MasterLookup) -> ProductRef | None:
+        """The product of a JDH SKU; ``012014`` is ``12014`` (JDH SKUs have no leading zeros)."""
+
+        bare = sku.lstrip("0") if sku.isdigit() else sku
+        found = await lookup.products_by_sku(list(dict.fromkeys([sku, bare])) if bare else [sku])
+        return found.get(sku) or (found.get(bare) if bare else None)
+
+    @staticmethod
+    async def _customer_of(nit: str, lookup: MasterLookup) -> CustomerRef | None:
+        """The customer of a NIT, written with or without its verification digit.
+
+        The master stores NITs without it. A NIT that is not there but whose last digit is the
+        DIAN check digit of the rest (``8001162991``, from ``800116299-1``) is read as the rest.
+        """
+
+        candidates = [nit]
+        if len(nit) > 5 and nit_check_digit(nit[:-1]) == nit[-1]:
+            candidates.append(nit[:-1])
+        found = await lookup.customers(candidates)
+        return next((found[item] for item in candidates if item in found), None)
 
     @staticmethod
     async def _jdh_sku_of(

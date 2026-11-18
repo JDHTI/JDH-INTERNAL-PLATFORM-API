@@ -30,6 +30,19 @@ def clean_nit(value: object) -> str | None:
     return digits or None
 
 
+_DV_WEIGHTS = (3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71)
+
+
+def nit_check_digit(digits: str) -> str:
+    """The DIAN verification digit of a NIT (digits only, without the digit itself)."""
+
+    total = sum(
+        int(digit) * weight for digit, weight in zip(reversed(digits), _DV_WEIGHTS, strict=False)
+    )
+    rest = total % 11
+    return str(rest if rest < 2 else 11 - rest)
+
+
 @dataclass(frozen=True)
 class Page[T]:
     """One page of results."""
@@ -182,6 +195,17 @@ class ProductRef:
     avg_unit_cost: Decimal | None = None
     # The supplier's own code of the product (the product master's).
     supplier_sku: str | None = None
+
+
+@dataclass(frozen=True)
+class CustomerRef:
+    """What a support takes from the customer master for one NIT (all its branches)."""
+
+    nit: str
+    name: str
+    business_group: str | None = None
+    # Branch ids as the master writes them (``001``).
+    branches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
