@@ -470,5 +470,12 @@ async def test_who_asks_from_the_panel(panel_service) -> None:
     assert await panel_service.can_request_direct(PANEL)
     assert await panel_service.can_request_direct(QUOTER)  # whoever quotes asks here too
     assert not await panel_service.can_request_direct(REVIEWER)  # BI decides
+    # The panel's button follows the same rule: Comercial asks without using the quoter.
+    assert (await panel_service.permissions(PANEL))["can_request_internal"]
+    assert (await panel_service.permissions(QUOTER))["can_request_internal"]
+    assert await panel_service.permissions(REVIEWER) == {
+        "can_review_internal": True,
+        "can_request_internal": False,
+    }
     with pytest.raises(ForbiddenError):
         await panel_service.targets(person("otro@jdh.com.co"), "800116299", ["1128"])

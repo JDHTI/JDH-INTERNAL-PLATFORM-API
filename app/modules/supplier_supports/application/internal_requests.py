@@ -170,12 +170,13 @@ class InternalRequestService:
         )
 
     async def permissions(self, principal: Principal) -> dict[str, bool]:
-        """``can_review_internal`` and ``can_request_internal`` (for "my requests")."""
+        """``can_review_internal``, and ``can_request_internal``: asks from the requests panel and
+        sees "my requests". Same rule as ``create_direct``, so Comercial's requesters of
+        ``solicitudes-apoyos`` get the button even when they do not use the quoter."""
 
-        reviewer = await self.links.is_reviewer(principal)
         return {
-            "can_review_internal": reviewer,
-            "can_request_internal": not reviewer and await self.quotations.can_quote(principal),
+            "can_review_internal": await self.links.is_reviewer(principal),
+            "can_request_internal": await self.can_request_direct(principal),
         }
 
     async def _require_reviewer(self, principal: Principal) -> None:
