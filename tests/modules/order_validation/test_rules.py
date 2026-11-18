@@ -631,3 +631,24 @@ def test_a_full_margin_product_is_only_released_by_hand() -> None:
     assert alert.code == "margen_100" and alert.row_numbers == (3,)
     # It stays out of the order margin: it carries no cost.
     assert rules.order_margins(items)[0] == D("0.300000")
+
+
+def test_a_support_without_effect_is_never_the_reason_a_line_is_released() -> None:
+    # A supported cost above today's DWH cost brings $0 (costo apoyado 227.932,80 > 200.000).
+    idle = agreement(
+        calc_method="costo_neto",
+        supplier_value=D("227932.80"),
+        dwh_unit_cost=D("200000"),
+        supported_margin_pct=D("0.08"),
+    )
+
+    # The line reaches the product's margin on its own: that is the reason.
+    own = decide([idle], reference=D("0.08"))
+    assert own.status == "listo_para_liberar" and own.reason == "cumple_margen_lista"
+    (checked,) = own.checks
+    assert checked.no_effect and checked.detail.startswith("Apoyo sin efecto: aporta $0")
+    assert checked.as_dict()["no_effect"] is True
+    # Below it, the support's 8 % does not release it: it brings no money.
+    short = decide([idle], reference=D("0.16"))
+    assert short.status == "pendiente_validacion" and short.reason == "no_cumple_acuerdo"
+    assert short.support_id == idle.id

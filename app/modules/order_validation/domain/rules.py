@@ -366,7 +366,16 @@ def check(
             f"Apoyo de {how}, pero sin margen objetivo para comparar",
         )
     effective = margin + share * (ONE - margin)
-    return _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
+    result = _compare(agreement, effective, required, f"Margen con apoyo ({how})", "objetivo")
+    if share <= ZERO:
+        # A supported cost above today's cost (or a zero value) brings no money: checked and
+        # listed, but never the reason a line is released (BI, 2026-11-18).
+        return replace(
+            result,
+            no_effect=True,
+            detail=f"Apoyo sin efecto: aporta $0 ({how}). {result.detail}",
+        )
+    return result
 
 
 def _outcome(
@@ -520,7 +529,11 @@ def _decide(
     checks = tuple(check(item, line, reference) for item in applicable)
     label = _BASIS_LABEL.get(basis or "", "margen del producto")
 
-    active_ok = [item for item in checks if item.outcome == "cumple" and not item.needs_review]
+    # A support without effect ($0) never releases a line: the line stands on its own margin.
+    effective_checks = [item for item in checks if not item.no_effect]
+    active_ok = [
+        item for item in effective_checks if item.outcome == "cumple" and not item.needs_review
+    ]
     if active_ok:
         best = _closest(active_ok)
         return _result(vocabulary.READY, "cumple_con_apoyo", best.detail, best, checks)
@@ -535,13 +548,14 @@ def _decide(
             checks=checks,
         )
 
-    in_review = [item for item in checks if item.outcome == "cumple"]
+    in_review = [item for item in effective_checks if item.outcome == "cumple"]
     if in_review:
         best = _closest(in_review)
         detail = f"{best.detail}, pero el apoyo está pendiente de revisión"
         return _result(vocabulary.PENDING, "acuerdo_en_revision", detail, best, checks)
 
-    failed = [item for item in checks if item.outcome == "no_cumple"]
+    # Below its own margin, a support without effect does not bring it there either.
+    failed = [item for item in checks if item.outcome == "no_cumple" or item.no_effect]
     if failed:
         best = _closest(failed)
         return _result(vocabulary.PENDING, "no_cumple_acuerdo", best.detail, best, checks)
