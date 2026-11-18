@@ -5,6 +5,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.modules.quotations.domain import pricing, rules
+from app.modules.quotations.presentation.router import _support
 from app.modules.quotations.domain.entities import (
     ItemInfo,
     ListPrice,
@@ -339,3 +340,16 @@ def test_a_guaranteed_margin_is_priced_at_the_line_price() -> None:
     assert dearer.support_amount == Decimal("0") and dearer.new_margin_with_support_pct == Decimal(
         "0.4"
     )
+
+
+def test_the_response_of_a_guaranteed_margin_carries_it_and_its_money_at_the_line_price() -> None:
+    line = rules.reprice(
+        build([agreement(calc_method="precio_neto", target_margin_pct=Decimal("0.30"))]),
+        Decimal("3500"),
+    )
+
+    shown = _support(line.support, line)
+
+    assert shown.guaranteed_margin_pct == Decimal("0.3")
+    # At 3.500 it pays 3.000 - 3.500 x 70 % = 550; at the list price 3.750 it would pay 375.
+    assert shown.amount == Decimal("550.00") and shown.list_amount == Decimal("375.00")

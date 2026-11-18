@@ -338,6 +338,10 @@ class SupportResponse(BaseModel):
     valid_to: date | None
     # JDH's authorized minimum margin: when set, the line's minimum price uses it.
     authorized_margin_pct: Decimal | None = None
+    # % Margen Garantizado: the margin the supplier guarantees at any price. Its ``amount`` is
+    # what it pays at the line's price (new, else last); ``list_amount`` at the list price.
+    guaranteed_margin_pct: Decimal | None = None
+    list_amount: Decimal | None = None
 
 
 class CandidateResponse(BaseModel):
@@ -600,15 +604,19 @@ class QuotationPageResponse(BaseModel):
     size: int
 
 
-def _support(item: AppliedSupport | None) -> SupportResponse | None:
+def _support(item: AppliedSupport | None, line: QuotationLine) -> SupportResponse | None:
     if item is None:
         return None
+    guaranteed = item.guaranteed_margin_pct is not None
     return SupportResponse(
         support_id=item.support_id,
         kind=item.kind,
         calc_method=item.calc_method,
         program=item.program,
-        amount=item.amount,
+        # A guaranteed margin pays what is missing at the line's price: that is its amount.
+        amount=line.support_amount if guaranteed else item.amount,
+        guaranteed_margin_pct=item.guaranteed_margin_pct,
+        list_amount=item.amount,
         share_of_cost=item.share_of_cost,
         required_margin_pct=item.required_margin_pct,
         detail=item.detail,
@@ -674,7 +682,7 @@ def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
         optimal_price=line.optimal_price,
         below_target=line.below_target,
         is_active=line.is_active,
-        support=_support(line.support),
+        support=_support(line.support, line),
         support_candidates=[
             CandidateResponse(
                 support_id=item.support_id,
