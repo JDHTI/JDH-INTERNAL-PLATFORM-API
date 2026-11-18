@@ -191,6 +191,9 @@ class SpreadsheetSupportReader:
 
 
 _CUSTOMER_COLUMNS = ("customer_nit", "customer_name", "customer_branch_id")
+# The download with data adds these to the short template: the reason of a «Validación» No
+# and whether each support applies in the promotional warehouses.
+_EXPORT_ONLY = ("notes", "promo_warehouses")
 # The «Validación» column the bulk load reads (``application.bulk.VALIDATION``).
 VALIDATION = "validation"
 VALIDATION_HEADER = "Validación"
@@ -219,7 +222,9 @@ def template_headers(
     columns: list[tuple[str, str]] = []
     mapped = set(profile.data.column_map) if profile is not None else set()
     for spec in fields.FIELD_SPECS:
-        wanted = full or spec.core or spec.name in mapped or (validation and spec.name == "notes")
+        wanted = (
+            full or spec.core or spec.name in mapped or (validation and spec.name in _EXPORT_ONLY)
+        )
         if groups and spec.name == "customer_group":
             wanted = True
         if groups and spec.name in _CUSTOMER_COLUMNS:
@@ -286,6 +291,8 @@ def _shown(name: str, value: Any) -> Any:
 
     if value is None or value == ():
         return None
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
     if name == "kind":
         return vocabulary.KIND_LABELS.get(value, value)
     if name == "calc_method":
@@ -452,6 +459,7 @@ _LISTS = (
     ("calc_method", "Tipo apoyo"),
     ("value_unit", "Unidad valor"),
     (VALIDATION, VALIDATION_HEADER),
+    ("promo_warehouses", "Bodega promocional"),
     ("funding", "Quién financia"),
     ("settlement_method", "Forma de liquidación"),
 )
@@ -464,7 +472,7 @@ def _list_values(name: str) -> list[str]:
         return _active_methods()
     if name == "value_unit":
         return ["Unidad", "Caja"]
-    if name == VALIDATION:
+    if name in (VALIDATION, "promo_warehouses"):
         return ["Sí", "No"]
     if name == "funding":
         return list(vocabulary.FUNDINGS)

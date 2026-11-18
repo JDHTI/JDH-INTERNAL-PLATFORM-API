@@ -166,6 +166,8 @@ def _default_value(name: str, value: Any) -> Any:
             return None
     if kind == fields.LIST:
         return tuple(value)
+    if kind == fields.FLAG:
+        return cells.flag(value)
     return value
 
 
@@ -190,6 +192,11 @@ def _convert(name: str, raw: Any, calc: str | None, values: dict[str, Any]) -> A
             }.get(name, spec.choices)
             raise _BadCell(f"valor no válido: {raw!r} (válidos: {', '.join(shown)})")
         return chosen
+    if spec.type == fields.FLAG:
+        try:
+            return cells.flag(raw)
+        except ValueError as exc:
+            raise _BadCell(str(exc)) from exc
     if spec.type == fields.TEXT:
         text = n.clean_text(raw)
         if text and spec.max_length and len(text) > spec.max_length:

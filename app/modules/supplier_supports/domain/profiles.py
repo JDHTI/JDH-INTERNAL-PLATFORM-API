@@ -21,6 +21,7 @@ DEFAULT_FIELDS = (
     "business_units",
     "channels",
     "warehouse",
+    "promo_warehouses",
     "brand",
     "jdh_pct",
     "target_margin_pct",

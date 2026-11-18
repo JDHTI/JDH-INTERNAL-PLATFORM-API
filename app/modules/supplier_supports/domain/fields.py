@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from app.modules.supplier_supports.domain import vocabulary
 
 # How a value is typed in the form and read from a file.
-TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST = (
+TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST, FLAG = (
     "text",
     "sku",
     "nit",
@@ -21,6 +21,7 @@ TEXT, SKU, NIT, DATE, NUMBER, FRACTION, CHOICE, LIST = (
     "fraction",
     "choice",
     "list",
+    "flag",
 )
 
 GROUP_IDENTITY = "Identidad"
@@ -49,6 +50,8 @@ class FieldSpec:
     max_length: int | None = None
     # Whether the short general template (the default download) carries it.
     core: bool = False
+    # Whether ``form-schema`` lists it (the creation form has its own control otherwise).
+    in_form: bool = True
 
 
 FIELD_SPECS: tuple[FieldSpec, ...] = (
@@ -189,6 +192,18 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         core=True,
     ),
     FieldSpec("warehouse", "Bodega", GROUP_SCOPE, TEXT, max_length=50, core=True),
+    FieldSpec(
+        "promo_warehouses",
+        "Bodega promocional",
+        GROUP_SCOPE,
+        FLAG,
+        ("bodegas promocionales", "incluir bodegas promocionales", "aplica en promocion"),
+        ("Sí", "No"),
+        "Sí = el apoyo también aplica en las bodegas promocionales (grupo 23); No = no hay "
+        "doble apoyo sobre un producto en promoción. Vacía = el valor elegido para la carga "
+        "(No si no se eligió).",
+        in_form=False,
+    ),
     FieldSpec(
         "calc_method",
         "Tipo apoyo",
@@ -443,6 +458,7 @@ _ORDER = (
     "business_units",
     "channels",
     "warehouse",
+    "promo_warehouses",
 )
 FIELD_SPECS = tuple(
     sorted(
@@ -560,6 +576,7 @@ def form_schema() -> dict[str, object]:
                 "max_length": spec.max_length,
             }
             for spec in FIELD_SPECS
+            if spec.in_form
         ],
         "methods": {
             name: {

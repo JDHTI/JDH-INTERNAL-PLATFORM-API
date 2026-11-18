@@ -301,9 +301,9 @@ async def test_template_follows_the_profile_layout(profiles, manager) -> None:
         "Canal",
         "Bodega",
     ]
-    # The download with data adds the reason of a «Validación» No.
+    # The download with data adds the promotional warehouses and the reason of a «Validación» No.
     validated = [header for _, header in template_headers(None, validation=True)]
-    assert validated == [*general, "Observaciones"]
+    assert validated == [*general, "Bodega promocional", "Observaciones"]
     full = [header for _, header in template_headers(None, full=True)]
     assert "Costo Referencia" in full and "Grupo Empresarial" in full
 

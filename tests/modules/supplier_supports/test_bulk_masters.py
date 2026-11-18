@@ -194,6 +194,52 @@ async def test_a_supplier_sku_without_jdh_sku_finds_it_or_fails(
         assert message in report.errors[0].message
 
 
+async def test_promotional_warehouses_come_from_the_load_or_from_each_row(
+    bulk, repo, manager
+) -> None:
+    header = [*HEADER, "Bodega promocional"]
+    rows = [
+        ["Apoyo táctico", "% Apoyo en Costo", 0.05, 800116299, None, 1128, None],  # the default
+        ["Apoyo táctico", "% Apoyo en Costo", 0.05, 900430148, None, 1128, "No"],  # its own
+    ]
+
+    report = await load(
+        bulk, manager, xlsx(header, *rows), apply=True, defaults={"promo_warehouses": "true"}
+    )
+
+    assert report.errors == []
+    by_nit = {item.data.customer_nit: item.data.promo_warehouses for item in repo.items.values()}
+    assert by_nit == {"800116299": True, "900430148": False}
+    bad = await load(bulk, manager, xlsx(header, [*rows[0][:-1], "Tal vez"]))
+    assert bad.blocked and bad.errors[0].field == "promo_warehouses"
+    assert "escribe Sí o No" in bad.errors[0].message
+
+
+async def test_a_profile_can_fix_the_promotional_warehouses(profiles, manager) -> None:
+    profile = await profiles.save(
+        manager,
+        "233",
+        defaults={"promo_warehouses": "Sí"},
+        column_map={},
+        sheet=None,
+        notes=None,
+        expected_version=None,
+    )
+
+    assert profile.data.defaults["promo_warehouses"] is True
+
+
+def test_the_promotional_column_is_in_the_full_template_and_the_download_only() -> None:
+    assert "Bodega promocional" not in colors(template_workbook())
+    assert colors(template_workbook(full=True))["Bodega promocional"] == BLUE
+    exported = openpyxl.load_workbook(
+        io.BytesIO(template_workbook(rows=[{"promo_warehouses": True}], validation=True))
+    )["Apoyos"]
+    headers = [cell.value for cell in exported[1]]
+    column = headers.index("Bodega promocional") + 1
+    assert headers[column - 2] == "Bodega" and exported.cell(row=2, column=column).value == "Sí"
+
+
 async def test_the_download_with_data_reads_the_masters_again(bulk, repo, lookup, manager) -> None:
     row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, 900430148, None, 1128]
     await load(bulk, manager, xlsx(HEADER, row), apply=True)

@@ -118,6 +118,15 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
     - Excepción margen mínimo autorizado JDH: Margen mínimo autorizado y % Margen Garantizado;
   - **azul**: opcional. La fecha inicio es parte de la llave, pero vacía vale (sin inicio);
   - si el perfil fija el tipo, sus campos pasan a rojo.
+- **Bodegas promocionales (grupo 23)** en la carga (`promo_warehouses`):
+  - `/bulk` y `/bulk/groups` lo aceptan en `defaults` (`"true"`/`"false"`, también Sí/No) y lo
+    aplican a las filas sin valor. El perfil del proveedor lo acepta en sus `defaults` para
+    dejarlo fijo;
+  - columna opcional «Bodega promocional» (Sí/No, lista desplegable, azul) en la plantilla
+    completa y en la descarga con datos, después de Bodega. No va en la plantilla corta, que
+    quedó con solo los campos de BI. Vacía = el valor de la carga (No si no se eligió);
+  - el alta manual y el PATCH siguen con `promo_warehouses` como antes. `form-schema` no lo
+    lista: el formulario tiene su propio control.
 - Con la columna Clase apoyo, una fila sin clase es error. Solo un archivo sin esa columna (el
   formato propio de un proveedor) deduce la clase.
 - En la plantilla corta, la columna de margen es el margen garantizado de un % Margen
