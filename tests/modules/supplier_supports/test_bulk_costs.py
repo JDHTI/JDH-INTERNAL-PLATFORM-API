@@ -30,6 +30,9 @@ class NoTargets:
     async def save(self, costs, now):
         raise AssertionError("the load saves the costs with the supports")
 
+    async def margin_fields(self, nits):
+        return {}
+
 
 class FakeWarehouse:
     """1128 has a cost in the DWH, 8749 has none; ``down`` makes every read fail."""
@@ -84,8 +87,9 @@ async def test_an_applied_load_saves_the_cost_of_each_support_with_it(
     (plan,) = repo.loads
     by_support = {cost.support_id: cost for cost in plan.costs}
     assert set(by_support) == set(report.created)
+    # The quoter's cost: the DWH's, rounded up, times the general family's 1,004.
     assert sorted((c.product_sku, c.unit_cost) for c in plan.costs) == [
-        ("1128", D("1000")),
+        ("1128", D("1004.0000")),
         ("8749", None),
     ]
 

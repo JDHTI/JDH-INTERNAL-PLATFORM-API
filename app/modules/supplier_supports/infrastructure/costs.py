@@ -14,6 +14,8 @@ from sqlalchemy.dialects.postgresql import insert
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderConnection, DataProviderUnavailable
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.margins import branches_margin_field
+from app.modules.commercial_masters.infrastructure.models import CustomerModel
 from app.modules.quotations.domain.entities import CostInfo
 from app.modules.quotations.domain.pricing import StockPlan
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
@@ -62,6 +64,28 @@ class SqlAlchemyCostRepository:
 
         async with self.database.session_factory() as session, session.begin():
             return await upsert_costs(session, costs, now)
+
+    async def margin_fields(self, nits: Sequence[str]) -> dict[str, str]:
+        """``{nit: margin list field}``: the majority of the client's active branches decides
+        (``branches_margin_field``, as the supports master)."""
+
+        unique = sorted({nit for nit in nits if nit})
+        if not unique:
+            return {}
+        grouped: dict[str, list[Any]] = {}
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(
+                    CustomerModel.nit,
+                    CustomerModel.channel,
+                    CustomerModel.billing_center_code,
+                    CustomerModel.sales_team_class,
+                    CustomerModel.is_active,
+                ).where(CustomerModel.nit.in_(unique))
+            )
+            for row in rows.all():
+                grouped.setdefault(row.nit, []).append(row)
+        return {nit: branches_margin_field(branches) for nit, branches in grouped.items()}
 
 
 async def upsert_costs(session: Any, costs: Sequence[SupportCost], now: datetime) -> int:

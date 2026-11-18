@@ -21,9 +21,13 @@ D = Decimal
 
 
 class FakeRepository:
-    def __init__(self, targets):
+    def __init__(self, targets, fields=None):
         self._targets = targets
         self.saved = []
+        self.fields = fields or {}
+
+    async def margin_fields(self, nits):
+        return {nit: self.fields[nit] for nit in nits if nit in self.fields}
 
     async def targets(self, support_ids=None):
         if support_ids is None:
@@ -47,7 +51,11 @@ class FakeWarehouse:
                 BranchPlan("001", "001", True),  # Antioquia list
                 BranchPlan("003", "003", True),  # Centro list
                 BranchPlan("002", "002", False),  # inactive branch: ignored
-            ]
+            ],
+            "901": [BranchPlan("1M", "001", True)],  # Mayoristas Antioquia (MDE1/MDE3)
+            # A list outside the skill: the center gives the warehouses (Centro).
+            "902": [BranchPlan("77X", "003", True)],
+            "903": [BranchPlan("77X", "003", True)],
         }
 
     async def costs(self, skus, plan):
@@ -67,7 +75,7 @@ class FakeWarehouse:
         return {sku: info for sku in skus if info is not None}
 
 
-async def test_the_highest_cost_of_the_clients_plans_without_the_list_factor() -> None:
+async def test_the_highest_cost_of_the_clients_plans_with_the_list_factor() -> None:
     client, everyone = uuid4(), uuid4()
     repo = FakeRepository([CostTarget(client, "1128", "900"), CostTarget(everyone, "1128", None)])
     warehouse = FakeWarehouse()
@@ -75,13 +83,32 @@ async def test_the_highest_cost_of_the_clients_plans_without_the_list_factor() -
     summary = await SupportCostService(repo, warehouse).run()
 
     costs = {cost.support_id: cost for cost in repo.saved}
-    # Antioquia 100.4 (quotation) vs Centro 120.2 (inventory): the higher, rounded up.
-    assert costs[client].unit_cost == D("121.0000") and costs[client].source == "inventario"
+    # Antioquia 100.4 (quotation) vs Centro 120.2 (inventory): the higher, rounded up, times
+    # the general family's 1,004 (the quoter's very cost).
+    assert costs[client].unit_cost == D("121.4840") and costs[client].source == "inventario"
     assert costs[client].plan_key == "BTA9/BTA8"
     # No client: list 1, highest among its warehouses; a 1-peso quotation never counts.
-    assert costs[everyone].unit_cost == D("110.0000") and costs[everyone].plan_key == "lista1-mayor"
+    assert costs[everyone].unit_cost == D("110.4400") and costs[everyone].plan_key == "lista1-mayor"
     assert "OCC1/OCC16" not in warehouse.calls  # the inactive branch
     assert summary["with_cost"] == 2 and summary["without_cost"] == 0
+
+
+async def test_the_wholesale_family_carries_no_factor() -> None:
+    by_list, by_margin, general = uuid4(), uuid4(), uuid4()
+    repo = FakeRepository(
+        [
+            CostTarget(by_list, "1128", "901"),  # a wholesale list of the skill (1M)
+            CostTarget(by_margin, "1128", "902"),  # a list outside it: the margin list decides
+            CostTarget(general, "1128", "903"),  # same list, Food service margin
+        ],
+        fields={"902": "margin_wholesale", "903": "margin_list"},
+    )
+
+    await SupportCostService(repo, FakeWarehouse()).run()
+
+    costs = {cost.support_id: cost.unit_cost for cost in repo.saved}
+    assert costs[by_list] == D("101.0000")  # 100.4 rounded up, no factor
+    assert costs[by_margin] == D("121.0000") and costs[general] == D("121.4840")
 
 
 def test_the_figures_use_the_dwh_cost_per_unit() -> None:
