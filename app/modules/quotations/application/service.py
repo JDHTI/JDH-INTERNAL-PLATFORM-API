@@ -427,10 +427,20 @@ class QuotationService:
         return approvers is not None and await approvers.is_manager(principal)
 
     async def can_validate(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
+        """Who validates each kind. A customer quotation pending validation is also validated
+        from ``actualizacion-listas`` (BI, 2026-11-19): whoever validates list updates
+        validates it too."""
+
         _, approvers = self._policies(kind)
         if principal.is_platform_admin:
             return True
-        return approvers is not None and await approvers.is_manager(principal)
+        if approvers is not None and await approvers.is_manager(principal):
+            return True
+        return (
+            kind == vocabulary.QUOTATION
+            and self.list_approvers is not None
+            and await self.list_approvers.is_manager(principal)
+        )
 
     async def _sees_all(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
         """Validators and moderators read every quotation; anyone else only the ones they made."""
@@ -462,14 +472,17 @@ class QuotationService:
             raise ForbiddenError("No tienes permiso para usar el cotizador")
 
     async def can_read(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
-        """Read on the quoter in either area (comercial quotes, BI validates)."""
+        """Read on the quoter in either area (comercial quotes, BI validates); the customer
+        quotations also for whoever validates list updates (:meth:`can_validate`)."""
 
         managers, approvers = self._policies(kind)
         if principal.is_platform_admin:
             return True
         if managers is not None and await managers.can_read(principal):
             return True
-        return approvers is not None and await approvers.can_read(principal)
+        if approvers is not None and await approvers.can_read(principal):
+            return True
+        return kind == vocabulary.QUOTATION and await self.can_validate(principal, kind)
 
     async def _require_reader(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> None:
         if not await self.can_read(principal, kind):

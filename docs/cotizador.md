@@ -321,6 +321,15 @@ El asesor puede retirarla de la validación por el mismo camino. Validan los mie
 `QUOTATIONS_APPROVER_AREA_SLUG` (por defecto `bi`, que lleva las listas de precios) y los
 administradores; ellos leen todas las cotizaciones aunque no sean del área comercial.
 
+**Validación desde Actualización de listas** (BI, 2026-11-19): las cotizaciones de cliente
+pendientes de validación se ven y se validan también en el módulo `actualizacion-listas`.
+- Quien valida actualizaciones de listas (BI con `manage` en `actualizacion-listas`) también lee
+  y valida las cotizaciones de cliente: `can_validate` es `true` en
+  `GET /quotations/permissions?kind=cotizacion`.
+- La UI las lista con `GET /quotations?kind=cotizacion&status=pendiente_validacion` (y
+  `pendiente_carga`), y usa las mismas acciones: `/validate`, `/return`, `/uploaded` y los
+  archivos.
+
 ## Actualización o creación de lista
 
 - **Actualización** (`actualizacion`): los precios se escriben en la **lista que el cliente tiene

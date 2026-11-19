@@ -25,7 +25,7 @@ from app.modules.quotations.domain import rules
 from app.modules.quotations.domain.entities import ItemInfo, ListPrice, ValueTaxKey
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
-from tests.modules.supplier_supports.conftest import person
+from tests.modules.supplier_supports.conftest import FakeManagers, person
 
 
 async def test_create_builds_every_sku_with_cost_support_and_target(
@@ -242,6 +242,34 @@ async def test_the_offer_goes_to_the_customer_without_validation(
     own = (await service.create(approver, NIT, 12)).quotation
     await service.update_lines(approver, own.id, 1, [LineChange("2537", Decimal("4100"))])
     assert (await service.send(approver, own.id, 2)).quotation.status == "borrador"
+
+
+async def test_list_update_validators_validate_customer_quotations(service, advisor) -> None:
+    # BI, 2026-11-19: the customer quotations pending validation are validated from
+    # Actualización de listas, by whoever validates list updates.
+    validator = person("validador.listas@jdh.com.co")
+    assert not await service.can_validate(validator)
+    service.list_approvers = FakeManagers(["bi@jdh.com.co", validator.email])
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("4100"))])
+    await service.confirm(
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
+    )
+
+    assert await service.can_read(validator) and await service.can_validate(validator)
+    pending = await service.list(
+        validator,
+        mine=False,
+        status="pendiente_validacion",
+        customer_nit=None,
+        q=None,
+        page=1,
+        size=20,
+    )
+    assert [item.id for item in pending.items] == [quotation.id]
+    validated = await service.validate(validator, quotation.id, 3)
+    assert validated.quotation.status == "pendiente_carga"
+    assert validated.quotation.validated_by == validator.email
 
 
 async def test_create_a_list_for_a_customer_on_list_one(
