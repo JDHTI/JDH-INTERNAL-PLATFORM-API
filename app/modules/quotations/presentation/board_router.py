@@ -153,8 +153,11 @@ class ActionResponse(BaseModel):
 
 
 def _row(row: BoardRow, stock: StockTotal | None = None) -> BoardRowResponse:
+    # The line already carries its own stock; the board's comes from the list's
+    # warehouses and replaces it, so it is left out of the spread.
+    line = _line(row.line, "changed").model_dump(exclude={"stock_on_hand", "stock_available"})
     return BoardRowResponse(
-        **_line(row.line, "changed").model_dump(),
+        **line,
         quotation_id=row.quotation_id,
         quotation_version=row.quotation_version,
         price_list_id=row.price_list_id,
