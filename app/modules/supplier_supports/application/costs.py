@@ -209,8 +209,16 @@ class SupportCostService:
         for target in targets:
             best: tuple[Decimal, StockPlan, CostInfo, str] | None = None
             fallback: tuple[StockPlan, CostInfo | None] | None = None
+            # A plan without stock of the SKU does not compete when another has some.
+            own = pricing.prefer_stocked(
+                {
+                    plan_key(plan): {target.product_sku: infos[plan_key(plan)][target.product_sku]}
+                    for plan, _ in plans_of[target.support_id]
+                    if target.product_sku in infos[plan_key(plan)]
+                }
+            )
             for plan, factor in plans_of[target.support_id]:
-                info = infos[plan_key(plan)].get(target.product_sku)
+                info = own.get(plan_key(plan), {}).get(target.product_sku)
                 fallback = fallback or (plan, info)
                 if info is None:
                     continue

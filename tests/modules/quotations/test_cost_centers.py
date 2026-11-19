@@ -69,6 +69,41 @@ def test_each_sku_takes_the_costliest_center() -> None:
     assert pricing.highest_cost({None: {"A": cost("A", "5")}})["A"].center_code is None
 
 
+def test_a_center_without_stock_does_not_set_the_cost() -> None:
+    """2026-11-19: only warehouses with stock give the inventory cost."""
+
+    empty = {"inventory_stocked": False}
+    costs = {
+        "001": {
+            "A": cost("A", inventory="100", **empty),  # 001 has no stock of A
+            "B": cost("B", inventory="80", **empty),
+        },
+        "003": {
+            "A": cost("A", inventory="90", inventory_stocked=True),
+            "B": cost("B", inventory="70", **empty),
+        },
+    }
+
+    result = pricing.highest_cost(costs)
+
+    assert result["A"].center_code == "003" and result["A"].inventory_cost == Decimal(90)
+    # No center has stock of B: their last average cost stays, the highest wins.
+    assert result["B"].center_code == "001" and result["B"].inventory_cost == Decimal(80)
+    # Comparing centers: 001's 100 without stock gives way to its quotation (85) < 90.
+    compared = {
+        "001": {"A": cost("A", inventory="100", quote="85", **empty)},
+        "003": {"A": cost("A", inventory="90", inventory_stocked=True)},
+    }
+    assert pricing.costliest_center(compared) == "003"
+    # The supplier's quotation is not a warehouse's: it stays.
+    quoted = {
+        "001": {"A": cost("A", inventory="100", quote="95", **empty)},
+        "003": {"A": cost("A", inventory="90", inventory_stocked=True)},
+    }
+    assert pricing.highest_cost(quoted)["A"].center_code == "001"
+    assert pricing.highest_cost(quoted)["A"].inventory_cost is None
+
+
 def test_plans_by_list_and_centers() -> None:
     skill = pricing.stock_plans("001", ["003", "004"])
     assert list(skill) == [None] and skill[None].warehouses == ("MDE1", "MDE3")

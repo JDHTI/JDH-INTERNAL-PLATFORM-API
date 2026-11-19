@@ -168,6 +168,10 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
     assert costs["12779"].discarded_quote == Decimal("80552")
     assert costs["12779"].quote_cost is None and costs["12779"].inventory_cost == Decimal("2049")
     assert costs["12779"].snapshot_date == date(2026, 11, 3)
+    # Only warehouses with stock give the cost; with none, the last average cost stays.
+    assert 'f."existencia" > 0' in query
+    assert costs["12779"].inventory_stocked is False
+    assert costs["1081"].inventory_stocked is None
     assert costs["1081"].quote_cost == Decimal("13104") and not costs["1081"].is_active
     await source.costs(["1"], pricing.stock_plan("1", None))
     # List 1 takes the highest cost among its warehouses.

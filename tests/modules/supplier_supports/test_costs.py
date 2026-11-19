@@ -93,6 +93,24 @@ async def test_the_highest_cost_of_the_clients_plans_with_the_list_factor() -> N
     assert summary["with_cost"] == 2 and summary["without_cost"] == 0
 
 
+async def test_a_plan_without_stock_does_not_set_the_support_cost() -> None:
+    """2026-11-19: Centro (120.2) has no stock and Antioquia does, so Antioquia's 100.4."""
+
+    class Stocked(FakeWarehouse):
+        async def costs(self, skus, plan):
+            rows = await super().costs(skus, plan)
+            stocked = plan_key(plan) == "MDE1/MDE3"
+            return {sku: replace(info, inventory_stocked=stocked) for sku, info in rows.items()}
+
+    client = uuid4()
+    repo = FakeRepository([CostTarget(client, "1128", "900")])
+
+    await SupportCostService(repo, Stocked()).run()
+
+    (saved,) = repo.saved
+    assert saved.plan_key == "MDE1/MDE3" and saved.unit_cost == D("101.4040")
+
+
 async def test_the_wholesale_family_carries_no_factor() -> None:
     by_list, by_margin, general = uuid4(), uuid4(), uuid4()
     repo = FakeRepository(

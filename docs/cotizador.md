@@ -94,7 +94,13 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      mañana) de la bodega de la lista, redondeado al peso. La **bodega 2** (cuarto frío) aplica
      solo a las referencias de línea `CONGELADOS` y `REFRIGERADOS` (`consumo.productos.linea`);
      el resto usa la bodega 1. Oriente (BGA1) y Market (URA6) no tienen cuarto frío aparte: la
-     bodega 2 es la misma bodega 1;
+     bodega 2 es la misma bodega 1.
+     **Solo cuentan las bodegas con existencia** (`existencia > 0`, desde el 2026-11-19): en
+     Nacional o la lista 1, el mayor costo de las bodegas que tienen la referencia; con varios CO,
+     un CO sin existencia no compite con su costo de inventario si otro tiene (sí con la
+     cotización del proveedor, que no es de una bodega). Si ninguna bodega tiene existencia, se
+     conserva su último costo promedio para no dejar la línea sin costo. Aplica igual a la
+     comparación de CO, a Actualización de listas, a Listas principales y al costo de los apoyos;
    - el **costo nuevo de un alza pendiente**: si la alza más reciente de la referencia en el
      histórico del maestro de productos no tiene fecha de actualización en SIESA, su costo nuevo
      (con impuesto saludable si lo trae). Solo gana si es estrictamente mayor
