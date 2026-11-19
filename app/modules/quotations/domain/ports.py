@@ -15,6 +15,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
     CustomerPage,
+    GroupPage,
     ItemInfo,
     LastSale,
     ListItem,
@@ -48,9 +49,27 @@ class WarehouseSource(Protocol):
 
     async def last_sales(self, nit: str, months: int) -> list[LastSale]: ...
 
+    async def group_branches(self, nits: Sequence[str]) -> list[Branch]:
+        """Every branch of these NITs, each with its ``nit`` (a business group)."""
+        ...
+
+    async def group_last_sales(self, nits: Sequence[str], months: int) -> list[LastSale]:
+        """:meth:`last_sales` over every branch of these NITs (a business group)."""
+        ...
+
     async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]: ...
 
     async def price_list_exists(self, price_list_id: str) -> bool: ...
+
+    async def price_list_ids(self) -> list[str]:
+        """Every list code SIESA has (as of yesterday's load)."""
+        ...
+
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]:
+        """Stock by warehouse of the SKUs in these warehouses and centers (only with some)."""
+        ...
 
     async def list_prices(
         self, price_list_id: str, skus: Sequence[str]
@@ -95,6 +114,16 @@ class MasterSource(Protocol):
     async def customers(
         self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
     ) -> CustomerPage: ...
+
+    async def business_groups(
+        self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
+    ) -> GroupPage:
+        """Business groups with an active customer of these salespeople (``None``: all)."""
+        ...
+
+    async def group_nits(self, group: str) -> list[str]:
+        """The NITs of a business group (its active customers)."""
+        ...
 
 
 class SupportSource(Protocol):
@@ -155,6 +184,11 @@ class QuotationRepository(Protocol):
 
     async def delete(self, quotation_id: UUID) -> bool: ...
 
+    async def reserved_list_ids(self) -> list[str]:
+        """Codes of the new lists already validated (pending load or loaded): SIESA may not
+        have them yet, but they are taken."""
+        ...
+
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None: ...
 
 
@@ -177,7 +211,9 @@ class StagingRepository(QuotationRepository, Protocol):
 class InsightSource(Protocol):
     """Warehouse reads of an item's detail in a list update."""
 
-    async def stock(self, skus: Sequence[str], warehouses: Sequence[str]) -> list[StockRow]: ...
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]: ...
 
     async def price_history(
         self, price_list_id: str, sku: str, months: int

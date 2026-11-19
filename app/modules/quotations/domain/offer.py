@@ -195,6 +195,10 @@ class OfferDocument:
     summary: OfferSummary | None
     conditions: tuple[str, ...]
     include_variation: bool = False
+    # A business group's quotation goes to the group (2026-11-19): its name and how many
+    # customers (NITs) it has; ``customer_name`` is the group's name then.
+    business_group: str | None = None
+    group_customers: int | None = None
 
 
 def _row(line: QuotationLine, quantities: bool) -> OfferRow:
@@ -252,6 +256,8 @@ def offer_document(detail: QuotationDetail, issued: date) -> OfferDocument:
         summary=offer_summary(detail),
         conditions=tuple(conditions),
         include_variation=quotation.include_variation,
+        business_group=quotation.business_group,
+        group_customers=quotation.group_customers,
     )
 
 

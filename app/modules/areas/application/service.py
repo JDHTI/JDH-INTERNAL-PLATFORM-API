@@ -547,11 +547,28 @@ class AreaService:
             )
         cleaned: dict[str, str] = {}
         overrides = await self.repository.list_module_overrides()
+        before = (await self.repository.get_role_permissions([role.id])).get(role.id, {})
+        catalog_keys = {item.key for item in MODULES}
+
+        def switched_off(key: str) -> bool:
+            """A catalog module switched off in the area (a retired one is not kept)."""
+
+            return key in catalog_keys and not is_enabled(area.slug, key, overrides)
+
         for module, action in grants:
+            key = module.strip().lower()
+            if key in before and switched_off(key):
+                # A grant kept on a module switched off in the area is not editable: the
+                # dialog sends it back as it read it, and it stays as it was below
+                # (2026-11-19: saving such a role failed with 422). A new grant on a
+                # switched-off module is still refused.
+                continue
             module, action = validate_grant(area.slug, module, action, overrides)
             if cleaned.get(module) != MANAGE:
                 cleaned[module] = action
-        before = (await self.repository.get_role_permissions([role.id])).get(role.id, {})
+        for module, action in before.items():
+            if switched_off(module):
+                cleaned.setdefault(module, action)
         await self.repository.replace_role_permissions(
             role.id, [RolePermission(module, action) for module, action in cleaned.items()]
         )

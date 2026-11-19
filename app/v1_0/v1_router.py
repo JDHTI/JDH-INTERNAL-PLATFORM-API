@@ -59,9 +59,6 @@ from app.modules.supplier_supports.presentation.requests_router import (
     router as support_requests_router,
 )
 from app.modules.supplier_supports.presentation.router import router as supports_router
-from app.modules.supplier_supports.presentation.special_cases_router import (
-    router as special_cases_router,
-)
 from app.modules.territory.presentation.prospects_router import router as territory_router
 from app.modules.territory.presentation.routes_router import router as territory_routes_router
 from app.modules.territory.presentation.zones_router import router as territory_zones_router
@@ -106,9 +103,6 @@ v1_router.include_router(
     support_profiles_router,
     prefix="/supplier-support-profiles",
     tags=["supplier-support-profiles"],
-)
-v1_router.include_router(
-    special_cases_router, prefix="/supplier-special-cases", tags=["supplier-special-cases"]
 )
 v1_router.include_router(
     order_validation_router, prefix="/order-validations", tags=["order-validations"]

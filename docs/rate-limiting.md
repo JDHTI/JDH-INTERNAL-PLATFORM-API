@@ -351,7 +351,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations` | `read` |  |
 | `POST` | `/v1/quotations` | `relaxed` |  |
 | `GET` | `/v1/quotations/billing-centers` | `read` |  |
+| `GET` | `/v1/quotations/business-groups` | `read` |  |
 | `GET` | `/v1/quotations/customers` | `read` |  |
+| `GET` | `/v1/quotations/list-codes/available` | `read` |  |
 | `POST` | `/v1/quotations/list-updates` | `relaxed` |  |
 | `GET` | `/v1/quotations/manual` | `read` |  |
 | `GET` | `/v1/quotations/permissions` | `read` |  |
@@ -373,6 +375,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/refresh` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/return` | `relaxed` |  |
+| `GET` | `/v1/quotations/{quotation_id}/stock-breakdown` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/support-requests` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/uploaded` | `relaxed` |  |
 | `POST` | `/v1/quotations/{quotation_id}/validate` | `relaxed` |  |
@@ -388,10 +391,6 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/sites/{site_id}` | `relaxed` |  |
 | `GET` | `/v1/sites/{site_id}` | `read` |  |
 | `PATCH` | `/v1/sites/{site_id}` | `relaxed` |  |
-| `GET` | `/v1/supplier-special-cases` | `read` |  |
-| `POST` | `/v1/supplier-special-cases` | `relaxed` |  |
-| `GET` | `/v1/supplier-special-cases/{case_id}` | `read` |  |
-| `PATCH` | `/v1/supplier-special-cases/{case_id}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-profiles` | `read` |  |
 | `DELETE` | `/v1/supplier-support-profiles/{supplier_code}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-profiles/{supplier_code}` | `read` |  |

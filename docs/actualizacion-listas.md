@@ -133,11 +133,17 @@ Reglas:
 
 ## Detalle del ítem
 
-- **Existencias por bodega** (`consumo.inventario_fecha`, la foto de SIESA de la mañana): solo
-  las bodegas vendibles de la lista (`pricing.stock_warehouses`): las propias de la skill
-  (bodega 1 y la de fríos), las 17 principales para la lista 1 o una lista *Nacional*, o las de
-  sus C.O. Las de obsoletos, tránsito o devoluciones nunca cuentan. La tabla trae el total por
-  referencia (`GET /{id}/stock`).
+- **Existencias por bodega** (`consumo.inventario_fecha`, la foto de SIESA de la mañana),
+  consolidadas en las **bodegas vendibles de los C.O. de la actualización**
+  (`pricing.stock_scope`, 2026-11-19):
+  - las de cada C.O. elegido, sumadas;
+  - un C.O. sin fila se lee por las bodegas que SIESA le pone;
+  - sin C.O. (*Nacional*), las 17 principales, cualquiera sea la lista. Antes una lista con
+    bodegas propias mostraba solo esas.
+
+  Las de obsoletos, tránsito o devoluciones nunca cuentan. La tabla trae el total por
+  referencia (`GET /{id}/stock`), y el desglose por C.O. y bodega sale de
+  `GET /quotations/{id}/stock-breakdown` (ver [cotizador](cotizador.md)).
 - **Historial del precio** (`precios_lista_historico`, últimos 24 meses): versiones del precio de
   la lista por unidad de inventario. Las listas principales solo tienen versiones desde 2026 (la
   lista 1 desde el 2026-08-12): las anteriores ya no están en SIESA. Los precios marcador no

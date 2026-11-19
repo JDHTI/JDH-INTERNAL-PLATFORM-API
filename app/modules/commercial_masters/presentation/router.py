@@ -43,7 +43,6 @@ router = APIRouter(
             require_permission(
                 "maestros",
                 "apoyos",
-                "casos-especiales",
                 "cotizador",
                 "actualizacion-listas",
                 "validador-pedidos",

@@ -104,6 +104,27 @@ async def test_switching_a_module_off_hides_it_and_keeps_the_grants(
     # The grant stays stored; it only stops counting.
     assert any("validador-pedidos" in grants for grants in area_repo.permissions.values())
 
+    # The role still saves (2026-11-19): the dialog sends back the stored grant on the
+    # switched-off module with the rest, and it is kept as it was, not refused.
+    role_id = next(
+        role_id
+        for role_id, grants in area_repo.permissions.items()
+        if "validador-pedidos" in grants
+    )
+    _, saved = await areas.set_role_permissions(
+        "bi",
+        role_id,
+        [("validador-pedidos", "read"), ("cotizador", "read")],
+        admin,
+    )
+    assert {(item.module, item.action) for item in saved} == {
+        ("validador-pedidos", "manage"),
+        ("cotizador", "read"),
+    }
+    # A new grant on a switched-off module is still refused.
+    with pytest.raises(InvalidInputError, match="no está activo"):
+        await areas.set_role_permissions("bi", role_id, [("proyectos", "read")], admin)
+
     await areas.set_area_module("bi", "validador-pedidos", True, None, admin)
     assert await areas.allows(ana, "bi", "validador-pedidos", "manage")
 

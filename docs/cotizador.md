@@ -164,8 +164,23 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      (`supported_margin_pct`), el mínimo es (costo − apoyo) / (1 − ese margen)
      (`support.authorized_margin_pct`); si no, la regla general.
    - Rebates y presupuestos quedan aparte: nunca se aplican.
-   - **Inventario**: cada línea trae `stock_on_hand` (existencia) y `stock_available`
-     (`cant_disponible`) de las mismas bodegas del costo.
+   - **Inventario** (2026-11-19): cada línea trae `stock_on_hand` (existencia) y
+     `stock_available` (`cant_disponible`) **consolidados en las bodegas de los CO del filtro**
+     (`cost_centers`), no solo en la bodega del costo.
+     - **Uno o varios CO:** la suma de las bodegas vendibles de cada uno
+       (`pricing.CENTER_STOCK_WAREHOUSES`: 001 MDE1, MDE3, MDE4; 002 OCC1, OCC16, OCC14; 003
+       BTA9, BTA8, BTA20; 004 CTG1, CTG15, CTG14; 005 BGA1, BGA11; 009 BAQ1, BAQ2, BAQ10).
+     - Un CO sin esa fila (Urabá, Valledupar, Yumbo…) se lee por las bodegas que SIESA le pone
+       (`co_bodega`).
+     - **Nacional** (sin CO): las 17 bodegas principales, cualquiera sea la lista.
+     - Las bodegas de obsoletos, tránsito o devoluciones nunca cuentan.
+     - Cambiar los CO (`/billing-center`) recalcula las existencias.
+   - **Desglose:** `GET /quotations/{id}/stock-breakdown?sku=&sku=` → `{national, label,
+     warehouses, centers, stock_at, items: [{sku, on_hand, available, centers: [{code,
+     on_hand, available, warehouses: [{warehouse, name, on_hand, available}]}]}]}`.
+     - Sin `sku` trae todas las líneas de SIESA (hasta 500).
+     - Sirve para el cotizador y para las actualizaciones de lista: el total por referencia
+       es el de la línea, y debajo va el detalle por CO y bodega.
 8. **Referencias inactivas**: una referencia inactiva en SIESA (`consumo.productos.estado`) se
    muestra marcada (`is_active: false`, `referencia_inactiva`) para reemplazarla. **No sale en el
    Excel ni en el plano**, no cuenta en las líneas cambiadas y no bloquea la confirmación. Se puede
@@ -283,6 +298,35 @@ en `bajo_minimo`, `sin_objetivo` o `sin_costo` se confirma y llega a quien valid
 `below_rule_count`. Confirmar solo exige al menos una línea activa con precio nuevo, de SIESA o
 solo para cotización (un cliente temporal puede tener solo productos locales).
 
+## Cotizar por grupo empresarial
+
+BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo**
+(`customers.business_group`).
+
+- **Buscar:** `GET /quotations/business-groups?q=&scope=mine|all&page=&size=` →
+  `{items: [{name, customers, branches}], total, page, size, seller_linked}`.
+  - Sigue la misma regla de cartera que `/customers`: un vendedor o supervisor ve los grupos con
+    al menos un cliente suyo (o de su equipo).
+  - Solo quien ve todos los clientes elige entre `mine` y `all`.
+  - `customers` y `branches` cuentan los clientes activos de todo el grupo.
+- **Crear:** `POST /quotations {business_group, window_months, ...}` en lugar de
+  `customer_nit`; se manda uno solo de NIT, grupo o cliente temporal. Fuera de la cartera es
+  403.
+- **Cómo se cotiza:**
+  - Las sucursales de todos los NIT del grupo deciden por mayoría la lista, el canal y el C.O.,
+    con el aviso `listas_distintas` si difieren. `customer_nit` es el NIT con más sucursales
+    activas.
+  - Las referencias salen de las ventas de **todo el grupo**: la última venta de cada SKU, con
+    la misma regla de precio más alto por C.O.
+  - Aplican **solo los apoyos generales y los del grupo** (`customer_group`, que la carga por
+    grupo deja uno por NIT y aquí cuentan como uno). Un apoyo de un solo NIT del grupo no se
+    extiende al grupo.
+  - El refresh vuelve a leer el grupo.
+- **La cotización** trae `business_group` y `group_customers` (migración `0074`), y
+  `customer_name` es el nombre del grupo.
+- **La oferta** sale a nombre del grupo: el Excel dice «Grupo empresarial» y cuántos NIT tiene,
+  sin NIT.
+
 ## Estados
 
 **Flujo sin bloqueos hasta el cliente** (BI, 2026-11-18 y 2026-11-19):
@@ -338,6 +382,14 @@ pendientes de validación se ven y se validan también en el módulo `actualizac
   puede proponer la descripción al confirmar, y quien valida puede cambiarla (por defecto
   `COTIZADOR <cliente>`, en ASCII y mayúsculas, máximo 40). `export_price_list_id` se fija al
   validar.
+  - **Códigos libres** (2026-11-19): `GET /quotations/list-codes/available?after=&size=30` →
+    `{items, free, used, next_after}`.
+    - Lista en orden (dígitos antes que letras) los códigos de 3 caracteres que SIESA no tiene
+      y que ninguna creación ya validada tomó (pendiente de carga o cargada). Se pagina con
+      `next_after`.
+    - `free` y `used` cuentan sobre los 46.656 códigos posibles.
+    - Validar con un código ya tomado por otra creación validada es 422, aunque SIESA todavía no
+      lo tenga.
 - **Lista 1**: un cliente en la lista `1` (GENERAL, unos 28.000 clientes) **siempre va por
   creación**: la lista 1 no se actualiza por este medio (aviso `lista_general`). Igual un
   **cliente temporal**, que no tiene lista en SIESA.

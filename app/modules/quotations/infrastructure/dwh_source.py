@@ -30,6 +30,7 @@ from app.modules.quotations.domain.entities import (
     PriceListInfo,
     Seller,
     SellerContact,
+    StockRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.pricing import StockPlan
@@ -91,11 +92,19 @@ class WarehouseQuotationSource:
     async def branches(self, nit: str) -> list[Branch]:
         """Every branch of a customer (``consumo.clientes``)."""
 
+        return await self.group_branches([nit])
+
+    async def group_branches(self, nits: Sequence[str]) -> list[Branch]:
+        """Every branch of these NITs, each with its ``nit`` (a business group)."""
+
+        if not nits:
+            return []
         rows = await self._fetch(
-            'SELECT "id_sucursal", "razon_social", "cod_canal", "canal", "lista_precio_id", '
-            '"lista_precio", "cod_co_factura", "cod_vendedor", "nombre_vendedor", "estado", '
-            f'"estado_sucursal" FROM {self._view("clientes")} WHERE "nit" = $1',
-            nit,
+            'SELECT "nit", "id_sucursal", "razon_social", "cod_canal", "canal", '
+            '"lista_precio_id", "lista_precio", "cod_co_factura", "cod_vendedor", '
+            f'"nombre_vendedor", "estado", "estado_sucursal" FROM {self._view("clientes")} '
+            'WHERE "nit" = ANY($1::text[])',
+            list(nits),
         )
         return [
             Branch(
@@ -109,6 +118,7 @@ class WarehouseQuotationSource:
                 salesperson_code=_strip(row["cod_vendedor"]),
                 salesperson_name=row["nombre_vendedor"],
                 is_active=row["estado"] == "A" and row["estado_sucursal"] == "A",
+                nit=_strip(row["nit"]),
             )
             for row in rows
         ]
@@ -142,10 +152,18 @@ class WarehouseQuotationSource:
         30 s limit; by key it reads only the customer's lines through their index.
         """
 
+        return await self.group_last_sales([nit], months)
+
+    async def group_last_sales(self, nits: Sequence[str], months: int) -> list[LastSale]:
+        """:meth:`last_sales` over every branch of these NITs (a business group)."""
+
+        if not nits:
+            return []
         keys = [
             row["cliente_key"]
             for row in await self._fetch(
-                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = $1', nit
+                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = ANY($1::text[])',
+                list(nits),
             )
         ]
         if not keys:
@@ -297,6 +315,43 @@ class WarehouseQuotationSource:
             )
         return result
 
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]:
+        """Stock of the SKUs in the given warehouses, and in every warehouse of ``centers``
+        (operation centers without a list of their own), only where there is some.
+
+        ``cant_disponible`` is what is not committed to orders yet (on 10U, 16 % of the rows
+        have part of the stock committed).
+        """
+
+        if not skus or not (warehouses or centers):
+            return []
+        rows = await self._fetch(
+            'SELECT p."sku", f."bodega", f."desc_bodega", f."co_bodega", f."existencia",'
+            ' f."cant_disponible", f."foto_at"'
+            f" FROM {self._view('inventario_fecha')} f"
+            f' JOIN {self._view("productos")} p ON p."producto_key" = f."producto_key"'
+            ' WHERE p."sku" = ANY($1::text[]) AND f."existencia" > 0 AND f."bodega_activa"'
+            ' AND (f."bodega" = ANY($2::text[]) OR trim(f."co_bodega") = ANY($3::text[]))'
+            ' ORDER BY p."sku", f."existencia" DESC',
+            list(skus),
+            list(warehouses),
+            list(centers),
+        )
+        return [
+            StockRow(
+                sku=str(row["sku"]).strip(),
+                warehouse=str(row["bodega"]).strip(),
+                warehouse_name=_strip(row["desc_bodega"]),
+                center_code=_strip(row["co_bodega"]),
+                on_hand=Decimal(row["existencia"]),
+                available=_decimal(row["cant_disponible"]),
+                snapshot_at=row["foto_at"],
+            )
+            for row in rows
+        ]
+
     async def price_list_exists(self, price_list_id: str) -> bool:
         """Whether SIESA already has a list with this code (as of yesterday's load)."""
 
@@ -305,6 +360,15 @@ class WarehouseQuotationSource:
             price_list_id,
         )
         return bool(rows)
+
+    async def price_list_ids(self) -> list[str]:
+        """Every list code SIESA has (as of yesterday's load)."""
+
+        rows = await self._fetch(
+            f'SELECT DISTINCT "lista_precio_id" FROM {self._view("listas_precios")}'
+            ' WHERE "lista_precio_id" IS NOT NULL'
+        )
+        return [str(row["lista_precio_id"]) for row in rows]
 
     async def list_prices(self, price_list_id: str, skus: Sequence[str]) -> dict[str, ListPrice]:
         """Price in force and value tax of each SKU in a list, per inventory unit."""

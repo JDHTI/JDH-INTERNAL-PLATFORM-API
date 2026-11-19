@@ -22,7 +22,13 @@ from app.modules.commercial_masters.infrastructure.models import (
     PriceIncreaseModel,
     ProductModel,
 )
-from app.modules.quotations.domain.entities import CustomerOption, CustomerPage, ProductMaster
+from app.modules.quotations.domain.entities import (
+    CustomerOption,
+    CustomerPage,
+    GroupInfo,
+    GroupPage,
+    ProductMaster,
+)
 
 _CHUNK = 1000
 _INCREASE_FIELDS = ("sku", "system_updated_on", "new_cost", "new_cost_with_tax")
@@ -249,6 +255,65 @@ class SqlAlchemyQuotationMasterSource:
             page,
             size,
         )
+
+    async def business_groups(
+        self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
+    ) -> GroupPage:
+        """Business groups with an active customer of these salespeople (``None``: all),
+        by name; each with its active customers (NITs) and branches, the whole group's."""
+
+        group = CustomerModel.business_group
+        conditions = [group.is_not(None), func.trim(group) != "", CustomerModel.is_active.is_(True)]
+        if seller_codes is not None:
+            if not seller_codes:
+                return GroupPage((), 0, page, size)
+            mine = select(CustomerModel.business_group).where(
+                CustomerModel.salesperson_code.in_(list(seller_codes))
+            )
+            conditions.append(group.in_(mine))
+        for token in (q or "").lower().translate(_ACCENTS).split():
+            conditions.append(_plain(group).contains(token, autoescape=True))
+        grouped = (
+            select(
+                group.label("name"),
+                func.count(func.distinct(CustomerModel.nit)).label("customers"),
+                func.count().label("branches"),
+            )
+            .where(*conditions)
+            .group_by(group)
+            .subquery()
+        )
+        async with self.database.session_factory() as session:
+            total = (await session.execute(select(func.count()).select_from(grouped))).scalar_one()
+            rows = (
+                await session.execute(
+                    select(grouped).order_by(grouped.c.name).offset((page - 1) * size).limit(size)
+                )
+            ).all()
+        return GroupPage(
+            tuple(
+                GroupInfo(name=row.name, customers=int(row.customers), branches=int(row.branches))
+                for row in rows
+            ),
+            int(total),
+            page,
+            size,
+        )
+
+    async def group_nits(self, group: str) -> list[str]:
+        """The NITs of a business group with an active branch."""
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(CustomerModel.nit)
+                .where(
+                    CustomerModel.business_group == group,
+                    CustomerModel.is_active.is_(True),
+                )
+                .distinct()
+                .order_by(CustomerModel.nit)
+            )
+            return [nit for (nit,) in rows.all()]
 
 
 __all__ = ["SqlAlchemyQuotationMasterSource"]

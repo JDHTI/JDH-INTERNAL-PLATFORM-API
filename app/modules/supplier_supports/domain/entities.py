@@ -95,7 +95,6 @@ class SupportData:
     status: str = "activo"
     is_enabled: bool = True
     unit_basis_source: str = "desconocido"
-    special_case_id: UUID | None = None
     issues: tuple[Issue, ...] = ()
     tiers: tuple[Tier, ...] = ()
 

@@ -135,7 +135,6 @@ MODULES: tuple[Module, ...] = (
         ("bi",),
         "Aprueba o rechaza los apoyos internos pedidos desde la cotización",
     ),
-    Module("casos-especiales", "Casos especiales", ("bi",), "Condiciones especiales"),
     Module(
         "mapa-comercial",
         "Mapa comercial",

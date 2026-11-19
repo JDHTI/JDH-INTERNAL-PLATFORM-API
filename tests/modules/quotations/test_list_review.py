@@ -188,8 +188,8 @@ async def test_the_item_detail_reads_stock_history_and_sales(
 
     result = await review.insight(lister, detail.quotation.id, "2537")
 
-    # 10U's own warehouses: Medellín's stock does not count.
-    assert result.warehouses == ("BTA9", "BTA8")
+    # 10U bills from 003: that center's warehouses (2026-11-19); Medellín's does not count.
+    assert result.warehouses == ("BTA9", "BTA8", "BTA20")
     assert [row.warehouse for row in result.stock] == ["BTA9", "BTA8"]
     assert result.history[-1].price == Decimal(4568) and result.history[-1].valid_to is None
     assert result.sales[0].price == Decimal(4400) and result.sales_scope == "lista"
@@ -202,7 +202,7 @@ async def test_the_item_detail_reads_stock_history_and_sales(
 
     warehouses, totals = await review.stock_totals(lister, detail.quotation.id)
     assert totals["2537"].on_hand == Decimal(150) and totals["2537"].available == Decimal(130)
-    assert totals["2537"].warehouses == 2 and warehouses == ("BTA9", "BTA8")
+    assert totals["2537"].warehouses == 2 and warehouses == ("BTA9", "BTA8", "BTA20")
 
 
 async def test_a_quotation_has_no_item_review(service, review, advisor) -> None:
@@ -215,8 +215,25 @@ async def test_a_quotation_has_no_item_review(service, review, advisor) -> None:
 
 
 def test_the_stock_warehouses_of_a_list() -> None:
-    assert pricing.stock_warehouses("10U", ()) == ("BTA9", "BTA8")
-    assert pricing.stock_warehouses("005", ()) == ("BGA1",)
+    # Without a center: Nacional (the 17 main ones), whatever the list.
+    assert pricing.stock_warehouses("10U", ()) == pricing.GENERAL_WAREHOUSES
     assert pricing.stock_warehouses("1", ()) == pricing.GENERAL_WAREHOUSES
-    assert pricing.stock_warehouses("77X", ("004",)) == ("CTG1", "CTG15")
-    assert pricing.stock_warehouses("77X", ()) == pricing.GENERAL_WAREHOUSES
+    assert pricing.stock_scope("77X", ()).national
+    # With centers (2026-11-19): the sellable warehouses of each chosen center, whatever the
+    # list; a center without a row is read by its own warehouses in SIESA.
+    assert pricing.stock_warehouses("77X", ("004",)) == ("CTG1", "CTG15", "CTG14")
+    assert pricing.stock_warehouses("1", ("001", "002")) == (
+        "MDE1",
+        "MDE3",
+        "MDE4",
+        "OCC1",
+        "OCC16",
+        "OCC14",
+    )
+    urab = pricing.stock_scope("10U", ("003", "007"))
+    assert urab.warehouses == ("BTA9", "BTA8", "BTA20") and urab.centers == ("007",)
+    assert not urab.national
+    # Every main warehouse belongs to one center.
+    assert sorted(
+        code for codes in pricing.CENTER_STOCK_WAREHOUSES.values() for code in codes
+    ) == sorted(pricing.GENERAL_WAREHOUSES)

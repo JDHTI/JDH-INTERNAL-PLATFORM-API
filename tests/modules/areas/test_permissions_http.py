@@ -68,7 +68,6 @@ def test_a_plain_user_is_kept_out_of_the_workspace_reads(client, world) -> None:
     for path in (
         "/order-validations",
         "/commercial/products",
-        "/supplier-special-cases",
         "/pqrsf/cases/suggestions?q=abc",
         "/pqrsf/supplier-contacts",
         "/dwh-monitoring/overview",
