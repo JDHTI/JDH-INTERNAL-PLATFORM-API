@@ -29,7 +29,6 @@ import asyncio
 import csv
 import sys
 from collections import Counter, defaultdict
-from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -41,50 +40,7 @@ from app.app_container import (
 )
 from app.core.config import Settings
 from app.core.errors import ApplicationError
-from app.modules.supplier_supports.domain.special_cases import SpecialCaseData
 from app.modules.supplier_supports.infrastructure import workbook as wb
-
-# Particular client cases that cannot be configured from the workbook alone: they are opened
-# as special cases (requests) and their supports point at them.
-SPECIAL_CASES = {
-    ("Rubbermaid", "Lista_Summar_RCP"): (
-        "575",
-        SpecialCaseData(
-            title="Rubbermaid: costo apoyado exclusivo para Summar",
-            request=(
-                "El nuevo costo apoyado (costo RCP) de la lista de Summar aplica solo para este "
-                "cliente (NIT 800125313). Confirmar sucursales, vigencia y cómo se factura."
-            ),
-            rule_to_program=(
-                "Si cliente = Summar y el SKU está en la lista: costo = COSTO APOYADO; para el "
-                "resto de clientes se sigue usando el COSTO REGULAR."
-            ),
-            customer_nit="800125313",
-            customer_name="SUMMAR",
-            priority="media",
-            source_key="Rubbermaid/Lista_Summar_RCP",
-        ),
-    ),
-    ("Rubbermaid", "Lista_SodexoCedi_RCP"): (
-        "575",
-        SpecialCaseData(
-            title="Rubbermaid: costo apoyado exclusivo para Sodexo CEDI",
-            request=(
-                "Misma regla que Summar para Sodexo CEDI, pero el libro no trae NIT. Definir qué "
-                "sucursal(es) de Sodexo S.A.S. (NIT 800230447) son el CEDI y configurarlas a mano. "
-                "La vigencia del libro (2025-04-01 a 2026-03-30) ya venció: confirmar si se "
-                "renueva."
-            ),
-            rule_to_program=(
-                "Si cliente = Sodexo CEDI y el SKU está en la lista: costo = COSTO APOYADO; el "
-                "resto de clientes usa el COSTO REGULAR."
-            ),
-            customer_name="SODEXO CEDI",
-            priority="alta",
-            source_key="Rubbermaid/Lista_SodexoCedi_RCP",
-        ),
-    ),
-}
 
 
 class CachedLookup:
@@ -172,16 +128,6 @@ async def run(args: argparse.Namespace) -> int:
             )
             return 1
 
-        cases = container.v1_container.special_case_service()
-        case_ids: dict[tuple[str, str], object] = {}
-        for key, (supplier_code, case) in SPECIAL_CASES.items():
-            if args.only and key[0] not in args.only:
-                continue
-            case_ids[key] = await cases.ensure(
-                case, supplier_code=supplier_code, dry_run=not args.apply
-            )
-            print(f"Caso especial {key[0]}/{key[1]}: {case_ids[key] or 'por crear'}")
-
         notes: dict[str, str | None] = {}
         created = skipped = flagged = updated = manual = 0
         per_table: dict[tuple[str, str], Counter] = defaultdict(Counter)
@@ -196,12 +142,8 @@ async def run(args: argparse.Namespace) -> int:
             if item.supplier and item.supplier.startswith("name:") and code is None:
                 unresolved[item.supplier[5:]] += 1
             try:
-                data = item.data
-                case_id = case_ids.get((item.sheet, item.table))
-                if case_id is not None:
-                    data = replace(data, special_case_id=case_id)
                 outcome = await service.import_support(
-                    data, supplier_code=code, dry_run=not args.apply, refresh=args.refresh
+                    item.data, supplier_code=code, dry_run=not args.apply, refresh=args.refresh
                 )
             except ApplicationError as exc:
                 print(f"  ! {item.data.source_key}: {exc.detail}", file=sys.stderr)

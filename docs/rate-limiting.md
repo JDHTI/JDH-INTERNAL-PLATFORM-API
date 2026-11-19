@@ -388,10 +388,6 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/sites/{site_id}` | `relaxed` |  |
 | `GET` | `/v1/sites/{site_id}` | `read` |  |
 | `PATCH` | `/v1/sites/{site_id}` | `relaxed` |  |
-| `GET` | `/v1/supplier-special-cases` | `read` |  |
-| `POST` | `/v1/supplier-special-cases` | `relaxed` |  |
-| `GET` | `/v1/supplier-special-cases/{case_id}` | `read` |  |
-| `PATCH` | `/v1/supplier-special-cases/{case_id}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-profiles` | `read` |  |
 | `DELETE` | `/v1/supplier-support-profiles/{supplier_code}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-profiles/{supplier_code}` | `read` |  |

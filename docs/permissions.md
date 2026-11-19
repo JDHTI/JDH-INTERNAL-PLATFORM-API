@@ -69,12 +69,11 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | bi, comercial | `validador-pedidos` | lotes, órdenes, reglas | cargar, aprobar, umbral, revalidar, borrar. `manage` vale desde un rol de BI o de Comercial. `ORDER_VALIDATION_MANAGER_AREA_SLUG` lo limita a un área si se fija |
 | bi, comercial | `apoyos` | maestro de apoyos, perfiles, adjuntos | crear, editar, anular, cargas masivas |
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
-| bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza y no decide los pide |
-| bi | `casos-especiales` | casos especiales | crear, editar |
+| bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza los pide (también un aprobador, que no aprueba los propios) |
 | comercial | `mapa-comercial` | mapa de prospectos, ficha, zonas, rutas | cargar el archivo mensual, corregir ubicación, marcar visitas, crear y editar zonas y rutas. El responsable de una ruta marca sus visitas sin `manage` |
 | bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 
-`/commercial/*` también lo leen `apoyos`, `casos-especiales`, `cotizador`, `actualizacion-listas` y
+`/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas` y
 `validador-pedidos`, porque esas pantallas buscan proveedores y productos.
 
 `/quotations/*` lo abren `cotizador`, `actualizacion-listas` y `listas-principales`: comparten
@@ -125,7 +124,7 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
 - **Lectura en la presentación.** `require_permission(*módulos, action="read")`
   (`app/modules/areas/presentation/dependencies.py`) protege los routers. Basta con tener uno de los
   módulos en cualquier área donde exista.
-  - Va a nivel de router en commercial, casos especiales, perfiles, cargas y adjuntos de apoyos,
+  - Va a nivel de router en commercial, perfiles, cargas y adjuntos de apoyos,
     solicitudes, monitoreo del DWH, monitoreo de aplicativos con el tablero, y feedback, certificados
     y envíos de PQRSF.
   - Va por endpoint en el validador de pedidos, el cotizador y el router principal de apoyos.

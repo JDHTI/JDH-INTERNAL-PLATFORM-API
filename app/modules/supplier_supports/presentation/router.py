@@ -316,7 +316,6 @@ class SupportResponse(_SupportFields):
     needs_review: bool
     is_enabled: bool
     unit_basis_source: str
-    special_case_id: UUID | None
     has_conflicts: bool
     attachment_count: int
     # The support's business group, else the customer's in the master (null = none), and

@@ -79,7 +79,6 @@ def _enum(name: str, label: str, values: Sequence[str]) -> FieldDef:
 
 _FIELD_LIST = (
     FieldDef("id", "uuid", "Identificador", sortable=False),
-    FieldDef("special_case_id", "uuid", "Caso especial", sortable=False),
     FieldDef("is_enabled", "bool", "Activado", sortable=False),
     _enum("unit_basis_source", "Origen de la unidad", vocabulary.UNIT_BASIS_SOURCES),
     _enum("kind", "Tipo de apoyo", vocabulary.KINDS),
