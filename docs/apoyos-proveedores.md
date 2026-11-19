@@ -306,6 +306,16 @@ apuntan a él (`special_case_id`). Nacen dos: Summar y Sodexo CEDI.
 Lectura: cualquier usuario autenticado. Escritura: administradores y miembros del
 área `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG` (por defecto `bi`).
 
+**Qué apoyos ve cada quien** (2026-11-19). La búsqueda y el detalle siguen la cartera del
+cotizador (`salespeople`):
+- **Todos los apoyos:** los gestores de `apoyos` (BI), quien ve todos los clientes (BI, el líder
+  o responsable de Comercial) y los administradores.
+- **Vendedor o supervisor:** los apoyos de los NIT de su cartera (sucursales con su código de
+  vendedor, o los de su equipo) y los apoyos generales, sin NIT.
+- **Sin clientes asignados:** ningún apoyo. El detalle de un apoyo fuera de la cartera es 404.
+
+`GET /supplier-supports/permissions` trae `customer_scope` (`all`, `team`, `mine` o `none`).
+
 | Método y ruta | Uso |
 | --- | --- |
 | `POST /supplier-supports/search` | Filtrado dinámico (abajo) |

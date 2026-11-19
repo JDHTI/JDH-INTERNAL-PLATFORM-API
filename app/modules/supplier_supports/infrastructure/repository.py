@@ -13,6 +13,7 @@ from sqlalchemy import (
     Select,
     Text,
     and_,
+    false,
     func,
     literal,
     not_,
@@ -329,6 +330,18 @@ def _compile(node: Condition | Group) -> ColumnElement[bool]:
         else _SUPPORT_COLUMNS[node.field]
     )
     return _leaf(column, kind, node)
+
+
+def _in_customers(codes: Sequence[str]) -> ColumnElement[bool]:
+    """The supports of the customers of these salespeople, plus the general ones (no NIT);
+    nothing without codes (2026-11-19: no customers, no supports)."""
+
+    if not codes:
+        return false()
+    owned = select(CustomerModel.nit).where(
+        func.trim(CustomerModel.salesperson_code).in_(list(codes))
+    )
+    return or_(S.customer_nit.is_(None), S.customer_nit.in_(owned))
 
 
 def _free_text(term: str) -> ColumnElement[bool]:
@@ -936,7 +949,25 @@ class SqlAlchemySupportRepository:
         if spec.has_attachments is not None:
             link = select(literal(1)).where(A.support_id == S.id).exists()
             conditions.append(link if spec.has_attachments else not_(link))
+        if spec.salesperson_codes is not None:
+            conditions.append(_in_customers(spec.salesperson_codes))
         return conditions
+
+    async def customers_of(self, nits: Sequence[str], salesperson_codes: Sequence[str]) -> set[str]:
+        """The NITs (of ``nits``) with a branch of one of these salespeople."""
+
+        if not nits or not salesperson_codes:
+            return set()
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(CustomerModel.nit)
+                .where(
+                    CustomerModel.nit.in_(list(nits)),
+                    func.trim(CustomerModel.salesperson_code).in_(list(salesperson_codes)),
+                )
+                .distinct()
+            )
+            return {nit for (nit,) in rows.all()}
 
     async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]:
         """Ids of the supports a search matches, up to ``limit``, in the search's order."""

@@ -385,6 +385,7 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_read": True,
         "can_review_internal": False,
         "can_request_internal": False,
+        "customer_scope": "all",
     }
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
@@ -396,4 +397,5 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_read": False,
         "can_review_internal": False,
         "can_request_internal": False,
+        "customer_scope": "all",
     }

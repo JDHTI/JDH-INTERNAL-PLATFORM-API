@@ -359,3 +359,7 @@ class SearchSpec:
     page: int
     size: int
     has_attachments: bool | None = None
+    # The caller's customers (2026-11-19): ``None`` sees every support; otherwise only the
+    # supports of the customers of these salesperson codes and the general ones (no NIT),
+    # and none at all without codes.
+    salesperson_codes: tuple[str, ...] | None = None

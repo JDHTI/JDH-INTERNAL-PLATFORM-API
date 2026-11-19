@@ -125,6 +125,24 @@ class SupportRepository(Protocol):
 
     async def scope_values(self) -> dict[str, list[str]]: ...
 
+    async def customers_of(self, nits: Sequence[str], salesperson_codes: Sequence[str]) -> set[str]:
+        """The NITs (of ``nits``) with a branch of one of these salespeople."""
+        ...
+
+
+class CustomerScope(Protocol):
+    """The customers a person works on (the salespeople module's ``SalesScope``)."""
+
+    scope: str
+    # Salesperson codes; ``None`` means every customer.
+    codes: tuple[str, ...] | None
+
+
+class CustomerScopeResolver(Protocol):
+    """Decides each person's customers from their role and salesperson links."""
+
+    async def scope_for(self, principal: Principal) -> CustomerScope: ...
+
 
 class MasterLookup(Protocol):
     """The masters a support points to."""
