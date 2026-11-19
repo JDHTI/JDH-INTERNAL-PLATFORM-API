@@ -49,6 +49,7 @@ class WarehouseQuotationSource:
         connection: DataProviderConnection,
         schema: str = "consumo",
         timeout: float | None = 30.0,
+        sales_timeout: float | None = None,
     ) -> None:
         """Create the source.
 
@@ -57,6 +58,9 @@ class WarehouseQuotationSource:
             schema (str): Consumption schema.
             timeout (float | None): Seconds per query. The sales history of a customer with
                 hundreds of branches can pass the pool's default when the warehouse is busy.
+            sales_timeout (float | None): Seconds for a customer's or group's sales history
+                (building or refreshing a quotation); ``None`` is ``timeout``. On a cold
+                cache it passed 30 s, and the retry answered at once (2026-11-19).
 
         Raises:
             ValueError: The schema is not a SQL identifier.
@@ -67,6 +71,7 @@ class WarehouseQuotationSource:
         self.connection = connection
         self.schema = schema
         self.timeout = timeout
+        self.sales_timeout = sales_timeout
 
     def _view(self, name: str) -> str:
         return f'"{self.schema}"."{name}"'
@@ -193,6 +198,7 @@ class WarehouseQuotationSource:
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
             keys,
             months,
+            timeout=self.sales_timeout,
         )
         sales: list[LastSale] = []
         for row in rows:

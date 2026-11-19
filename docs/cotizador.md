@@ -84,7 +84,10 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      pudo consultar el datawarehouse» (medido el 2026-11-11 con Sodexo: 33,6 s en frío; por
      llaves, 1,4 s). Las lecturas del cotizador corren sin JIT (`jit = off`, unos 2 s menos cada
      una), y si una se pasa del tiempo el mensaje lo dice: «El datawarehouse tardó más de 30 s en
-     responder».
+     responder». El histórico de ventas tiene su propio límite, 90 s
+     (`QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS`, 2026-11-19). Una conexión del pool que el servidor
+     o la red cerraron mientras estaba inactiva se reintenta una vez (antes salía como 500 la
+     primera vez y el reintento cargaba de inmediato).
 3. **Costo**: el **mayor** entre:
    - la **cotización vigente del proveedor** (`consumo.cotizaciones_proveedores`: vigente, ítem
      activo, unidad `UNID` o `KL`): `redondear(costo_bruto) × (1 + ICUI/100) + IBUA`, la mayor por
@@ -558,6 +561,7 @@ Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_
 | `QUOTATIONS_MAX_LINES` | `3000` | referencias máximas por cotización |
 | `QUOTATIONS_SIESA_COMPANY` | `001` | compañía del plano |
 | `QUOTATIONS_DWH_TIMEOUT_SECONDS` | `30` | segundos por consulta al DWH del cotizador |
+| `QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS` | `90` | segundos para el histórico de ventas del cliente o grupo al armar o refrescar (con el caché frío un cliente de muchas sucursales pasaba de 30 s; el reintento cargaba de inmediato) |
 
 El usuario del DWH debe leer en `consumo`: `ventas`, `clientes`, `productos`,
 `producto_impuestos`, `inventario_fecha`, `cotizaciones_proveedores`, `precios_lista_vigentes`,
