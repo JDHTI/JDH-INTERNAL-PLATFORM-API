@@ -37,6 +37,8 @@ from app.modules.quotations.domain.entities import (
     PriceListLoad,
     QuotationDetail,
     StagedItem,
+    StockTotal,
+    stock_totals,
 )
 from app.modules.quotations.domain.export import ExportRow, ExportTaxRow, PriceListExport
 from app.modules.quotations.domain.ports import (
@@ -60,13 +62,6 @@ class StagedList:
     price_list_id: str
     price_list_name: str | None
     items: tuple[StagedItem, ...]
-
-
-@dataclass(frozen=True)
-class StockTotal:
-    on_hand: Decimal
-    available: Decimal | None
-    warehouses: int
 
 
 class ListReviewService:
@@ -431,9 +426,10 @@ class ListReviewService:
         line = next((item for item in detail.lines if item.sku == sku), None)
         if line is None:
             raise NotFoundError(f"La referencia {sku} no está en la actualización")
-        warehouses = pricing.stock_warehouses(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        warehouses = scope.warehouses
         stock, history = await asyncio.gather(
-            self.insights.stock([sku], warehouses),
+            self.insights.stock([sku], scope.warehouses, scope.centers),
             self.insights.price_history(
                 quotation.price_list_id or "", sku, vocabulary.PRICE_HISTORY_MONTHS
             ),
@@ -460,28 +456,16 @@ class ListReviewService:
     async def stock_totals(
         self, principal: Principal, quotation_id: UUID
     ) -> tuple[tuple[str, ...], dict[str, StockTotal]]:
-        """Stock of every item in the update's warehouses, summed per SKU."""
+        """Stock of every item in the warehouses of the update's operation centers
+        (:func:`pricing.stock_scope`), summed per SKU."""
 
         detail = await self.quotations.get(principal, quotation_id)
         quotation = detail.quotation
         _list_only(quotation.is_list_update)
-        warehouses = pricing.stock_warehouses(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
         skus = [line.sku for line in detail.lines if not line.is_local]
-        totals: dict[str, StockTotal] = {}
-        for row in await self.insights.stock(skus, warehouses):
-            current = totals.get(row.sku)
-            available = row.available
-            if current is None:
-                totals[row.sku] = StockTotal(row.on_hand, available, 1)
-                continue
-            totals[row.sku] = StockTotal(
-                current.on_hand + row.on_hand,
-                None
-                if current.available is None or available is None
-                else current.available + available,
-                current.warehouses + 1,
-            )
-        return warehouses, totals
+        rows = await self.insights.stock(skus, scope.warehouses, scope.centers)
+        return scope.warehouses, stock_totals(rows)
 
 
 def _list_only(is_list_update: bool) -> None:
@@ -493,4 +477,4 @@ def _text(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
 
 
-__all__ = ["ListReviewService", "StagedList", "StockTotal"]
+__all__ = ["ListReviewService", "StagedList", "StockTotal"]  # StockTotal: domain re-export

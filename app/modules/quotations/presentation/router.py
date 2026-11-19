@@ -137,11 +137,33 @@ class TemporaryCustomerRequest(BaseModel):
     nit: str | None = Field(default=None, max_length=30)
 
 
+class GroupResponse(BaseModel):
+    """A business group to quote: its active customers (NITs) and branches."""
+
+    name: str
+    customers: int
+    branches: int
+
+
+class GroupPageResponse(BaseModel):
+    items: list[GroupResponse]
+    total: int
+    page: int
+    size: int
+    seller_linked: bool
+
+
 class CreateRequest(BaseModel):
-    """A SIESA customer by ``customer_nit``, or a ``temporary_customer`` with the
-    ``billing_center_code`` its prices come from."""
+    """A SIESA customer by ``customer_nit``, a whole ``business_group``, or a
+    ``temporary_customer`` with the ``billing_center_code`` its prices come from (one of
+    the three)."""
 
     customer_nit: str | None = Field(default=None, max_length=30)
+    business_group: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Quote a whole business group (its name, from /quotations/business-groups)",
+    )
     temporary_customer: TemporaryCustomerRequest | None = None
     billing_center_code: str | None = Field(
         default=None,
@@ -546,6 +568,9 @@ class SummaryResponse(BaseModel):
     # A list update: ``cliente`` (from a customer's list) or ``lista``.
     source: Literal["cliente", "lista"] | None = None
     price_list_name: str | None = None
+    # Quoted to a business group: its name (also ``customer_name``) and its NITs.
+    business_group: str | None = None
+    group_customers: int | None = None
 
 
 class QuotationResponse(SummaryResponse):
@@ -796,6 +821,8 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "temporary_customer": TemporaryCustomerResponse(**quotation.temporary_customer.as_dict())
         if quotation.temporary_customer
         else None,
+        "business_group": quotation.business_group,
+        "group_customers": quotation.group_customers,
         "kind": quotation.kind,
         "source": quotation.source,
         "price_list_name": quotation.price_list_name,
@@ -993,12 +1020,44 @@ async def customers(
     )
 
 
+@router.get(
+    "/business-groups",
+    dependencies=[_READ_GATE],
+    response_model=GroupPageResponse,
+    summary="Business groups to quote",
+)
+@inject
+async def business_groups(
+    scope: Literal["mine", "all"] = Query(default="mine"),
+    q: str | None = Query(default=None, max_length=100),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> GroupPageResponse:
+    """The business groups of the caller's portfolio (a group with at least one customer of
+    their salespeople), by name; BI and Comercial's leaders choose ``mine`` or ``all``. Each
+    with the whole group's active customers and branches."""
+
+    result, linked = await service.business_groups(principal, scope, q, page, size)
+    return GroupPageResponse(
+        items=[
+            GroupResponse(name=item.name, customers=item.customers, branches=item.branches)
+            for item in result.items
+        ],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+        seller_linked=linked,
+    )
+
+
 @router.post(
     "",
     dependencies=[_READ_GATE],
     response_model=QuotationResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Build a quotation of a customer",
+    summary="Build a quotation of a customer or a business group",
 )
 @inject
 async def create_quotation(
@@ -1028,6 +1087,7 @@ async def create_quotation(
             else None,
             billing_center_code=body.billing_center_code,
             with_history=body.with_history,
+            business_group=body.business_group,
         ),
     )
 
@@ -1131,6 +1191,147 @@ async def price_lists(
         for item in await service.price_lists(principal, q, kind)
     ]
     return PriceListPageResponse(items=items, total=len(items), page=1, size=max(len(items), 1))
+
+
+class WarehouseStockResponse(BaseModel):
+    warehouse: str
+    name: str | None
+    on_hand: Decimal
+    available: Decimal | None
+
+
+class CenterStockResponse(BaseModel):
+    """One operation center's warehouses with stock of the reference."""
+
+    code: str | None
+    on_hand: Decimal
+    available: Decimal | None
+    warehouses: list[WarehouseStockResponse]
+
+
+class SkuStockResponse(BaseModel):
+    """The consolidated stock of a reference (the line's) and its detail by center."""
+
+    sku: str
+    on_hand: Decimal
+    available: Decimal | None
+    centers: list[CenterStockResponse]
+
+
+class StockBreakdownResponse(BaseModel):
+    # Nacional (no center chosen): every main warehouse.
+    national: bool
+    label: str
+    # The warehouses read by code, and the centers read by every warehouse SIESA puts there.
+    warehouses: list[str]
+    centers: list[str]
+    stock_at: datetime | None
+    items: list[SkuStockResponse]
+
+
+def _stock_items(result: Any) -> list[SkuStockResponse]:
+    by_sku: dict[str, dict[str | None, list[Any]]] = {}
+    for row in result.rows:
+        by_sku.setdefault(row.sku, {}).setdefault(row.center_code, []).append(row)
+    items = []
+    for sku in result.skus:
+        total = result.totals.get(sku)
+        centers = []
+        for code, rows in sorted(by_sku.get(sku, {}).items(), key=lambda item: item[0] or "~"):
+            available = (
+                None
+                if any(row.available is None for row in rows)
+                else sum((row.available for row in rows), Decimal(0))
+            )
+            centers.append(
+                CenterStockResponse(
+                    code=code,
+                    on_hand=sum((row.on_hand for row in rows), Decimal(0)),
+                    available=available,
+                    warehouses=[
+                        WarehouseStockResponse(
+                            warehouse=row.warehouse,
+                            name=row.warehouse_name,
+                            on_hand=row.on_hand,
+                            available=row.available,
+                        )
+                        for row in rows
+                    ],
+                )
+            )
+        items.append(
+            SkuStockResponse(
+                sku=sku,
+                on_hand=total.on_hand if total else Decimal(0),
+                available=total.available if total else Decimal(0),
+                centers=centers,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/{quotation_id}/stock-breakdown",
+    dependencies=[_READ_GATE],
+    response_model=StockBreakdownResponse,
+    summary="Stock of the references in the warehouses of the chosen operation centers",
+)
+@inject
+async def stock_breakdown(
+    quotation_id: UUID,
+    sku: list[str] | None = Query(default=None, max_length=500),  # noqa: B008
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> StockBreakdownResponse:
+    """The stock of a quotation's or list update's references (``sku``, repeatable; none:
+    every SIESA line, up to 500) in the sellable warehouses of its operation centers, summed
+    per reference as each line shows it, and detailed by center and warehouse. No center
+    chosen is *Nacional*: every main warehouse. From SIESA's stock photo of the morning."""
+
+    result = await service.stock_breakdown(principal, quotation_id, sku)
+    return StockBreakdownResponse(
+        national=result.scope.national,
+        label=result.scope.label,
+        warehouses=list(result.scope.warehouses),
+        centers=list(result.scope.centers),
+        stock_at=max((row.snapshot_at for row in result.rows if row.snapshot_at), default=None),
+        items=_stock_items(result),
+    )
+
+
+class FreeCodesResponse(BaseModel):
+    """Free codes for a new price list, in order."""
+
+    items: list[str]
+    # Of the 46 656 codes of 3 characters (0-9, A-Z).
+    free: int
+    used: int
+    # Pass it as ``after`` for the next page; ``null`` on the last one.
+    next_after: str | None
+
+
+# Declared before ``/{quotation_id}`` so the path is not taken for an id.
+@router.get(
+    "/list-codes/available",
+    dependencies=[_READ_GATE],
+    response_model=FreeCodesResponse,
+    summary="Free codes for a new price list",
+)
+@inject
+async def available_list_codes(
+    after: str | None = Query(default=None, max_length=3),
+    size: int = Query(default=30, ge=1, le=200),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> FreeCodesResponse:
+    """The 3-character codes (digits and letters, digits first) that SIESA does not have and
+    no validated quotation took, in order, after ``after``. The validator of a list creation
+    picks one of them; ``free`` and ``used`` count the whole range."""
+
+    result = await service.available_list_codes(principal, after, size)
+    return FreeCodesResponse(
+        items=list(result.items), free=result.free, used=result.used, next_after=result.next_after
+    )
 
 
 @router.post(

@@ -66,9 +66,20 @@ class CustomerOfferWorkbook:
         sheet.append([TITLE])
         sheet["A1"].font = _TITLE_FONT
         sheet.append([])
+        # A business group's offer goes to the group, not to one of its NITs.
+        addressee = (
+            (
+                ("Grupo empresarial", document.business_group),
+                ("Clientes", f"{document.group_customers or 0} NIT del grupo"),
+            )
+            if document.business_group
+            else (
+                ("Cliente", document.customer_name or document.customer_nit),
+                ("NIT", document.customer_nit),
+            )
+        )
         for label, value in (
-            ("Cliente", document.customer_name or document.customer_nit),
-            ("NIT", document.customer_nit),
+            *addressee,
             ("Canal", document.channel),
             ("Fecha", long_date(document.issued)),
             ("Válida hasta", long_date(document.valid_until) if document.valid_until else None),

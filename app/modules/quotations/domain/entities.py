@@ -6,6 +6,7 @@ are fractions (0.18 = 18 %); ``vat_pct`` is in points (19 = 19 %), as the master
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -85,6 +86,29 @@ class CustomerContext:
     warnings: tuple[str, ...] = ()
     # Operation centers the lines are costed from; none is *Nacional* (every warehouse).
     cost_centers: tuple[str, ...] = ()
+    # A business group's quotation (2026-11-19): the group and its NITs. The branches of
+    # every NIT decide the list, channel and center (the majority); the sales are the
+    # group's; only the general supports and the group's apply. ``nit`` is then the NIT
+    # with the most active branches (``group_nits`` empty: read them again).
+    business_group: str | None = None
+    group_nits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GroupInfo:
+    """A business group to quote (``customers.business_group``)."""
+
+    name: str
+    customers: int
+    branches: int
+
+
+@dataclass(frozen=True)
+class GroupPage:
+    items: tuple[GroupInfo, ...]
+    total: int
+    page: int
+    size: int
 
 
 @dataclass(frozen=True)
@@ -607,6 +631,10 @@ class Quotation:
     kind: str = vocabulary.QUOTATION
     # A list update: ``cliente`` (started from a customer's list) or ``lista``.
     source: str | None = None
+    # Quoted to a business group (2026-11-19): ``customer_name`` is the group's name and
+    # ``customer_nit`` the NIT of the group with the most active branches.
+    business_group: str | None = None
+    group_customers: int | None = None
 
     @property
     def is_temporary_customer(self) -> bool:
@@ -695,6 +723,34 @@ class MonthlySale:
     month: date
     price: Decimal
     quantity: Decimal
+
+
+@dataclass(frozen=True)
+class StockTotal:
+    """The stock of a SKU summed over the warehouses read (``warehouses`` with some)."""
+
+    on_hand: Decimal
+    available: Decimal | None
+    warehouses: int
+
+
+def stock_totals(rows: Sequence[StockRow]) -> dict[str, StockTotal]:
+    """Stock rows summed per SKU (the available is unknown if one warehouse's is)."""
+
+    totals: dict[str, StockTotal] = {}
+    for row in rows:
+        current = totals.get(row.sku)
+        if current is None:
+            totals[row.sku] = StockTotal(row.on_hand, row.available, 1)
+            continue
+        totals[row.sku] = StockTotal(
+            current.on_hand + row.on_hand,
+            None
+            if current.available is None or row.available is None
+            else current.available + row.available,
+            current.warehouses + 1,
+        )
+    return totals
 
 
 @dataclass(frozen=True)

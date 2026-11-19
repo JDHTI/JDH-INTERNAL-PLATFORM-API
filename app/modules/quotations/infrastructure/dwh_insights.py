@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 
-from app.modules.quotations.domain.entities import MonthlySale, PriceVersion, StockRow
+from app.modules.quotations.domain.entities import MonthlySale, PriceVersion
 from app.modules.quotations.domain.liquor import LiquorListPrice, LiquorProduct, LiquorSuspect
 from app.modules.quotations.infrastructure.dwh_source import (
     WarehouseQuotationSource,
@@ -53,40 +53,8 @@ def _day(value: object) -> date | None:
 
 
 class WarehouseInsightSource(WarehouseQuotationSource):
-    """Stock by warehouse, list price history, monthly sales and liquor taxes."""
-
-    async def stock(self, skus: Sequence[str], warehouses: Sequence[str]) -> list[StockRow]:
-        """Stock of the SKUs in the given warehouses, only where there is some.
-
-        ``cant_disponible`` is what is not committed to orders yet (on 10U, 16 % of the rows
-        have part of the stock committed).
-        """
-
-        if not skus or not warehouses:
-            return []
-        rows = await self._fetch(
-            'SELECT p."sku", f."bodega", f."desc_bodega", f."co_bodega", f."existencia",'
-            ' f."cant_disponible", f."foto_at"'
-            f" FROM {self._view('inventario_fecha')} f"
-            f' JOIN {self._view("productos")} p ON p."producto_key" = f."producto_key"'
-            ' WHERE p."sku" = ANY($1::text[]) AND f."existencia" > 0 AND f."bodega_activa"'
-            ' AND f."bodega" = ANY($2::text[])'
-            ' ORDER BY p."sku", f."existencia" DESC',
-            list(skus),
-            list(warehouses),
-        )
-        return [
-            StockRow(
-                sku=str(row["sku"]).strip(),
-                warehouse=str(row["bodega"]).strip(),
-                warehouse_name=_strip(row["desc_bodega"]),
-                center_code=_strip(row["co_bodega"]),
-                on_hand=Decimal(row["existencia"]),
-                available=_decimal(row["cant_disponible"]),
-                snapshot_at=row["foto_at"],
-            )
-            for row in rows
-        ]
+    """List price history, monthly sales and liquor taxes (the stock by warehouse is the base
+    source's :meth:`WarehouseQuotationSource.stock`)."""
 
     async def price_history(self, price_list_id: str, sku: str, months: int) -> list[PriceVersion]:
         """Versions of the SKU's price on the list that were in force in the last ``months``.

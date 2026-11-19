@@ -364,6 +364,21 @@ class SqlAlchemyQuotationRepository:
             result = await session.execute(delete(Q).where(Q.id == quotation_id))
         return bool(result.rowcount)
 
+    async def reserved_list_ids(self) -> list[str]:
+        """Codes of the new lists already validated (pending load or loaded)."""
+
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(Q.export_price_list_id)
+                .where(
+                    Q.list_action == "creacion",
+                    Q.status.in_(("pendiente_carga", "cargada")),
+                    Q.export_price_list_id.is_not(None),
+                )
+                .distinct()
+            )
+            return [code for (code,) in rows.all()]
+
     async def staged(self, kind: str, price_list_id: str | None = None) -> list[StagedItem]:
         """Validated items not loaded yet of every update of a kind (the staging).
 

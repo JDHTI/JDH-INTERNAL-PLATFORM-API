@@ -1,4 +1,4 @@
-﻿# Solicitudes de apoyo JDH
+# Solicitudes de apoyo JDH
 
 Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`. Frontend coordinado en `internal-platform-ui/supplier-supports-form`, rama `feat/supplier-supports-requests`.
 
@@ -81,7 +81,7 @@ automática de errores ortográficos como «slamanca».
 
 Aplicar `alembic upgrade head`: migración `0036_support_requests`, tras `0035_full_margin_reason`. Crea solicitudes, eventos, triggers y costo JDH independiente. La línea base conserva valores anteriores y aclara que no son solicitudes históricas.
 
-Configurar `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG=bi` si el entorno tenía explícitamente `comercial`; defaults de aplicación, ejemplo y Compose ya usan BI. Cubre también cargas, perfiles, adjuntos y casos especiales. Las solicitudes usan membresía de Comercial; administradores tienen ambas capacidades.
+Configurar `SUPPLIER_SUPPORTS_MANAGER_AREA_SLUG=bi` si el entorno tenía explícitamente `comercial`; defaults de aplicación, ejemplo y Compose ya usan BI. Cubre también cargas, perfiles y adjuntos. Las solicitudes usan membresía de Comercial; administradores tienen ambas capacidades.
 
 - Suite completa: **982 pruebas pasan**, incluidas catorce de PostgreSQL.
 - Ruff y formato limpios; `git diff --check` correcto.

@@ -18,6 +18,8 @@ from app.modules.quotations.domain.entities import (
     CostInfo,
     CustomerOption,
     CustomerPage,
+    GroupInfo,
+    GroupPage,
     ItemInfo,
     LastSale,
     ListItem,
@@ -123,6 +125,8 @@ class FakeWarehouse:
             "2537": cost("2537", inventory="3000", snapshot_date=date(2026, 11, 3))
         }
         self.existing_lists: set[str] = {"001", "1", "C01"}
+        # Stock by warehouse (the morning's photo): what the lines and the breakdown read.
+        self.stock_rows: list[StockRow] = []
         self.prices: dict[str, ListPrice] = {"2537": ListPrice("2537", Decimal("4568"))}
         self.taxes: dict[str, ValueTaxKey] = {}
         self.seller_rows: dict[str, list[Seller]] = {
@@ -213,6 +217,20 @@ class FakeWarehouse:
         self.calls.append(("last_sales", nit, months))
         return list(self.sales.get(nit, []))
 
+    async def group_branches(self, nits):
+        self._check()
+        return [replace(item, nit=nit) for nit in nits for item in self.branch_rows.get(nit, [])]
+
+    async def group_last_sales(self, nits, months):
+        self._check()
+        self.calls.append(("group_last_sales", tuple(nits), months))
+        latest: dict[str, LastSale] = {}
+        for nit in nits:
+            for item in self.sales.get(nit, []):
+                if item.sku not in latest or item.net_price > latest[item.sku].net_price:
+                    latest[item.sku] = item
+        return list(latest.values())
+
     async def costs(self, skus, plan):
         self._check()
         self.calls.append(("costs", tuple(skus), plan))
@@ -223,6 +241,19 @@ class FakeWarehouse:
     async def price_list_exists(self, price_list_id):
         self._check()
         return price_list_id in self.existing_lists
+
+    async def price_list_ids(self):
+        self._check()
+        return sorted(self.existing_lists)
+
+    async def stock(self, skus, warehouses, centers=()):
+        self._check()
+        self.calls.append(("stock", tuple(warehouses), tuple(centers)))
+        return [
+            row
+            for row in self.stock_rows
+            if row.sku in skus and (row.warehouse in warehouses or row.center_code in centers)
+        ]
 
     async def list_prices(self, price_list_id, skus):
         self._check()
@@ -295,6 +326,9 @@ class FakeMasters:
             ),
             CustomerOption("800125313", "SUMMAR", "0151", "EMPRESAS", "0099", "OTRO", 1, 1),
         ]
+        # Business groups: name -> NITs, and each NIT's salesperson.
+        self.groups: dict[str, list[str]] = {}
+        self.sellers_of: dict[str, str] = {NIT: "0051", "800125313": "0099"}
 
     async def products(self, skus):
         return {sku: self.catalog[sku] for sku in skus if sku in self.catalog}
@@ -313,6 +347,25 @@ class FakeMasters:
             and (not q or q.lower() in (item.name or "").lower() or item.nit.startswith(q))
         ]
         return CustomerPage(tuple(items[(page - 1) * size : page * size]), len(items), page, size)
+
+    async def business_groups(self, seller_codes, q, page, size):
+        names = sorted(
+            {
+                group
+                for group, nits in self.groups.items()
+                if seller_codes is None
+                or any(self.sellers_of.get(nit) in seller_codes for nit in nits)
+            }
+        )
+        items = [
+            GroupInfo(name, len(self.groups[name]), len(self.groups[name]))
+            for name in names
+            if not q or q.lower() in name.lower()
+        ]
+        return GroupPage(tuple(items[(page - 1) * size : page * size]), len(items), page, size)
+
+    async def group_nits(self, group):
+        return list(self.groups.get(group, []))
 
 
 class FakeRepository:
@@ -416,6 +469,17 @@ class FakeRepository:
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
 
+    async def reserved_list_ids(self):
+        return sorted(
+            {
+                detail.quotation.export_price_list_id
+                for detail in self.items.values()
+                if detail.quotation.list_action == "creacion"
+                and detail.quotation.status in ("pendiente_carga", "cargada")
+                and detail.quotation.export_price_list_id
+            }
+        )
+
     # ------------------------------------------------------------ staging
 
     async def staged(self, kind, price_list_id=None):
@@ -490,9 +554,13 @@ class FakeInsights:
         self.sales_down = False
         self.calls: list[tuple] = []
 
-    async def stock(self, skus, warehouses):
+    async def stock(self, skus, warehouses, centers=()):
         self.calls.append(("stock", tuple(skus), tuple(warehouses)))
-        return [row for row in self.stock_rows if row.sku in skus and row.warehouse in warehouses]
+        return [
+            row
+            for row in self.stock_rows
+            if row.sku in skus and (row.warehouse in warehouses or row.center_code in centers)
+        ]
 
     async def price_history(self, price_list_id, sku, months):
         self.calls.append(("history", price_list_id, sku, months))

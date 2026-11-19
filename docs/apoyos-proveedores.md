@@ -1,4 +1,4 @@
-﻿# Maestro de apoyos de proveedores
+# Maestro de apoyos de proveedores
 
 Reemplaza el libro **«1. MAESTRO APOYOS PROVEEDORES.xlsx»** (22 hojas, 41 tablas,
 un formato distinto por proveedor) por un maestro único, enlazado con los
@@ -282,24 +282,7 @@ programa `DESCUENTO PORTAFOLIO DIVERSEY`. En el libro actual no hay ninguno.
 En `Lista_Summar_RCP` y `Lista_SodexoCedi_RCP` el apoyo es el **nuevo costo apoyado**
 (`costo_neto`: `supplier_value` = «COSTO APOYADO», `reference_cost` = «COSTO REGULAR») y
 vale solo para ese cliente. Summar tiene NIT (800125313). Sodexo CEDI no: queda
-`pendiente_revision` con la inconsistencia `cliente_por_definir`. Ambas listas abren un
-**caso especial**.
-
-## Casos especiales
-
-Peticiones sobre clientes puntuales que el libro no alcanza a describir: sirven para
-(1) llevar el seguimiento de lo que se hace con ellos y (2) programar la lógica de negocio
-en código. Cada caso tiene título, petición, regla por programar, proveedor y cliente
-(opcionales), estado (`pendiente`, `en_analisis`, `programado`, `implementado`,
-`descartado`), prioridad, responsable y resolución. Los apoyos que nacieron de un caso
-apuntan a él (`special_case_id`). Nacen dos: Summar y Sodexo CEDI.
-
-| Método y ruta | Uso |
-| --- | --- |
-| `GET /supplier-special-cases` | Lista (`q`, `status`, `customer_nit`, `page`, `size`) con `support_count` |
-| `POST /supplier-special-cases` | Abrir un caso (gestores); código `CE-0001`… |
-| `GET /supplier-special-cases/{id}` | Detalle |
-| `PATCH /supplier-special-cases/{id}` | Solo los campos enviados; exige `version` |
+`pendiente_revision` con la inconsistencia `cliente_por_definir`. (El módulo «Casos» que las seguía se eliminó el 2026-11-19, migración `0073`.)
 
 ## API (`/api/v1`)
 

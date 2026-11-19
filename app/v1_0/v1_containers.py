@@ -187,7 +187,6 @@ from app.modules.supplier_supports.application.profiles import SupportProfileSer
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.rollover import SupportRolloverService
 from app.modules.supplier_supports.application.service import SupplierSupportService
-from app.modules.supplier_supports.application.special_cases import SpecialCaseService
 from app.modules.supplier_supports.infrastructure.attachments_repository import (
     SqlAlchemyAttachmentRepository,
 )
@@ -215,9 +214,6 @@ from app.modules.supplier_supports.infrastructure.quotation_access import Quoter
 from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySupportRepository
 from app.modules.supplier_supports.infrastructure.requests_repository import (
     SqlAlchemySupportRequestRepository,
-)
-from app.modules.supplier_supports.infrastructure.special_cases_repository import (
-    SqlAlchemySpecialCaseRepository,
 )
 from app.modules.territory.application.prospects import ProspectService
 from app.modules.territory.application.routes import RouteService
@@ -539,12 +535,6 @@ class V1Container(containers.DeclarativeContainer):
         area_slug=config.supplier_supports.manager_area_slug,
         module="maestros",
     )
-    special_case_manager_policy = providers.Factory(
-        PermissionPolicy,
-        areas=area_service,
-        area_slug=config.supplier_supports.manager_area_slug,
-        module="casos-especiales",
-    )
     commercial_margin_reader = providers.Singleton(SpreadsheetMarginReader)
     commercial_master_service = providers.Factory(
         CommercialMasterService,
@@ -582,13 +572,6 @@ class V1Container(containers.DeclarativeContainer):
         source=warehouse_master_source,
         repository=commercial_master_repository,
         batch_size=config.masters_sync.batch_size,
-    )
-    special_case_repository = providers.Factory(SqlAlchemySpecialCaseRepository, database=database)
-    special_case_service = providers.Factory(
-        SpecialCaseService,
-        repository=special_case_repository,
-        masters=master_lookup,
-        managers=special_case_manager_policy,
     )
     supplier_support_repository = providers.Factory(SqlAlchemySupportRepository, database=database)
     supplier_support_service = providers.Factory(

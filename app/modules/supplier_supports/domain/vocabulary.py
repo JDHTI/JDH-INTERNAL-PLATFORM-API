@@ -148,9 +148,6 @@ ORIGINS = (
 INTERNAL_STATUSES = ("pendiente", "aprobada", "rechazada")
 INTERNAL_DECISIONS = ("persistente", "unica_vez")
 
-SPECIAL_CASE_STATUSES = ("pendiente", "en_analisis", "programado", "implementado", "descartado")
-SPECIAL_CASE_PRIORITIES = ("baja", "media", "alta")
-
 # Issues the importer and the services attach to a support.
 ISSUE_CODES = (
     "fecha_invalida",
