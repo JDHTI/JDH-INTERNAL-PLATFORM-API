@@ -209,6 +209,9 @@ class CostInfo:
     center_code: str | None = None
     # Available units (existence minus committed) in the same warehouses as ``stock``.
     available: Decimal | None = None
+    # Whether ``inventory_cost`` comes from warehouses with stock (2026-11-19): ``False`` when
+    # none of them had any and it is their last average cost; ``None`` when not read.
+    inventory_stocked: bool | None = None
 
 
 @dataclass(frozen=True)
