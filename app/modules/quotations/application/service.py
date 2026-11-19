@@ -2317,40 +2317,6 @@ class QuotationService:
         )
         return await self.repository.save(confirmed, [], version)
 
-    async def send(self, principal: Principal, quotation_id: UUID, version: int) -> QuotationDetail:
-        """The offer goes to the customer: no validation, for Comercial and BI.
-
-        It is independent of the price list (BI, 2026-11-19): the status does not change (a
-        draft stays a draft), only ``sent_at`` and ``sent_by`` are stamped, from any status,
-        a closed one too (sending changes none of its data). Updating or creating a price list
-        is what goes to validation (:meth:`confirm`), before or after sending. The margin rule
-        never blocks: the offer carries what the advisor quoted.
-
-        Raises:
-            ForbiddenError: The caller may not edit it.
-            ConflictError: It changed (``version``).
-            InvalidInputError: A list update, or no line goes in the offer.
-        """
-
-        detail = await self.get(principal, quotation_id)
-        quotation = detail.quotation
-        await self._require_manager(principal, quotation.kind)
-        await self._require_owner_or_validator(principal, quotation, "enviarla")
-        self._no_offer(quotation)
-        self._check_version(quotation, version)
-        if not offer.offer_lines(detail):
-            raise InvalidInputError("La oferta no tiene referencias activas con precio para enviar")
-        now = datetime.now(UTC)
-        sent = replace(
-            quotation,
-            sent_at=now,
-            sent_by=principal.email,
-            version=quotation.version + 1,
-            updated_by=principal.email,
-            updated_at=now,
-        )
-        return await self.repository.save(sent, [], version)
-
     async def return_to_draft(
         self, principal: Principal, quotation_id: UUID, version: int, note: str | None
     ) -> QuotationDetail:

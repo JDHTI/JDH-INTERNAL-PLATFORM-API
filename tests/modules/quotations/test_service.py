@@ -201,47 +201,27 @@ async def test_confirm_validate_upload_and_export_an_update(service, advisor, ap
         await service.confirm(
             advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
         )
-    # Sending the offer changes none of its data: allowed, and it stays loaded.
-    sent = await service.send(advisor, quotation.id, 5)
-    assert sent.quotation.status == "cargada" and sent.quotation.sent_by == advisor.email
-    assert sent.quotation.validated_at is not None and sent.quotation.uploaded_at is not None
+    # The offer still downloads, to send it by hand.
+    assert (await service.offer_file(advisor, quotation.id)).content
 
 
-async def test_the_offer_goes_to_the_customer_without_validation(
-    service, advisor, approver
+async def test_the_offer_downloads_in_draft_and_only_the_list_goes_to_validation(
+    service, advisor
 ) -> None:
+    # BI, 2026-11-19: nothing is sent from the platform; the advisor downloads the offer
+    # (PDF or Excel) and sends it by hand. Only the price list goes to validation.
     quotation = (await service.create(advisor, NIT, 12)).quotation
-    with pytest.raises(InvalidInputError, match="no tiene referencias activas con precio"):
-        await service.send(advisor, quotation.id, 1)
-    # A price under the minimum does not block sending either.
     await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
 
-    sent = await service.send(advisor, quotation.id, 2)
+    offer_file = await service.offer_file(advisor, quotation.id)
 
-    # Sending is not a status (2026-11-19): it stays a draft, with who sent it and when.
-    assert sent.quotation.status == "borrador" and sent.quotation.sent_by == advisor.email
-    assert sent.quotation.sent_at is not None
-    assert sent.quotation.below_rule_count == 1 and sent.quotation.confirmed_at is None
-    # Still editable, and the edit keeps when it was sent.
-    edited, _ = await service.update_lines(
-        advisor, quotation.id, 3, [LineChange("2537", Decimal("3100"))]
-    )
-    assert edited.quotation.status == "borrador" and edited.quotation.sent_at is not None
-    again = await service.send(advisor, quotation.id, 4)
-    assert again.quotation.status == "borrador"
-    # Then the price list goes to validation.
+    assert offer_file.content
+    assert (await service.get(advisor, quotation.id)).quotation.status == "borrador"
+    assert not hasattr(service, "send")
     pending = await service.confirm(
-        advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
     )
     assert pending.quotation.status == "pendiente_validacion"
-    # Sending while it is validated changes nothing of it either.
-    resent = await service.send(approver, quotation.id, 6)
-    assert resent.quotation.status == "pendiente_validacion"
-    assert resent.quotation.sent_by == approver.email
-    # BI quotes too, and sends its own.
-    own = (await service.create(approver, NIT, 12)).quotation
-    await service.update_lines(approver, own.id, 1, [LineChange("2537", Decimal("4100"))])
-    assert (await service.send(approver, own.id, 2)).quotation.status == "borrador"
 
 
 async def test_list_update_validators_validate_customer_quotations(service, advisor) -> None:

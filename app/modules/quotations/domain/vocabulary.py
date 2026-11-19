@@ -49,9 +49,8 @@ LIST_UPDATE_WINDOW = 12
 # it (the files are released and wait to be loaded in SIESA) and then marks it loaded. A
 # list update stays a draft: its items are reviewed one by one (``REVIEW_STATUSES``).
 #
-# Sending the offer to the customer is not a status (BI, 2026-11-19): it needs no validation
-# and only stamps ``sent_at``; the quotation stays a draft and goes to validation only to
-# update or create a price list.
+# The offer is not sent from the platform (BI, 2026-11-19): the advisor downloads its PDF or
+# Excel and sends it by hand. Only updating or creating a price list goes to validation.
 DRAFT = "borrador"
 PENDING = "pendiente_validacion"
 UPLOAD_PENDING = "pendiente_carga"

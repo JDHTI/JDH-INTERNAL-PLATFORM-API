@@ -531,9 +531,6 @@ class SummaryResponse(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
-    # The last time the offer went to the customer, and who sent it (kept after later edits).
-    sent_at: datetime | None = None
-    sent_by: str | None = None
     confirmed_at: datetime | None
     validated_at: datetime | None
     uploaded_at: datetime | None
@@ -790,8 +787,6 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "created_by": quotation.created_by,
         "created_at": quotation.created_at,
         "updated_at": quotation.updated_at,
-        "sent_at": quotation.sent_at,
-        "sent_by": quotation.sent_by,
         "confirmed_at": quotation.confirmed_at,
         "validated_at": quotation.validated_at,
         "uploaded_at": quotation.uploaded_at,
@@ -1391,27 +1386,6 @@ async def refresh_quotation(
     """Last sales, cost and supports as they are now; new prices are kept by SKU."""
 
     return await _respond(service, await service.refresh(principal, quotation_id, body.version))
-
-
-@router.post(
-    "/{quotation_id}/send",
-    dependencies=[_READ_GATE],
-    response_model=QuotationResponse,
-    summary="Send the offer to the customer (no validation)",
-)
-@inject
-async def send_quotation(
-    quotation_id: UUID,
-    body: VersionRequest,
-    principal: Principal = _principal,
-    service: QuotationService = _service,
-) -> QuotationResponse:
-    """Comercial or BI sends the offer to the customer without validation, from any status:
-    the status does not change (a draft stays ``borrador``), only ``sent_at`` and ``sent_by``
-    are stamped. Only ``/confirm`` (update or create a price list) goes to validation, before
-    or after sending. Needs one line in the offer; the margin rule never blocks."""
-
-    return await _respond(service, await service.send(principal, quotation_id, body.version))
 
 
 @router.post(

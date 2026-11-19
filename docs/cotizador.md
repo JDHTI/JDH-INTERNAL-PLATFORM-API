@@ -288,18 +288,16 @@ solo para cotización (un cliente temporal puede tener solo productos locales).
 **Flujo sin bloqueos hasta el cliente** (BI, 2026-11-18 y 2026-11-19):
 - Comercial y BI arman la cotización y ven y descargan la oferta en borrador. La regla de margen
   nunca bloquea.
-- **Enviar al cliente** (`POST /quotations/{id}/send`) no pasa por validación y **no es un
-  estado**: solo guarda `sent_at` y `sent_by`, y la cotización sigue en el estado en que esté.
-  - Se puede enviar desde cualquier estado, también cerrada, porque no cambia ningún dato.
-  - Necesita al menos una referencia en la oferta.
-- Después, o sin enviarla, **actualizar o crear una lista de precios** (`/confirm`) es lo único
-  que pasa por la validación de BI.
-- En la UI las tres acciones salen del botón «Continuar proceso». La migración `0072` pasó a
-  borrador las cotizaciones `enviada`, que salieron con la `0071`.
+- **La oferta no se envía desde la plataforma:** el comercial descarga su PDF o Excel y se la
+  manda al cliente a mano.
+  - La migración `0072` quitó el estado `enviada`, `POST /send` y `sent_at`/`sent_by` (los había
+    agregado la `0071`), y pasó a borrador las cotizaciones enviadas.
+- **Actualizar o crear una lista de precios** (`/confirm`) es lo único que pasa por la validación
+  de BI. En la UI sale del botón «Continuar proceso».
 
 | Estado | Etiqueta | Quién | Qué pasa |
 | --- | --- | --- | --- |
-| `borrador` | Borrador | asesor | edita precios, márgenes y referencias; cualquier cambio la deja aquí, y se envía al cliente sin salir de aquí |
+| `borrador` | Borrador | asesor | edita precios, márgenes y referencias; cualquier cambio la deja aquí; descarga la oferta |
 | `pendiente_validacion` | Pendiente de validación | asesor pide la lista (`/confirm`) | queda bloqueada para editar precios; elige actualización o creación y la fecha de activación |
 | `pendiente_carga` | Pendiente de carga | BI valida (`/validate`) | da el código de una lista nueva; se liberan el Excel y el plano |
 | `cargada` | Cargada | BI marca (`/uploaded`) | los archivos se cargaron en SIESA; guarda `uploaded_by` y `uploaded_at` |
@@ -313,7 +311,7 @@ más. Toda edición responde 409, también para BI:
 - refresh;
 - `/confirm`.
 
-Se descargan sus archivos y se puede enviar al cliente. Para volver a cotizar se crea una nueva.
+Se descargan sus archivos y su oferta. Para volver a cotizar se crea una nueva.
 La migración `0052` pasó las `creada` y `actualizada` a `pendiente_carga`.
 
 Quien valida también puede **devolverla** a borrador con una nota (`/return`, `review_note`).
@@ -417,7 +415,6 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (30), billing_center_code?, with_history?: true}` (`with_history: false` empieza vacía) o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
 | `GET /quotations/billing-centers` | `[{code, name, regional, regional_label}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`) |
 | `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
-| `POST /quotations/{id}/send` | `{version}`: la oferta va al cliente sin validación (asesor o BI). El estado no cambia; guarda `sent_at` y `sent_by`. Se envía desde cualquier estado. 422 sin referencias en la oferta; 409 por versión |
 | `GET /quotations/{id}` | Cotización completa |
 | `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price?, margin_pct?, quantity?}]}`. `quantity` (texto o número; `null` la quita) va sola o con `new_price`, nunca con `margin_pct`. Un lote con **solo** cantidades se acepta en cualquier estado, no cambia el estado y sube la versión; uno que toca precios sigue las reglas de siempre. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
 | `POST /quotations/{id}/lines` | Pegar una lista o enviar una selección múltiple: `{version, text}` y/o `{skus: [...]}`; hasta 500. Devuelve `import_result: {added, revalidated, not_found, inactive, repeated}`. Una referencia `LOC-<n>` no se busca en SIESA: va en `not_found` |
