@@ -237,6 +237,9 @@ class Settings(BaseSettings):
     QUOTATIONS_MAX_LINES: int = 3000
     # Seconds per warehouse query of the quoter (the pool default is DWH_COMMAND_TIMEOUT).
     QUOTATIONS_DWH_TIMEOUT_SECONDS: float = 30.0
+    # Seconds for a customer's (or business group's) sales history when a quotation is built
+    # or refreshed: on a cold cache a customer with many branches passes 30 s (2026-11-19).
+    QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS: float = 90.0
     # SIESA company written in the import file (``f_cia``).
     QUOTATIONS_SIESA_COMPANY: str = "001"
     # The main lists, comma separated, exact SIESA codes: only module ``listas-principales``
@@ -696,6 +699,7 @@ class Settings(BaseSettings):
                 "max_points_below_target": self.QUOTATIONS_MAX_POINTS_BELOW_TARGET / 100,
                 "max_lines": self.QUOTATIONS_MAX_LINES,
                 "dwh_timeout": self.QUOTATIONS_DWH_TIMEOUT_SECONDS,
+                "dwh_sales_timeout": self.QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS,
                 "siesa_company": self.QUOTATIONS_SIESA_COMPANY,
                 "main_lists": tuple(
                     code.strip() for code in self.LIST_UPDATES_MAIN_LISTS.split(",") if code.strip()

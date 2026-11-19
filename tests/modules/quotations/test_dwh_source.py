@@ -57,9 +57,12 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     connection = FakeConnection(
         responses=[[{"cliente_key": "K1"}, {"cliente_key": "K2"}], sale_rows]
     )
-    source = WarehouseQuotationSource(connection, "consumo")
+    source = WarehouseQuotationSource(connection, "consumo", sales_timeout=90)
 
     sales = await source.last_sales("900315138", 6)
+
+    # The sales history has its own, longer limit (a cold cache passed 30 s).
+    assert connection.timeout == 90
 
     keys_query, keys_args = connection.queries[0]
     assert '"consumo"."clientes"' in keys_query and keys_args == (["900315138"],)
@@ -67,7 +70,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     query, args = connection.queries[1]
     assert '"consumo"."ventas"' in query and 'v."cliente_key" = ANY($1::text[])' in query
     assert 'naturaleza_codigo" = 2' in query and args == (["K1", "K2"], 6)
-    assert connection.timeout == 30.0 and connection.settings == {"jit": "off"}
+    assert connection.settings == {"jit": "off"}
     assert sales[0].net_price.quantize(Decimal("0.01")) == Decimal("3323.36")
     assert sales[0].unit == "UNID" and sales[0].sale_unit == "C45"
     assert not sales[0].is_active and sales[0].category == "DESECHABLES"
