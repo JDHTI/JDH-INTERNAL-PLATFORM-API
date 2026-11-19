@@ -1,6 +1,9 @@
-"""Item review, staging and loads of the list updates, and each item's detail.
+"""Item review, staging and loads of the main lists, and each item's detail.
 
-A list update (``lista`` or ``principal``) is never confirmed as a whole. Each item goes:
+Since 2026-11-19 only a main list (``principal``) is reviewed item by item. A list update
+(``lista``) goes through the quotation's flow as a whole (confirm, validate, files,
+loaded); its staging and loads stay readable, and loadable, for the items validated before
+that day. A main list's item goes:
 
 - ``sin_marcar`` → ``por_validar``: whoever edits it says its price is ready;
 - → ``validada``: whoever validates the kind (BI) accepts it; it waits in its list's
@@ -136,6 +139,11 @@ class ListReviewService:
         )
         quotation = detail.quotation
         _list_only(quotation.is_list_update)
+        if quotation.kind != vocabulary.MAIN_LIST:
+            raise InvalidInputError(
+                "Una actualización de lista se valida completa: envíala a validación con "
+                "«Continuar proceso»; la revisión por ítem es solo de Listas principales"
+            )
         self.quotations.check_version(quotation, version)
         validator = await self.quotations.can_validate(principal, quotation.kind)
         by_sku = {line.sku: line for line in detail.lines}
