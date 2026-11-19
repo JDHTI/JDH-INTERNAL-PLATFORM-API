@@ -120,6 +120,8 @@ class CustomerModel(Base):
         Index("ix_customers_business_unit", "business_unit"),
         Index("ix_customers_business_group", "business_group"),
         Index("ix_customers_is_active", "is_active"),
+        # Each commercial user's customers (supports scope, business groups).
+        Index("ix_customers_salesperson_code", "salesperson_code"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
