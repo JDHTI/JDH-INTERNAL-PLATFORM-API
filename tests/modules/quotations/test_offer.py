@@ -103,7 +103,7 @@ async def test_offer_settings_are_checked(service, advisor) -> None:
         await service.update_offer(person(advisor.email), quotation.id, 1, include_seller=False)
 
 
-async def test_offer_settings_change_in_any_status_without_moving_it(
+async def test_offer_settings_change_while_pending_but_never_once_closed(
     service, advisor, approver
 ) -> None:
     quotation = (await service.create(advisor, NIT, 12)).quotation
@@ -114,9 +114,10 @@ async def test_offer_settings_change_in_any_status_without_moving_it(
 
     assert changed.quotation.status == "pendiente_validacion" and changed.quotation.version == 4
     assert changed.quotation.confirmed_at == pending.quotation.confirmed_at
-    validated = await service.validate(approver, quotation.id, 4)
-    closed = await service.update_offer(advisor, quotation.id, 5, quote_quantities=True)
-    assert closed.quotation.status == "pendiente_carga" == validated.quotation.status
+    await service.validate(approver, quotation.id, 4)
+    # Closed (2026-11-19): its data never change, the offer settings neither.
+    with pytest.raises(ConflictError, match="ya está cerrada"):
+        await service.update_offer(advisor, quotation.id, 5, quote_quantities=True)
 
 
 # ------------------------------------------------------------------ 3. seller contact

@@ -61,7 +61,7 @@ _principal = Depends(get_current_principal)
 _KIND = Query(default="cotizacion")
 _LIST_KIND = Query(default="lista")
 
-Status = Literal["borrador", "enviada", "pendiente_validacion", "pendiente_carga", "cargada"]
+Status = Literal["borrador", "pendiente_validacion", "pendiente_carga", "cargada"]
 Kind = Literal["cotizacion", "lista", "principal"]
 ListKind = Literal["lista", "principal"]
 ReviewStatus = Literal["sin_marcar", "por_validar", "validada"]
@@ -1406,10 +1406,10 @@ async def send_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Comercial or BI sends the offer to the customer without validation: the quotation is
-    ``enviada`` (from ``borrador`` or ``enviada``) and stays editable; an edit takes it back to
-    ``borrador``. Only ``/confirm`` (update or create a price list) goes to validation. Needs
-    one line in the offer; the margin rule never blocks."""
+    """Comercial or BI sends the offer to the customer without validation, from any status:
+    the status does not change (a draft stays ``borrador``), only ``sent_at`` and ``sent_by``
+    are stamped. Only ``/confirm`` (update or create a price list) goes to validation, before
+    or after sending. Needs one line in the offer; the margin rule never blocks."""
 
     return await _respond(service, await service.send(principal, quotation_id, body.version))
 
@@ -1427,7 +1427,7 @@ async def confirm_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    """Ask to take the quotation to a price list, from ``borrador`` or ``enviada``: the only
+    """Ask to take the quotation to a price list, from ``borrador`` (sent or not): the only
     step that goes to validation. It needs one priced active line (the rule does not block;
     the validator sees what breaks it). ``actualizacion`` writes to the customer's list;
     ``creacion`` creates a list whose code the validator gives (list 1 and temporary

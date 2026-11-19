@@ -48,19 +48,19 @@ LIST_UPDATE_WINDOW = 12
 # Life of a quotation: the advisor edits a draft and confirms it; the approver validates
 # it (the files are released and wait to be loaded in SIESA) and then marks it loaded. A
 # list update stays a draft: its items are reviewed one by one (``REVIEW_STATUSES``).
+#
+# Sending the offer to the customer is not a status (BI, 2026-11-19): it needs no validation
+# and only stamps ``sent_at``; the quotation stays a draft and goes to validation only to
+# update or create a price list.
 DRAFT = "borrador"
-# The offer went to the customer (BI, 2026-11-18): no validation is needed for it; the
-# quotation stays editable and goes to validation only to update or create a price list.
-SENT = "enviada"
 PENDING = "pendiente_validacion"
 UPLOAD_PENDING = "pendiente_carga"
 UPLOADED = "cargada"
-STATUSES = (DRAFT, SENT, PENDING, UPLOAD_PENDING, UPLOADED)
-# The files can be downloaded.
+STATUSES = (DRAFT, PENDING, UPLOAD_PENDING, UPLOADED)
+# The files can be downloaded, and nothing of the quotation changes any more.
 CLOSED = (UPLOAD_PENDING, UPLOADED)
 STATUS_LABELS = {
     DRAFT: "Borrador",
-    SENT: "Enviada al cliente",
     PENDING: "Pendiente de validación",
     UPLOAD_PENDING: "Pendiente de carga",
     UPLOADED: "Cargada",

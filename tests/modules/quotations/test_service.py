@@ -191,9 +191,20 @@ async def test_confirm_validate_upload_and_export_an_update(service, advisor, ap
     assert workbook.filename == "ACTUALIZACION LISTAS PRECIOS_asesor@jdh.com.co.xlsx"
     with pytest.raises(ConflictError, match="pendiente de carga"):
         await service.mark_uploaded(approver, quotation.id, 5)
-    edited, _ = await service.update_lines(advisor, quotation.id, 5, [LineChange("2537", None)])
-    assert edited.quotation.status == "borrador" and edited.quotation.validated_at is None
-    assert edited.quotation.uploaded_at is None and edited.quotation.uploaded_by is None
+    # Closed: its data never change any more, not even by a refresh or by BI.
+    for actor in (advisor, approver):
+        with pytest.raises(ConflictError, match="ya está cerrada"):
+            await service.update_lines(actor, quotation.id, 5, [LineChange("2537", None)])
+        with pytest.raises(ConflictError, match="ya está cerrada"):
+            await service.refresh(actor, quotation.id, 5)
+    with pytest.raises(ConflictError, match="ya está cerrada"):
+        await service.confirm(
+            advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
+        )
+    # Sending the offer changes none of its data: allowed, and it stays loaded.
+    sent = await service.send(advisor, quotation.id, 5)
+    assert sent.quotation.status == "cargada" and sent.quotation.sent_by == advisor.email
+    assert sent.quotation.validated_at is not None and sent.quotation.uploaded_at is not None
 
 
 async def test_the_offer_goes_to_the_customer_without_validation(
@@ -207,26 +218,30 @@ async def test_the_offer_goes_to_the_customer_without_validation(
 
     sent = await service.send(advisor, quotation.id, 2)
 
-    assert sent.quotation.status == "enviada" and sent.quotation.sent_by == advisor.email
+    # Sending is not a status (2026-11-19): it stays a draft, with who sent it and when.
+    assert sent.quotation.status == "borrador" and sent.quotation.sent_by == advisor.email
+    assert sent.quotation.sent_at is not None
     assert sent.quotation.below_rule_count == 1 and sent.quotation.confirmed_at is None
-    # Still editable: an edit takes it back to draft and keeps when it was sent.
+    # Still editable, and the edit keeps when it was sent.
     edited, _ = await service.update_lines(
         advisor, quotation.id, 3, [LineChange("2537", Decimal("3100"))]
     )
     assert edited.quotation.status == "borrador" and edited.quotation.sent_at is not None
     again = await service.send(advisor, quotation.id, 4)
-    assert again.quotation.status == "enviada"
-    # Only asking for the price list goes to validation, from a sent quotation too.
+    assert again.quotation.status == "borrador"
+    # Then the price list goes to validation.
     pending = await service.confirm(
         advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
     )
     assert pending.quotation.status == "pendiente_validacion"
-    with pytest.raises(ConflictError, match="pendiente de validación"):
-        await service.send(approver, quotation.id, 6)
+    # Sending while it is validated changes nothing of it either.
+    resent = await service.send(approver, quotation.id, 6)
+    assert resent.quotation.status == "pendiente_validacion"
+    assert resent.quotation.sent_by == approver.email
     # BI quotes too, and sends its own.
     own = (await service.create(approver, NIT, 12)).quotation
     await service.update_lines(approver, own.id, 1, [LineChange("2537", Decimal("4100"))])
-    assert (await service.send(approver, own.id, 2)).quotation.status == "enviada"
+    assert (await service.send(approver, own.id, 2)).quotation.status == "borrador"
 
 
 async def test_create_a_list_for_a_customer_on_list_one(

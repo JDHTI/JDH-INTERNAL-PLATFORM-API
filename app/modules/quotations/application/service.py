@@ -1413,13 +1413,21 @@ class QuotationService:
 
         BI (and admins) has the whole module: it edits any quotation. Anyone else, only theirs.
         ``any_status`` lets through a pending one too: for changes that never touch prices
-        (offer settings, quantities). With ``skus``, only those lines come.
+        (offer settings, quantities). A closed one (validated or loaded) never changes: no
+        edit, no refresh (2026-11-19). With ``skus``, only those lines come.
         """
 
         detail = await self.get(principal, quotation_id, skus)
         await self._require_manager(principal, detail.quotation.kind)
         await self._require_owner_or_validator(principal, detail.quotation, "editarla")
         await self._check_restricted(principal, detail.quotation)
+        if detail.quotation.status in vocabulary.CLOSED:
+            noun = self._noun(detail.quotation.kind)
+            raise ConflictError(
+                f"{noun[0].upper()}{noun[1:]} ya está cerrada "
+                f"({vocabulary.STATUS_LABELS[detail.quotation.status].lower()}): sus datos no "
+                "cambian; crea una nueva para cotizar de nuevo"
+            )
         if not any_status and detail.quotation.status == vocabulary.PENDING:
             noun = self._noun(detail.quotation.kind)
             raise ConflictError(
@@ -2299,34 +2307,31 @@ class QuotationService:
         return await self.repository.save(confirmed, [], version)
 
     async def send(self, principal: Principal, quotation_id: UUID, version: int) -> QuotationDetail:
-        """The offer goes to the customer: no validation, for Comercial and BI (BI, 2026-11-18).
+        """The offer goes to the customer: no validation, for Comercial and BI.
 
-        Only updating or creating a price list goes to validation (:meth:`confirm`). A sent
-        quotation stays editable: an edit takes it back to draft (to be sent again) and keeps
-        when it was last sent; from draft or sent it may still go to validation. The margin
-        rule never blocks: the offer carries what the advisor quoted.
+        It is independent of the price list (BI, 2026-11-19): the status does not change (a
+        draft stays a draft), only ``sent_at`` and ``sent_by`` are stamped, from any status,
+        a closed one too (sending changes none of its data). Updating or creating a price list
+        is what goes to validation (:meth:`confirm`), before or after sending. The margin rule
+        never blocks: the offer carries what the advisor quoted.
 
         Raises:
             ForbiddenError: The caller may not edit it.
-            ConflictError: It changed (``version``), or it is already in validation or
-                closed.
+            ConflictError: It changed (``version``).
             InvalidInputError: A list update, or no line goes in the offer.
         """
 
-        detail = await self._editable(principal, quotation_id)
+        detail = await self.get(principal, quotation_id)
         quotation = detail.quotation
+        await self._require_manager(principal, quotation.kind)
+        await self._require_owner_or_validator(principal, quotation, "enviarla")
         self._no_offer(quotation)
         self._check_version(quotation, version)
-        if quotation.status not in (vocabulary.DRAFT, vocabulary.SENT):
-            raise ConflictError(
-                "La cotización ya está en validación o cargada: la oferta se envía desde borrador"
-            )
         if not offer.offer_lines(detail):
             raise InvalidInputError("La oferta no tiene referencias activas con precio para enviar")
         now = datetime.now(UTC)
         sent = replace(
             quotation,
-            status=vocabulary.SENT,
             sent_at=now,
             sent_by=principal.email,
             version=quotation.version + 1,

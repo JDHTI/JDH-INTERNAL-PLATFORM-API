@@ -92,8 +92,7 @@ class QuotationModel(Base):
     __tablename__ = "quotations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('borrador', 'enviada', 'pendiente_validacion', 'pendiente_carga', "
-            "'cargada')",
+            "status IN ('borrador', 'pendiente_validacion', 'pendiente_carga', 'cargada')",
             name="ck_quotations_status",
         ),
         CheckConstraint(
