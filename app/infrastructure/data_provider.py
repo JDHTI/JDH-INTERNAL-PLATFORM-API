@@ -7,6 +7,14 @@ from collections.abc import Mapping, Sequence
 
 import asyncpg
 
+# Errors of a connection that died, not of the query: ``InterfaceError`` (closed in the
+# middle of an operation) is not a ``PostgresError``, so it used to escape as a 500.
+_CONNECTION_LOST = (
+    asyncpg.InterfaceError,
+    asyncpg.PostgresConnectionError,
+    ConnectionError,
+)
+
 
 class DataProviderError(Exception):
     """Base error raised while using an external data provider."""
@@ -122,14 +130,22 @@ class DataProviderConnection:
         pool = self._pool
         if pool is None:  # pragma: no cover - connect() either sets or raises
             raise DataProviderUnavailable("Data provider pool is not initialized")
-        try:
-            async with pool.acquire() as connection:
-                async with connection.transaction(readonly=True):
-                    for name, value in (settings or {}).items():
-                        await connection.execute("SELECT set_config($1, $2, true)", name, value)
-                    return await connection.fetch(query, *args, timeout=timeout)
-        except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
-            raise DataProviderUnavailable("Data provider query failed") from exc
+        for attempt in (1, 2):
+            try:
+                async with pool.acquire() as connection:
+                    async with connection.transaction(readonly=True):
+                        for name, value in (settings or {}).items():
+                            await connection.execute("SELECT set_config($1, $2, true)", name, value)
+                        return await connection.fetch(query, *args, timeout=timeout)
+            except _CONNECTION_LOST as exc:
+                # An idle pooled connection the server or the network closed fails on its
+                # first use; the pool replaces it, so a read-only query is tried once more.
+                if attempt == 1:
+                    continue
+                raise DataProviderUnavailable("Data provider connection lost") from exc
+            except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
+                raise DataProviderUnavailable("Data provider query failed") from exc
+        raise DataProviderUnavailable("Data provider query failed")  # pragma: no cover
 
     async def disconnect(self) -> None:
         """Close the provider pool and release all open connections."""

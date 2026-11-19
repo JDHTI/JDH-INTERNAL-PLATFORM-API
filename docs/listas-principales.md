@@ -40,8 +40,8 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   de cada una o en su detalle) y la observación. Cada una va a la actualización de su lista, en la
   versión vigente; si otra persona la cambió en el mismo momento, se intenta una vez más.
 - **Un precio nuevo pasa a «Por validar» de inmediato,** a nombre de quien lo puso, si la
-  referencia está activa y tiene unidad. Borrar el precio la deja «Sin marcar». En Actualización
-  de listas, en cambio, un precio nuevo sigue volviendo a «Sin marcar».
+  referencia está activa y tiene unidad. Borrar el precio la deja «Sin marcar». Actualización de
+  listas ya no revisa por ítem (2026-11-19): se valida entera, como la cotización.
 - **Las ediciones solo leen y escriben sus filas,** nunca la lista entera (la lista 1 tiene miles):
   `price_rows` en `QuotationService`, `mark` y `set_note` con `full=False`. Los conteos del
   encabezado se mueven por lo que cambiaron esas filas. Antes cada precio leía la lista completa

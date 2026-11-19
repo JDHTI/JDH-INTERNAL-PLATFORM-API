@@ -84,7 +84,10 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      pudo consultar el datawarehouse» (medido el 2026-11-11 con Sodexo: 33,6 s en frío; por
      llaves, 1,4 s). Las lecturas del cotizador corren sin JIT (`jit = off`, unos 2 s menos cada
      una), y si una se pasa del tiempo el mensaje lo dice: «El datawarehouse tardó más de 30 s en
-     responder».
+     responder». El histórico de ventas tiene su propio límite, 90 s
+     (`QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS`, 2026-11-19). Una conexión del pool que el servidor
+     o la red cerraron mientras estaba inactiva se reintenta una vez (antes salía como 500 la
+     primera vez y el reintento cargaba de inmediato).
 3. **Costo**: el **mayor** entre:
    - la **cotización vigente del proveedor** (`consumo.cotizaciones_proveedores`: vigente, ítem
      activo, unidad `UNID` o `KL`): `redondear(costo_bruto) × (1 + ICUI/100) + IBUA`, la mayor por
@@ -94,7 +97,13 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      mañana) de la bodega de la lista, redondeado al peso. La **bodega 2** (cuarto frío) aplica
      solo a las referencias de línea `CONGELADOS` y `REFRIGERADOS` (`consumo.productos.linea`);
      el resto usa la bodega 1. Oriente (BGA1) y Market (URA6) no tienen cuarto frío aparte: la
-     bodega 2 es la misma bodega 1;
+     bodega 2 es la misma bodega 1.
+     **Solo cuentan las bodegas con existencia** (`existencia > 0`, desde el 2026-11-19): en
+     Nacional o la lista 1, el mayor costo de las bodegas que tienen la referencia; con varios CO,
+     un CO sin existencia no compite con su costo de inventario si otro tiene (sí con la
+     cotización del proveedor, que no es de una bodega). Si ninguna bodega tiene existencia, se
+     conserva su último costo promedio para no dejar la línea sin costo. Aplica igual a la
+     comparación de CO, a Actualización de listas, a Listas principales y al costo de los apoyos;
    - el **costo nuevo de un alza pendiente**: si la alza más reciente de la referencia en el
      histórico del maestro de productos no tiene fecha de actualización en SIESA, su costo nuevo
      (con impuesto saludable si lo trae). Solo gana si es estrictamente mayor
@@ -552,6 +561,7 @@ Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_
 | `QUOTATIONS_MAX_LINES` | `3000` | referencias máximas por cotización |
 | `QUOTATIONS_SIESA_COMPANY` | `001` | compañía del plano |
 | `QUOTATIONS_DWH_TIMEOUT_SECONDS` | `30` | segundos por consulta al DWH del cotizador |
+| `QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS` | `90` | segundos para el histórico de ventas del cliente o grupo al armar o refrescar (con el caché frío un cliente de muchas sucursales pasaba de 30 s; el reintento cargaba de inmediato) |
 
 El usuario del DWH debe leer en `consumo`: `ventas`, `clientes`, `productos`,
 `producto_impuestos`, `inventario_fecha`, `cotizaciones_proveedores`, `precios_lista_vigentes`,

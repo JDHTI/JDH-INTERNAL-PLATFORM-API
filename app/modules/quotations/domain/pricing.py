@@ -6,7 +6,9 @@ the lists; the quoter applies the same rules so a quoted price matches the list 
 - **Cost** = the highest of the supplier's quotation in force and the inventory average cost
   of the list's warehouse, rounded up, times the list family's factor (1,004 except the
   wholesale lists). A product whose latest price increase SIESA does not have yet (no system
-  update date in the product master's history) compares its new cost too.
+  update date in the product master's history) compares its new cost too. Only warehouses
+  with stock give the inventory cost (2026-11-19); when none has any, their last average
+  cost stays so the line is not left without cost.
 - **Warehouse** of a list: fixed by the area (sheet "Faltantes en Lista"); warehouse 2 for
   frozen and refrigerated lines. List 1 takes the highest cost among its 17 warehouses.
   A list outside the skill uses the warehouses of the operation centers the quotation is
@@ -291,11 +293,38 @@ def regional_of(centers: Sequence[str], billing_center: str | None) -> str:
     )
 
 
+def prefer_stocked[K](costs: Mapping[K, Mapping[str, CostInfo]]) -> dict[K, dict[str, CostInfo]]:
+    """Per SKU, drop the inventory cost of the plans without stock when another plan has
+    some (2026-11-19): a warehouse at zero never sets the cost.
+
+    The quotation cost stays: it is the supplier's, not a warehouse's. A plan whose
+    warehouses all lack stock keeps their last average cost only when no plan has stock
+    (``CostInfo.inventory_stocked``).
+    """
+
+    stocked = {
+        sku for rows in costs.values() for sku, info in rows.items() if info.inventory_stocked
+    }
+    return {
+        key: {
+            sku: (
+                replace(info, inventory_cost=None)
+                if sku in stocked and info.inventory_stocked is False
+                else info
+            )
+            for sku, info in rows.items()
+        }
+        for key, rows in costs.items()
+    }
+
+
 def costliest_center(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> str | None:
     """The center whose references cost the most: the highest sum of unit costs over the
     SKUs every center has a cost for. ``None`` when nothing compares or the top ties.
+    Only warehouses with stock count (:func:`prefer_stocked`).
     """
 
+    costs = prefer_stocked(costs)
     unit = {
         code: {
             sku: value
@@ -321,9 +350,11 @@ def highest_cost(costs: Mapping[str | None, Mapping[str, CostInfo]]) -> dict[str
     The cost compared is the one the rule uses (:func:`effective_cost`; the list factor is
     the same for every center, so it does not change the order). A tie goes to the first
     center in ``costs``. A SKU without a cost anywhere keeps the first center's row,
-    unmarked: no center set its cost.
+    unmarked: no center set its cost. A center without stock of the SKU does not compete
+    with its inventory cost when another has stock (:func:`prefer_stocked`).
     """
 
+    costs = prefer_stocked(costs)
     result: dict[str, CostInfo] = {}
     best: dict[str, Decimal] = {}
     for code, rows in costs.items():
@@ -398,6 +429,7 @@ __all__ = [
     "effective_cost",
     "family",
     "highest_cost",
+    "prefer_stocked",
     "regional",
     "regional_of",
     "round_price",

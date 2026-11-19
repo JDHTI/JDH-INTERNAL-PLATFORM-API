@@ -8,9 +8,10 @@ diferencias:
 - **Sin oferta.** No hay oferta al cliente, cotización con cantidades ni productos solo para
   cotización.
 - **Siempre actualización.** Los archivos actualizan siempre esa misma lista.
-- **Revisión por ítem.** Cada ítem se marca y se valida por separado, y lo validado espera en el
-  **staging** de su lista hasta que se carga en SIESA (ver [Revisión por ítem y
-  staging](#revisión-por-ítem-y-staging)).
+- **Validación completa, como la cotización** (desde el 2026-11-19). La actualización se envía a
+  validación entera, quien valida la aprueba, se descargan sus archivos y se marca cargada (ver
+  [Flujo de validación](#flujo-de-validación)). La revisión por ítem y el staging quedan solo para
+  [Listas principales](listas-principales.md).
 
 Las **listas principales** (`LIST_UPDATES_MAIN_LISTS`: 1, 001, 002, 003, 004, 005, 009, 1M, 10T,
 10U, 11N, 10N, 1DR y 35P) no se actualizan aquí: van por [Listas principales](listas-principales.md),
@@ -104,32 +105,36 @@ que el permiso de un módulo no abre las del otro.
      listan con su motivo y no se aplican.
    - El cotizador sigue aplicando el apoyo que trae más dinero.
 
-## Revisión por ítem y staging
+## Flujo de validación
 
-Una actualización no se confirma ni se valida entera (`confirm`, `validate`, `return` y
-`uploaded` responden 422). Cada ítem pasa por:
+Desde el 2026-11-19 una actualización sigue el flujo de la cotización, entera:
 
-1. **Sin marcar.** Así nace, y así vuelve cada vez que cambia su precio nuevo.
-2. **Por validar.** Quien edita la actualización dice que su precio está listo. Necesita una
-   referencia activa, precio nuevo y unidad.
-3. **Validada.** Quien valida el tipo lo acepta. Queda en el **staging** de su lista.
-4. **Cargada.** Quien valida descarga los archivos del staging de la lista (las dos hojas de
-   SIESA: `Precios` e `Impuestos en valor`, o el plano con `0126` y `0127`), los carga en SIESA y
-   marca la carga. El ítem sigue `validada` y apunta a la carga (`load_id`); sale del staging.
+1. **Borrador.** Quien edita pone los precios nuevos y la refresca cuando quiera.
+2. **Pendiente de validación.** `POST /quotations/{id}/confirm` con `list_action` vacío o
+   `actualizacion` (otra acción responde 422: siempre escribe en su misma lista) y la fecha de
+   activación (mañana si no se da). Necesita al menos una referencia activa con precio nuevo y
+   unidad. No se edita mientras espera; quien la creó la retira, o quien valida la devuelve con
+   un motivo (`POST /return`).
+3. **Pendiente de carga.** Quien valida el tipo la aprueba (`POST /validate`, sin código: la
+   lista es la suya). Se liberan los archivos de SIESA: `GET /quotations/{id}/export.xlsx|txt`
+   (las dos hojas, `Precios` e `Impuestos en valor`, o el plano con `0126` y `0127`).
+4. **Cargada.** Quien valida la marca cargada (`POST /uploaded`).
 
-Reglas:
+Una actualización **pendiente de carga o cargada está cerrada**: sus datos no cambian, ni con
+un refresco. Para volver a actualizar la lista se crea una nueva. Las pendientes de validación
+salen en el panel de validación del módulo, junto con las cotizaciones de cliente
+(`GET /quotations?kind=lista&status=pendiente_validacion&mine=false`).
 
-- Solo quien valida pone un ítem en `validada` o lo saca de ahí.
-- Un ítem cargado no cambia de estado hasta que cambie su precio: eso empieza otra revisión.
-- Una referencia no puede estar validada sin cargar en dos actualizaciones de la misma lista: la
-  segunda validación se rechaza.
-- La carga recibe los ítems de los archivos que se descargaron (`line_ids`). Si alguno salió del
-  staging mientras tanto, la carga entera se rechaza (409) y hay que descargar de nuevo.
-- Cada carga guarda lo que escribió (`price_list_loads.rows`): referencia, unidad, precio
-  anterior y nuevo, impuesto y quién lo validó.
-- Las actualizaciones guardadas antes de `0059` pasaron así: las pendientes de validación dejaron
-  sus ítems con precio en `por_validar`, las validadas en `validada` (staging) y las cargadas en
-  `validada` con una carga armada desde la actualización. Todas quedaron en `borrador`.
+**Sin revisión por ítem.** `PUT /price-list-updates/{id}/review` responde 422 en una
+actualización. El estado de cada ítem (`review_status`) ya no cambia. La observación por ítem
+sigue.
+
+**Lo que se validó antes por ítem.** Los ítems que ya estaban en `validada` sin cargar siguen en
+el staging de su lista: `GET /staging?kind=lista`, sus archivos y su carga siguen funcionando
+para vaciarlo, y `GET /loads?kind=lista` guarda el historial. No entran ítems nuevos.
+
+La revisión por ítem y el staging se describen en [Listas principales](listas-principales.md),
+que los conserva.
 
 ## Detalle del ítem
 
@@ -158,8 +163,8 @@ Reglas:
 | Acción | Quién |
 | --- | --- |
 | Ver, y ver el staging y las cargas | `actualizacion-listas: read` (solo las propias), y quien valida (todas) |
-| Crear, editar, marcar «Por validar», escribir observaciones | `actualizacion-listas: manage` en cualquier área donde esté activo |
-| Validar ítems, descargar el staging y marcarlo cargado | `actualizacion-listas: manage` desde el área de `QUOTATIONS_APPROVER_AREA_SLUG` (BI) y los administradores |
+| Crear, editar, enviar a validación, retirar, escribir observaciones | `actualizacion-listas: manage` en cualquier área donde esté activo |
+| Validar o devolver, descargar los archivos y marcarla cargada (y vaciar el staging anterior) | `actualizacion-listas: manage` desde el área de `QUOTATIONS_APPROVER_AREA_SLUG` (BI) y los administradores |
 | Una **lista principal** | nadie desde aquí (403): va por Listas principales |
 
 ## API
@@ -179,13 +184,14 @@ Reglas:
   `GET /quotations/permissions` y `GET /quotations/customers`. Para una actualización, este último
   busca entre todos los clientes, sin cartera.
 - **Endpoints del cotizador:** el resto funciona igual por `id`.
-  - Responden 422 en una actualización: `PATCH /offer`, `GET /offer.xlsx`, `POST /local-lines`,
-    `PUT /lines` con cantidades, `confirm`, `validate`, `return` y `uploaded`.
+  - Responden 422 en una actualización: `PATCH /offer`, `GET /offer.xlsx`, `POST /local-lines` y
+    `PUT /lines` con cantidades. `confirm`, `validate`, `return`, `uploaded` y `export` funcionan
+    como en la cotización desde el 2026-11-19; solo en una lista principal responden 422.
 - **`/price-list-updates`:**
 
   | Endpoint | Qué hace |
   | --- | --- |
-  | `PUT /{id}/review` `{version, skus, status}` | marca ítems; los que no se pueden marcar vienen en `skipped` |
+  | `PUT /{id}/review` `{version, skus, status}` | solo listas principales; 422 en una actualización |
   | `PUT /{id}/lines/{sku}/note` `{version, note}` | escribe o borra la observación |
   | `GET /{id}/lines/{sku}/insight` | existencias por bodega, historial del precio y venta por mes |
   | `GET /{id}/stock` | existencias de todas las referencias, sumadas |
@@ -204,14 +210,16 @@ Ruta `/<área>/actualizacion-listas` (`src/app/(app)/(workspace)/[area]/actualiz
 Usa los componentes del cotizador con `QuotationKindProvider kind="lista"`
 (`src/features/quotations/lib/kind.tsx`).
 
-- **Lo que no aparece:** oferta, «Cotizar con cantidades», «Crear producto» y la confirmación.
+- **Lo que no aparece:** oferta, «Cotizar con cantidades» y «Crear producto».
 - **Columna de precio:** dice «Precio actual». La última venta va en un tooltip: «Última venta
   $X», o «Sin venta en los últimos 12 meses».
-- **Estado del ítem:** un chip por ítem (Sin marcar, Por validar, Validada, Cargada) y acciones
-  sobre la selección.
-- **Filtros:** por estado del ítem y por margen actual contra el objetivo, con ±0,5 puntos de
+- **Sin estado por ítem** (2026-11-19): los chips Sin marcar, Por validar, Validada y Cargada
+  quedan solo en Listas principales. La actualización tiene el estado de la cotización y su botón
+  «Continuar proceso» (envío a validación).
+- **Filtros:** por margen actual contra el objetivo, con ±0,5 puntos de
   tolerancia: «Con alza» (bajo el objetivo), «En el objetivo», «Por encima» (para bajar el precio o
   revisar el costo) y «Alerta» (bajo el mínimo, sin costo o con precio marcador).
 - **Detalle de la línea:** apoyos con su mínimo y su óptimo, existencias por bodega, la gráfica
   del precio de lista y del precio de venta por mes, y la observación.
-- **Por cargar:** la página del staging, por lista, con los archivos y la carga.
+- **Por cargar:** las actualizaciones pendientes de carga, con sus archivos y «Marcar cargada»;
+  mientras queden, los ítems validados por ítem antes del 2026-11-19 (staging de `kind=lista`).

@@ -49,6 +49,7 @@ class WarehouseQuotationSource:
         connection: DataProviderConnection,
         schema: str = "consumo",
         timeout: float | None = 30.0,
+        sales_timeout: float | None = None,
     ) -> None:
         """Create the source.
 
@@ -57,6 +58,9 @@ class WarehouseQuotationSource:
             schema (str): Consumption schema.
             timeout (float | None): Seconds per query. The sales history of a customer with
                 hundreds of branches can pass the pool's default when the warehouse is busy.
+            sales_timeout (float | None): Seconds for a customer's or group's sales history
+                (building or refreshing a quotation); ``None`` is ``timeout``. On a cold
+                cache it passed 30 s, and the retry answered at once (2026-11-19).
 
         Raises:
             ValueError: The schema is not a SQL identifier.
@@ -67,6 +71,7 @@ class WarehouseQuotationSource:
         self.connection = connection
         self.schema = schema
         self.timeout = timeout
+        self.sales_timeout = sales_timeout
 
     def _view(self, name: str) -> str:
         return f'"{self.schema}"."{name}"'
@@ -193,6 +198,7 @@ class WarehouseQuotationSource:
             ' WHERE l.rn = 1 ORDER BY l."fecha" DESC, l."sku"',
             keys,
             months,
+            timeout=self.sales_timeout,
         )
         sales: list[LastSale] = []
         for row in rows:
@@ -247,6 +253,10 @@ class WarehouseQuotationSource:
           of the list's warehouse rounded to pesos; warehouse 2 for frozen and refrigerated
           lines; the highest of the list 1 warehouses when the plan says so. Costs of one peso
           or less are placeholders and never count.
+        - Only warehouses with stock (``existencia > 0``) give the inventory cost
+          (2026-11-19). When none of the plan's warehouses has any, their last average cost
+          is kept, marked ``inventory_stocked=False``, so the line is not left without cost;
+          :func:`pricing.prefer_stocked` drops it when another center has stock.
         """
 
         if not skus:
@@ -277,6 +287,9 @@ class WarehouseQuotationSource:
             "), inv AS ("
             ' SELECT f."producto_key",'
             ' max(round(f."costo_prom_unit_ins"))'
+            ' FILTER (WHERE round(f."costo_prom_unit_ins") > 1 AND f."existencia" > 0)'
+            " AS costo_inv_existencia,"
+            ' max(round(f."costo_prom_unit_ins"))'
             ' FILTER (WHERE round(f."costo_prom_unit_ins") > 1)'
             ' AS costo_inv, sum(f."existencia") AS existencia,'
             ' sum(f."cant_disponible") AS disponible, max(f."foto_at") AS foto'
@@ -286,7 +299,7 @@ class WarehouseQuotationSource:
             " THEN $4 ELSE $3 END END"
             " GROUP BY 1"
             ') SELECT pr."sku", pr."linea", pr."estado", c.costo_cot, c.costo_descartado,'
-            " i.costo_inv, i.existencia, i.disponible, i.foto"
+            " i.costo_inv_existencia, i.costo_inv, i.existencia, i.disponible, i.foto"
             ' FROM prod pr LEFT JOIN cot_ok c USING ("producto_key")'
             ' LEFT JOIN inv i USING ("producto_key")',
             list(skus),
@@ -302,11 +315,14 @@ class WarehouseQuotationSource:
         for row in rows:
             sku = str(row["sku"]).strip()
             snapshot = row["foto"]
+            stocked = _decimal(row.get("costo_inv_existencia"))
+            any_cost = _decimal(row["costo_inv"])
             result[sku] = CostInfo(
                 sku=sku,
                 quote_cost=_decimal(row["costo_cot"]),
                 discarded_quote=_decimal(row["costo_descartado"]),
-                inventory_cost=_decimal(row["costo_inv"]),
+                inventory_cost=stocked if stocked is not None else any_cost,
+                inventory_stocked=None if any_cost is None else stocked is not None,
                 stock=_decimal(row["existencia"]),
                 available=_decimal(row.get("disponible")),
                 product_line=row["linea"],

@@ -767,6 +767,7 @@ class V1Container(containers.DeclarativeContainer):
         connection=data_provider,
         schema=settings.provided.DWH_SCHEMA,
         timeout=config.quotations.dwh_timeout,
+        sales_timeout=config.quotations.dwh_sales_timeout,
     )
     quotation_insight_source = providers.Factory(
         WarehouseInsightSource,
