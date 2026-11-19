@@ -19,6 +19,16 @@ def lister():
     return person(LIST_MANAGER)
 
 
+@pytest.fixture
+def collaborator():
+    return person(MAIN_MANAGER)
+
+
+@pytest.fixture
+def analyst():
+    return person(MAIN_APPROVER)
+
+
 async def _priced(service, who, price_list_id="10U", kind="lista", price=4700):
     detail = await service.create_list_update(who, price_list_id=price_list_id, kind=kind)
     priced, _ = await service.update_lines(
@@ -27,121 +37,165 @@ async def _priced(service, who, price_list_id="10U", kind="lista", price=4700):
     return priced
 
 
-async def test_an_item_goes_to_validation_then_to_the_staging(
+async def _main(service, who, price=4700):
+    """A main list (only they are reviewed item by item since 2026-11-19)."""
+
+    return await _priced(service, who, price_list_id="001", kind="principal", price=price)
+
+
+async def test_a_list_update_goes_through_validation_as_a_whole(
     service, review, lister, approver
 ) -> None:
+    """2026-11-19: Actualización de listas follows the quotation's flow, no item review."""
+
     priced = await _priced(service, lister)
+    quotation = priced.quotation
+    with pytest.raises(InvalidInputError, match="se valida completa"):
+        await review.mark(lister, quotation.id, quotation.version, ["2537"], "por_validar")
+
+    pending = await service.confirm(
+        lister,
+        quotation.id,
+        quotation.version,
+        list_action=None,
+        new_list_name=None,
+        activation_date=None,
+    )
+    assert pending.quotation.status == "pendiente_validacion"
+    assert pending.quotation.list_action == "actualizacion"
+    with pytest.raises(ForbiddenError):
+        await service.validate(lister, quotation.id, pending.quotation.version)
+    validated = await service.validate(approver, quotation.id, pending.quotation.version)
+    assert validated.quotation.status == "pendiente_carga"
+    assert validated.quotation.export_price_list_id == "10U"
+
+    flat = await service.export(approver, quotation.id, "txt")
+    assert "0126" in flat.content.decode("ascii") and flat.filename.startswith("precios-lista10U")
+
+    loaded = await service.mark_uploaded(approver, quotation.id, validated.quotation.version)
+    assert loaded.quotation.status == "cargada"
+    # Closed: its data no longer changes.
+    with pytest.raises(ConflictError, match="cerrada"):
+        await service.update_lines(
+            lister, quotation.id, loaded.quotation.version, [LineChange("2537", Decimal(4900))]
+        )
+    assert await review.staging(lister, "lista") == []
+
+
+async def test_an_item_goes_to_validation_then_to_the_staging(
+    service, review, collaborator, analyst
+) -> None:
+    priced = await _main(service, collaborator)
     quotation = priced.quotation
 
     marked, skipped = await review.mark(
-        lister, quotation.id, quotation.version, ["2537", "26278"], "por_validar"
+        collaborator, quotation.id, quotation.version, ["2537"], "por_validar"
     )
 
     by_sku = {line.sku: line for line in marked.lines}
     assert by_sku["2537"].review_status == "por_validar"
-    assert by_sku["2537"].reviewed_by == LIST_MANAGER
-    # The placeholder has no new price: it cannot be marked.
-    assert [(item.sku, item.reason) for item in skipped] == [("26278", "Sin precio nuevo")]
+    assert by_sku["2537"].reviewed_by == MAIN_MANAGER
+    assert skipped == ()
     assert marked.quotation.status == "borrador"
     # Only who validates validates.
     with pytest.raises(ForbiddenError, match="Solo quien valida"):
-        await review.mark(lister, quotation.id, marked.quotation.version, ["2537"], "validada")
+        await review.mark(
+            collaborator, quotation.id, marked.quotation.version, ["2537"], "validada"
+        )
 
     validated, _ = await review.mark(
-        approver, quotation.id, marked.quotation.version, ["2537"], "validada"
+        analyst, quotation.id, marked.quotation.version, ["2537"], "validada"
     )
 
     line = validated.lines[0]
     assert line.review_status == "validada" and line.is_staged
-    staging = await review.staging(lister, "lista")
-    assert [(group.price_list_id, len(group.items)) for group in staging] == [("10U", 1)]
+    staging = await review.staging(collaborator, "principal")
+    assert [(group.price_list_id, len(group.items)) for group in staging] == [("001", 1)]
     # Whoever edits cannot take it back out of validada.
     with pytest.raises(ForbiddenError):
-        await review.mark(lister, quotation.id, validated.quotation.version, ["2537"], "sin_marcar")
+        await review.mark(
+            collaborator, quotation.id, validated.quotation.version, ["2537"], "sin_marcar"
+        )
 
 
 async def test_a_new_price_sends_the_item_back_to_unmarked(
-    service, review, lister, approver
+    service, review, collaborator, analyst
 ) -> None:
-    priced = await _priced(service, lister)
+    priced = await _main(service, collaborator)
     quotation = priced.quotation
-    validated, _ = await review.mark(
-        approver, quotation.id, quotation.version, ["2537"], "validada"
-    )
+    validated, _ = await review.mark(analyst, quotation.id, quotation.version, ["2537"], "validada")
 
     repriced, _ = await service.update_lines(
-        lister, quotation.id, validated.quotation.version, [LineChange("2537", Decimal(4800))]
+        collaborator, quotation.id, validated.quotation.version, [LineChange("2537", Decimal(4800))]
     )
 
     line = repriced.lines[0]
     assert line.review_status == "sin_marcar" and line.reviewed_by is None
-    assert await review.staging(lister, "lista") == []
+    assert await review.staging(collaborator, "principal") == []
 
 
 async def test_the_same_sku_is_not_staged_twice_for_a_list(
-    service, review, lister, approver
+    service, review, collaborator, analyst
 ) -> None:
-    first = await _priced(service, lister)
-    second = await _priced(service, lister, price=4900)
-    await review.mark(approver, first.quotation.id, first.quotation.version, ["2537"], "validada")
+    first = await _main(service, collaborator)
+    second = await _main(service, collaborator, price=4900)
+    await review.mark(analyst, first.quotation.id, first.quotation.version, ["2537"], "validada")
 
     with pytest.raises(InvalidInputError, match="otra actualización"):
         await review.mark(
-            approver, second.quotation.id, second.quotation.version, ["2537"], "validada"
+            analyst, second.quotation.id, second.quotation.version, ["2537"], "validada"
         )
 
 
-async def test_the_staging_files_and_load(service, review, lister, approver, repository) -> None:
-    priced = await _priced(service, lister)
+async def test_the_staging_files_and_load(
+    service, review, collaborator, analyst, repository
+) -> None:
+    priced = await _main(service, collaborator)
     quotation = priced.quotation
-    validated, _ = await review.mark(
-        approver, quotation.id, quotation.version, ["2537"], "validada"
-    )
+    validated, _ = await review.mark(analyst, quotation.id, quotation.version, ["2537"], "validada")
     line = validated.lines[0]
     activation = TODAY + timedelta(days=2)
 
     with pytest.raises(ForbiddenError):
-        await review.staging_file(lister, "lista", "10U", "txt", activation)
-    flat = await review.staging_file(approver, "lista", "10U", "txt", activation)
-    workbook = await review.staging_file(approver, "lista", "10U", "xlsx", activation)
+        await review.staging_file(collaborator, "principal", "001", "txt", activation)
+    flat = await review.staging_file(analyst, "principal", "001", "txt", activation)
+    workbook = await review.staging_file(analyst, "principal", "001", "xlsx", activation)
 
     text = flat.content.decode("ascii")
-    assert flat.filename == f"precios-lista10U-staging-{activation:%Y%m%d}.txt"
+    assert flat.filename == f"precios-lista001-staging-{activation:%Y%m%d}.txt"
     assert "0126" in text and "2537" in text and "000000000004700.0000" in text
     assert workbook.filename.endswith(".xlsx") and workbook.content[:2] == b"PK"
     with pytest.raises(InvalidInputError, match="anterior a hoy"):
-        await review.staging_file(approver, "lista", "10U", "txt", TODAY - timedelta(days=1))
+        await review.staging_file(analyst, "principal", "001", "txt", TODAY - timedelta(days=1))
 
-    load = await review.load(approver, "lista", "10U", [line.id], activation)
+    load = await review.load(analyst, "principal", "001", [line.id], activation)
 
     assert load.line_count == 1 and Decimal(load.rows[0]["price"]) == Decimal(4700)
     assert Decimal(load.rows[0]["previous_price"]) == Decimal(4568)
-    assert await review.staging(lister, "lista") == []
+    assert await review.staging(collaborator, "principal") == []
     stored = repository.items[quotation.id]
     assert stored.lines[0].load_id == load.id and stored.lines[0].review_status == "validada"
-    assert [item.id for item in await review.loads(lister, "lista")] == [load.id]
+    assert [item.id for item in await review.loads(collaborator, "principal")] == [load.id]
     # A loaded item keeps its state until its price changes.
     with pytest.raises(InvalidInputError, match="Ya se cargó"):
-        await review.mark(approver, quotation.id, stored.quotation.version, ["2537"], "sin_marcar")
+        await review.mark(analyst, quotation.id, stored.quotation.version, ["2537"], "sin_marcar")
     with pytest.raises(NotFoundError):
-        await review.staging_file(approver, "lista", "10U", "txt", activation)
+        await review.staging_file(analyst, "principal", "001", "txt", activation)
 
 
 async def test_a_load_with_items_that_left_the_staging_is_refused(
-    service, review, lister, approver
+    service, review, collaborator, analyst
 ) -> None:
-    priced = await _priced(service, lister)
+    priced = await _main(service, collaborator)
     quotation = priced.quotation
-    validated, _ = await review.mark(
-        approver, quotation.id, quotation.version, ["2537"], "validada"
-    )
+    validated, _ = await review.mark(analyst, quotation.id, quotation.version, ["2537"], "validada")
     line_id = validated.lines[0].id
     await service.update_lines(
-        lister, quotation.id, validated.quotation.version, [LineChange("2537", Decimal(4800))]
+        collaborator, quotation.id, validated.quotation.version, [LineChange("2537", Decimal(4800))]
     )
 
     with pytest.raises((InvalidInputError, NotFoundError, ConflictError)):
-        await review.load(approver, "lista", "10U", [line_id], None)
+        await review.load(analyst, "principal", "001", [line_id], None)
 
 
 async def test_the_main_lists_are_reviewed_by_their_own_validators(

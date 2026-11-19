@@ -2797,12 +2797,13 @@ def _kept(line: QuotationLine, stored: QuotationLine | None) -> QuotationLine:
 
 
 def _whole_review(quotation: Quotation) -> None:
-    """A list update is reviewed item by item and loaded from its list's staging: it is
-    never confirmed, validated or marked loaded as a whole."""
+    """A main list is reviewed item by item and loaded from its list's staging: it is never
+    confirmed, validated or marked loaded as a whole. A list update (``lista``) is, like a
+    quotation, since 2026-11-19."""
 
-    if quotation.is_list_update:
+    if quotation.kind == vocabulary.MAIN_LIST:
         raise InvalidInputError(
-            "Una actualización de lista se valida por ítem y se carga desde «Por cargar»"
+            "Una lista principal se valida por ítem y se carga desde «Por cargar»"
         )
 
 

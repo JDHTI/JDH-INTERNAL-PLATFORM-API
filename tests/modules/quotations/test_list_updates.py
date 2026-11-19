@@ -12,7 +12,13 @@ from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain.entities import ItemInfo, ListPrice
 from tests.modules.order_validation.conftest import agreement
-from tests.modules.quotations.conftest import LIST_MANAGER, MAIN_MANAGER, NIT, branch
+from tests.modules.quotations.conftest import (
+    LIST_MANAGER,
+    MAIN_APPROVER,
+    MAIN_MANAGER,
+    NIT,
+    branch,
+)
 from tests.modules.supplier_supports.conftest import TODAY, person
 
 WHOLESALE = frozenset({"MAYORISTAS Y DISTRIBUIDORES"})
@@ -171,18 +177,22 @@ async def test_a_list_update_has_no_offer_quantities_or_new_list(service, lister
     priced, _ = await service.update_lines(
         lister, quotation.id, quotation.version, [LineChange("2537", Decimal(4700))]
     )
-    # Reviewed item by item: never confirmed or validated as a whole.
-    with pytest.raises(InvalidInputError, match="se valida por ítem"):
+    # Confirmed as a whole since 2026-11-19, but always onto its own list.
+    with pytest.raises(InvalidInputError, match="misma lista"):
         await service.confirm(
             lister,
             quotation.id,
             priced.quotation.version,
-            list_action=None,
+            list_action="creacion",
             new_list_name=None,
             activation_date=TODAY + timedelta(days=1),
         )
+    # A main list, instead, is never confirmed or validated as a whole.
+    main = await service.create_list_update(
+        person(MAIN_MANAGER), price_list_id="001", kind="principal"
+    )
     with pytest.raises(InvalidInputError, match="se valida por ítem"):
-        await service.validate(approver, quotation.id, priced.quotation.version)
+        await service.validate(person(MAIN_APPROVER), main.quotation.id, main.quotation.version)
 
 
 async def test_refresh_keeps_the_new_prices_and_the_added_skus(service, lister, warehouse) -> None:
