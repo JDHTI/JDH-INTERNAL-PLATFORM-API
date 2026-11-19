@@ -1133,6 +1133,41 @@ async def price_lists(
     return PriceListPageResponse(items=items, total=len(items), page=1, size=max(len(items), 1))
 
 
+class FreeCodesResponse(BaseModel):
+    """Free codes for a new price list, in order."""
+
+    items: list[str]
+    # Of the 46 656 codes of 3 characters (0-9, A-Z).
+    free: int
+    used: int
+    # Pass it as ``after`` for the next page; ``null`` on the last one.
+    next_after: str | None
+
+
+# Declared before ``/{quotation_id}`` so the path is not taken for an id.
+@router.get(
+    "/list-codes/available",
+    dependencies=[_READ_GATE],
+    response_model=FreeCodesResponse,
+    summary="Free codes for a new price list",
+)
+@inject
+async def available_list_codes(
+    after: str | None = Query(default=None, max_length=3),
+    size: int = Query(default=30, ge=1, le=200),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> FreeCodesResponse:
+    """The 3-character codes (digits and letters, digits first) that SIESA does not have and
+    no validated quotation took, in order, after ``after``. The validator of a list creation
+    picks one of them; ``free`` and ``used`` count the whole range."""
+
+    result = await service.available_list_codes(principal, after, size)
+    return FreeCodesResponse(
+        items=list(result.items), free=result.free, used=result.used, next_after=result.next_after
+    )
+
+
 @router.post(
     "/list-updates",
     dependencies=[_READ_GATE],

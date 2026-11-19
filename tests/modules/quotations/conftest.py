@@ -224,6 +224,10 @@ class FakeWarehouse:
         self._check()
         return price_list_id in self.existing_lists
 
+    async def price_list_ids(self):
+        self._check()
+        return sorted(self.existing_lists)
+
     async def list_prices(self, price_list_id, skus):
         self._check()
         self.calls.append(("list_prices", price_list_id))
@@ -415,6 +419,17 @@ class FakeRepository:
 
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
+
+    async def reserved_list_ids(self):
+        return sorted(
+            {
+                detail.quotation.export_price_list_id
+                for detail in self.items.values()
+                if detail.quotation.list_action == "creacion"
+                and detail.quotation.status in ("pendiente_carga", "cargada")
+                and detail.quotation.export_price_list_id
+            }
+        )
 
     # ------------------------------------------------------------ staging
 

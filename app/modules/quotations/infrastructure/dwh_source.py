@@ -306,6 +306,15 @@ class WarehouseQuotationSource:
         )
         return bool(rows)
 
+    async def price_list_ids(self) -> list[str]:
+        """Every list code SIESA has (as of yesterday's load)."""
+
+        rows = await self._fetch(
+            f'SELECT DISTINCT "lista_precio_id" FROM {self._view("listas_precios")}'
+            ' WHERE "lista_precio_id" IS NOT NULL'
+        )
+        return [str(row["lista_precio_id"]) for row in rows]
+
     async def list_prices(self, price_list_id: str, skus: Sequence[str]) -> dict[str, ListPrice]:
         """Price in force and value tax of each SKU in a list, per inventory unit."""
 

@@ -26,7 +26,7 @@ from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.catalog import Section
 from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.order_validation.domain.rules import BASIS
-from app.modules.quotations.domain import offer, pricing, rules, vocabulary
+from app.modules.quotations.domain import list_codes, offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
     BillingCenter,
@@ -1076,6 +1076,29 @@ class QuotationService:
             found = [await self.warehouse.price_list(code) for code in self.main_list_order]
             return [info for info in found if info is not None]
         return await self.warehouse.price_lists(text[:80])
+
+    async def available_list_codes(
+        self, principal: Principal, after: str | None, size: int
+    ) -> list_codes.FreeCodes:
+        """Free codes for a new list (BI, 2026-11-19): the 3-character codes SIESA does not
+        have and no validated quotation took, in order, after ``after``.
+
+        Raises:
+            ForbiddenError: The caller reads neither the quoter nor the list updates.
+            InvalidInputError: A page size out of range.
+        """
+
+        if not (
+            await self.can_read(principal, vocabulary.QUOTATION)
+            or await self.can_read(principal, vocabulary.LIST_UPDATE)
+        ):
+            raise ForbiddenError("No tienes permiso para consultar las listas de precios")
+        if not 1 <= size <= list_codes.MAX_PAGE:
+            raise InvalidInputError(f"El tamaño debe estar entre 1 y {list_codes.MAX_PAGE}")
+        siesa, reserved = await asyncio.gather(
+            self.warehouse.price_list_ids(), self.repository.reserved_list_ids()
+        )
+        return list_codes.free_codes([*siesa, *reserved], after, size)
 
     async def _list_branches(self, code: str) -> list[Branch]:
         return await self.warehouse.list_branches(code)
@@ -2391,6 +2414,10 @@ class QuotationService:
                 raise InvalidInputError("La lista nueva debe tener un código distinto")
             if await self.warehouse.price_list_exists(code):
                 raise InvalidInputError(f"La lista {code} ya existe en SIESA; usa otro código")
+            if code in await self.repository.reserved_list_ids():
+                raise InvalidInputError(
+                    f"El código {code} ya lo tomó otra lista validada; usa otro código"
+                )
             if (new_list_name or "").strip():
                 name = list_name(new_list_name or "")
             name = name or list_name(f"COTIZADOR {quotation.customer_name or ''}")

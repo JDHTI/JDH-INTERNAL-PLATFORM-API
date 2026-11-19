@@ -338,6 +338,14 @@ pendientes de validación se ven y se validan también en el módulo `actualizac
   puede proponer la descripción al confirmar, y quien valida puede cambiarla (por defecto
   `COTIZADOR <cliente>`, en ASCII y mayúsculas, máximo 40). `export_price_list_id` se fija al
   validar.
+  - **Códigos libres** (2026-11-19): `GET /quotations/list-codes/available?after=&size=30` →
+    `{items, free, used, next_after}`.
+    - Lista en orden (dígitos antes que letras) los códigos de 3 caracteres que SIESA no tiene
+      y que ninguna creación ya validada tomó (pendiente de carga o cargada). Se pagina con
+      `next_after`.
+    - `free` y `used` cuentan sobre los 46.656 códigos posibles.
+    - Validar con un código ya tomado por otra creación validada es 422, aunque SIESA todavía no
+      lo tenga.
 - **Lista 1**: un cliente en la lista `1` (GENERAL, unos 28.000 clientes) **siempre va por
   creación**: la lista 1 no se actualiza por este medio (aviso `lista_general`). Igual un
   **cliente temporal**, que no tiene lista en SIESA.
