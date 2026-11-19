@@ -150,7 +150,7 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
 | `DELETE /areas/{slug}/modules/{module}` | admin | Vuelve al valor del catálogo y responde ese estado. 404 si el módulo no existe |
 | `GET /permissions/me` | autenticado | Rol global y, por área, `{módulo: acción}`. La UI arma el menú con esto |
 | `GET /areas/{slug}/roles/{role_id}/permissions` | admin o moderador | Permisos de un rol |
-| `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si el módulo no existe en el área; 409 en el rol líder |
+| `PUT /areas/{slug}/roles/{role_id}/permissions` | admin | `{grants: [{module, action}]}` reemplaza todos los permisos. 422 si se da un permiso nuevo sobre un módulo que no existe o está apagado en el área; 409 en el rol líder. Desde el 2026-11-19, un permiso ya guardado sobre un módulo apagado se conserva tal cual, se reenvíe o no (no cuenta mientras esté apagado), y uno sobre un módulo retirado del catálogo se borra |
 | `GET /permissions/users/{user_id}` | admin o moderador | Áreas, rol y permisos de una persona |
 | `GET /permissions/audit` | admin o moderador | Bitácora: `area_slug`, `target_user_id`, `action`, `offset`, `limit` |
 | `GET /areas` | autenticado | Cada área trae `my_modules` |
