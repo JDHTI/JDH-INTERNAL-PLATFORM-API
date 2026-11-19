@@ -62,7 +62,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     sales = await source.last_sales("900315138", 6)
 
     keys_query, keys_args = connection.queries[0]
-    assert '"consumo"."clientes"' in keys_query and keys_args == ("900315138",)
+    assert '"consumo"."clientes"' in keys_query and keys_args == (["900315138"],)
     # The sales are bound by the customer's keys, so the planner uses their index.
     query, args = connection.queries[1]
     assert '"consumo"."ventas"' in query and 'v."cliente_key" = ANY($1::text[])' in query

@@ -137,11 +137,33 @@ class TemporaryCustomerRequest(BaseModel):
     nit: str | None = Field(default=None, max_length=30)
 
 
+class GroupResponse(BaseModel):
+    """A business group to quote: its active customers (NITs) and branches."""
+
+    name: str
+    customers: int
+    branches: int
+
+
+class GroupPageResponse(BaseModel):
+    items: list[GroupResponse]
+    total: int
+    page: int
+    size: int
+    seller_linked: bool
+
+
 class CreateRequest(BaseModel):
-    """A SIESA customer by ``customer_nit``, or a ``temporary_customer`` with the
-    ``billing_center_code`` its prices come from."""
+    """A SIESA customer by ``customer_nit``, a whole ``business_group``, or a
+    ``temporary_customer`` with the ``billing_center_code`` its prices come from (one of
+    the three)."""
 
     customer_nit: str | None = Field(default=None, max_length=30)
+    business_group: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Quote a whole business group (its name, from /quotations/business-groups)",
+    )
     temporary_customer: TemporaryCustomerRequest | None = None
     billing_center_code: str | None = Field(
         default=None,
@@ -546,6 +568,9 @@ class SummaryResponse(BaseModel):
     # A list update: ``cliente`` (from a customer's list) or ``lista``.
     source: Literal["cliente", "lista"] | None = None
     price_list_name: str | None = None
+    # Quoted to a business group: its name (also ``customer_name``) and its NITs.
+    business_group: str | None = None
+    group_customers: int | None = None
 
 
 class QuotationResponse(SummaryResponse):
@@ -796,6 +821,8 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "temporary_customer": TemporaryCustomerResponse(**quotation.temporary_customer.as_dict())
         if quotation.temporary_customer
         else None,
+        "business_group": quotation.business_group,
+        "group_customers": quotation.group_customers,
         "kind": quotation.kind,
         "source": quotation.source,
         "price_list_name": quotation.price_list_name,
@@ -993,12 +1020,44 @@ async def customers(
     )
 
 
+@router.get(
+    "/business-groups",
+    dependencies=[_READ_GATE],
+    response_model=GroupPageResponse,
+    summary="Business groups to quote",
+)
+@inject
+async def business_groups(
+    scope: Literal["mine", "all"] = Query(default="mine"),
+    q: str | None = Query(default=None, max_length=100),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE),
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> GroupPageResponse:
+    """The business groups of the caller's portfolio (a group with at least one customer of
+    their salespeople), by name; BI and Comercial's leaders choose ``mine`` or ``all``. Each
+    with the whole group's active customers and branches."""
+
+    result, linked = await service.business_groups(principal, scope, q, page, size)
+    return GroupPageResponse(
+        items=[
+            GroupResponse(name=item.name, customers=item.customers, branches=item.branches)
+            for item in result.items
+        ],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+        seller_linked=linked,
+    )
+
+
 @router.post(
     "",
     dependencies=[_READ_GATE],
     response_model=QuotationResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Build a quotation of a customer",
+    summary="Build a quotation of a customer or a business group",
 )
 @inject
 async def create_quotation(
@@ -1028,6 +1087,7 @@ async def create_quotation(
             else None,
             billing_center_code=body.billing_center_code,
             with_history=body.with_history,
+            business_group=body.business_group,
         ),
     )
 

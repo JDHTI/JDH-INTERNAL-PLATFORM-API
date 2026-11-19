@@ -91,11 +91,19 @@ class WarehouseQuotationSource:
     async def branches(self, nit: str) -> list[Branch]:
         """Every branch of a customer (``consumo.clientes``)."""
 
+        return await self.group_branches([nit])
+
+    async def group_branches(self, nits: Sequence[str]) -> list[Branch]:
+        """Every branch of these NITs, each with its ``nit`` (a business group)."""
+
+        if not nits:
+            return []
         rows = await self._fetch(
-            'SELECT "id_sucursal", "razon_social", "cod_canal", "canal", "lista_precio_id", '
-            '"lista_precio", "cod_co_factura", "cod_vendedor", "nombre_vendedor", "estado", '
-            f'"estado_sucursal" FROM {self._view("clientes")} WHERE "nit" = $1',
-            nit,
+            'SELECT "nit", "id_sucursal", "razon_social", "cod_canal", "canal", '
+            '"lista_precio_id", "lista_precio", "cod_co_factura", "cod_vendedor", '
+            f'"nombre_vendedor", "estado", "estado_sucursal" FROM {self._view("clientes")} '
+            'WHERE "nit" = ANY($1::text[])',
+            list(nits),
         )
         return [
             Branch(
@@ -109,6 +117,7 @@ class WarehouseQuotationSource:
                 salesperson_code=_strip(row["cod_vendedor"]),
                 salesperson_name=row["nombre_vendedor"],
                 is_active=row["estado"] == "A" and row["estado_sucursal"] == "A",
+                nit=_strip(row["nit"]),
             )
             for row in rows
         ]
@@ -142,10 +151,18 @@ class WarehouseQuotationSource:
         30 s limit; by key it reads only the customer's lines through their index.
         """
 
+        return await self.group_last_sales([nit], months)
+
+    async def group_last_sales(self, nits: Sequence[str], months: int) -> list[LastSale]:
+        """:meth:`last_sales` over every branch of these NITs (a business group)."""
+
+        if not nits:
+            return []
         keys = [
             row["cliente_key"]
             for row in await self._fetch(
-                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = $1', nit
+                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = ANY($1::text[])',
+                list(nits),
             )
         ]
         if not keys:

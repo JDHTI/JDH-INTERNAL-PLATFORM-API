@@ -144,9 +144,9 @@ async def test_a_temporary_customer_starts_empty_and_goes_by_creation(
 
     with pytest.raises(InvalidInputError, match="centro de operación del cliente temporal"):
         await create(temporary_customer=customer)
-    with pytest.raises(InvalidInputError, match="no los dos"):
+    with pytest.raises(InvalidInputError, match="uno solo"):
         await create(nit=NIT, temporary_customer=customer, billing_center_code="004")
-    with pytest.raises(InvalidInputError, match="NIT del cliente o los datos"):
+    with pytest.raises(InvalidInputError, match="el grupo empresarial o los datos"):
         await create()
     with pytest.raises(InvalidInputError, match="razón social"):
         await create(temporary_customer=TemporaryCustomer("Espiga", " "), billing_center_code="004")

@@ -15,6 +15,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CostInfo,
     CustomerPage,
+    GroupPage,
     ItemInfo,
     LastSale,
     ListItem,
@@ -47,6 +48,14 @@ class WarehouseSource(Protocol):
     async def price_list_customers(self, price_list_id: str) -> int | None: ...
 
     async def last_sales(self, nit: str, months: int) -> list[LastSale]: ...
+
+    async def group_branches(self, nits: Sequence[str]) -> list[Branch]:
+        """Every branch of these NITs, each with its ``nit`` (a business group)."""
+        ...
+
+    async def group_last_sales(self, nits: Sequence[str], months: int) -> list[LastSale]:
+        """:meth:`last_sales` over every branch of these NITs (a business group)."""
+        ...
 
     async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]: ...
 
@@ -99,6 +108,16 @@ class MasterSource(Protocol):
     async def customers(
         self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
     ) -> CustomerPage: ...
+
+    async def business_groups(
+        self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
+    ) -> GroupPage:
+        """Business groups with an active customer of these salespeople (``None``: all)."""
+        ...
+
+    async def group_nits(self, group: str) -> list[str]:
+        """The NITs of a business group (its active customers)."""
+        ...
 
 
 class SupportSource(Protocol):

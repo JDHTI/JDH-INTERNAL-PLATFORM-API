@@ -283,6 +283,35 @@ en `bajo_minimo`, `sin_objetivo` o `sin_costo` se confirma y llega a quien valid
 `below_rule_count`. Confirmar solo exige al menos una línea activa con precio nuevo, de SIESA o
 solo para cotización (un cliente temporal puede tener solo productos locales).
 
+## Cotizar por grupo empresarial
+
+BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo**
+(`customers.business_group`).
+
+- **Buscar:** `GET /quotations/business-groups?q=&scope=mine|all&page=&size=` →
+  `{items: [{name, customers, branches}], total, page, size, seller_linked}`.
+  - Sigue la misma regla de cartera que `/customers`: un vendedor o supervisor ve los grupos con
+    al menos un cliente suyo (o de su equipo).
+  - Solo quien ve todos los clientes elige entre `mine` y `all`.
+  - `customers` y `branches` cuentan los clientes activos de todo el grupo.
+- **Crear:** `POST /quotations {business_group, window_months, ...}` en lugar de
+  `customer_nit`; se manda uno solo de NIT, grupo o cliente temporal. Fuera de la cartera es
+  403.
+- **Cómo se cotiza:**
+  - Las sucursales de todos los NIT del grupo deciden por mayoría la lista, el canal y el C.O.,
+    con el aviso `listas_distintas` si difieren. `customer_nit` es el NIT con más sucursales
+    activas.
+  - Las referencias salen de las ventas de **todo el grupo**: la última venta de cada SKU, con
+    la misma regla de precio más alto por C.O.
+  - Aplican **solo los apoyos generales y los del grupo** (`customer_group`, que la carga por
+    grupo deja uno por NIT y aquí cuentan como uno). Un apoyo de un solo NIT del grupo no se
+    extiende al grupo.
+  - El refresh vuelve a leer el grupo.
+- **La cotización** trae `business_group` y `group_customers` (migración `0074`), y
+  `customer_name` es el nombre del grupo.
+- **La oferta** sale a nombre del grupo: el Excel dice «Grupo empresarial» y cuántos NIT tiene,
+  sin NIT.
+
 ## Estados
 
 **Flujo sin bloqueos hasta el cliente** (BI, 2026-11-18 y 2026-11-19):

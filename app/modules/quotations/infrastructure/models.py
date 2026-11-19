@@ -150,7 +150,6 @@ class QuotationModel(Base):
     price_family: Mapped[str] = mapped_column(String(20), nullable=False, default="generales")
     stock_source: Mapped[str | None] = mapped_column(Text)
     below_target_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # The last time the offer went to the customer (0071).
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by: Mapped[str | None] = mapped_column(String(320))
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -173,6 +172,9 @@ class QuotationModel(Base):
     with_history: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="cotizacion")
     source: Mapped[str | None] = mapped_column(String(20))
+    # Quoted to a business group (0074): its name and how many NITs it had.
+    business_group: Mapped[str | None] = mapped_column(Text)
+    group_customers: Mapped[int | None] = mapped_column(Integer)
 
 
 class RequestedProductModel(Base):

@@ -85,6 +85,29 @@ class CustomerContext:
     warnings: tuple[str, ...] = ()
     # Operation centers the lines are costed from; none is *Nacional* (every warehouse).
     cost_centers: tuple[str, ...] = ()
+    # A business group's quotation (2026-11-19): the group and its NITs. The branches of
+    # every NIT decide the list, channel and center (the majority); the sales are the
+    # group's; only the general supports and the group's apply. ``nit`` is then the NIT
+    # with the most active branches (``group_nits`` empty: read them again).
+    business_group: str | None = None
+    group_nits: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GroupInfo:
+    """A business group to quote (``customers.business_group``)."""
+
+    name: str
+    customers: int
+    branches: int
+
+
+@dataclass(frozen=True)
+class GroupPage:
+    items: tuple[GroupInfo, ...]
+    total: int
+    page: int
+    size: int
 
 
 @dataclass(frozen=True)
@@ -607,6 +630,10 @@ class Quotation:
     kind: str = vocabulary.QUOTATION
     # A list update: ``cliente`` (started from a customer's list) or ``lista``.
     source: str | None = None
+    # Quoted to a business group (2026-11-19): ``customer_name`` is the group's name and
+    # ``customer_nit`` the NIT of the group with the most active branches.
+    business_group: str | None = None
+    group_customers: int | None = None
 
     @property
     def is_temporary_customer(self) -> bool:

@@ -24,7 +24,7 @@ from app.modules.commercial_masters.domain.entities import clean_nit
 from app.modules.commercial_masters.domain.margins import customer_margin_field
 from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.catalog import Section
-from app.modules.order_validation.domain.entities import CustomerScope
+from app.modules.order_validation.domain.entities import Agreement, CustomerScope
 from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import list_codes, offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
@@ -34,6 +34,7 @@ from app.modules.quotations.domain.entities import (
     CostInfo,
     CustomerContext,
     CustomerPage,
+    GroupPage,
     ItemInfo,
     LastSale,
     ListPrice,
@@ -299,6 +300,34 @@ def _margin_field(context: CustomerContext, scope: CustomerScope | None = None) 
     if scope is not None and scope.margin_field:
         return scope.margin_field
     return customer_margin_field(context.channel, context.billing_center_code)
+
+
+_NO_ID = UUID(int=0)
+
+
+def _same_group(value: str | None, group: str) -> bool:
+    return " ".join((value or "").split()).casefold() == " ".join(group.split()).casefold()
+
+
+def _group_agreements(agreements: Sequence[Agreement], group: str) -> list[Agreement]:
+    """The supports of a business group's quotation (2026-11-19): the general ones (no NIT)
+    and the group's (``customer_group``). A support of one NIT of the group never covers the
+    whole group.
+
+    The group's supports are loaded one per NIT (``bulk/groups``): they are taken as one,
+    for the whole quotation (no NIT, no branch), and the copies collapse.
+    """
+
+    kept: dict[Agreement, Agreement] = {}
+    for item in agreements:
+        if item.customer_nit is None and not item.customer_group:
+            kept.setdefault(item, item)
+            continue
+        if not _same_group(item.customer_group, group):
+            continue
+        whole = replace(item, customer_nit=None, customer_branch_id=None)
+        kept.setdefault(replace(whole, id=_NO_ID, dwh_unit_cost=None), whole)
+    return list(kept.values())
 
 
 def _setup(context: CustomerContext) -> _Setup:
@@ -667,6 +696,32 @@ class QuotationService:
             linked = False
         return await self.masters.customers(None, q, page, size), linked
 
+    async def business_groups(
+        self, principal: Principal, scope: str, q: str | None, page: int, size: int
+    ) -> tuple[GroupPage, bool]:
+        """Business groups to quote, with the same portfolio rule as :meth:`customers`: a
+        salesperson or supervisor gets the groups of their customers (or their team's), and
+        only a person who sees every customer chooses between ``mine`` and ``all``.
+
+        Returns:
+            tuple[GroupPage, bool]: The page and whether the caller is linked to a seller.
+        """
+
+        await self._require_manager(principal)
+        _page(page, size)
+        sales = await self._scope(principal)
+        if sales is not None:
+            linked = bool(sales.seller_codes or sales.supervisor_codes)
+            if sales.is_all:
+                codes = list(sales.seller_codes) if scope == "mine" else None
+            else:
+                codes = list(sales.codes or ())
+            return await self.masters.business_groups(codes, q, page, size), linked
+        if scope == "mine":
+            codes = [seller.code for seller in await self.warehouse.sellers(principal.email)]
+            return await self.masters.business_groups(codes, q, page, size), bool(codes)
+        return await self.masters.business_groups(None, q, page, size), False
+
     # ------------------------------------------------------------ build
 
     async def _context(self, nit: str, scope: SalesScope | None = None) -> CustomerContext:
@@ -681,6 +736,43 @@ class QuotationService:
         draft = rules.customer_context(nit, branches)
         shared = await self.warehouse.price_list_customers(draft.price_list_id)
         context = rules.customer_context(nit, branches, shared)
+        if context.price_list_id == vocabulary.GENERAL_PRICE_LIST:
+            context = replace(context, warnings=(*context.warnings, "lista_general"))
+        return context
+
+    async def _group_context(self, group: str, scope: SalesScope | None = None) -> CustomerContext:
+        """A business group as one customer (2026-11-19): the branches of every NIT decide
+        the list, channel and center by majority (``listas_distintas`` when they differ); the
+        NIT with the most active branches stands for the group. In the caller's scope when
+        one of its branches is."""
+
+        name = (group or "").strip()
+        if not name:
+            raise InvalidInputError("Elige el grupo empresarial")
+        nits = await self.masters.group_nits(name)
+        if not nits:
+            raise NotFoundError(f"No se encontró el grupo empresarial {name}")
+        branches = await self.warehouse.group_branches(nits)
+        if not branches:
+            raise NotFoundError(f"El grupo empresarial {name} no tiene sucursales en SIESA")
+        if self._restricted(scope) and not any(
+            scope.allows(branch.salesperson_code)  # type: ignore[union-attr]
+            for branch in branches
+        ):
+            raise ForbiddenError(f"El grupo empresarial {name} no está en tu cartera")
+        active: dict[str, int] = {}
+        for branch in branches:
+            if branch.nit:
+                active[branch.nit] = active.get(branch.nit, 0) + int(branch.is_active)
+        leader = min(active or {nits[0]: 0}, key=lambda nit: (-active.get(nit, 0), nit))
+        draft = rules.customer_context(leader, branches)
+        shared = await self.warehouse.price_list_customers(draft.price_list_id)
+        context = replace(
+            rules.customer_context(leader, branches, shared),
+            name=name,
+            business_group=name,
+            group_nits=tuple(nits),
+        )
         if context.price_list_id == vocabulary.GENERAL_PRICE_LIST:
             context = replace(context, warnings=(*context.warnings, "lista_general"))
         return context
@@ -730,7 +822,11 @@ class QuotationService:
             )
             return pricing.highest_cost(dict(zip(setup.plans, rows, strict=True)))
 
-        nits = list(audience.nits) if audience is not None else [context.nit]
+        group = context.business_group if audience is None else None
+        if group:
+            nits = list(context.group_nits) or await self.masters.group_nits(group)
+        else:
+            nits = list(audience.nits) if audience is not None else [context.nit]
         costs, prices, taxes, agreements, scopes, names, increases = await asyncio.gather(
             costs_by_center(),
             list_prices(),
@@ -740,6 +836,10 @@ class QuotationService:
             self.masters.supplier_names(codes),
             self.masters.pending_increases(skus),
         )
+        if group:
+            agreements = _group_agreements(agreements, group)
+        # A group has no one customer scope: its margin list comes from the majority channel.
+        scope = None if group else scopes.get(context.nit)
         today = self.calendar.today()
         lines: list[QuotationLine] = []
         for entry in entries:
@@ -790,8 +890,8 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
-                    margin_field=_margin_field(context, scopes.get(context.nit)),
-                    scope=scopes.get(context.nit),
+                    margin_field=_margin_field(context, scope),
+                    scope=scope,
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),
                     cost=costs.get(sku),
@@ -831,7 +931,12 @@ class QuotationService:
         the added SKUs are priced.
         """
 
-        sales = await self.warehouse.last_sales(context.nit, months) if history else []
+        sales: list[LastSale] = []
+        if history and context.business_group:
+            nits = list(context.group_nits) or await self.masters.group_nits(context.business_group)
+            sales = await self.warehouse.group_last_sales(nits, months)
+        elif history:
+            sales = await self.warehouse.last_sales(context.nit, months)
         sold = {sale.sku for sale in sales}
         extra = [sku for sku in added if sku not in sold]
         total = len(sales) + len(extra) + reserved
@@ -867,6 +972,8 @@ class QuotationService:
             salesperson_name=quotation.salesperson_name,
             warnings=quotation.warnings,
             cost_centers=quotation.cost_centers,
+            # The group's NITs are read again when it is priced.
+            business_group=quotation.business_group,
         )
 
     @staticmethod
@@ -892,6 +999,8 @@ class QuotationService:
             "stock_source": setup.stock_label,
             # List 1 is never updated from a quotation: its customer gets a new list.
             "list_action": vocabulary.CREATE_LIST if general else vocabulary.UPDATE_LIST,
+            "business_group": context.business_group,
+            "group_customers": len(context.group_nits) if context.business_group else None,
         }
 
     async def _seller_contact(self, context: CustomerContext) -> SellerContact | None:
@@ -952,9 +1061,11 @@ class QuotationService:
         temporary_customer: TemporaryCustomer | None = None,
         billing_center_code: str | None = None,
         with_history: bool = True,
+        business_group: str | None = None,
     ) -> QuotationDetail:
         """Build a quotation of a customer from its last sales in the window, or an empty one
-        for a temporary customer.
+        for a temporary customer. With ``business_group`` (instead of the NIT) it quotes the
+        whole group (2026-11-19, :meth:`_group_context`); the offer goes to the group.
 
         A temporary customer (not in SIESA) needs ``billing_center_code``: it has no sales and
         no list, and its lines are priced from that center. For a SIESA customer the center
@@ -980,10 +1091,16 @@ class QuotationService:
             raise InvalidInputError("La ventana debe ser de 6 o 12 meses")
         _check_validity(validity_days)
         has_nit = bool((customer_nit or "").strip())
-        if temporary_customer is not None and has_nit:
-            raise InvalidInputError("Envía el NIT de un cliente o un cliente temporal, no los dos")
-        if temporary_customer is None and not has_nit:
-            raise InvalidInputError("Escribe el NIT del cliente o los datos del cliente temporal")
+        group = (business_group or "").strip() or None
+        given = sum((has_nit, group is not None, temporary_customer is not None))
+        if given > 1:
+            raise InvalidInputError(
+                "Envía el NIT de un cliente, un grupo empresarial o un cliente temporal, uno solo"
+            )
+        if given == 0:
+            raise InvalidInputError(
+                "Escribe el NIT del cliente, el grupo empresarial o los datos del cliente temporal"
+            )
         if temporary_customer is not None and not (billing_center_code or "").strip():
             raise InvalidInputError("Elige el centro de operación del cliente temporal")
         temporary = _temporary(temporary_customer) if temporary_customer else None
@@ -1005,8 +1122,12 @@ class QuotationService:
             )
             lines, snapshot, seller = [], None, None
         else:
-            nit = normalize_nit(customer_nit or "")
-            context = await self._context(nit, await self._scope(principal))
+            if group is not None:
+                context = await self._group_context(group, await self._scope(principal))
+                nit = context.nit
+            else:
+                nit = normalize_nit(customer_nit or "")
+                context = await self._context(nit, await self._scope(principal))
             if center is not None:
                 context = replace(
                     context, billing_center_code=center.code, cost_centers=(center.code,)
@@ -1786,7 +1907,11 @@ class QuotationService:
             return await self._refresh_list(principal, detail, version)
         if detail.quotation.is_temporary_customer:
             return await self._repriced(principal, detail, version, detail.quotation.cost_centers)
-        context = await self._context(detail.quotation.customer_nit)
+        context = (
+            await self._group_context(detail.quotation.business_group)
+            if detail.quotation.business_group
+            else await self._context(detail.quotation.customer_nit)
+        )
         manual = detail.quotation.billing_center_source == vocabulary.CENTER_MANUAL
         if manual:
             context = replace(

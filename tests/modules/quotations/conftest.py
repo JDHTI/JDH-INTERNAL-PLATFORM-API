@@ -18,6 +18,8 @@ from app.modules.quotations.domain.entities import (
     CostInfo,
     CustomerOption,
     CustomerPage,
+    GroupInfo,
+    GroupPage,
     ItemInfo,
     LastSale,
     ListItem,
@@ -213,6 +215,20 @@ class FakeWarehouse:
         self.calls.append(("last_sales", nit, months))
         return list(self.sales.get(nit, []))
 
+    async def group_branches(self, nits):
+        self._check()
+        return [replace(item, nit=nit) for nit in nits for item in self.branch_rows.get(nit, [])]
+
+    async def group_last_sales(self, nits, months):
+        self._check()
+        self.calls.append(("group_last_sales", tuple(nits), months))
+        latest: dict[str, LastSale] = {}
+        for nit in nits:
+            for item in self.sales.get(nit, []):
+                if item.sku not in latest or item.net_price > latest[item.sku].net_price:
+                    latest[item.sku] = item
+        return list(latest.values())
+
     async def costs(self, skus, plan):
         self._check()
         self.calls.append(("costs", tuple(skus), plan))
@@ -299,6 +315,9 @@ class FakeMasters:
             ),
             CustomerOption("800125313", "SUMMAR", "0151", "EMPRESAS", "0099", "OTRO", 1, 1),
         ]
+        # Business groups: name -> NITs, and each NIT's salesperson.
+        self.groups: dict[str, list[str]] = {}
+        self.sellers_of: dict[str, str] = {NIT: "0051", "800125313": "0099"}
 
     async def products(self, skus):
         return {sku: self.catalog[sku] for sku in skus if sku in self.catalog}
@@ -317,6 +336,25 @@ class FakeMasters:
             and (not q or q.lower() in (item.name or "").lower() or item.nit.startswith(q))
         ]
         return CustomerPage(tuple(items[(page - 1) * size : page * size]), len(items), page, size)
+
+    async def business_groups(self, seller_codes, q, page, size):
+        names = sorted(
+            {
+                group
+                for group, nits in self.groups.items()
+                if seller_codes is None
+                or any(self.sellers_of.get(nit) in seller_codes for nit in nits)
+            }
+        )
+        items = [
+            GroupInfo(name, len(self.groups[name]), len(self.groups[name]))
+            for name in names
+            if not q or q.lower() in name.lower()
+        ]
+        return GroupPage(tuple(items[(page - 1) * size : page * size]), len(items), page, size)
+
+    async def group_nits(self, group):
+        return list(self.groups.get(group, []))
 
 
 class FakeRepository:
