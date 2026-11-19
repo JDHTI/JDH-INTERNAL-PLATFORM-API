@@ -92,8 +92,7 @@ class QuotationModel(Base):
     __tablename__ = "quotations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('borrador', 'enviada', 'pendiente_validacion', 'pendiente_carga', "
-            "'cargada')",
+            "status IN ('borrador', 'pendiente_validacion', 'pendiente_carga', 'cargada')",
             name="ck_quotations_status",
         ),
         CheckConstraint(
@@ -152,8 +151,6 @@ class QuotationModel(Base):
     stock_source: Mapped[str | None] = mapped_column(Text)
     below_target_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # The last time the offer went to the customer (0071).
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    sent_by: Mapped[str | None] = mapped_column(String(320))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by: Mapped[str | None] = mapped_column(String(320))
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

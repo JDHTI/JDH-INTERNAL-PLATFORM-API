@@ -182,6 +182,8 @@ class FakeSupportRepository:
         # What wrote the last version of each support (the real one queues it for the DWH).
         self.traces: dict[UUID, Trace] = {}
         self.loads: list[LoadPlan] = []
+        # Customer NIT -> its salesperson code (the customers master).
+        self.salespeople: dict[str, str] = {}
 
     async def live_in_groups(self, kinds):
         return [
@@ -352,9 +354,20 @@ class FakeSupportRepository:
         rows = [
             SupportRow(support=item, supplier_code="233")
             for item in self.items.values()
-            if spec.include_voided or item.data.status != "anulado"
+            if (spec.include_voided or item.data.status != "anulado")
+            and self._in_scope(item.data.customer_nit, spec.salesperson_codes)
         ]
         return rows, len(rows)
+
+    def _in_scope(self, nit: str | None, codes: tuple[str, ...] | None) -> bool:
+        if codes is None:
+            return True
+        if not codes:
+            return False
+        return nit is None or self.salespeople.get(nit) in codes
+
+    async def customers_of(self, nits, salesperson_codes) -> set[str]:
+        return {nit for nit in nits if self.salespeople.get(nit) in set(salesperson_codes)}
 
     async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]:
         self.last_search = spec

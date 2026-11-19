@@ -82,7 +82,8 @@ async def test_choosing_a_center_reprices_and_survives_a_refresh(
     await confirm(service, advisor, quotation.id, 3)
     with pytest.raises(ConflictError, match="pendiente"):
         await service.set_billing_center(advisor, quotation.id, 4, ["004"])
-    await service.validate(approver, quotation.id, 4)
+    # A closed one never changes (2026-11-19): back to draft to choose the center.
+    await service.return_to_draft(advisor, quotation.id, 4, None)
     with pytest.raises(InvalidInputError, match="no existe"):
         await service.set_billing_center(advisor, quotation.id, 5, ["999"])
     with pytest.raises(ConflictError):

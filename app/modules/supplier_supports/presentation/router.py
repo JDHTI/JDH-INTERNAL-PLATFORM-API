@@ -517,9 +517,12 @@ async def search_supports(
     service: SupplierSupportService = _service,
 ) -> SupportPageResponse:
     """Filter supports with a dynamic tree of conditions, free text, validity and sorting.
-    The cost is only for BI (managers of ``apoyos``); Comercial gets it empty."""
+    The cost is only for BI (managers of ``apoyos``); Comercial gets it empty. Only the
+    caller's customers come: BI, Comercial's leaders and admins see every support; a
+    salesperson the supports of their customers and the general ones (no NIT); without
+    customers, none (``customer_scope`` in ``/permissions``)."""
 
-    page = await service.search(**body.model_dump())
+    page = await service.search(principal, **body.model_dump())
     sees_cost = await service.can_manage(principal)
     return SupportPageResponse(
         items=[_shown(view, sees_cost) for view in page.items],
@@ -546,12 +549,19 @@ async def permissions(
     principal: Principal = _principal,
     service: SupportRequestService = _requests,
     internal: InternalRequestService = _internal,
-) -> dict[str, bool]:
+    supports: SupplierSupportService = _service,
+) -> dict[str, bool | str]:
     """Tell the UI whether to offer write actions (create, edit, switch, void), and the
     internal support requests: ``can_review_internal`` (BI or a designated reviewer) and
-    ``can_request_internal`` (whoever quotes and does not review: "my requests")."""
+    ``can_request_internal`` (whoever quotes or asks JDH supports: "my requests").
+    ``customer_scope`` says which supports the search shows: ``all``, ``team``, ``mine``
+    (their customers and the general ones) or ``none`` (no customers: no supports)."""
 
-    return {**await service.permissions(principal), **await internal.permissions(principal)}
+    return {
+        **await service.permissions(principal),
+        **await internal.permissions(principal),
+        "customer_scope": await supports.customer_scope(principal),
+    }
 
 
 @router.get("/catalogs", dependencies=[_READ_GATE], summary="Vocabularies and scope values in use")
@@ -822,7 +832,7 @@ async def get_support(
     """Return one support with names, validity, conflicts and derived values (the cost only
     for BI)."""
 
-    return _shown(await service.get(support_id), await service.can_manage(principal))
+    return _shown(await service.get(support_id, principal), await service.can_manage(principal))
 
 
 @router.patch(

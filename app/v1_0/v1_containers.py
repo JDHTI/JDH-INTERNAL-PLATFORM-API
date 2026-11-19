@@ -503,6 +503,26 @@ class V1Container(containers.DeclarativeContainer):
         notifier=pqrsf_notification_service,
         sales=pqrsf_sales_lookup,
     )
+    # --- Salespeople: who is which SIESA salesperson, and each person's sales scope ---
+    # (before the supports and the quoter: both show each person only their customers)
+    salesperson_link_repository = providers.Factory(SqlAlchemyLinkRepository, database=database)
+    sales_roster = providers.Factory(
+        WarehouseSalesRoster,
+        connection=data_provider,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.quotations.dwh_timeout,
+    )
+    sales_scope_service = providers.Factory(
+        SalesScopeService,
+        links=salesperson_link_repository,
+        roster=sales_roster,
+        users=user_directory,
+        access=area_service,
+        audit=area_service,
+        # BI sees every customer; in Comercial only its leader or responsible does.
+        all_area_slugs=providers.List(config.quotations.approver_area_slug),
+        leader_area_slugs=providers.List(config.quotations.manager_area_slug),
+    )
     # --- Commercial masters (DWH mirror) and supplier supports ---
     commercial_master_repository = providers.Factory(
         SqlAlchemyCommercialMasterRepository, database=database
@@ -577,6 +597,7 @@ class V1Container(containers.DeclarativeContainer):
         masters=master_lookup,
         managers=supplier_support_manager_policy,
         calendar=pqrsf_calendar,
+        sales=sales_scope_service,
     )
     supplier_support_request_repository = providers.Factory(
         SqlAlchemySupportRequestRepository, database=database
@@ -775,25 +796,6 @@ class V1Container(containers.DeclarativeContainer):
     quotation_workbook_writer = providers.Singleton(PriceListWorkbookWriter)
     quotation_flat_file_writer = providers.Singleton(
         SiesaPriceFileWriter, company=config.quotations.siesa_company
-    )
-    # --- Salespeople: who is which SIESA salesperson, and each person's sales scope ---
-    salesperson_link_repository = providers.Factory(SqlAlchemyLinkRepository, database=database)
-    sales_roster = providers.Factory(
-        WarehouseSalesRoster,
-        connection=data_provider,
-        schema=settings.provided.DWH_SCHEMA,
-        timeout=config.quotations.dwh_timeout,
-    )
-    sales_scope_service = providers.Factory(
-        SalesScopeService,
-        links=salesperson_link_repository,
-        roster=sales_roster,
-        users=user_directory,
-        access=area_service,
-        audit=area_service,
-        # BI sees every customer; in Comercial only its leader or responsible does.
-        all_area_slugs=providers.List(config.quotations.approver_area_slug),
-        leader_area_slugs=providers.List(config.quotations.manager_area_slug),
     )
     # --- Commercial map (prospects on the map, zones, visit routes) ---
     # ``manage`` in any area where the module is on (Comercial by default).

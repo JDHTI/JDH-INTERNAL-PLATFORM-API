@@ -31,12 +31,13 @@ class FakeLinks:
         return self.refs
 
 
-async def test_whoever_quotes_and_does_not_review_may_ask(service, advisor, approver) -> None:
+async def test_whoever_quotes_may_ask(service, advisor, approver) -> None:
     assert not (await service.permissions(advisor)).can_request_support  # nothing wired
     service.support_requests = FakeLinks({})
 
     assert (await service.permissions(advisor)).can_request_support
-    assert not (await service.permissions(approver)).can_request_support  # BI reviews
+    # BI asks too (2026-11-19); it never approves its own request.
+    assert (await service.permissions(approver)).can_request_support
     assert not (await service.permissions(advisor, "lista")).can_request_support
 
 

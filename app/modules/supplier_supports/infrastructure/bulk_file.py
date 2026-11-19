@@ -198,8 +198,10 @@ _EXPORT_ONLY = ("notes", "promo_warehouses")
 VALIDATION = "validation"
 VALIDATION_HEADER = "Validación"
 _UNIT_LABELS = {"unidad": "Unidad", "caja": "Caja", "kg": "Kg"}
-# Rows the dropdowns, date checks and date format cover below the filled ones.
-_VALIDATED_ROWS = 2000
+# The dropdowns and date checks cover the whole column (Excel's last row), and the date
+# format is the column's own style: a row typed anywhere below takes it (2026-11-19; it used
+# to stop 2000 rows below the filled ones).
+_LAST_ROW = 1_048_576
 _DATE_FORMAT = "dd/mm/yyyy"
 
 
@@ -482,8 +484,9 @@ def _list_values(name: str) -> list[str]:
 def _add_checks(
     book: Any, sheet: Any, columns: Sequence[tuple[str, str]], validation: bool, filled: int
 ) -> None:
-    """Dropdowns from the «Valores» sheet, and date checks and the date format on the rows to
-    fill (filled or not), so a typed date is a date and not a text."""
+    """Dropdowns from the «Valores» sheet, and date checks and the date format on the whole
+    column, so a typed date is a date and not a text in any row. The filled rows carry the
+    format on each cell (a written cell does not take the column's style)."""
 
     values = book.create_sheet("Valores")
     ranges: dict[str, str] = {}
@@ -495,11 +498,10 @@ def _add_checks(
         for row, item in enumerate(items, start=2):
             values.cell(row=row, column=column, value=item)
         ranges[name] = f"Valores!${letter}$2:${letter}${len(items) + 1}"
-    last = max(filled + 1, 1) + _VALIDATED_ROWS
     names = [name for name, _ in columns] + ([VALIDATION] if validation else [])
     for index, name in enumerate(names, start=1):
         letter = get_column_letter(index)
-        target = f"{letter}2:{letter}{last}"
+        target = f"{letter}2:{letter}{_LAST_ROW}"
         if name in ranges:
             check = DataValidation(
                 type="list",
@@ -510,7 +512,8 @@ def _add_checks(
                 error="Elige un valor de la lista",
             )
         elif fields.FIELDS.get(name) is not None and fields.FIELDS[name].type == fields.DATE:
-            for row in range(2, last + 1):
+            sheet.column_dimensions[letter].number_format = _DATE_FORMAT
+            for row in range(2, filled + 2):
                 sheet.cell(row=row, column=index).number_format = _DATE_FORMAT
             check = DataValidation(
                 type="date",

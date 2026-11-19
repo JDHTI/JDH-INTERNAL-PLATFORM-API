@@ -427,10 +427,20 @@ class QuotationService:
         return approvers is not None and await approvers.is_manager(principal)
 
     async def can_validate(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
+        """Who validates each kind. A customer quotation pending validation is also validated
+        from ``actualizacion-listas`` (BI, 2026-11-19): whoever validates list updates
+        validates it too."""
+
         _, approvers = self._policies(kind)
         if principal.is_platform_admin:
             return True
-        return approvers is not None and await approvers.is_manager(principal)
+        if approvers is not None and await approvers.is_manager(principal):
+            return True
+        return (
+            kind == vocabulary.QUOTATION
+            and self.list_approvers is not None
+            and await self.list_approvers.is_manager(principal)
+        )
 
     async def _sees_all(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
         """Validators and moderators read every quotation; anyone else only the ones they made."""
@@ -462,14 +472,17 @@ class QuotationService:
             raise ForbiddenError("No tienes permiso para usar el cotizador")
 
     async def can_read(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
-        """Read on the quoter in either area (comercial quotes, BI validates)."""
+        """Read on the quoter in either area (comercial quotes, BI validates); the customer
+        quotations also for whoever validates list updates (:meth:`can_validate`)."""
 
         managers, approvers = self._policies(kind)
         if principal.is_platform_admin:
             return True
         if managers is not None and await managers.can_read(principal):
             return True
-        return approvers is not None and await approvers.can_read(principal)
+        if approvers is not None and await approvers.can_read(principal):
+            return True
+        return kind == vocabulary.QUOTATION and await self.can_validate(principal, kind)
 
     async def _require_reader(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> None:
         if not await self.can_read(principal, kind):
@@ -536,11 +549,9 @@ class QuotationService:
                 sellers = []
             seller = sellers[0] if sellers else None
         scope = await self._scope(principal) if kind == vocabulary.QUOTATION else None
+        # Everyone who quotes asks, approvers too (2026-11-19); nobody approves their own.
         can_request = (
-            kind == vocabulary.QUOTATION
-            and can_manage
-            and self.support_requests is not None
-            and not await self.support_requests.is_reviewer(principal)
+            kind == vocabulary.QUOTATION and can_manage and self.support_requests is not None
         )
         return Permissions(
             can_manage,
@@ -1413,13 +1424,21 @@ class QuotationService:
 
         BI (and admins) has the whole module: it edits any quotation. Anyone else, only theirs.
         ``any_status`` lets through a pending one too: for changes that never touch prices
-        (offer settings, quantities). With ``skus``, only those lines come.
+        (offer settings, quantities). A closed one (validated or loaded) never changes: no
+        edit, no refresh (2026-11-19). With ``skus``, only those lines come.
         """
 
         detail = await self.get(principal, quotation_id, skus)
         await self._require_manager(principal, detail.quotation.kind)
         await self._require_owner_or_validator(principal, detail.quotation, "editarla")
         await self._check_restricted(principal, detail.quotation)
+        if detail.quotation.status in vocabulary.CLOSED:
+            noun = self._noun(detail.quotation.kind)
+            raise ConflictError(
+                f"{noun[0].upper()}{noun[1:]} ya está cerrada "
+                f"({vocabulary.STATUS_LABELS[detail.quotation.status].lower()}): sus datos no "
+                "cambian; crea una nueva para cotizar de nuevo"
+            )
         if not any_status and detail.quotation.status == vocabulary.PENDING:
             noun = self._noun(detail.quotation.kind)
             raise ConflictError(
@@ -2297,43 +2316,6 @@ class QuotationService:
             updated_at=now,
         )
         return await self.repository.save(confirmed, [], version)
-
-    async def send(self, principal: Principal, quotation_id: UUID, version: int) -> QuotationDetail:
-        """The offer goes to the customer: no validation, for Comercial and BI (BI, 2026-11-18).
-
-        Only updating or creating a price list goes to validation (:meth:`confirm`). A sent
-        quotation stays editable: an edit takes it back to draft (to be sent again) and keeps
-        when it was last sent; from draft or sent it may still go to validation. The margin
-        rule never blocks: the offer carries what the advisor quoted.
-
-        Raises:
-            ForbiddenError: The caller may not edit it.
-            ConflictError: It changed (``version``), or it is already in validation or
-                closed.
-            InvalidInputError: A list update, or no line goes in the offer.
-        """
-
-        detail = await self._editable(principal, quotation_id)
-        quotation = detail.quotation
-        self._no_offer(quotation)
-        self._check_version(quotation, version)
-        if quotation.status not in (vocabulary.DRAFT, vocabulary.SENT):
-            raise ConflictError(
-                "La cotización ya está en validación o cargada: la oferta se envía desde borrador"
-            )
-        if not offer.offer_lines(detail):
-            raise InvalidInputError("La oferta no tiene referencias activas con precio para enviar")
-        now = datetime.now(UTC)
-        sent = replace(
-            quotation,
-            status=vocabulary.SENT,
-            sent_at=now,
-            sent_by=principal.email,
-            version=quotation.version + 1,
-            updated_by=principal.email,
-            updated_at=now,
-        )
-        return await self.repository.save(sent, [], version)
 
     async def return_to_draft(
         self, principal: Principal, quotation_id: UUID, version: int, note: str | None

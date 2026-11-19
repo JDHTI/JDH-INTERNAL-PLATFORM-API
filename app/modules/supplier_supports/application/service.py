@@ -42,6 +42,7 @@ from app.modules.supplier_supports.domain.entities import (
 from app.modules.supplier_supports.domain.overlap import Supersede
 from app.modules.supplier_supports.domain.ports import (
     Calendar,
+    CustomerScopeResolver,
     ManagerPolicy,
     MasterLookup,
     SupportRepository,
@@ -300,6 +301,7 @@ class SupplierSupportService:
         masters: MasterLookup,
         managers: ManagerPolicy,
         calendar: Calendar,
+        sales: CustomerScopeResolver | None = None,
     ) -> None:
         """Create the service.
 
@@ -308,12 +310,47 @@ class SupplierSupportService:
             masters (MasterLookup): Resolves suppliers, products and customers.
             managers (ManagerPolicy): Decides who may write.
             calendar (Calendar): Business-day clock.
+            sales (CustomerScopeResolver | None): Each person's customers, for what they see
+                (``None``: everyone sees every support).
         """
 
         self.repository = repository
         self.masters = masters
         self.managers = managers
         self.calendar = calendar
+        self.sales = sales
+
+    # ------------------------------------------------------------ who sees what
+
+    async def _scope(self, principal: Principal) -> tuple[str, tuple[str, ...] | None]:
+        """The caller's customer scope and its salesperson codes (``None`` = every support).
+
+        2026-11-19: the managers of ``apoyos`` (BI) and whoever sees every customer (BI,
+        Comercial's leaders, admins) see every support; a salesperson or supervisor only the
+        supports of their customers plus the general ones (no NIT); without customers, none.
+        """
+
+        if self.sales is None or await self.managers.is_manager(principal):
+            return "all", None
+        scope = await self.sales.scope_for(principal)
+        if scope.codes is None:
+            return scope.scope, None
+        return scope.scope, tuple(scope.codes)
+
+    async def customer_scope(self, principal: Principal) -> str:
+        """``all``, ``team``, ``mine`` or ``none``: what the caller sees of the supports."""
+
+        return (await self._scope(principal))[0]
+
+    async def _check_visible(self, principal: Principal | None, support: Support) -> None:
+        if principal is None:
+            return
+        _, codes = await self._scope(principal)
+        nit = support.data.customer_nit
+        if codes is None or (nit is None and codes):
+            return
+        if nit is None or nit not in await self.repository.customers_of([nit], codes):
+            raise NotFoundError("Apoyo no encontrado")
 
     # ------------------------------------------------------------ validation
 
@@ -693,16 +730,21 @@ class SupplierSupportService:
             margin_list=row.margin_field,
         )
 
-    async def get(self, support_id: UUID) -> SupportView:
-        """One support with names, validity, conflicts and derived values."""
+    async def get(self, support_id: UUID, principal: Principal | None = None) -> SupportView:
+        """One support with names, validity, conflicts and derived values.
+
+        With ``principal``, only if it is in the caller's customers (404 otherwise).
+        """
 
         row = await self.repository.get_row(support_id)
         if row is None:
             raise NotFoundError("Apoyo no encontrado")
+        await self._check_visible(principal, row.support)
         return (await self._views([row]))[0]
 
     async def search(
         self,
+        principal: Principal | None = None,
         *,
         match: str = "all",
         conditions: Sequence[Mapping[str, Any]] | None = None,
@@ -726,6 +768,8 @@ class SupplierSupportService:
         """Filter supports with the dynamic filter language.
 
         Args:
+            principal (Principal | None): The caller: only the supports of their customers
+                come (:meth:`_scope`). ``None`` (internal use) sees every support.
             match (str): ``all`` (AND) or ``any`` (OR) for the top-level conditions.
             conditions (Sequence[Mapping[str, Any]] | None): Conditions or nested groups;
                 see :mod:`app.modules.supplier_supports.domain.filters`.
@@ -776,6 +820,8 @@ class SupplierSupportService:
             page=page,
             size=size,
         )
+        if principal is not None:
+            spec = replace(spec, salesperson_codes=(await self._scope(principal))[1])
         rows, total = await self.repository.search(spec)
         return SupportPage(items=await self._views(rows), total=total, page=page, size=size)
 

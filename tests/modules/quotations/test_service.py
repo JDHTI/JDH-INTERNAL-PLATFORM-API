@@ -25,7 +25,7 @@ from app.modules.quotations.domain import rules
 from app.modules.quotations.domain.entities import ItemInfo, ListPrice, ValueTaxKey
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import NIT, branch, cost, product, sale
-from tests.modules.supplier_supports.conftest import person
+from tests.modules.supplier_supports.conftest import FakeManagers, person
 
 
 async def test_create_builds_every_sku_with_cost_support_and_target(
@@ -191,42 +191,65 @@ async def test_confirm_validate_upload_and_export_an_update(service, advisor, ap
     assert workbook.filename == "ACTUALIZACION LISTAS PRECIOS_asesor@jdh.com.co.xlsx"
     with pytest.raises(ConflictError, match="pendiente de carga"):
         await service.mark_uploaded(approver, quotation.id, 5)
-    edited, _ = await service.update_lines(advisor, quotation.id, 5, [LineChange("2537", None)])
-    assert edited.quotation.status == "borrador" and edited.quotation.validated_at is None
-    assert edited.quotation.uploaded_at is None and edited.quotation.uploaded_by is None
+    # Closed: its data never change any more, not even by a refresh or by BI.
+    for actor in (advisor, approver):
+        with pytest.raises(ConflictError, match="ya está cerrada"):
+            await service.update_lines(actor, quotation.id, 5, [LineChange("2537", None)])
+        with pytest.raises(ConflictError, match="ya está cerrada"):
+            await service.refresh(actor, quotation.id, 5)
+    with pytest.raises(ConflictError, match="ya está cerrada"):
+        await service.confirm(
+            advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
+        )
+    # The offer still downloads, to send it by hand.
+    assert (await service.offer_file(advisor, quotation.id)).content
 
 
-async def test_the_offer_goes_to_the_customer_without_validation(
-    service, advisor, approver
+async def test_the_offer_downloads_in_draft_and_only_the_list_goes_to_validation(
+    service, advisor
 ) -> None:
+    # BI, 2026-11-19: nothing is sent from the platform; the advisor downloads the offer
+    # (PDF or Excel) and sends it by hand. Only the price list goes to validation.
     quotation = (await service.create(advisor, NIT, 12)).quotation
-    with pytest.raises(InvalidInputError, match="no tiene referencias activas con precio"):
-        await service.send(advisor, quotation.id, 1)
-    # A price under the minimum does not block sending either.
     await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
 
-    sent = await service.send(advisor, quotation.id, 2)
+    offer_file = await service.offer_file(advisor, quotation.id)
 
-    assert sent.quotation.status == "enviada" and sent.quotation.sent_by == advisor.email
-    assert sent.quotation.below_rule_count == 1 and sent.quotation.confirmed_at is None
-    # Still editable: an edit takes it back to draft and keeps when it was sent.
-    edited, _ = await service.update_lines(
-        advisor, quotation.id, 3, [LineChange("2537", Decimal("3100"))]
-    )
-    assert edited.quotation.status == "borrador" and edited.quotation.sent_at is not None
-    again = await service.send(advisor, quotation.id, 4)
-    assert again.quotation.status == "enviada"
-    # Only asking for the price list goes to validation, from a sent quotation too.
+    assert offer_file.content
+    assert (await service.get(advisor, quotation.id)).quotation.status == "borrador"
+    assert not hasattr(service, "send")
     pending = await service.confirm(
-        advisor, quotation.id, 5, list_action=None, new_list_name=None, activation_date=None
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
     )
     assert pending.quotation.status == "pendiente_validacion"
-    with pytest.raises(ConflictError, match="pendiente de validación"):
-        await service.send(approver, quotation.id, 6)
-    # BI quotes too, and sends its own.
-    own = (await service.create(approver, NIT, 12)).quotation
-    await service.update_lines(approver, own.id, 1, [LineChange("2537", Decimal("4100"))])
-    assert (await service.send(approver, own.id, 2)).quotation.status == "enviada"
+
+
+async def test_list_update_validators_validate_customer_quotations(service, advisor) -> None:
+    # BI, 2026-11-19: the customer quotations pending validation are validated from
+    # Actualización de listas, by whoever validates list updates.
+    validator = person("validador.listas@jdh.com.co")
+    assert not await service.can_validate(validator)
+    service.list_approvers = FakeManagers(["bi@jdh.com.co", validator.email])
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("4100"))])
+    await service.confirm(
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
+    )
+
+    assert await service.can_read(validator) and await service.can_validate(validator)
+    pending = await service.list(
+        validator,
+        mine=False,
+        status="pendiente_validacion",
+        customer_nit=None,
+        q=None,
+        page=1,
+        size=20,
+    )
+    assert [item.id for item in pending.items] == [quotation.id]
+    validated = await service.validate(validator, quotation.id, 3)
+    assert validated.quotation.status == "pendiente_carga"
+    assert validated.quotation.validated_by == validator.email
 
 
 async def test_create_a_list_for_a_customer_on_list_one(
