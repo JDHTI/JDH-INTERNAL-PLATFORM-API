@@ -125,6 +125,8 @@ class FakeWarehouse:
             "2537": cost("2537", inventory="3000", snapshot_date=date(2026, 11, 3))
         }
         self.existing_lists: set[str] = {"001", "1", "C01"}
+        # Stock by warehouse (the morning's photo): what the lines and the breakdown read.
+        self.stock_rows: list[StockRow] = []
         self.prices: dict[str, ListPrice] = {"2537": ListPrice("2537", Decimal("4568"))}
         self.taxes: dict[str, ValueTaxKey] = {}
         self.seller_rows: dict[str, list[Seller]] = {
@@ -243,6 +245,15 @@ class FakeWarehouse:
     async def price_list_ids(self):
         self._check()
         return sorted(self.existing_lists)
+
+    async def stock(self, skus, warehouses, centers=()):
+        self._check()
+        self.calls.append(("stock", tuple(warehouses), tuple(centers)))
+        return [
+            row
+            for row in self.stock_rows
+            if row.sku in skus and (row.warehouse in warehouses or row.center_code in centers)
+        ]
 
     async def list_prices(self, price_list_id, skus):
         self._check()
@@ -543,9 +554,13 @@ class FakeInsights:
         self.sales_down = False
         self.calls: list[tuple] = []
 
-    async def stock(self, skus, warehouses):
+    async def stock(self, skus, warehouses, centers=()):
         self.calls.append(("stock", tuple(skus), tuple(warehouses)))
-        return [row for row in self.stock_rows if row.sku in skus and row.warehouse in warehouses]
+        return [
+            row
+            for row in self.stock_rows
+            if row.sku in skus and (row.warehouse in warehouses or row.center_code in centers)
+        ]
 
     async def price_history(self, price_list_id, sku, months):
         self.calls.append(("history", price_list_id, sku, months))

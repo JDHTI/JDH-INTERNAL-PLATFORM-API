@@ -49,8 +49,9 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   filas como quedaron (`rows`), para que la UI las muestre sin releer la página.
 - **Compartido:** cualquiera con `manage` en el módulo edita todas las listas, aunque las haya
   armado otra persona; cualquiera con `read` las ve todas.
-- **Existencias:** la sincronización guarda la existencia de cada referencia en las bodegas de su
-  lista (`quotation_lines.stock_on_hand` y `stock_available`, migración `0060`: 0 sin existencia,
+- **Existencias:** la sincronización guarda la existencia de cada referencia en las bodegas de los
+  C.O. de su lista (desde el 2026-11-19, `pricing.stock_scope`; sin C.O., las 17 principales)
+  (`quotation_lines.stock_on_hand` y `stock_available`, migración `0060`: 0 sin existencia,
   NULL sin leer). La página la toma de ahí y se puede ordenar por ella (`sort=existencia`, sin
   leer al final). Las filas sin leer (una lista sin sincronizar desde la `0060`) se leen del DWH
   por página; si no responde, salen sin ella (`stock_read: false`).

@@ -30,6 +30,7 @@ from app.modules.quotations.domain.entities import (
     PriceListInfo,
     Seller,
     SellerContact,
+    StockRow,
     ValueTaxKey,
 )
 from app.modules.quotations.domain.pricing import StockPlan
@@ -313,6 +314,43 @@ class WarehouseQuotationSource:
                 snapshot_date=snapshot.date() if isinstance(snapshot, datetime) else snapshot,
             )
         return result
+
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]:
+        """Stock of the SKUs in the given warehouses, and in every warehouse of ``centers``
+        (operation centers without a list of their own), only where there is some.
+
+        ``cant_disponible`` is what is not committed to orders yet (on 10U, 16 % of the rows
+        have part of the stock committed).
+        """
+
+        if not skus or not (warehouses or centers):
+            return []
+        rows = await self._fetch(
+            'SELECT p."sku", f."bodega", f."desc_bodega", f."co_bodega", f."existencia",'
+            ' f."cant_disponible", f."foto_at"'
+            f" FROM {self._view('inventario_fecha')} f"
+            f' JOIN {self._view("productos")} p ON p."producto_key" = f."producto_key"'
+            ' WHERE p."sku" = ANY($1::text[]) AND f."existencia" > 0 AND f."bodega_activa"'
+            ' AND (f."bodega" = ANY($2::text[]) OR trim(f."co_bodega") = ANY($3::text[]))'
+            ' ORDER BY p."sku", f."existencia" DESC',
+            list(skus),
+            list(warehouses),
+            list(centers),
+        )
+        return [
+            StockRow(
+                sku=str(row["sku"]).strip(),
+                warehouse=str(row["bodega"]).strip(),
+                warehouse_name=_strip(row["desc_bodega"]),
+                center_code=_strip(row["co_bodega"]),
+                on_hand=Decimal(row["existencia"]),
+                available=_decimal(row["cant_disponible"]),
+                snapshot_at=row["foto_at"],
+            )
+            for row in rows
+        ]
 
     async def price_list_exists(self, price_list_id: str) -> bool:
         """Whether SIESA already has a list with this code (as of yesterday's load)."""

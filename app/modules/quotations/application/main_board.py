@@ -27,7 +27,7 @@ from app.core.errors import (
 from app.modules.identity.domain.principal import Principal
 from app.modules.jobs.domain.entities import JobRun
 from app.modules.jobs.domain.registry import Trigger
-from app.modules.quotations.application.list_review import ListReviewService, StockTotal
+from app.modules.quotations.application.list_review import ListReviewService
 from app.modules.quotations.application.service import LineChange, QuotationService, Skipped
 from app.modules.quotations.domain import board, pricing, vocabulary
 from app.modules.quotations.domain.board import (
@@ -37,7 +37,12 @@ from app.modules.quotations.domain.board import (
     BoardPage,
     BoardRow,
 )
-from app.modules.quotations.domain.entities import Quotation, QuotationDetail
+from app.modules.quotations.domain.entities import (
+    Quotation,
+    QuotationDetail,
+    StockTotal,
+    stock_totals,
+)
 from app.modules.quotations.domain.ports import InsightSource
 
 logger = logging.getLogger(__name__)
@@ -319,10 +324,10 @@ class MainBoardService:
         """
 
         quotation = detail.quotation
-        warehouses = pricing.stock_warehouses(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
         skus = [line.sku for line in detail.lines if not line.is_local]
         try:
-            found = await self.insights.stock(skus, warehouses)
+            found = await self.insights.stock(skus, scope.warehouses, scope.centers)
         except DependencyUnavailableError as exc:
             logger.warning("quotations: stock of list %s not read: %s", quotation.id, exc)
             return
@@ -380,7 +385,8 @@ class MainBoardService:
     async def _stock(
         self, rows: Sequence[BoardRow], updates: dict[UUID, Quotation]
     ) -> dict[tuple[UUID, str], StockTotal]:
-        """Stock of each row in its list's sellable warehouses, one read per list."""
+        """Stock of each row in the warehouses of its list's operation centers, one read per
+        list (:func:`pricing.stock_scope`)."""
 
         skus: dict[UUID, list[str]] = defaultdict(list)
         for row in rows:
@@ -389,20 +395,10 @@ class MainBoardService:
         totals: dict[tuple[UUID, str], StockTotal] = {}
         for quotation_id, items in skus.items():
             update = updates[quotation_id]
-            warehouses = pricing.stock_warehouses(update.price_list_id, update.cost_centers)
-            for stock_row in await self.insights.stock(items, warehouses):
-                key = (quotation_id, stock_row.sku)
-                current = totals.get(key)
-                if current is None:
-                    totals[key] = StockTotal(stock_row.on_hand, stock_row.available, 1)
-                    continue
-                totals[key] = StockTotal(
-                    current.on_hand + stock_row.on_hand,
-                    None
-                    if current.available is None or stock_row.available is None
-                    else current.available + stock_row.available,
-                    current.warehouses + 1,
-                )
+            scope = pricing.stock_scope(update.price_list_id, update.cost_centers)
+            found = await self.insights.stock(items, scope.warehouses, scope.centers)
+            for sku, total in stock_totals(found).items():
+                totals[(quotation_id, sku)] = total
         return totals
 
     async def keys(self, principal: Principal, filters: BoardFilter) -> list[BoardKey]:

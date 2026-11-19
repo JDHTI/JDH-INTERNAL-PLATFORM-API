@@ -46,7 +46,10 @@ from app.modules.quotations.domain.entities import (
     QuotationPolicy,
     Seller,
     SellerContact,
+    StockRow,
+    StockTotal,
     TemporaryCustomer,
+    stock_totals,
 )
 from app.modules.quotations.domain.export import (
     ExportRow,
@@ -267,6 +270,22 @@ class ExportFile:
     content: bytes
     filename: str
     media_type: str
+
+
+# References one stock breakdown may ask for.
+MAX_STOCK_SKUS = 500
+
+
+@dataclass(frozen=True)
+class StockBreakdown:
+    """The stock of some references in a quotation's warehouses: where it is read, every
+    warehouse with stock and the total per SKU."""
+
+    scope: pricing.StockScope
+    # The references asked (SIESA lines of the quotation), with or without stock.
+    skus: tuple[str, ...]
+    rows: tuple[StockRow, ...]
+    totals: dict[str, StockTotal]
 
 
 @dataclass(frozen=True)
@@ -827,7 +846,17 @@ class QuotationService:
             nits = list(context.group_nits) or await self.masters.group_nits(group)
         else:
             nits = list(audience.nits) if audience is not None else [context.nit]
-        costs, prices, taxes, agreements, scopes, names, increases = await asyncio.gather(
+        stock_scope = pricing.stock_scope(context.price_list_id, context.cost_centers)
+        (
+            costs,
+            prices,
+            taxes,
+            agreements,
+            scopes,
+            names,
+            increases,
+            stock_rows,
+        ) = await asyncio.gather(
             costs_by_center(),
             list_prices(),
             self.warehouse.value_tax_keys(skus),
@@ -835,7 +864,9 @@ class QuotationService:
             self.supports.customers(nits),
             self.masters.supplier_names(codes),
             self.masters.pending_increases(skus),
+            self.warehouse.stock(skus, stock_scope.warehouses, stock_scope.centers),
         )
+        stock = stock_totals(stock_rows)
         if group:
             agreements = _group_agreements(agreements, group)
         # A group has no one customer scope: its margin list comes from the majority channel.
@@ -911,6 +942,16 @@ class QuotationService:
                     increase=increases.get(sku),
                 )
             )
+        # The stock is the consolidated one of the warehouses of the chosen operation centers
+        # (every center: Nacional), not the cost's warehouse (2026-11-19).
+        lines = [
+            replace(
+                line,
+                stock_on_hand=stock[line.sku].on_hand if line.sku in stock else Decimal(0),
+                stock_available=stock[line.sku].available if line.sku in stock else Decimal(0),
+            )
+            for line in lines
+        ]
         snapshot = max(
             (cost.snapshot_date for cost in costs.values() if cost.snapshot_date), default=None
         )
@@ -1197,6 +1238,30 @@ class QuotationService:
             found = [await self.warehouse.price_list(code) for code in self.main_list_order]
             return [info for info in found if info is not None]
         return await self.warehouse.price_lists(text[:80])
+
+    async def stock_breakdown(
+        self, principal: Principal, quotation_id: UUID, skus: Sequence[str] | None = None
+    ) -> StockBreakdown:
+        """The stock of the quotation's (or list update's) references in the warehouses of
+        its operation centers (2026-11-19): consolidated per SKU and warehouse by warehouse,
+        to show the detail behind each line's total. Without ``skus``, every SIESA line (at
+        most :data:`MAX_STOCK_SKUS`).
+
+        Raises:
+            InvalidInputError: Too many references.
+        """
+
+        detail = await self.get(principal, quotation_id)
+        quotation = detail.quotation
+        siesa = [line.sku for line in detail.lines if not line.is_local]
+        wanted = list(dict.fromkeys(sku.strip() for sku in skus if sku.strip())) if skus else siesa
+        if len(wanted) > MAX_STOCK_SKUS:
+            raise InvalidInputError(f"Pide el desglose de hasta {MAX_STOCK_SKUS} referencias")
+        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        known = set(siesa)
+        asked = tuple(sku for sku in wanted if sku in known)
+        rows = await self.warehouse.stock(list(asked), scope.warehouses, scope.centers)
+        return StockBreakdown(scope=scope, skus=asked, rows=tuple(rows), totals=stock_totals(rows))
 
     async def available_list_codes(
         self, principal: Principal, after: str | None, size: int

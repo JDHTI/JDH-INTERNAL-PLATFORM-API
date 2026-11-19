@@ -65,6 +65,12 @@ class WarehouseSource(Protocol):
         """Every list code SIESA has (as of yesterday's load)."""
         ...
 
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]:
+        """Stock by warehouse of the SKUs in these warehouses and centers (only with some)."""
+        ...
+
     async def list_prices(
         self, price_list_id: str, skus: Sequence[str]
     ) -> dict[str, ListPrice]: ...
@@ -205,7 +211,9 @@ class StagingRepository(QuotationRepository, Protocol):
 class InsightSource(Protocol):
     """Warehouse reads of an item's detail in a list update."""
 
-    async def stock(self, skus: Sequence[str], warehouses: Sequence[str]) -> list[StockRow]: ...
+    async def stock(
+        self, skus: Sequence[str], warehouses: Sequence[str], centers: Sequence[str] = ()
+    ) -> list[StockRow]: ...
 
     async def price_history(
         self, price_list_id: str, sku: str, months: int

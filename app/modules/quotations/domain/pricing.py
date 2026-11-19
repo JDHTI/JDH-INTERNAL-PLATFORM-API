@@ -113,6 +113,17 @@ GENERAL_WAREHOUSES = (
     "BAQ2",
     "BAQ10",
 )
+# The sellable warehouses of each operation center whose stock a quotation or a list update
+# shows (2026-11-19): the same 17 of list 1, by center. A center without a row (Urabá,
+# Valledupar, Yumbo…) is read by the warehouses SIESA places in it (``co_bodega``).
+CENTER_STOCK_WAREHOUSES: dict[str, tuple[str, ...]] = {
+    "001": ("MDE1", "MDE3", "MDE4"),
+    "002": ("OCC1", "OCC16", "OCC14"),
+    "003": ("BTA9", "BTA8", "BTA20"),
+    "004": ("CTG1", "CTG15", "CTG14"),
+    "005": ("BGA1", "BGA11"),
+    "009": ("BAQ1", "BAQ2", "BAQ10"),
+}
 # Product lines that go to warehouse 2.
 COLD_LINES = ("CONGELADOS", "REFRIGERADOS")
 
@@ -208,21 +219,53 @@ def stock_plans(price_list_id: str | None, centers: Sequence[str]) -> dict[str |
     return {code: stock_plan(price_list_id, code) for code in centers}
 
 
-def stock_warehouses(price_list_id: str | None, centers: Sequence[str]) -> tuple[str, ...]:
-    """The sellable warehouses whose stock a list update shows.
+@dataclass(frozen=True)
+class StockScope:
+    """Where the stock of a quotation or a list update is read (2026-11-19).
 
-    The list's own (warehouse 1 and the cold one) when the skill names it; list 1 and a list
-    costed *Nacional* or from centers without a rule, the 17 main warehouses; otherwise the
-    warehouses of its centers. Obsolete, transit or returns warehouses never count: the DWH
-    cannot tell them apart (``bodegas.facturable`` is 'Si' for all but one).
+    ``warehouses`` are read by code; ``centers`` are operation centers without a row in
+    :data:`CENTER_STOCK_WAREHOUSES`, read by every warehouse SIESA places in them.
     """
 
-    if price_list_id in LIST_WAREHOUSES:
-        return tuple(dict.fromkeys(LIST_WAREHOUSES[price_list_id]))
-    own = [code for center in centers for code in CENTER_WAREHOUSES.get(center, ())]
-    if price_list_id == vocabulary.GENERAL_PRICE_LIST or not own:
-        return GENERAL_WAREHOUSES
-    return tuple(dict.fromkeys(own))
+    warehouses: tuple[str, ...]
+    centers: tuple[str, ...] = ()
+    national: bool = False
+
+    @property
+    def label(self) -> str:
+        if self.national:
+            return "Nacional: todas las bodegas"
+        parts = list(self.warehouses) + [f"C.O. {code}" for code in self.centers]
+        return ", ".join(parts)
+
+
+def stock_scope(price_list_id: str | None, centers: Sequence[str]) -> StockScope:
+    """The warehouses whose stock is shown, consolidated: those of the chosen operation
+    centers (2026-11-19).
+
+    - One or more centers (the quotation's filter): the sellable warehouses of each, summed;
+      a center without a row is read by its own warehouses in SIESA.
+    - No center: *Nacional*, the 17 main warehouses of every center.
+
+    The filter alone decides, whatever the list (a list's own warehouses still decide its
+    cost, not its stock). Obsolete, transit or returns warehouses never count: the DWH
+    cannot tell them apart (``bodegas.facturable`` is 'Si' for all but one), so the mapped
+    centers use the list of sellable ones.
+    """
+
+    del price_list_id  # the list no longer decides the stock (2026-11-19)
+    codes = tuple(dict.fromkeys(code for code in centers if code))
+    if codes:
+        own = [code for center in codes for code in CENTER_STOCK_WAREHOUSES.get(center, ())]
+        others = tuple(code for code in codes if code not in CENTER_STOCK_WAREHOUSES)
+        return StockScope(tuple(dict.fromkeys(own)), others)
+    return StockScope(GENERAL_WAREHOUSES, national=True)
+
+
+def stock_warehouses(price_list_id: str | None, centers: Sequence[str]) -> tuple[str, ...]:
+    """The warehouses of :func:`stock_scope` read by code (the main lists' board)."""
+
+    return stock_scope(price_list_id, centers).warehouses
 
 
 def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
@@ -348,6 +391,8 @@ __all__ = [
     "FAMILY_LABELS",
     "NATIONAL_SOURCE",
     "StockPlan",
+    "StockScope",
+    "stock_scope",
     "centers_set_cost",
     "costliest_center",
     "effective_cost",

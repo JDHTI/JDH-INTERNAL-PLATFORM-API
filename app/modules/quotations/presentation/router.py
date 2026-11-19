@@ -1193,6 +1193,112 @@ async def price_lists(
     return PriceListPageResponse(items=items, total=len(items), page=1, size=max(len(items), 1))
 
 
+class WarehouseStockResponse(BaseModel):
+    warehouse: str
+    name: str | None
+    on_hand: Decimal
+    available: Decimal | None
+
+
+class CenterStockResponse(BaseModel):
+    """One operation center's warehouses with stock of the reference."""
+
+    code: str | None
+    on_hand: Decimal
+    available: Decimal | None
+    warehouses: list[WarehouseStockResponse]
+
+
+class SkuStockResponse(BaseModel):
+    """The consolidated stock of a reference (the line's) and its detail by center."""
+
+    sku: str
+    on_hand: Decimal
+    available: Decimal | None
+    centers: list[CenterStockResponse]
+
+
+class StockBreakdownResponse(BaseModel):
+    # Nacional (no center chosen): every main warehouse.
+    national: bool
+    label: str
+    # The warehouses read by code, and the centers read by every warehouse SIESA puts there.
+    warehouses: list[str]
+    centers: list[str]
+    stock_at: datetime | None
+    items: list[SkuStockResponse]
+
+
+def _stock_items(result: Any) -> list[SkuStockResponse]:
+    by_sku: dict[str, dict[str | None, list[Any]]] = {}
+    for row in result.rows:
+        by_sku.setdefault(row.sku, {}).setdefault(row.center_code, []).append(row)
+    items = []
+    for sku in result.skus:
+        total = result.totals.get(sku)
+        centers = []
+        for code, rows in sorted(by_sku.get(sku, {}).items(), key=lambda item: item[0] or "~"):
+            available = (
+                None
+                if any(row.available is None for row in rows)
+                else sum((row.available for row in rows), Decimal(0))
+            )
+            centers.append(
+                CenterStockResponse(
+                    code=code,
+                    on_hand=sum((row.on_hand for row in rows), Decimal(0)),
+                    available=available,
+                    warehouses=[
+                        WarehouseStockResponse(
+                            warehouse=row.warehouse,
+                            name=row.warehouse_name,
+                            on_hand=row.on_hand,
+                            available=row.available,
+                        )
+                        for row in rows
+                    ],
+                )
+            )
+        items.append(
+            SkuStockResponse(
+                sku=sku,
+                on_hand=total.on_hand if total else Decimal(0),
+                available=total.available if total else Decimal(0),
+                centers=centers,
+            )
+        )
+    return items
+
+
+@router.get(
+    "/{quotation_id}/stock-breakdown",
+    dependencies=[_READ_GATE],
+    response_model=StockBreakdownResponse,
+    summary="Stock of the references in the warehouses of the chosen operation centers",
+)
+@inject
+async def stock_breakdown(
+    quotation_id: UUID,
+    sku: list[str] | None = Query(default=None, max_length=500),  # noqa: B008
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> StockBreakdownResponse:
+    """The stock of a quotation's or list update's references (``sku``, repeatable; none:
+    every SIESA line, up to 500) in the sellable warehouses of its operation centers, summed
+    per reference as each line shows it, and detailed by center and warehouse. No center
+    chosen is *Nacional*: every main warehouse. From SIESA's stock photo of the morning."""
+
+    result = await service.stock_breakdown(principal, quotation_id, sku)
+    return StockBreakdownResponse(
+        national=result.scope.national,
+        label=result.scope.label,
+        warehouses=list(result.scope.warehouses),
+        centers=list(result.scope.centers),
+        stock_at=max((row.snapshot_at for row in result.rows if row.snapshot_at), default=None),
+        items=_stock_items(result),
+    )
+
+
 class FreeCodesResponse(BaseModel):
     """Free codes for a new price list, in order."""
 

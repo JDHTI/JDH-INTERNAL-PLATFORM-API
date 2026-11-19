@@ -164,8 +164,23 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      (`supported_margin_pct`), el mínimo es (costo − apoyo) / (1 − ese margen)
      (`support.authorized_margin_pct`); si no, la regla general.
    - Rebates y presupuestos quedan aparte: nunca se aplican.
-   - **Inventario**: cada línea trae `stock_on_hand` (existencia) y `stock_available`
-     (`cant_disponible`) de las mismas bodegas del costo.
+   - **Inventario** (2026-11-19): cada línea trae `stock_on_hand` (existencia) y
+     `stock_available` (`cant_disponible`) **consolidados en las bodegas de los CO del filtro**
+     (`cost_centers`), no solo en la bodega del costo.
+     - **Uno o varios CO:** la suma de las bodegas vendibles de cada uno
+       (`pricing.CENTER_STOCK_WAREHOUSES`: 001 MDE1, MDE3, MDE4; 002 OCC1, OCC16, OCC14; 003
+       BTA9, BTA8, BTA20; 004 CTG1, CTG15, CTG14; 005 BGA1, BGA11; 009 BAQ1, BAQ2, BAQ10).
+     - Un CO sin esa fila (Urabá, Valledupar, Yumbo…) se lee por las bodegas que SIESA le pone
+       (`co_bodega`).
+     - **Nacional** (sin CO): las 17 bodegas principales, cualquiera sea la lista.
+     - Las bodegas de obsoletos, tránsito o devoluciones nunca cuentan.
+     - Cambiar los CO (`/billing-center`) recalcula las existencias.
+   - **Desglose:** `GET /quotations/{id}/stock-breakdown?sku=&sku=` → `{national, label,
+     warehouses, centers, stock_at, items: [{sku, on_hand, available, centers: [{code,
+     on_hand, available, warehouses: [{warehouse, name, on_hand, available}]}]}]}`.
+     - Sin `sku` trae todas las líneas de SIESA (hasta 500).
+     - Sirve para el cotizador y para las actualizaciones de lista: el total por referencia
+       es el de la línea, y debajo va el detalle por CO y bodega.
 8. **Referencias inactivas**: una referencia inactiva en SIESA (`consumo.productos.estado`) se
    muestra marcada (`is_active: false`, `referencia_inactiva`) para reemplazarla. **No sale en el
    Excel ni en el plano**, no cuenta en las líneas cambiadas y no bloquea la confirmación. Se puede

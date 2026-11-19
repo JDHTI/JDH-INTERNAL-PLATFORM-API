@@ -6,6 +6,7 @@ are fractions (0.18 = 18 %); ``vat_pct`` is in points (19 = 19 %), as the master
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -722,6 +723,34 @@ class MonthlySale:
     month: date
     price: Decimal
     quantity: Decimal
+
+
+@dataclass(frozen=True)
+class StockTotal:
+    """The stock of a SKU summed over the warehouses read (``warehouses`` with some)."""
+
+    on_hand: Decimal
+    available: Decimal | None
+    warehouses: int
+
+
+def stock_totals(rows: Sequence[StockRow]) -> dict[str, StockTotal]:
+    """Stock rows summed per SKU (the available is unknown if one warehouse's is)."""
+
+    totals: dict[str, StockTotal] = {}
+    for row in rows:
+        current = totals.get(row.sku)
+        if current is None:
+            totals[row.sku] = StockTotal(row.on_hand, row.available, 1)
+            continue
+        totals[row.sku] = StockTotal(
+            current.on_hand + row.on_hand,
+            None
+            if current.available is None or row.available is None
+            else current.available + row.available,
+            current.warehouses + 1,
+        )
+    return totals
 
 
 @dataclass(frozen=True)
