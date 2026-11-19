@@ -146,6 +146,8 @@ class InternalRequestResponse(BaseModel):
     agreed_with: str
     reason: str
     requested_by: str
+    # Who asked: nobody approves their own request (the UI hides the approve button).
+    requested_by_id: UUID
     created_at: datetime
     version: int
     valid_from: date | None
@@ -179,6 +181,7 @@ def _response(request: InternalRequest) -> InternalRequestResponse:
         agreed_with=request.agreed_with,
         reason=request.reason,
         requested_by=request.requested_by,
+        requested_by_id=request.requested_by_id,
         created_at=request.created_at,
         version=request.version,
         valid_from=request.valid_from,

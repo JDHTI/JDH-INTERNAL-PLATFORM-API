@@ -31,8 +31,9 @@ Módulo `supplier_supports` (con un puerto hacia `quotations`). Migración `0062
   de SIESA) no puede pedir.
 - **Quién pide:** quien gestiona el `cotizador` (`can_request_support`), también un aprobador o
   un administrador (2026-11-19: el formulario sale a todo el que cotiza). **Nadie aprueba su
-  propia solicitud**: es 403 y la decide otro aprobador. La UI elige una o varias referencias y
-  hace un `POST` por proveedor.
+  propia solicitud**: es 403 y la decide otro aprobador. La respuesta trae `requested_by_id`
+  para que la UI oculte «Aprobar». La UI elige una o varias referencias y hace un `POST` por
+  proveedor.
 - **Quién decide** (`can_review_internal`):
   - los gestores de `apoyos` en BI;
   - quien tenga `manage` sobre `aprobacion-apoyos-internos` en cualquier área. Es un permiso sin

@@ -23,6 +23,7 @@ from app.modules.supplier_supports.domain.internal_requests import (
     QuotedLine,
     RequestRef,
 )
+from app.modules.supplier_supports.presentation.internal_requests_router import _response
 from tests.modules.supplier_supports.conftest import (
     FAMILIA_ID,
     FakeLookup,
@@ -268,6 +269,8 @@ async def test_a_request_takes_the_quotation_line_and_the_order_date(requests_se
         D("0.18"),
     )
     assert first.requested_margin_pct == D("0.160000")
+    # The UI hides «Aprobar» on one's own request by this id.
+    assert _response(request).requested_by_id == QUOTER.user_id
 
 
 @pytest.mark.parametrize(
