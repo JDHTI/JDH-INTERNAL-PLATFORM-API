@@ -163,11 +163,10 @@ class InternalRequestService:
     # ------------------------------------------------------------ access
 
     async def can_request(self, principal: Principal) -> bool:
-        """Uses the quoter and does not review."""
+        """Uses the quoter. An approver asks too (2026-11-19: the form shows for everyone who
+        quotes); they never approve their own request (:meth:`approve`)."""
 
-        return await self.quotations.can_quote(principal) and not await self.links.is_reviewer(
-            principal
-        )
+        return await self.quotations.can_quote(principal)
 
     async def permissions(self, principal: Principal) -> dict[str, bool]:
         """``can_review_internal``, and ``can_request_internal``: asks from the requests panel and
@@ -208,7 +207,7 @@ class InternalRequestService:
 
         if not await self.can_request(principal):
             raise ForbiddenError(
-                "Solo quien cotiza (y no revisa) puede pedir apoyos internos desde la cotización"
+                "Solo quien cotiza puede pedir apoyos internos desde la cotización"
             )
         quotation = await self.quotations.quotation(principal, quotation_id)
         if quotation.kind != QUOTATION_KIND:
@@ -273,10 +272,9 @@ class InternalRequestService:
         )
 
     async def can_request_direct(self, principal: Principal) -> bool:
-        """Asks from the requests panel: quotes or asks JDH supports, and does not review."""
+        """Asks from the requests panel: quotes or asks JDH supports (an approver too; they
+        never approve their own request)."""
 
-        if await self.links.is_reviewer(principal):
-            return False
         if await self.quotations.can_quote(principal):
             return True
         return self.requesters is not None and await self.requesters.is_manager(principal)
@@ -453,6 +451,9 @@ class InternalRequestService:
         request = await self.repository.get(request_id)
         if request is None:
             raise NotFoundError("Solicitud no encontrada")
+        if request.requested_by_id == principal.user_id:
+            # An approver may ask too (2026-11-19), but never decides their own request.
+            raise ForbiddenError("No puedes aprobar tu propia solicitud: la decide otro aprobador")
         if request.status != PENDING:
             raise ConflictError("La solicitud ya fue resuelta")
         if decision not in (FOR_GOOD, ONCE):

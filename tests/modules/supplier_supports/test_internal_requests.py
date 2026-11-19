@@ -219,17 +219,28 @@ async def test_who_asks_and_who_decides(requests_service, access) -> None:
     }
     assert (await requests_service.permissions(REVIEWER))["can_review_internal"]
     assert (await requests_service.permissions(DESIGNATED))["can_review_internal"]
-    with pytest.raises(ForbiddenError):  # BI reviews, it does not ask itself
-        await requests_service.create(
-            REVIEWER,
-            QUOTATION_ID,
-            version=7,
-            supplier_code="233",
-            requested_for=None,
-            agreed_with="x",
-            reason="y",
-            items=[("1128", D("0.1"))],
-        )
+    # An approver who quotes asks too (2026-11-19), but never decides their own request.
+    own = await requests_service.create(
+        REVIEWER,
+        QUOTATION_ID,
+        version=7,
+        supplier_code="233",
+        requested_for=None,
+        agreed_with="x",
+        reason="y",
+        items=[("1128", D("0.1"))],
+    )
+    decision = {
+        "version": 1,
+        "decision": "persistente",
+        "valid_from": None,
+        "valid_to": None,
+        "note": None,
+        "items": [("1128", D("0.1"))],
+    }
+    with pytest.raises(ForbiddenError, match="tu propia solicitud"):
+        await requests_service.approve(REVIEWER, own.id, **decision)
+    assert (await requests_service.approve(DESIGNATED, own.id, **decision)).status == APPROVED
     with pytest.raises(ForbiddenError):  # does not quote
         await requests_service.create(
             person("otro@jdh.com.co"),
@@ -469,13 +480,14 @@ async def test_the_panel_refuses_a_margin_not_under_the_current_one(
 async def test_who_asks_from_the_panel(panel_service) -> None:
     assert await panel_service.can_request_direct(PANEL)
     assert await panel_service.can_request_direct(QUOTER)  # whoever quotes asks here too
-    assert not await panel_service.can_request_direct(REVIEWER)  # BI decides
+    # An approver who quotes asks too (2026-11-19); they never decide their own request.
+    assert await panel_service.can_request_direct(REVIEWER)
     # The panel's button follows the same rule: Comercial asks without using the quoter.
     assert (await panel_service.permissions(PANEL))["can_request_internal"]
     assert (await panel_service.permissions(QUOTER))["can_request_internal"]
     assert await panel_service.permissions(REVIEWER) == {
         "can_review_internal": True,
-        "can_request_internal": False,
+        "can_request_internal": True,
     }
     with pytest.raises(ForbiddenError):
         await panel_service.targets(person("otro@jdh.com.co"), "800116299", ["1128"])

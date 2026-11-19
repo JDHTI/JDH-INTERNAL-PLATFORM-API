@@ -549,11 +549,9 @@ class QuotationService:
                 sellers = []
             seller = sellers[0] if sellers else None
         scope = await self._scope(principal) if kind == vocabulary.QUOTATION else None
+        # Everyone who quotes asks, approvers too (2026-11-19); nobody approves their own.
         can_request = (
-            kind == vocabulary.QUOTATION
-            and can_manage
-            and self.support_requests is not None
-            and not await self.support_requests.is_reviewer(principal)
+            kind == vocabulary.QUOTATION and can_manage and self.support_requests is not None
         )
         return Permissions(
             can_manage,

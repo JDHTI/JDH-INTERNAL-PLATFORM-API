@@ -25,12 +25,14 @@ Módulo `supplier_supports` (con un puerto hacia `quotations`). Migración `0062
     - todas las referencias de una solicitud deben ser del mismo proveedor;
     - hay una solicitud pendiente por cliente y referencia;
     - el NIT acepta el dígito de verificación;
-    - pide quien cotiza o quien pide apoyos JDH (`solicitudes-apoyos` en Comercial), nunca un
-      aprobador.
+    - pide quien cotiza o quien pide apoyos JDH (`solicitudes-apoyos` en Comercial).
 - **Alcance:** el NIT de la cotización y una o varias referencias del mismo proveedor que estén en
   ella. Nunca lista de precios, canal, regional ni unidad de negocio. Un cliente temporal (sin NIT
   de SIESA) no puede pedir.
-- **Quién pide:** quien gestiona el `cotizador` y no es aprobador (`can_request_support`).
+- **Quién pide:** quien gestiona el `cotizador` (`can_request_support`), también un aprobador o
+  un administrador (2026-11-19: el formulario sale a todo el que cotiza). **Nadie aprueba su
+  propia solicitud**: es 403 y la decide otro aprobador. La UI elige una o varias referencias y
+  hace un `POST` por proveedor.
 - **Quién decide** (`can_review_internal`):
   - los gestores de `apoyos` en BI;
   - quien tenga `manage` sobre `aprobacion-apoyos-internos` en cualquier área. Es un permiso sin
