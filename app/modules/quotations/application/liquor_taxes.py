@@ -25,6 +25,7 @@ from app.modules.identity.domain.principal import Principal
 from app.modules.quotations.application.service import ExportFile, QuotationService
 from app.modules.quotations.domain import liquor, vocabulary
 from app.modules.quotations.domain.entities import ProductMaster
+from app.modules.quotations.domain.export import loadable_date
 from app.modules.quotations.domain.liquor import (
     LiquorProduct,
     LiquorSummary,
@@ -276,8 +277,12 @@ class LiquorTaxService:
         await self._require(principal, "manage")
         if item.status not in (liquor.UPLOAD_PENDING, liquor.UPLOADED) or not item.activation_date:
             raise ConflictError("El cambio está anulado: sus archivos ya no se cargan")
-        export = liquor.to_export(item.export_rows, item.activation_date)
-        stamp = item.activation_date.strftime("%Y%m%d")
+        activation = item.activation_date
+        if item.status == liquor.UPLOAD_PENDING:
+            # Downloaded after its date, SIESA would refuse it: today instead (2026-11-20).
+            activation = loadable_date(activation, self.calendar.today())
+        export = liquor.to_export(item.export_rows, activation)
+        stamp = activation.strftime("%Y%m%d")
         if fmt == "xlsx":
             return ExportFile(
                 await asyncio.to_thread(self.workbook.write, export),
