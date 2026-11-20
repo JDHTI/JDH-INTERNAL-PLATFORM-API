@@ -13,6 +13,7 @@ from app.modules.order_validation.domain.entities import Agreement, CustomerScop
 from app.modules.quotations.domain.entities import (
     BillingCenter,
     Branch,
+    CenterWarehouse,
     CostInfo,
     CustomerPage,
     GroupPage,
@@ -84,6 +85,8 @@ class WarehouseSource(Protocol):
     async def seller_contact(self, code: str) -> SellerContact | None: ...
 
     async def billing_centers(self) -> list[BillingCenter]: ...
+
+    async def center_warehouses(self) -> list[CenterWarehouse]: ...
 
     async def price_lists(self, q: str, limit: int = 50) -> list[PriceListInfo]: ...
 

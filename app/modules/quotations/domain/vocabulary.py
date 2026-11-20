@@ -117,7 +117,8 @@ LOCAL_SKU_PREFIX = "LOC-"
 LOCAL_VAT_POINTS = (19, 5, 0)
 
 # The customer offer: how long it holds, which lines it carries, its conditions.
-DEFAULT_VALIDITY_DAYS = 30
+# 15 days since 2026-11-20 (it was 30); a quotation already saved keeps its own.
+DEFAULT_VALIDITY_DAYS = 15
 MAX_VALIDITY_DAYS = 365
 # ``changed``: active lines with a new price (local products too); ``all``: every active
 # line with an offer price.

@@ -15,6 +15,7 @@ from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import (
     BillingCenter,
     Branch,
+    CenterWarehouse,
     CostInfo,
     CustomerOption,
     CustomerPage,
@@ -146,11 +147,27 @@ class FakeWarehouse:
             BillingCenter("001", "ANTIOQUIA"),
             BillingCenter("003", "CENTRO"),
         ]
+        # The main (BP) and spot-request (BSP) warehouses of three centers.
+        self.center_warehouse_rows: list[CenterWarehouse] = [
+            CenterWarehouse("MDE1", "PRINCIPAL MEDELLIN", "001", "BP"),
+            CenterWarehouse("MDE3", "CAVA MEDELLIN", "001", "BP"),
+            CenterWarehouse("MDE4", "SOLICITUDES PUNTUALES", "001", "BSP"),
+            CenterWarehouse("BTA8", "CAVA BOGOTA", "003", "BP"),
+            CenterWarehouse("BTA9", "PRINCIPAL BOGOTA", "003", "BP"),
+            CenterWarehouse("BTA20", "SOLICITUDES PUNTUALES", "003", "BSP"),
+            CenterWarehouse("CTG1", "PRINCIPAL CARTAGENA", "004", "BP"),
+            CenterWarehouse("CTG15", "CAVA CARTAGENA", "004", "BP"),
+            CenterWarehouse("CTG14", "SOLICITUDES PUNTUALES", "004", "BSP"),
+            CenterWarehouse("MDE27", "PROMOCIONES MEDELLIN FOOD", "001", "PROMO"),
+            CenterWarehouse("MDE28", "PROMOCIONES MEDELLIN CAVA", "001", "PROMO"),
+        ]
+        self.warehouses_down = False
         self.list_customers = 28113
         self.down = False
         self.calls: list[tuple] = []
-        # Costs of one plan, by its main warehouse (``MDE1``) or its source (``nacional``);
-        # any other plan gets ``cost_rows``.
+        # Costs of one plan, by its main warehouse (``MDE1``), its chosen warehouses joined
+        # by commas (``MDE1,MDE4``) or its source (``nacional``), plus ``+`` and its
+        # promotional warehouses (``MDE1+MDE27``); any other plan gets ``cost_rows``.
         self.plan_costs: dict[str, dict[str, CostInfo]] = {}
         # List updates: list 10U with two SKUs, served to two customers of Centro.
         self.lists: dict[str, PriceListInfo] = {
@@ -234,7 +251,12 @@ class FakeWarehouse:
     async def costs(self, skus, plan):
         self._check()
         self.calls.append(("costs", tuple(skus), plan))
-        key = plan.warehouses[0] if plan.warehouses else plan.source
+        if plan.selected:
+            key = ",".join(plan.selected)
+        else:
+            key = plan.warehouses[0] if plan.warehouses else plan.source
+        if plan.promos:
+            key += "+" + ",".join(plan.promos)
         rows = self.plan_costs.get(key, self.cost_rows)
         return {sku: rows[sku] for sku in skus if sku in rows}
 
@@ -279,6 +301,12 @@ class FakeWarehouse:
     async def billing_centers(self):
         self._check()
         return list(self.centers)
+
+    async def center_warehouses(self):
+        self._check()
+        if self.warehouses_down:
+            raise DependencyUnavailableError("No se pudo consultar el datawarehouse")
+        return list(self.center_warehouse_rows)
 
     # ------------------------------------------------------------ list updates
 

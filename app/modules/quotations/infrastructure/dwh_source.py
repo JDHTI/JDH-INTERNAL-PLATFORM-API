@@ -22,6 +22,7 @@ from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import (
     BillingCenter,
     Branch,
+    CenterWarehouse,
     CostInfo,
     ItemInfo,
     LastSale,
@@ -242,6 +243,38 @@ class WarehouseQuotationSource:
             if _strip(row["codigo"])
         ]
 
+    async def center_warehouses(self) -> list[CenterWarehouse]:
+        """The active warehouses SIESA classifies for the platform (2026-11-19): main
+        (``BP``) and spot requests (``BSP``), plus the promotional ones (``PROMO``,
+        2026-11-20), with their operation center.
+
+        Read from the master: ``consumo.bodegas.clasificacion_bodega``, filtered by the code
+        (other SIESA groups are also named "BODEGAS PRINCIPALES"), and ``promocional``. If
+        SIESA moves a warehouse between groups the list follows it.
+        """
+
+        rows = await self._fetch(
+            'SELECT trim("codigo") AS codigo, "descripcion", trim("co") AS co,'
+            ' CASE WHEN trim("clasificacion_bodega") = ANY($1::text[])'
+            ' THEN trim("clasificacion_bodega") ELSE $2 END AS clase'
+            f" FROM {self._view('bodegas')}"
+            ' WHERE (trim("clasificacion_bodega") = ANY($1::text[]) OR "promocional" = \'Si\')'
+            " AND \"estado\" = 'Activo'"
+            " ORDER BY 3, 4, 1",
+            list(pricing.SITE_CLASSES),
+            pricing.PROMO_WAREHOUSES,
+        )
+        return [
+            CenterWarehouse(
+                code=str(row["codigo"]),
+                name=_strip(row["descripcion"]),
+                center_code=str(row["co"]),
+                classification=str(row["clase"]),
+            )
+            for row in rows
+            if _strip(row["codigo"]) and _strip(row["co"])
+        ]
+
     async def costs(self, skus: Sequence[str], plan: StockPlan) -> dict[str, CostInfo]:
         """The supplier quotation and the inventory cost of each SKU (skill ``lista-precios``).
 
@@ -251,8 +284,9 @@ class WarehouseQuotationSource:
           SKU's installations is a capture error: it comes apart as ``discarded_quote``.
         - Inventory: ``inventario_fecha`` (SIESA's own snapshot of the morning), average cost
           of the list's warehouse rounded to pesos; warehouse 2 for frozen and refrigerated
-          lines; the highest of the list 1 warehouses when the plan says so. Costs of one peso
-          or less are placeholders and never count.
+          lines; the highest of the list 1 warehouses when the plan says so, or of the
+          warehouses chosen in a center (:meth:`StockPlan.reads`). Costs of one peso or less
+          are placeholders and never count.
         - Only warehouses with stock (``existencia > 0``) give the inventory cost
           (2026-11-19). When none of the plan's warehouses has any, their last average cost
           is kept, marked ``inventory_stocked=False``, so the line is not left without cost;
@@ -261,7 +295,7 @@ class WarehouseQuotationSource:
 
         if not skus:
             return {}
-        primary, cold = plan.warehouses or ("", "")
+        dry, cold = plan.reads()
         rows = await self._fetch(
             "WITH prod AS ("
             ' SELECT p."producto_key", p."sku", p."linea", p."estado"'
@@ -278,11 +312,11 @@ class WarehouseQuotationSource:
             f' FROM {self._view("cotizaciones_proveedores")} c JOIN prod USING ("producto_key")'
             ' WHERE c."es_vigente" AND c."producto_activo"'
             " AND c.\"unidad_medida_id\" IN ('UNID', 'KL')"
-            ' AND (coalesce(c."proveedor_nit", \'\') <> $7 OR c."proveedor_sucursal_id" = $2)'
+            ' AND (coalesce(c."proveedor_nit", \'\') <> $5 OR c."proveedor_sucursal_id" = $2)'
             "), cot_ok AS ("
             ' SELECT c."producto_key",'
-            " max(c.costo) FILTER (WHERE r.med IS NULL OR c.costo <= $8 * r.med) AS costo_cot,"
-            " max(c.costo) FILTER (WHERE c.costo > $8 * r.med) AS costo_descartado"
+            " max(c.costo) FILTER (WHERE r.med IS NULL OR c.costo <= $6 * r.med) AS costo_cot,"
+            " max(c.costo) FILTER (WHERE c.costo > $6 * r.med) AS costo_descartado"
             ' FROM cot c LEFT JOIN ref r USING ("producto_key") GROUP BY 1'
             "), inv AS ("
             ' SELECT f."producto_key",'
@@ -294,9 +328,8 @@ class WarehouseQuotationSource:
             ' AS costo_inv, sum(f."existencia") AS existencia,'
             ' sum(f."cant_disponible") AS disponible, max(f."foto_at") AS foto'
             f' FROM {self._view("inventario_fecha")} f JOIN prod pr USING ("producto_key")'
-            ' WHERE CASE WHEN $5 THEN f."bodega" = ANY($6::text[])'
-            " ELSE f.\"bodega\" = CASE WHEN pr.\"linea\" IN ('CONGELADOS', 'REFRIGERADOS')"
-            " THEN $4 ELSE $3 END END"
+            " WHERE f.\"bodega\" = ANY(CASE WHEN pr.\"linea\" IN ('CONGELADOS', 'REFRIGERADOS')"
+            " THEN $4::text[] ELSE $3::text[] END)"
             " GROUP BY 1"
             ') SELECT pr."sku", pr."linea", pr."estado", c.costo_cot, c.costo_descartado,'
             " i.costo_inv_existencia, i.costo_inv, i.existencia, i.disponible, i.foto"
@@ -304,10 +337,8 @@ class WarehouseQuotationSource:
             ' LEFT JOIN inv i USING ("producto_key")',
             list(skus),
             plan.lactalis_branch,
-            primary,
-            cold,
-            plan.highest,
-            list(pricing.GENERAL_WAREHOUSES),
+            list(dry),
+            list(cold),
             pricing.LACTALIS_NIT,
             pricing.QUOTE_OUTLIER_FACTOR,
         )
