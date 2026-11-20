@@ -179,6 +179,13 @@ async def test_a_business_group_row_becomes_one_support_per_customer(bulk, repo,
     customers = {item.data.customer_nit for item in repo.items.values()}
     assert customers == {"900430148", "830012863"}
     assert {item.data.customer_group for item in repo.items.values()} == {"Grupo Goddard"}
+    # Each copy covers the whole group (also a customer that joins it later).
+    assert all(item.data.group_wide for item in repo.items.values())
+    # A copy loaded before the flag existed is marked when the group is uploaded again.
+    first = next(iter(repo.items.values()))
+    repo.items[first.id] = replace(first, data=replace(first.data, group_wide=False))
+    again = await load(bulk, manager, header + row, apply=True, groups=True)
+    assert again.to_update == 1 and repo.items[first.id].data.group_wide
     unknown = await load(bulk, manager, header + row.replace("Goddard", "Nadie"), groups=True)
     assert unknown.blocked and "no tiene clientes activos" in unknown.errors[0].message
     with pytest.raises(InvalidInputError, match="columna Grupo"):

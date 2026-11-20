@@ -362,3 +362,6 @@ class SearchSpec:
     # supports of the customers of these salesperson codes and the general ones (no NIT),
     # and none at all without codes.
     salesperson_codes: tuple[str, ...] | None = None
+    # The base search by customer (2026-11-20): the supports of these NITs and those of their
+    # business groups (``group_wide``), so a customer that joined a group later finds them.
+    customer_nits: tuple[str, ...] = ()

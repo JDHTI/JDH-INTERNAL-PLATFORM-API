@@ -488,11 +488,11 @@ async def test_base_search_combines_client_supplier_and_reference_in_any_subset(
     group = repo.last_search.group
     base, free = group.items[:-1], group.items[-1]
     assert {(item.field, item.op) for item in base} == {
-        ("customer_nit", "in"),
         ("supplier.code", "in"),
         ("product_sku", "in"),
     }
-    assert [item.value for item in base if item.field == "customer_nit"] == [["800116299"]]
+    # The client goes apart: the repository adds its business groups' supports.
+    assert repo.last_search.customer_nits == ("800116299",)
     assert group.match == "all" and free.items == ()
 
     await service.search(

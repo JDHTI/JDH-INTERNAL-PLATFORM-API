@@ -52,6 +52,9 @@ class SupportData:
     customer_branch_id: str | None = None
     customer_name: str | None = None
     customer_group: str | None = None
+    # A business group's support (2026-11-20): it covers every customer of ``customer_group``,
+    # also one that joined after it was loaded. Its rows are one copy per customer.
+    group_wide: bool = False
     product_id: UUID | None = None
     product_sku: str | None = None
     supplier_sku: str | None = None
@@ -298,6 +301,8 @@ class SupportView:
     # The support's group, else the customer's in the master; and the margin list it uses.
     business_group: str | None = None
     margin_list: str | None = None
+    # In force and ending within a month («por vencer»); its state stays ``vigente``.
+    expiring: bool = False
 
 
 @dataclass(frozen=True)

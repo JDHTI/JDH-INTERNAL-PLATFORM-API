@@ -49,7 +49,10 @@ from app.modules.supplier_supports.domain.ports import (
 )
 from app.modules.supplier_supports.domain.pricing import derive
 from app.modules.supplier_supports.domain.units import infer_value_unit
-from app.modules.supplier_supports.domain.validity import validity_on
+from app.modules.supplier_supports.domain.validity import (
+    is_expiring,
+    validity_on,
+)
 
 MAX_PAGE_SIZE = 200
 MAX_BATCH = 500
@@ -193,17 +196,26 @@ def _normalize_scope(values: Sequence[str]) -> tuple[str, ...]:
     return () if any(item in ("TODOS", "TODAS") for item in upper) else tuple(upper)
 
 
+def _base_nits(customer_nits: Sequence[str] | None) -> tuple[str, ...]:
+    """The base search by client: clean NITs, matched with their business groups' supports
+    by the repository (:attr:`filters.SearchSpec.customer_nits`)."""
+
+    nits = tuple(dict.fromkeys(nit for value in customer_nits or () if (nit := clean_nit(value))))
+    if len(nits) > filters.MAX_LIST_VALUES:
+        raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
+    return nits
+
+
 def _with_base_filters(
     group: filters.Group,
-    customer_nits: Sequence[str] | None,
     supplier_codes: Sequence[str] | None,
     product_skus: Sequence[str] | None,
 ) -> filters.Group:
-    """AND the base search (client, supplier, reference) with the free conditions."""
+    """AND the base search (supplier, reference) with the free conditions; the client goes
+    apart (:func:`_base_nits`)."""
 
     base: list[filters.Condition | filters.Group] = []
     for field_name, values in (
-        ("customer_nit", [nit for value in customer_nits or () if (nit := clean_nit(value))]),
         ("supplier.code", [code for value in supplier_codes or () if (code := _clean(value))]),
         ("product_sku", [sku for value in product_skus or () if (sku := _clean(value))]),
     ):
@@ -346,11 +358,19 @@ class SupplierSupportService:
         if principal is None:
             return
         _, codes = await self._scope(principal)
-        nit = support.data.customer_nit
-        if codes is None or (nit is None and codes):
+        if codes is None:
             return
-        if nit is None or nit not in await self.repository.customers_of([nit], codes):
-            raise NotFoundError("Apoyo no encontrado")
+        data = support.data
+        nit, group = data.customer_nit, data.customer_group
+        if codes and nit is None and not group:
+            return  # a general support
+        if nit is not None and nit in await self.repository.customers_of([nit], codes):
+            return
+        # A business group's support: seen by whoever has a customer of the group.
+        if group and (nit is None or data.group_wide) and codes:
+            if await self.repository.in_groups_of(group, codes):
+                return
+        raise NotFoundError("Apoyo no encontrado")
 
     # ------------------------------------------------------------ validation
 
@@ -728,6 +748,9 @@ class SupplierSupportService:
             dwh_cost=row.dwh_cost,
             business_group=data.customer_group or row.customer_business_group,
             margin_list=row.margin_field,
+            expiring=not voided
+            and data.is_enabled
+            and is_expiring(data.valid_from, data.valid_to, today),
         )
 
     async def get(self, support_id: UUID, principal: Principal | None = None) -> SupportView:
@@ -780,9 +803,11 @@ class SupplierSupportService:
                 ANDed with each other and with ``conditions``.
             q (str | None): Free text over program, client, SKU, brand, supplier and notes.
             active_on (date | None): Day used for ``validity`` (default today).
-            validity (str | None): ``vigente``, ``vencido`` or ``programado`` on ``active_on``.
-            state (str | None): The state people see: a validity or ``anulado``. ``anulado``
-                lists voided supports; any other value excludes them.
+            validity (str | None): ``vigente``, ``vencido``, ``programado`` or ``por_vencer``
+                (in force and ending within a month) on ``active_on``.
+            state (str | None): The state people see: a validity, ``por_vencer``,
+                ``inactivo`` or ``anulado``. ``anulado`` lists voided supports; any other value
+                excludes them.
             needs_review (bool | None): Only supports flagged ``pendiente_revision`` (or not).
             has_issues (bool | None): Only supports with (or without) data issues.
             has_conflicts (bool | None): Only supports that overlap another one.
@@ -824,6 +849,27 @@ class SupplierSupportService:
             spec = replace(spec, salesperson_codes=(await self._scope(principal))[1])
         rows, total = await self.repository.search(spec)
         return SupportPage(items=await self._views(rows), total=total, page=page, size=size)
+
+    async def summary(self, principal: Principal | None, **criteria: Any) -> dict[str, int]:
+        """How many supports of a search are in each state (the KPIs of the master): the
+        same criteria and customer scope as :meth:`search`, whatever ``state`` and
+        ``validity`` say, so each count is what its filter would list.
+
+        Returns:
+            dict[str, int]: ``vigente``, ``por_vencer`` (part of ``vigente``: in force and
+            ending within a month), ``programado``, ``vencido``, ``inactivo`` and ``total``
+            (voided ones never count).
+
+        Raises:
+            InvalidInputError: If a field, operator, value or bound is invalid.
+        """
+
+        for name in ("page", "size", "sort"):
+            criteria.pop(name, None)
+        spec = self._spec(**criteria)
+        if principal is not None:
+            spec = replace(spec, salesperson_codes=(await self._scope(principal))[1])
+        return await self.repository.state_counts(spec)
 
     async def search_ids(self, limit: int, **criteria: Any) -> list[UUID]:
         """Ids of the supports a search matches (same ``criteria`` as :meth:`search`).
@@ -869,17 +915,19 @@ class SupplierSupportService:
             raise InvalidInputError("La página debe ser mayor o igual a 1")
         if not 1 <= size <= MAX_PAGE_SIZE:
             raise InvalidInputError(f"El tamaño debe estar entre 1 y {MAX_PAGE_SIZE}")
-        if validity is not None and validity not in vocabulary.VALIDITIES:
-            raise InvalidInputError(f"validity debe ser uno de: {', '.join(vocabulary.VALIDITIES)}")
-        if state is not None and state not in vocabulary.STATES:
-            raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATES)}")
+        if validity is not None and validity not in vocabulary.VALIDITY_FILTERS:
+            raise InvalidInputError(
+                f"validity debe ser uno de: {', '.join(vocabulary.VALIDITY_FILTERS)}"
+            )
+        if state is not None and state not in vocabulary.STATE_FILTERS:
+            raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATE_FILTERS)}")
         return filters.SearchSpec(
             group=_with_base_filters(
                 filters.parse_group({"match": match, "conditions": list(conditions or [])}),
-                customer_nits,
                 supplier_codes,
                 product_skus,
             ),
+            customer_nits=_base_nits(customer_nits),
             q=_clean(q),
             active_on=active_on or self.calendar.today(),
             validity=validity,
@@ -1112,7 +1160,8 @@ class SupplierSupportService:
         on_overlap: str | None = None,
         overlap_reason: str | None = None,
     ) -> list[SupportView]:
-        """One support per active customer of ``data.customer_group``, all or none.
+        """One support per active customer of ``data.customer_group``, all or none, marked
+        ``group_wide``: each copy covers the whole group, also a customer that joins later.
 
         Raises:
             InvalidInputError: Without a group, with a NIT too, or a group with no customers.
@@ -1133,7 +1182,13 @@ class SupplierSupportService:
             raise InvalidInputError(f"El grupo tiene {len(members)} clientes; máximo {MAX_BATCH}")
         items = [
             (
-                replace(data, customer_group=group, customer_nit=nit, customer_name=name),
+                replace(
+                    data,
+                    customer_group=group,
+                    customer_nit=nit,
+                    customer_name=name,
+                    group_wide=True,
+                ),
                 supplier_code,
             )
             for nit, name in members

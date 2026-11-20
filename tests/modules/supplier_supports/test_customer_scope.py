@@ -101,3 +101,37 @@ async def test_each_person_sees_the_supports_of_their_customers(scoped, repo) ->
     with pytest.raises(NotFoundError):
         await scoped.get(general.id, NOBODY)
     assert (await scoped.get(other.id, LEADER)).support.id == other.id
+
+
+async def test_a_group_support_is_seen_by_whoever_has_a_customer_of_the_group(scoped, repo) -> None:
+    # 2026-11-20: the salesperson's customer joined the group after it was loaded.
+    created = (await scoped.create(BI, support(), supplier_code="233")).support
+    del repo.items[created.id]
+    copy = replace(
+        created,
+        id=uuid4(),
+        data=replace(
+            created.data,
+            customer_nit="900999999",
+            customer_group="Grupo Goddard",
+            group_wide=True,
+        ),
+    )
+    repo.items[copy.id] = copy
+    one_nit = replace(copy, id=uuid4(), data=replace(copy.data, group_wide=False))
+    repo.items[one_nit.id] = one_nit
+    no_nit = replace(copy, id=uuid4(), data=replace(copy.data, customer_nit=None))
+    repo.items[no_nit.id] = no_nit
+    repo.salespeople = {"800116299": "0051", "900999999": "0099"}
+    repo.groups = {"800116299": "GRUPO GODDARD", "900999999": "Grupo Goddard"}
+
+    page = await scoped.search(SELLER)
+
+    # The group's copy and its row with no NIT, never a support of one NIT of the group.
+    assert {view.support.id for view in page.items} == {copy.id, no_nit.id}
+    assert (await scoped.get(copy.id, SELLER)).support.id == copy.id
+    with pytest.raises(NotFoundError):
+        await scoped.get(one_nit.id, SELLER)
+    # Out of the group, a group's row with no NIT is no longer a general one.
+    repo.groups = {}
+    assert {view.support.id for view in (await scoped.search(SELLER)).items} == set()

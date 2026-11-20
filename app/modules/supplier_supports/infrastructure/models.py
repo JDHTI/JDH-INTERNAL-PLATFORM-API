@@ -121,6 +121,8 @@ class SupplierSupportModel(Base):
     customer_branch_id: Mapped[str | None] = mapped_column(Text)
     customer_name: Mapped[str | None] = mapped_column(Text)
     customer_group: Mapped[str | None] = mapped_column(Text)
+    # Covers every customer of ``customer_group`` (a copy of a business group's support).
+    group_wide: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     product_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT")
     )

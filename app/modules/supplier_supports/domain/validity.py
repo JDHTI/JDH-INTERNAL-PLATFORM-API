@@ -2,7 +2,26 @@
 
 from __future__ import annotations
 
+import calendar
 from datetime import date
+
+
+def expiring_until(day: date) -> date:
+    """The last day a support in force on ``day`` may end to be «por vencer» (2026-11-20):
+    one calendar month later (the 31st of January gives the last day of February)."""
+
+    year, month = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def is_expiring(valid_from: date | None, valid_to: date | None, day: date) -> bool:
+    """Whether a support is in force on ``day`` and ends within :func:`expiring_until`."""
+
+    return (
+        validity_on(valid_from, valid_to, day) == "vigente"
+        and valid_to is not None
+        and valid_to <= expiring_until(day)
+    )
 
 
 def validity_on(valid_from: date | None, valid_to: date | None, day: date) -> str:
