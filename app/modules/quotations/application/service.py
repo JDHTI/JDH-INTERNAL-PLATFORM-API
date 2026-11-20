@@ -58,6 +58,7 @@ from app.modules.quotations.domain.export import (
     ExportTaxRow,
     NewPriceList,
     PriceListExport,
+    loadable_date,
 )
 from app.modules.quotations.domain.ports import (
     Calendar,
@@ -2653,9 +2654,15 @@ class QuotationService:
                 )
             code, name = quotation.price_list_id, None
         now = datetime.now(UTC)
+        # SIESA does not load a date in the past: one that passed while it waited for the
+        # validation becomes the day it is validated (2026-11-20).
+        activation = quotation.activation_date
+        if activation is not None:
+            activation = loadable_date(activation, self.calendar.today())
         validated = replace(
             quotation,
             status=vocabulary.UPLOAD_PENDING,
+            activation_date=activation,
             export_price_list_id=code,
             new_list_name=name,
             validated_at=now,
@@ -2705,9 +2712,19 @@ class QuotationService:
 
     # ------------------------------------------------------------ export
 
+    def _file_date(self, quotation: Quotation) -> date | None:
+        """The activation date the files write: the stored one, or today if it passed while
+        the files waited to be loaded (``pendiente_carga``). A loaded one keeps its own."""
+
+        activation = quotation.activation_date
+        if activation is None or quotation.status != vocabulary.UPLOAD_PENDING:
+            return activation
+        return loadable_date(activation, self.calendar.today())
+
     def _export(self, detail: QuotationDetail) -> PriceListExport:
         quotation = detail.quotation
-        if quotation.status not in vocabulary.CLOSED or quotation.activation_date is None:
+        activation = self._file_date(quotation)
+        if quotation.status not in vocabulary.CLOSED or activation is None:
             raise ConflictError("Los archivos se generan cuando la cotización está validada")
         list_id = quotation.export_price_list_id or quotation.price_list_id
         rows: list[ExportRow] = []
@@ -2718,7 +2735,7 @@ class QuotationService:
                 ExportRow(
                     list_id,
                     line.sku,
-                    quotation.activation_date,
+                    activation,
                     unit,
                     line.new_price,  # type: ignore[arg-type]
                 )
@@ -2728,7 +2745,7 @@ class QuotationService:
                     ExportTaxRow(
                         list_id,
                         line.sku,
-                        quotation.activation_date,
+                        activation,
                         unit,
                         line.value_tax_key,
                         line.value_tax_amount,
@@ -2745,7 +2762,8 @@ class QuotationService:
         detail = await self.get(principal, quotation_id)
         export = self._export(detail)
         quotation = detail.quotation
-        stamp = quotation.activation_date.strftime("%Y%m%d") if quotation.activation_date else ""
+        activation = self._file_date(quotation)
+        stamp = activation.strftime("%Y%m%d") if activation else ""
         list_id = quotation.export_price_list_id or quotation.price_list_id
         if fmt == "xlsx":
             return ExportFile(

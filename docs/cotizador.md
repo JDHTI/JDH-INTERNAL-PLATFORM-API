@@ -359,6 +359,14 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
 
 `list_action` / `list_action_label` siguen diciendo si es actualización o creación.
 
+**Fecha de activación vencida** (2026-11-20): SIESA no acepta cargar una fecha pasada.
+- Al validar, si `activation_date` ya pasó (hora de Bogotá), se guarda la fecha del día de la validación. Una fecha de hoy o futura no cambia. La respuesta de `/validate` trae la fecha ya corregida.
+- Vale para cotizaciones de cliente (actualización o creación) y para actualizaciones de lista.
+- Si los archivos se descargan cuando la fecha ya pasó y siguen `pendiente_carga`, el Excel, el plano y el nombre del archivo llevan la fecha de hoy. La fecha guardada no cambia: descargar no es editar.
+- Una cotización ya `cargada` descarga con la fecha con que se cargó.
+- El impuesto licor hace lo mismo con sus archivos mientras está `pendiente_carga`.
+- El staging de listas principales no lo necesita: pide la fecha al descargar y rechaza una pasada.
+
 **Inmutable al cerrar** (2026-11-19): una cotización `pendiente_carga` o `cargada` no cambia
 más. Toda edición responde 409, también para BI:
 - precios, cantidades, oferta y líneas;

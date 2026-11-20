@@ -192,6 +192,28 @@ async def test_only_the_liquor_tax_collaborators_change_it(taxes) -> None:
         await taxes.create(owner, [ChangeInput("18973", "1", "1")], None, TODAY - timedelta(days=1))
 
 
+class _Day:
+    def __init__(self, day) -> None:
+        self.day = day
+
+    def today(self):
+        return self.day
+
+
+async def test_files_downloaded_after_their_date_write_today(taxes) -> None:
+    # 2026-11-20: SIESA does not load a date in the past.
+    owner = person(LIQUOR_MANAGER)
+    change = await taxes.create(owner, [ChangeInput("18973", "4200", "4300")], None)
+    assert change.activation_date == TODAY + timedelta(days=1)
+    taxes.calendar = _Day(TODAY + timedelta(days=3))
+
+    flat = await taxes.file(owner, change.id, "txt")
+
+    stamp = (TODAY + timedelta(days=3)).strftime("%Y%m%d")
+    assert flat.filename == f"impuesto-licor-listas-{stamp}.txt"
+    assert flat.content.decode("ascii").splitlines()[1][139:147] == stamp
+
+
 async def test_a_change_not_loaded_can_be_cancelled(taxes) -> None:
     owner = person(LIQUOR_MANAGER)
     change = await taxes.create(owner, [ChangeInput("26278", "42451", "42451")], None)

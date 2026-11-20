@@ -137,6 +137,57 @@ async def test_a_selection_is_priced_at_one_margin(service, advisor, warehouse, 
         )
 
 
+class _Day:
+    def __init__(self, day: date) -> None:
+        self.day = day
+
+    def today(self) -> date:
+        return self.day
+
+
+async def test_an_activation_date_that_passed_becomes_the_day_it_is_validated(
+    service, advisor, approver
+) -> None:
+    # 2026-11-20: confirmed on 9 October to start on the 10th, validated on the 12th.
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
+    pending = await service.confirm(
+        advisor, quotation.id, 2, list_action=None, new_list_name=None, activation_date=None
+    )
+    assert pending.quotation.activation_date == date(2026, 10, 10)
+    service.calendar = _Day(date(2026, 10, 12))
+
+    validated = await service.validate(approver, quotation.id, 3)
+
+    assert validated.quotation.activation_date == date(2026, 10, 12)
+    # Downloaded the next day, still not loaded: the files write that day, not a past one.
+    service.calendar = _Day(date(2026, 10, 13))
+    flat = await service.export(approver, quotation.id, "txt")
+    assert flat.filename.endswith("-20261013.txt")
+    assert flat.content.decode("ascii").split("\r\n")[1][139:147] == "20261013"
+    # Once loaded, the files keep the date they were loaded with.
+    await service.mark_uploaded(approver, quotation.id, 4)
+    later = await service.export(approver, quotation.id, "txt")
+    assert later.filename.endswith("-20261012.txt")
+
+
+async def test_a_future_activation_date_stays_when_validated(service, advisor, approver) -> None:
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+    await service.update_lines(advisor, quotation.id, 1, [LineChange("2537", Decimal("3000"))])
+    await service.confirm(
+        advisor,
+        quotation.id,
+        2,
+        list_action=None,
+        new_list_name=None,
+        activation_date=date(2026, 10, 20),
+    )
+
+    validated = await service.validate(approver, quotation.id, 3)
+
+    assert validated.quotation.activation_date == date(2026, 10, 20)
+
+
 async def test_confirm_validate_upload_and_export_an_update(service, advisor, approver) -> None:
     quotation = (await service.create(advisor, NIT, 12)).quotation
 

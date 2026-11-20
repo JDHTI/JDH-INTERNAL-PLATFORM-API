@@ -574,6 +574,9 @@ class SummaryResponse(BaseModel):
     # Quoted to a business group: its name (also ``customer_name``) and its NITs.
     business_group: str | None = None
     group_customers: int | None = None
+    # When SIESA activates the prices (set at /confirm). In «Por cargar», one already past
+    # means the files come out with today's date (SIESA does not load a past one).
+    activation_date: date | None = None
 
 
 class QuotationResponse(SummaryResponse):
@@ -602,7 +605,6 @@ class QuotationResponse(SummaryResponse):
     salesperson_name: str | None
     built_at: datetime
     cost_cut_date: date | None
-    activation_date: date | None
     new_list_name: str | None
     max_points_below_target: Decimal
     warnings: list[WarningResponse]
@@ -832,6 +834,7 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "kind": quotation.kind,
         "source": quotation.source,
         "price_list_name": quotation.price_list_name,
+        "activation_date": quotation.activation_date,
     }
 
 
@@ -860,7 +863,6 @@ def _detail(
         salesperson_name=quotation.salesperson_name,
         built_at=quotation.built_at,
         cost_cut_date=quotation.cost_cut_date,
-        activation_date=quotation.activation_date,
         new_list_name=quotation.new_list_name,
         max_points_below_target=quotation.max_points_below_target,
         warnings=[

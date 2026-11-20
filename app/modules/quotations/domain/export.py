@@ -7,6 +7,13 @@ from datetime import date
 from decimal import Decimal
 
 
+def loadable_date(activation: date, today: date) -> date:
+    """The activation date SIESA takes (2026-11-20): it does not load a date in the past, so
+    one that already passed becomes today (Bogotá)."""
+
+    return max(activation, today)
+
+
 @dataclass(frozen=True)
 class ExportRow:
     """One price of the update (sheet ``Precios`` / record ``0126``)."""
