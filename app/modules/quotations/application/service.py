@@ -37,6 +37,7 @@ from app.modules.quotations.domain.entities import (
     GroupPage,
     ItemInfo,
     LastSale,
+    ListItem,
     ListPrice,
     PriceListInfo,
     Quotation,
@@ -1341,18 +1342,21 @@ class QuotationService:
         audience: _Audience,
         added: Sequence[_Entry] = (),
         previous: Mapping[str, LastSale] | None = None,
+        items: Sequence[ListItem] | None = None,
     ) -> tuple[list[QuotationLine], date | None, bool]:
         """Every SKU with a price in force on the list, then the SKUs the person had added.
 
         ``previous`` are the last sales the lines had, kept when the warehouse does not
-        answer with the new ones.
+        answer with the new ones. ``items`` are the list's prices when already read (read
+        alongside its branches).
 
         Returns:
             tuple: The lines, the cost snapshot and whether the last sales were read.
         """
 
         code = context.price_list_id or ""
-        items = await self.warehouse.list_items(code)
+        if items is None:
+            items = await self.warehouse.list_items(code)
         listed = {item.item.sku for item in items}
         extra = [entry for entry in added if entry.sku not in listed]
         total = len(items) + len(extra)
@@ -1446,7 +1450,10 @@ class QuotationService:
         await self._require_manager(principal, kind)
         info, source, nit = await self._resolve_list(customer_nit, price_list_id)
         self._check_list_kind(kind, info.code)
-        branches = await self._list_branches(info.code)
+        # Its branches and its prices do not depend on each other: one wait instead of two.
+        branches, items = await asyncio.gather(
+            self._list_branches(info.code), self.warehouse.list_items(info.code)
+        )
         customer_name = None
         if nit:
             customer_name = next(
@@ -1464,7 +1471,7 @@ class QuotationService:
             info.code, info.name, branches, nit=nit or "", customer_name=customer_name
         )
         audience = self._audience(branches, nit)
-        lines, snapshot, read = await self._build_list(context, audience)
+        lines, snapshot, read = await self._build_list(context, audience, items=items)
         warnings = list(context.warnings)
         if not lines:
             warnings.append("lista_sin_precios")
@@ -1512,7 +1519,9 @@ class QuotationService:
 
         quotation = detail.quotation
         code = quotation.price_list_id or ""
-        branches = await self._list_branches(code)
+        branches, items = await asyncio.gather(
+            self._list_branches(code), self.warehouse.list_items(code)
+        )
         nit = quotation.customer_nit or None
         context = rules.list_context(
             code,
@@ -1536,7 +1545,7 @@ class QuotationService:
             if entry.sale is not None
         }
         lines, snapshot, read = await self._build_list(
-            context, self._audience(branches, nit), added, previous
+            context, self._audience(branches, nit), added, previous, items
         )
         warnings = list(context.warnings)
         if not lines:
