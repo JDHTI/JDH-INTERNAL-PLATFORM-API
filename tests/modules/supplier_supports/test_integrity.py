@@ -14,6 +14,7 @@ D = Decimal
 
 def tactic(**values) -> SupportData:
     base = {
+        "value_unit": "unidad",
         "kind": "tactico_cliente",
         "calc_method": "pct_costo",
         "supplier_value": D("0.05"),
