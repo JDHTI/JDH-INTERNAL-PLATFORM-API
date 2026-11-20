@@ -145,6 +145,8 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
     assert listing["items"][0]["validated_at"] is not None
     assert listing["items"][0]["uploaded_at"] is not None
     assert listing["items"][0]["is_temporary_customer"] is False
+    # «Por cargar» warns per row when the files would come out with today's date.
+    assert listing["items"][0]["activation_date"] is not None
     client.app.dependency_overrides[get_current_principal] = lambda: person(MANAGER, admin=True)
     assert client.delete(url).status_code == 204
     assert client.get(url).status_code == 404
