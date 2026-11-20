@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import time
 from enum import StrEnum
 
 KEY_PATTERN = re.compile(r"^[a-z0-9-]{1,60}$")
@@ -57,10 +58,14 @@ class JobDefinition:
     key: str
     label: str
     description: str
-    # DWH sequence whose fresh data starts it; ``None`` runs only by hand.
+    # DWH sequence whose fresh data starts it; ``None`` runs at ``at`` or only by hand.
     sequence: str | None
-    # ISO weekdays (1 = Monday) when the daily fallback runs it if the DWH did not.
+    # ISO weekdays (1 = Monday) when the daily fallback runs it if the DWH did not (or, with
+    # ``at``, the days it runs at that time).
     fallback_days: frozenset[int]
+    # Local time it runs every day, whatever the DWH does (2026-11-20); a start-up after
+    # that time runs it if it has not run since.
+    at: time | None = None
 
 
 JOBS: tuple[JobDefinition, ...] = (
@@ -106,14 +111,16 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
-    # Every morning: a programmed support that starts replaces the previous one.
+    # Right after midnight, when a programmed support starts: it replaces the previous one.
+    # It reads no DWH data, so it does not wait for a sequence (2026-11-20).
     JobDefinition(
         "supplier-supports-rollover",
         "Apoyos: programados reemplazan al anterior",
         "Vence el día anterior el apoyo que un apoyo programado de la misma clase, cliente y "
-        "referencia reemplaza, para que nunca se crucen",
-        "identidad",
+        "referencia reemplaza, para que nunca se crucen. Corre a las 00:05",
+        None,
         EVERY_DAY,
+        at=time(0, 5),
     ),
     # After the supply load: the price lists and the inventory are the day's.
     JobDefinition(
@@ -132,6 +139,12 @@ def jobs_for(sequence: str) -> list[JobDefinition]:
     """The jobs that a sequence's fresh data starts, in registry order."""
 
     return [job for job in JOBS if job.sequence == sequence]
+
+
+def timed_jobs() -> list[JobDefinition]:
+    """The jobs that run at a fixed local time, in registry order."""
+
+    return [job for job in JOBS if job.at is not None]
 
 
 def sequences() -> list[str]:

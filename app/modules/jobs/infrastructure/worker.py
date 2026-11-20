@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from app.modules.jobs.application.schedule import next_run_at
 from app.modules.jobs.application.service import JobService
+from app.modules.jobs.domain.registry import timed_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,19 @@ class JobsWorker:
             await self._task
         self._task = None
 
+    def _next_timed(self, now: datetime) -> datetime | None:
+        """The next moment a job with a fixed time is due (``None`` without such jobs)."""
+
+        times = {job.at for job in timed_jobs() if job.at is not None}
+        return min((next_run_at(now, at, self._zone) for at in times), default=None)
+
     async def _run(self) -> None:
         await self._guard(self._start_up)
         next_poll = self._clock() + timedelta(seconds=self._poll_seconds)
         next_fallback = next_run_at(self._clock(), self._at, self._zone)
+        next_timed = self._next_timed(self._clock())
         while True:
-            target = min(next_poll, next_fallback)
+            target = min(item for item in (next_poll, next_fallback, next_timed) if item)
             delay = max((target - self._clock()).total_seconds(), 0.0)
             run_id = await self._trigger.wait(delay)
             if run_id is not None:
@@ -115,6 +123,9 @@ class JobsWorker:
                 continue
             # The wait ended at the target: a wake-up a hair early still counts as due.
             now = max(self._clock(), target)
+            if next_timed is not None and now >= next_timed:
+                await self._guard(partial(self._dispatch, lambda s: s.timed()))
+                next_timed = self._next_timed(now + timedelta(seconds=1))
             if now >= next_fallback:
                 await self._guard(partial(self._dispatch, lambda s: s.fallback()))
                 next_fallback = next_run_at(now + timedelta(seconds=1), self._at, self._zone)
@@ -129,6 +140,7 @@ class JobsWorker:
             logger.warning("Jobs: closed %s run(s) left open", recovered)
         await self._dispatch(lambda s: s.poll_dwh())
         await self._dispatch(lambda s: s.catch_up())
+        await self._dispatch(lambda s: s.timed())
 
     async def _dispatch(self, step: Callable[[JobService], Awaitable[list[UUID]]]) -> None:
         for run_id in await step(self._service()):
