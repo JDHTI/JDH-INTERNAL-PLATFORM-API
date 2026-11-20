@@ -43,11 +43,12 @@ async def local(service, principal, quotation_id, version, **values):
 
 async def test_a_quotation_holds_its_validity_from_today(service, advisor) -> None:
     default = (await service.create(advisor, NIT, 12)).quotation
-    short = (await service.create(advisor, NIT, 12, validity_days=15)).quotation
+    longer = (await service.create(advisor, NIT, 12, validity_days=30)).quotation
 
-    assert default.validity_days == 30 and default.valid_from == TODAY
-    assert default.valid_until == date(2026, 11, 8)
-    assert short.valid_until == date(2026, 10, 24)
+    # 15 days by default (2026-11-20).
+    assert default.validity_days == 15 and default.valid_from == TODAY
+    assert default.valid_until == date(2026, 10, 24)
+    assert longer.valid_until == date(2026, 11, 8)
     for days in (0, 366):
         with pytest.raises(InvalidInputError, match="vigencia"):
             await service.create(advisor, NIT, 12, validity_days=days)
@@ -321,7 +322,7 @@ async def test_the_customer_workbook(service, advisor, approver, warehouse, mast
     rows = [[cell for cell in row if cell is not None] for row in sheet.iter_rows(values_only=True)]
     text = " ".join(str(cell) for row in rows for cell in row)
     assert rows[0] == ["Cotización"]
-    assert ["Válida hasta", "8 de noviembre de 2026"] in rows
+    assert ["Válida hasta", "24 de octubre de 2026"] in rows
     assert ["Teléfono", "3001234567"] in rows
     header = next(row for row in rows if row and row[0] == "Referencia")
     assert header[-4:] == ["Cantidad", "Subtotal", "IVA", "Total"]
@@ -334,7 +335,7 @@ async def test_the_customer_workbook(service, advisor, approver, warehouse, mast
     assert ["Total", 270807] in rows
     assert rows[-3:] == [
         ["Condiciones de la oferta"],
-        ["• Precios válidos hasta el 8 de noviembre de 2026"],
+        ["• Precios válidos hasta el 24 de octubre de 2026"],
         ["• Pago a 30 días"],
     ]
     for word in ("Costo", "Margen", "Apoyo", "mínimo", "óptimo", "cumple"):

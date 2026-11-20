@@ -89,6 +89,8 @@ class CustomerContext:
     # The warehouses chosen inside each center (main or spot-request ones, 2026-11-20); a
     # center without an entry keeps its own warehouses.
     cost_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # The promotional warehouses added to each center, read for every line.
+    promo_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # A business group's quotation (2026-11-19): the group and its NITs. The branches of
     # every NIT decide the list, channel and center (the majority); the sales are the
     # group's; only the general supports and the group's apply. ``nit`` is then the NIT
@@ -144,8 +146,9 @@ class LastSale:
 
 @dataclass(frozen=True)
 class CenterWarehouse:
-    """A warehouse SIESA classifies as main (``BP``) or spot requests (``BSP``), in the
-    operation center it belongs to (``consumo.bodegas.clasificacion_bodega``, 2026-11-19)."""
+    """A warehouse SIESA classifies as main (``BP``) or spot requests (``BSP``)
+    (``consumo.bodegas.clasificacion_bodega``, 2026-11-19), or a promotional one
+    (``PROMO``: ``promocional = 'Si'``), in the operation center it belongs to."""
 
     code: str
     name: str | None
@@ -640,6 +643,8 @@ class Quotation:
     # The warehouses chosen inside each center (2026-11-20); a center without an entry
     # keeps its own warehouses. Only with ``manual``.
     cost_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # The promotional warehouses added to each center (2026-11-20), read for every line.
+    promo_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
     # (chosen; a refresh keeps it).
     billing_center_source: str = vocabulary.CENTER_AUTO

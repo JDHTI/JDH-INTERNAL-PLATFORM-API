@@ -268,9 +268,10 @@ class OfferRequest(BaseModel):
 class BillingCenterRequest(BaseModel):
     """The operation centers to cost from: ``national`` alone, or one or more centers.
 
-    ``cost_warehouses`` are main or spot-request warehouses of the chosen centers
-    (``GET /billing-centers``): a center with some chosen costs and shows stock from those
-    only; one without any keeps its own. ``billing_center_code`` is the single center of
+    ``cost_warehouses`` are warehouses of the chosen centers (``GET /billing-centers``): a
+    center with main or spot-request ones chosen costs and shows stock from those only; one
+    without any keeps its own. Promotional ones are added on top, for every line (the
+    highest cost with stock wins). ``billing_center_code`` is the single center of
     earlier clients.
     """
 
@@ -536,8 +537,9 @@ class CenterWarehouseResponse(BaseModel):
 
     code: str
     name: str | None
-    # ``BP`` main warehouses, ``BSP`` spot requests (SIESA's groups for the platform).
-    classification: Literal["BP", "BSP"]
+    # ``BP`` main warehouses, ``BSP`` spot requests (SIESA's groups for the platform),
+    # ``PROMO`` promotional ones (added on top of the center's, read for every line).
+    classification: Literal["BP", "BSP", "PROMO"]
     classification_label: str
 
 
@@ -873,9 +875,12 @@ def _detail(
         cost_warehouses=[
             code
             for center in quotation.cost_centers
-            for code in quotation.cost_warehouses.get(center, ())
+            for code in (
+                *quotation.cost_warehouses.get(center, ()),
+                *quotation.promo_warehouses.get(center, ()),
+            )
         ],
-        centers_set_cost=bool(quotation.cost_warehouses)
+        centers_set_cost=bool(quotation.cost_warehouses or quotation.promo_warehouses)
         or pricing.centers_set_cost(quotation.price_list_id),
         with_history=quotation.with_history,
         billing_center_source=quotation.billing_center_source,  # type: ignore[arg-type]

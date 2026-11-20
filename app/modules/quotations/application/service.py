@@ -359,7 +359,10 @@ def _setup(context: CustomerContext) -> _Setup:
     return _Setup(
         family=pricing.family(context.price_list_id, basis),
         plans=pricing.stock_plans(
-            context.price_list_id, context.cost_centers, context.cost_warehouses
+            context.price_list_id,
+            context.cost_centers,
+            context.cost_warehouses,
+            context.promo_warehouses,
         ),
         regional=pricing.regional_of(context.cost_centers, context.billing_center_code),
     )
@@ -858,7 +861,10 @@ class QuotationService:
         else:
             nits = list(audience.nits) if audience is not None else [context.nit]
         stock_scope = pricing.stock_scope(
-            context.price_list_id, context.cost_centers, context.cost_warehouses
+            context.price_list_id,
+            context.cost_centers,
+            context.cost_warehouses,
+            context.promo_warehouses,
         )
         (
             costs,
@@ -1027,6 +1033,7 @@ class QuotationService:
             warnings=quotation.warnings,
             cost_centers=quotation.cost_centers,
             cost_warehouses=quotation.cost_warehouses,
+            promo_warehouses=quotation.promo_warehouses,
             # The group's NITs are read again when it is priced.
             business_group=quotation.business_group,
         )
@@ -1050,6 +1057,7 @@ class QuotationService:
             "warnings": context.warnings,
             "cost_centers": context.cost_centers,
             "cost_warehouses": context.cost_warehouses,
+            "promo_warehouses": context.promo_warehouses,
             "regional": setup.regional,
             "price_family": setup.family,
             "stock_source": setup.stock_label,
@@ -1290,7 +1298,10 @@ class QuotationService:
         if len(wanted) > MAX_STOCK_SKUS:
             raise InvalidInputError(f"Pide el desglose de hasta {MAX_STOCK_SKUS} referencias")
         scope = pricing.stock_scope(
-            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+            quotation.price_list_id,
+            quotation.cost_centers,
+            quotation.cost_warehouses,
+            quotation.promo_warehouses,
         )
         known = set(siesa)
         asked = tuple(sku for sku in wanted if sku in known)
@@ -1573,6 +1584,7 @@ class QuotationService:
                 billing_center_code=quotation.billing_center_code,
                 cost_centers=quotation.cost_centers,
                 cost_warehouses=quotation.cost_warehouses,
+                promo_warehouses=quotation.promo_warehouses,
             )
         added = [_list_entry_of(line) for line in detail.lines if line.origin == vocabulary.ADDED]
         # If the warehouse does not answer with the last sales, each line keeps the one it had.
@@ -2039,6 +2051,7 @@ class QuotationService:
                 version,
                 detail.quotation.cost_centers,
                 warehouses=detail.quotation.cost_warehouses,
+                promos=detail.quotation.promo_warehouses,
             )
         context = (
             await self._group_context(detail.quotation.business_group)
@@ -2052,6 +2065,7 @@ class QuotationService:
                 billing_center_code=detail.quotation.billing_center_code,
                 cost_centers=detail.quotation.cost_centers,
                 cost_warehouses=detail.quotation.cost_warehouses,
+                promo_warehouses=detail.quotation.promo_warehouses,
             )
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
         local = [line for line in detail.lines if line.is_local]
@@ -2094,9 +2108,10 @@ class QuotationService:
         centers: tuple[str, ...],
         source: str | None = None,
         warehouses: Mapping[str, tuple[str, ...]] | None = None,
+        promos: Mapping[str, tuple[str, ...]] | None = None,
     ) -> QuotationDetail:
         """Price every SIESA line again as it is stored, costed from ``centers`` (none is
-        *Nacional*) and the ``warehouses`` chosen inside them.
+        *Nacional*), the ``warehouses`` chosen inside them and the promotional ones added.
 
         Cost (the stock plans of the centers), liquor tax (their regional), target, minimum,
         optimal price, margins and compliance are recomputed; new prices, quantities and
@@ -2105,8 +2120,12 @@ class QuotationService:
 
         quotation = detail.quotation
         chosen = pricing.chosen_warehouses(centers, warehouses)
+        added = pricing.chosen_warehouses(centers, promos)
         context = replace(
-            self._stored_context(quotation), cost_centers=centers, cost_warehouses=chosen
+            self._stored_context(quotation),
+            cost_centers=centers,
+            cost_warehouses=chosen,
+            promo_warehouses=added,
         )
         siesa = [line for line in detail.lines if not line.is_local]
         for_list = quotation.is_list_update
@@ -2122,6 +2141,7 @@ class QuotationService:
         values: dict[str, object] = {
             "cost_centers": centers,
             "cost_warehouses": chosen,
+            "promo_warehouses": added,
             "regional": setup.regional,
             "price_family": setup.family,
             "stock_source": setup.stock_label,
@@ -2152,41 +2172,39 @@ class QuotationService:
         takes its warehouses; several take, SKU by SKU, the costliest of them, and each line
         says which one it was. Inside a center some of its main or spot-request warehouses
         can be chosen (2026-11-20): the center then costs and shows stock from those only
-        (:func:`pricing.warehouse_plan`); a center without any chosen keeps its own. Same
-        state and permission rules as :meth:`refresh`; the quotation goes back to draft.
-        Lines are priced again (stock plans and regional), keeping new prices, quantities
-        and local products. A refresh keeps the choice.
+        (:func:`pricing.warehouse_plan`); a center without any chosen keeps its own. Its
+        promotional warehouses can be added too: read for every line, the highest cost with
+        stock wins. Same state and permission rules as :meth:`refresh`; the quotation goes
+        back to draft. Lines are priced again (stock plans and regional), keeping new prices,
+        quantities and local products. A refresh keeps the choice.
 
         Raises:
             InvalidInputError: A code is not an active operation center, or a warehouse is
-                not a main or spot-request one of the chosen centers.
+                not a main, spot-request or promotional one of the chosen centers.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
         centers = await self._centers(codes)
+        chosen, promos = await self._warehouses(centers, warehouses)
         return await self._repriced(
-            principal,
-            detail,
-            version,
-            centers,
-            vocabulary.CENTER_MANUAL,
-            await self._warehouses(centers, warehouses),
+            principal, detail, version, centers, vocabulary.CENTER_MANUAL, chosen, promos
         )
 
     async def _warehouses(
         self, centers: Sequence[str], codes: Sequence[str]
-    ) -> dict[str, tuple[str, ...]]:
-        """The chosen warehouses grouped by their center, in the master's order.
+    ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+        """The chosen warehouses grouped by their center, in the master's order: the main
+        and spot-request ones, and the promotional ones.
 
         Raises:
-            InvalidInputError: Warehouses with *Nacional*, one that is not a main or
-                spot-request warehouse, or one outside the chosen centers.
+            InvalidInputError: Warehouses with *Nacional*, one that is not a main,
+                spot-request or promotional warehouse, or one outside the chosen centers.
         """
 
         wanted = list(dict.fromkeys(code.strip().upper() for code in codes if code.strip()))
         if not wanted:
-            return {}
+            return {}, {}
         if not centers:
             raise InvalidInputError(
                 "Las bodegas se eligen dentro de un centro de operación, no con Nacional"
@@ -2195,18 +2213,24 @@ class QuotationService:
         unknown = [code for code in wanted if code not in known]
         if unknown:
             raise InvalidInputError(
-                f"La bodega {', '.join(unknown)} no es principal ni de solicitudes puntuales"
+                f"La bodega {', '.join(unknown)} no es principal, de solicitudes puntuales "
+                "ni promocional"
             )
         outside = [code for code in wanted if known[code].center_code not in centers]
         if outside:
             raise InvalidInputError(
                 f"La bodega {', '.join(outside)} no pertenece a los centros de operación elegidos"
             )
-        chosen: dict[str, list[str]] = defaultdict(list)
+        sites: dict[str, list[str]] = defaultdict(list)
+        promos: dict[str, list[str]] = defaultdict(list)
         for code, item in known.items():
             if code in wanted:
-                chosen[item.center_code].append(item.code)
-        return {center: tuple(chosen[center]) for center in centers if chosen.get(center)}
+                promo = item.classification == pricing.PROMO_WAREHOUSES
+                (promos if promo else sites)[item.center_code].append(item.code)
+        return (
+            {center: tuple(sites[center]) for center in centers if sites.get(center)},
+            {center: tuple(promos[center]) for center in centers if promos.get(center)},
+        )
 
     async def compare_centers(
         self,
@@ -2230,12 +2254,12 @@ class QuotationService:
         centers = await self._centers(codes)
         if len(centers) < 2:
             raise InvalidInputError("Elige al menos dos centros de operación para compararlos")
-        chosen = await self._warehouses(centers, warehouses)
+        chosen, promos = await self._warehouses(centers, warehouses)
         price_list_id = detail.quotation.price_list_id
         skus = sorted({line.sku for line in detail.lines if not line.is_local})
-        if not skus or not (chosen or pricing.centers_set_cost(price_list_id)):
+        if not skus or not (chosen or promos or pricing.centers_set_cost(price_list_id)):
             return None
-        plans = pricing.stock_plans(price_list_id, centers, chosen)
+        plans = pricing.stock_plans(price_list_id, centers, chosen, promos)
         rows = await asyncio.gather(*(self.warehouse.costs(skus, plan) for plan in plans.values()))
         return pricing.costliest_center(dict(zip(plans, rows, strict=True)))
 

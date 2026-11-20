@@ -56,6 +56,29 @@ def test_the_stock_counts_only_the_chosen_warehouses_of_a_center() -> None:
     assert scope.label == "MDE1, MDE4, BTA9, BTA8, BTA20"
     # Nacional never narrows.
     assert pricing.stock_scope(OUTSIDE_SKILL, [], {"001": ("MDE4",)}).national
+    # Promotional warehouses add to the center's, chosen or not.
+    promos = pricing.stock_scope(OUTSIDE_SKILL, ["001", "003"], None, {"003": ("BTA23",)})
+    assert promos.warehouses == ("MDE1", "MDE3", "MDE4", "BTA9", "BTA8", "BTA20", "BTA23")
+
+
+def test_promotional_warehouses_are_read_for_every_line() -> None:
+    """2026-11-20: when the center's and the promotional ones both have stock, the highest
+    cost wins (the same rule among every warehouse a line reads)."""
+
+    plans = pricing.stock_plans(OUTSIDE_SKILL, ["001", "003"], None, {"001": ("MDE27", "MDE28")})
+    # The center keeps its own warehouses, plus the promotional ones for every line.
+    assert plans["001"].reads() == (("MDE1", "MDE27", "MDE28"), ("MDE3", "MDE27", "MDE28"))
+    assert plans["003"].reads() == (("BTA9",), ("BTA8",)) and not plans["003"].promos
+    assert (
+        plans["001"].label == "MDE1 / MDE3 (congelados y refrigerados) + promocionales MDE27, MDE28"
+    )
+    assert pricing.stock_label(plans).startswith("Mayor costo entre C.O. 001: MDE1 / MDE3")
+    # With chosen warehouses too, and on a list with its own warehouses.
+    both = pricing.stock_plans("001", ["001"], {"001": ("MDE4",)}, {"001": ("MDE27",)})
+    assert both["001"].reads() == (("MDE4", "MDE27"), ("MDE4", "MDE27"))
+    # A center without its own row reads list 1's warehouses plus its promotional ones.
+    uraba = pricing.stock_plans(OUTSIDE_SKILL, ["007"], None, {"007": ("URA17",)})["007"]
+    assert uraba.reads()[0] == (*pricing.GENERAL_WAREHOUSES, "URA17")
 
 
 # ------------------------------------------------------------------ service
@@ -64,8 +87,14 @@ def test_the_stock_counts_only_the_chosen_warehouses_of_a_center() -> None:
 async def test_the_centers_list_carries_their_warehouses(service, advisor, warehouse) -> None:
     centers = {item.code: item for item in await service.billing_centers(advisor)}
 
-    assert [item.code for item in centers["001"].warehouses] == ["MDE1", "MDE3", "MDE4"]
-    assert centers["001"].warehouses[2].classification == "BSP"
+    assert [item.code for item in centers["001"].warehouses] == [
+        "MDE1",
+        "MDE3",
+        "MDE4",
+        "MDE27",
+        "MDE28",
+    ]
+    assert [item.classification for item in centers["001"].warehouses][2:4] == ["BSP", "PROMO"]
     # When the warehouse master does not answer, the centers still come.
     warehouse.warehouses_down = True
     centers = await service.billing_centers(advisor)
@@ -108,6 +137,33 @@ async def test_chosen_warehouses_cost_and_stock_each_center(
     assert cleared.quotation.cost_warehouses == {}
 
 
+async def test_promotional_warehouses_join_the_center_and_the_highest_cost_wins(
+    service, advisor, warehouse, masters
+) -> None:
+    national_customer(warehouse, masters)
+    warehouse.plan_costs["MDE1+MDE27"] = {
+        "2537": cost("2537", inventory="3900", **SNAPSHOT),
+        "26278": cost("26278", inventory="1000", **SNAPSHOT),
+    }
+    created = await service.create(advisor, NIT, 12)
+    warehouse.calls.clear()
+
+    changed = await service.set_billing_center(
+        advisor, created.quotation.id, 1, ["001", "003"], ["MDE27"]
+    )
+
+    quotation = changed.quotation
+    assert quotation.cost_warehouses == {} and quotation.promo_warehouses == {"001": ("MDE27",)}
+    plans = [call[2] for call in warehouse.calls if call[0] == "costs"]
+    assert [plan.promos for plan in plans] == [("MDE27",), ()]
+    by_sku = {line.sku: line for line in changed.lines}
+    assert (by_sku["2537"].cost_center, by_sku["2537"].inventory_cost) == ("001", 3900)
+    stock = [call for call in warehouse.calls if call[0] == "stock"]
+    assert stock[-1][1] == ("MDE1", "MDE3", "MDE4", "MDE27", "BTA9", "BTA8", "BTA20")
+    refreshed = await service.refresh(advisor, quotation.id, 2)
+    assert refreshed.quotation.promo_warehouses == {"001": ("MDE27",)}
+
+
 async def test_only_main_or_spot_warehouses_of_the_chosen_centers(
     service, advisor, warehouse, masters
 ) -> None:
@@ -116,7 +172,9 @@ async def test_only_main_or_spot_warehouses_of_the_chosen_centers(
 
     with pytest.raises(InvalidInputError, match="no pertenece"):
         await service.set_billing_center(advisor, quotation.id, 1, ["003"], ["MDE4"])
-    with pytest.raises(InvalidInputError, match="no es principal ni de solicitudes"):
+    with pytest.raises(InvalidInputError, match="no pertenece"):
+        await service.set_billing_center(advisor, quotation.id, 1, ["003"], ["MDE27"])
+    with pytest.raises(InvalidInputError, match="ni promocional"):
         await service.set_billing_center(advisor, quotation.id, 1, ["001"], ["MDE10"])
     with pytest.raises(InvalidInputError, match="no con Nacional"):
         await service.set_billing_center(advisor, quotation.id, 1, [], ["MDE4"])

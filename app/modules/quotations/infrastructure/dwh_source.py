@@ -245,20 +245,24 @@ class WarehouseQuotationSource:
 
     async def center_warehouses(self) -> list[CenterWarehouse]:
         """The active warehouses SIESA classifies for the platform (2026-11-19): main
-        (``BP``) and spot requests (``BSP``), with their operation center.
+        (``BP``) and spot requests (``BSP``), plus the promotional ones (``PROMO``,
+        2026-11-20), with their operation center.
 
-        Read from the master (``consumo.bodegas.clasificacion_bodega``), filtered by the
-        code: other SIESA groups are also named "BODEGAS PRINCIPALES". If SIESA moves a
-        warehouse between groups the list follows it.
+        Read from the master: ``consumo.bodegas.clasificacion_bodega``, filtered by the code
+        (other SIESA groups are also named "BODEGAS PRINCIPALES"), and ``promocional``. If
+        SIESA moves a warehouse between groups the list follows it.
         """
 
         rows = await self._fetch(
             'SELECT trim("codigo") AS codigo, "descripcion", trim("co") AS co,'
-            ' trim("clasificacion_bodega") AS clase'
+            ' CASE WHEN trim("clasificacion_bodega") = ANY($1::text[])'
+            ' THEN trim("clasificacion_bodega") ELSE $2 END AS clase'
             f" FROM {self._view('bodegas')}"
-            ' WHERE trim("clasificacion_bodega") = ANY($1::text[]) AND "estado" = \'Activo\''
+            ' WHERE (trim("clasificacion_bodega") = ANY($1::text[]) OR "promocional" = \'Si\')'
+            " AND \"estado\" = 'Activo'"
             " ORDER BY 3, 4, 1",
-            list(pricing.WAREHOUSE_CLASSES),
+            list(pricing.SITE_CLASSES),
+            pricing.PROMO_WAREHOUSES,
         )
         return [
             CenterWarehouse(

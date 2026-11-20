@@ -325,7 +325,10 @@ class MainBoardService:
 
         quotation = detail.quotation
         scope = pricing.stock_scope(
-            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+            quotation.price_list_id,
+            quotation.cost_centers,
+            quotation.cost_warehouses,
+            quotation.promo_warehouses,
         )
         skus = [line.sku for line in detail.lines if not line.is_local]
         try:
@@ -398,7 +401,10 @@ class MainBoardService:
         for quotation_id, items in skus.items():
             update = updates[quotation_id]
             scope = pricing.stock_scope(
-                update.price_list_id, update.cost_centers, update.cost_warehouses
+                update.price_list_id,
+                update.cost_centers,
+                update.cost_warehouses,
+                update.promo_warehouses,
             )
             found = await self.insights.stock(items, scope.warehouses, scope.centers)
             for sku, total in stock_totals(found).items():

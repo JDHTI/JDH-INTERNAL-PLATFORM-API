@@ -166,6 +166,9 @@ class QuotationModel(Base):
     cost_warehouses: Mapped[dict[str, list[str]]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
+    promo_warehouses: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     billing_center_source: Mapped[str] = mapped_column(String(10), nullable=False, default="auto")
     billing_center_name: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

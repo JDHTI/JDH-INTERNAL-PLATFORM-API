@@ -143,9 +143,14 @@ WAREHOUSES_SOURCE = "bodegas"
 # other SIESA groups are also named "BODEGAS PRINCIPALES".
 MAIN_WAREHOUSES = "BP"
 SPOT_WAREHOUSES = "BSP"
+SITE_CLASSES = (MAIN_WAREHOUSES, SPOT_WAREHOUSES)
+# The promotional warehouses (``consumo.bodegas.promocional = 'Si'``, SIESA group 23) can be
+# added to a center too (2026-11-20): read for every line, on top of the center's own.
+PROMO_WAREHOUSES = "PROMO"
 WAREHOUSE_CLASSES = {
     MAIN_WAREHOUSES: "Bodegas principales",
     SPOT_WAREHOUSES: "Bodegas solicitudes puntuales",
+    PROMO_WAREHOUSES: "Bodegas promocionales",
 }
 
 # A quotation above this many times the median last cost is a capture error in SIESA (a
@@ -162,7 +167,8 @@ class StockPlan:
     ``warehouses`` is ``(warehouse 1, warehouse 2)`` for one list or operation center; with
     ``highest`` the cost is the highest among ``GENERAL_WAREHOUSES`` (list 1). ``selected``
     are the warehouses chosen inside a center (2026-11-20) and ``cold_room`` the center's
-    cold room, if it is one of them.
+    cold room, if it is one of them. ``promos`` are the promotional warehouses added to the
+    center, read for every line.
     """
 
     warehouses: tuple[str, str] | None
@@ -171,9 +177,15 @@ class StockPlan:
     lactalis_branch: str
     selected: tuple[str, ...] = ()
     cold_room: str | None = None
+    promos: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
+        promos = f" + promocionales {', '.join(self.promos)}" if self.promos else ""
+        return self._base_label + promos
+
+    @property
+    def _base_label(self) -> str:
         if self.source == NATIONAL_SOURCE:
             return "Nacional: mayor costo entre todas las bodegas"
         if self.selected:
@@ -192,8 +204,16 @@ class StockPlan:
           chosen, the rest the other chosen ones; a line with none of its kind chosen reads
           every chosen one.
         - Otherwise warehouse 1 and warehouse 2.
+        - The promotional warehouses added to the center, for every line: when they and the
+          center's both have stock, the highest cost wins.
         """
 
+        dry, cold = self._base_reads()
+        extra = tuple(code for code in self.promos if code not in dry)
+        extra_cold = tuple(code for code in self.promos if code not in cold)
+        return dry + extra, cold + extra_cold
+
+    def _base_reads(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if self.selected:
             cold = tuple(code for code in self.selected if code == self.cold_room)
             dry = tuple(code for code in self.selected if code != self.cold_room)
@@ -273,24 +293,30 @@ def stock_plans(
     price_list_id: str | None,
     centers: Sequence[str],
     warehouses: Mapping[str, Sequence[str]] | None = None,
+    promos: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str | None, StockPlan]:
     """The plans whose costs a quotation compares, by the center each one stands for.
 
-    - Warehouses chosen inside some center (2026-11-20): one plan per center, the chosen
-      warehouses for those centers (:func:`warehouse_plan`, whatever the list) and the
-      plan of today for the rest.
+    - Warehouses chosen inside some center, or promotional ones added to it (2026-11-20):
+      one plan per center, the chosen warehouses for those centers (:func:`warehouse_plan`,
+      whatever the list) and the plan of today for the rest, each plus its promotional
+      warehouses (read for every line).
     - A list with its own warehouses: one plan, whatever the centers (key ``None``).
     - No centers (*Nacional*): one plan, the highest among every warehouse (key ``None``).
     - One or more centers: one plan per center; each SKU takes the costliest of them.
     """
 
     chosen = chosen_warehouses(centers, warehouses)
-    if chosen:
+    added = chosen_warehouses(centers, promos)
+    if chosen or added:
         return {
-            code: (
-                warehouse_plan(code, chosen[code])
-                if code in chosen
-                else stock_plan(price_list_id, code)
+            code: replace(
+                (
+                    warehouse_plan(code, chosen[code])
+                    if code in chosen
+                    else stock_plan(price_list_id, code)
+                ),
+                promos=added.get(code, ()),
             )
             for code in centers
         }
@@ -325,13 +351,15 @@ def stock_scope(
     price_list_id: str | None,
     centers: Sequence[str],
     warehouses: Mapping[str, Sequence[str]] | None = None,
+    promos: Mapping[str, Sequence[str]] | None = None,
 ) -> StockScope:
     """The warehouses whose stock is shown, consolidated: those of the chosen operation
     centers (2026-11-19).
 
     - One or more centers (the quotation's filter): the sellable warehouses of each, summed;
       a center without a row is read by its own warehouses in SIESA. A center whose
-      warehouses were chosen (2026-11-20) counts only those.
+      warehouses were chosen (2026-11-20) counts only those, plus the promotional ones
+      added to it.
     - No center: *Nacional*, the 17 main warehouses of every center.
 
     The filter alone decides, whatever the list (a list's own warehouses still decide its
@@ -344,10 +372,14 @@ def stock_scope(
     codes = tuple(dict.fromkeys(code for code in centers if code))
     if codes:
         chosen = chosen_warehouses(codes, warehouses)
+        added = chosen_warehouses(codes, promos)
         own = [
             code
             for center in codes
-            for code in chosen.get(center, CENTER_STOCK_WAREHOUSES.get(center, ()))
+            for code in (
+                *chosen.get(center, CENTER_STOCK_WAREHOUSES.get(center, ())),
+                *added.get(center, ()),
+            )
         ]
         others = tuple(
             code for code in codes if code not in CENTER_STOCK_WAREHOUSES and code not in chosen
@@ -360,10 +392,11 @@ def stock_warehouses(
     price_list_id: str | None,
     centers: Sequence[str],
     warehouses: Mapping[str, Sequence[str]] | None = None,
+    promos: Mapping[str, Sequence[str]] | None = None,
 ) -> tuple[str, ...]:
     """The warehouses of :func:`stock_scope` read by code (the main lists' board)."""
 
-    return stock_scope(price_list_id, centers, warehouses).warehouses
+    return stock_scope(price_list_id, centers, warehouses, promos).warehouses
 
 
 def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
@@ -371,7 +404,7 @@ def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
 
     if len(plans) == 1:
         return next(iter(plans.values())).label
-    if any(plan.selected for plan in plans.values()):
+    if any(plan.selected or plan.promos for plan in plans.values()):
         return "Mayor costo entre " + "; ".join(
             f"C.O. {code}: {plan.label}" for code, plan in plans.items() if code
         )
@@ -522,6 +555,8 @@ __all__ = [
     "FAMILY_LABELS",
     "MAIN_WAREHOUSES",
     "NATIONAL_SOURCE",
+    "PROMO_WAREHOUSES",
+    "SITE_CLASSES",
     "SPOT_WAREHOUSES",
     "WAREHOUSES_SOURCE",
     "WAREHOUSE_CLASSES",

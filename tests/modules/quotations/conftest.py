@@ -158,14 +158,16 @@ class FakeWarehouse:
             CenterWarehouse("CTG1", "PRINCIPAL CARTAGENA", "004", "BP"),
             CenterWarehouse("CTG15", "CAVA CARTAGENA", "004", "BP"),
             CenterWarehouse("CTG14", "SOLICITUDES PUNTUALES", "004", "BSP"),
+            CenterWarehouse("MDE27", "PROMOCIONES MEDELLIN FOOD", "001", "PROMO"),
+            CenterWarehouse("MDE28", "PROMOCIONES MEDELLIN CAVA", "001", "PROMO"),
         ]
         self.warehouses_down = False
         self.list_customers = 28113
         self.down = False
         self.calls: list[tuple] = []
         # Costs of one plan, by its main warehouse (``MDE1``), its chosen warehouses joined
-        # by commas (``MDE1,MDE4``) or its source (``nacional``); any other plan gets
-        # ``cost_rows``.
+        # by commas (``MDE1,MDE4``) or its source (``nacional``), plus ``+`` and its
+        # promotional warehouses (``MDE1+MDE27``); any other plan gets ``cost_rows``.
         self.plan_costs: dict[str, dict[str, CostInfo]] = {}
         # List updates: list 10U with two SKUs, served to two customers of Centro.
         self.lists: dict[str, PriceListInfo] = {
@@ -253,6 +255,8 @@ class FakeWarehouse:
             key = ",".join(plan.selected)
         else:
             key = plan.warehouses[0] if plan.warehouses else plan.source
+        if plan.promos:
+            key += "+" + ",".join(plan.promos)
         rows = self.plan_costs.get(key, self.cost_rows)
         return {sku: rows[sku] for sku in skus if sku in rows}
 

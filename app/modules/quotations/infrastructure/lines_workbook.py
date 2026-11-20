@@ -128,7 +128,8 @@ def _centers(quotation: Quotation, names: Mapping[str, str | None]) -> str:
     parts = []
     for code in quotation.cost_centers:
         text = _center(code, names) or code
-        chosen = quotation.cost_warehouses.get(code)
+        chosen = list(quotation.cost_warehouses.get(code, ()))
+        chosen += [f"{item} promocional" for item in quotation.promo_warehouses.get(code, ())]
         parts.append(f"{text} ({', '.join(chosen)})" if chosen else text)
     return ", ".join(parts)
 

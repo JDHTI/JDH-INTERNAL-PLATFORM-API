@@ -208,6 +208,7 @@ async def test_center_warehouses_read_main_and_spot_request_ones_by_code() -> No
         [
             {"codigo": "MDE1", "descripcion": "PRINCIPAL MEDELLIN", "co": "001", "clase": "BP"},
             {"codigo": "MDE4", "descripcion": "SOLICITUDES PUNTUALES", "co": "001", "clase": "BSP"},
+            {"codigo": "MDE27", "descripcion": "PROMOCIONES", "co": "001", "clase": "PROMO"},
         ]
     )
 
@@ -216,10 +217,13 @@ async def test_center_warehouses_read_main_and_spot_request_ones_by_code() -> No
     query, args = connection.queries[0]
     assert '"consumo"."bodegas"' in query and "clasificacion_bodega" in query
     # By the code, never by the description: other SIESA groups share the name.
-    assert args == (["BP", "BSP"],) and "desc_clasificacion" not in query
+    assert args == (["BP", "BSP"], "PROMO") and "desc_clasificacion" not in query
+    # The promotional ones come by their flag.
+    assert "\"promocional\" = 'Si'" in query
     assert [(item.code, item.center_code, item.classification) for item in found] == [
         ("MDE1", "001", "BP"),
         ("MDE4", "001", "BSP"),
+        ("MDE27", "001", "PROMO"),
     ]
 
 
