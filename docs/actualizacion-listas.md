@@ -49,7 +49,7 @@ que el permiso de un módulo no abre las del otro.
 | línea `origin` | `lista` (tiene precio vigente en la lista) o `agregado` |
 | línea `last_price` | el **precio vigente de la lista** por unidad de inventario: contra él se calculan el margen actual, la variación y la alerta bajo objetivo |
 | línea `last_sale_price`, `last_sale_cost` | precio neto y costo de ventas unitario de la última venta, con su `last_sale_date` y `last_document` |
-| línea `support_options` | todos los apoyos de los clientes de la lista, cada uno con su precio mínimo y óptimo |
+| línea `support_options` | todos los apoyos de los clientes de la lista, cada uno con su precio mínimo y óptimo. `customer_nit` dice que es de un cliente; `customer_group`, que es de un grupo empresarial (2026-11-20); los dos vacíos, que es general |
 
 ## Cómo se arma
 

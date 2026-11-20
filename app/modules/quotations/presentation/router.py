@@ -391,6 +391,9 @@ class SupportOptionResponse(BaseModel):
     # Set when the support is for one customer of the list.
     customer_nit: str | None
     valid_to: date | None
+    # Set when the support is for a business group (no NIT): it covers that group, not the
+    # whole list. Both empty: a general support.
+    customer_group: str | None = None
 
 
 class SupportRequestRefResponse(BaseModel):
@@ -752,6 +755,7 @@ def _line(
                 reason=item.reason,
                 customer_nit=item.customer_nit,
                 valid_to=item.valid_to,
+                customer_group=item.customer_group,
             )
             for item in line.support_options
         ],

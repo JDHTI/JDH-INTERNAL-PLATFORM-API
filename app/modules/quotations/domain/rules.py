@@ -563,6 +563,8 @@ def pick_list_support(
             detail="",
             customer_nit=agreement.customer_nit,
             valid_to=agreement.valid_to,
+            # A business group's support (no NIT): it covers the group, not the whole list.
+            customer_group=None if agreement.customer_nit else agreement.customer_group,
         )
         reason: str | None = None
         if agreement.warehouse:
