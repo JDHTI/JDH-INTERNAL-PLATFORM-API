@@ -60,12 +60,18 @@ def offer_price(line: QuotationLine) -> Decimal | None:
     return line.new_price if line.new_price is not None else line.last_price
 
 
-def in_offer(line: QuotationLine, scope: str) -> bool:
-    """Whether the line goes in the offer (``changed`` or ``all``); inactive lines never."""
+def in_offer(line: QuotationLine, scope: str, *, quantities: bool = False) -> bool:
+    """Whether the line goes in the offer (``changed`` or ``all``); inactive lines never.
+
+    Quoting with quantities, a line given a quantity goes in whatever the scope: without a
+    new price it is quoted at the last price it was sold at (decided 2026-11-20).
+    """
 
     if not line.is_active:
         return False
     if scope == vocabulary.OFFER_ALL:
+        return offer_price(line) is not None
+    if quantities and line.quantity is not None and line.quantity > ZERO:
         return offer_price(line) is not None
     return line.new_price is not None
 
@@ -126,7 +132,8 @@ def offer_lines(detail: QuotationDetail) -> list[QuotationLine]:
     """The lines the offer carries, in position order."""
 
     scope = detail.quotation.offer_scope
-    return [line for line in detail.lines if in_offer(line, scope)]
+    quantities = detail.quotation.quote_quantities
+    return [line for line in detail.lines if in_offer(line, scope, quantities=quantities)]
 
 
 def offer_summary(detail: QuotationDetail) -> OfferSummary | None:

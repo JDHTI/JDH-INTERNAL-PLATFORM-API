@@ -664,7 +664,9 @@ def _request_ref(item: Any) -> SupportRequestRefResponse | None:
     )
 
 
-def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
+def _line(
+    line: QuotationLine, scope: str, request: Any = None, *, quantities: bool = False
+) -> LineResponse:
     return LineResponse(
         id=line.id,
         position=line.position,
@@ -732,7 +734,7 @@ def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
         category=line.category or None,
         quantity=line.quantity,
         offer_price=offer.offer_price(line),
-        in_offer=offer.in_offer(line, scope),
+        in_offer=offer.in_offer(line, scope, quantities=quantities),
         last_sale_price=line.last_sale_price,
         last_sale_cost=line.last_sale_cost,
         support_options=[
@@ -873,7 +875,12 @@ def _detail(
         seller_contact=_seller(quotation.seller_contact),
         offer_summary=_summary(detail),
         lines=[
-            _line(line, quotation.offer_scope, (requests or {}).get(line.sku))
+            _line(
+                line,
+                quotation.offer_scope,
+                (requests or {}).get(line.sku),
+                quantities=quotation.quote_quantities,
+            )
             for line in detail.lines
         ],
     )
