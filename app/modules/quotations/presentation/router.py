@@ -25,7 +25,7 @@ from app.modules.quotations.application.service import (
     QuotationService,
     Skipped,
 )
-from app.modules.quotations.domain import offer, pricing, rules
+from app.modules.quotations.domain import offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.entities import (
     AppliedSupport,
     Quotation,
@@ -1279,6 +1279,39 @@ def _stock_items(result: Any) -> list[SkuStockResponse]:
             )
         )
     return items
+
+
+class LastSalesStatusResponse(BaseModel):
+    """Whether a list update has its last sales, without reading its lines."""
+
+    read: bool = Field(description="False while it carries ultima_venta_no_leida")
+    retrying: bool = Field(description="The API is reading them again in the background")
+    version: int
+
+
+@router.get(
+    "/{quotation_id}/last-sales",
+    dependencies=[_READ_GATE],
+    response_model=LastSalesStatusResponse,
+    summary="Whether a list update has its last sales",
+)
+@inject
+async def last_sales_status(
+    quotation_id: UUID,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> LastSalesStatusResponse:
+    """Light to poll (only the header): ``read`` turns true when the background retry wrote
+    the last sales, without a new ``version``; then read the detail once. ``read: false``
+    with ``retrying: false`` means the retry gave up (or the API restarted): only a refresh
+    tries again."""
+
+    header = (await service.get(principal, quotation_id, [])).quotation
+    return LastSalesStatusResponse(
+        read=vocabulary.SALES_NOT_READ not in header.warnings,
+        retrying=service.retrying_sales(quotation_id),
+        version=header.version,
+    )
 
 
 @router.get(

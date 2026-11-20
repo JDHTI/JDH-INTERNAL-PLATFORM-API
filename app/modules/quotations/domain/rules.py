@@ -21,6 +21,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from decimal import ROUND_HALF_UP, ROUND_UP, Decimal
+from typing import Any
 from uuid import UUID
 
 from app.modules.commercial_masters.domain.margins import channel_field, margin_for
@@ -674,6 +675,24 @@ def _first(*values):
     return next((value for value in values if value is not None), None)
 
 
+def list_sale_fields(sale: LastSale | None) -> dict[str, Any]:
+    """The columns a list update's line takes from its last sale, as :func:`build_line` writes
+    them. They only inform: in a list update no price, margin, floor or count depends on
+    them, so they can be filled later without touching the rest of the line (2026-11-20)."""
+
+    return {
+        "last_gross_price": money(sale.gross_price) if sale else None,
+        "last_discount_pct": sale.discount_pct if sale else None,
+        "last_sale_date": sale.sale_date if sale else None,
+        "last_document": sale.document if sale else None,
+        "last_sale_unit": sale.sale_unit if sale else None,
+        "last_quantity": sale.quantity if sale else None,
+        "sales_in_window": sale.sales_in_window if sale else 0,
+        "last_sale_price": money(sale.net_price) if sale else None,
+        "last_sale_cost": money(sale.unit_cost) if sale else None,
+    }
+
+
 def build_line(
     position: int,
     sku: str,
@@ -710,8 +729,8 @@ def build_line(
 
     A list update passes ``list_scopes`` (its customers' scopes by NIT): the line is compared
     against ``base_price`` (the price in force on the list) instead of the last sale, the last
-    sale goes to ``last_sale_price`` / ``last_sale_cost``, and every support of the list is
-    listed with its prices (see :func:`pick_list_support`).
+    sale goes to ``last_sale_price`` / ``last_sale_cost`` (:func:`list_sale_fields`), and every
+    support of the list is listed with its prices (see :func:`pick_list_support`).
     """
 
     problems: list[str] = []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from typing import Any
 from uuid import UUID
@@ -514,6 +514,56 @@ class SqlAlchemyQuotationRepository:
         async with self.database.session_factory() as session:
             row = await session.get(PriceListLoadModel, load_id)
         return _load(row) if row is not None else None
+
+    async def fill_last_sales(
+        self, quotation_id: UUID, by_sku: Mapping[str, Mapping[str, Any]], warning: str
+    ) -> bool:
+        """Write the last-sale columns of a list update's lines (by SKU) and drop ``warning``
+        from its header, only while the header still has it. The version and ``updated_at``
+        stay: it is not an edit, and the editor saving prices meanwhile gets no 409.
+
+        Args:
+            quotation_id (UUID): The list update.
+            by_sku (Mapping[str, Mapping[str, Any]]): Columns by SKU
+                (:func:`rules.list_sale_fields`); every line of the SKU takes them.
+            warning (str): The warning the read clears.
+
+        Returns:
+            bool: Whether it wrote (``False``: gone, or the warning was already cleared).
+        """
+
+        async with self.database.session_factory() as session, session.begin():
+            model = await session.get(Q, quotation_id, with_for_update=True)
+            if model is None or warning not in (model.warnings or []):
+                return False
+            if by_sku:
+                table = L.__table__
+                columns = next(iter(by_sku.values())).keys()
+                await session.execute(
+                    update(table)
+                    .where(
+                        table.c.quotation_id == bindparam("owner_id"),
+                        table.c.sku == bindparam("line_sku"),
+                    )
+                    .values({name: bindparam(f"v_{name}") for name in columns}),
+                    [
+                        {
+                            "owner_id": quotation_id,
+                            "line_sku": sku,
+                            **{f"v_{name}": value for name, value in values.items()},
+                        }
+                        for sku, values in by_sku.items()
+                    ],
+                )
+            model.warnings = [item for item in model.warnings if item != warning]
+        return True
+
+    async def has_warning(self, quotation_id: UUID, warning: str) -> bool:
+        """Whether the quotation's header still carries ``warning``."""
+
+        async with self.database.session_factory() as session:
+            warnings = await session.scalar(select(Q.warnings).where(Q.id == quotation_id))
+        return warning in (warnings or [])
 
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None:
         """Store the category of some lines, by line id. The header is not touched: no new

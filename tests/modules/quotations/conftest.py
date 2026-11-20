@@ -403,6 +403,25 @@ class FakeRepository:
         )
         self.items[quotation_id] = QuotationDetail(detail.quotation, lines)
 
+    async def fill_last_sales(self, quotation_id, by_sku, warning) -> bool:
+        detail = self.items.get(quotation_id)
+        if detail is None or warning not in detail.quotation.warnings:
+            return False
+        lines = tuple(
+            replace(line, **by_sku[line.sku]) if line.sku in by_sku else line
+            for line in detail.lines
+        )
+        header = replace(
+            detail.quotation,
+            warnings=tuple(item for item in detail.quotation.warnings if item != warning),
+        )
+        self.items[quotation_id] = QuotationDetail(header, lines)
+        return True
+
+    async def has_warning(self, quotation_id, warning) -> bool:
+        detail = self.items.get(quotation_id)
+        return detail is not None and warning in detail.quotation.warnings
+
     async def list(
         self,
         *,

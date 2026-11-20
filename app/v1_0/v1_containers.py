@@ -157,6 +157,7 @@ from app.modules.projects.infrastructure.repository import SqlAlchemyProjectRepo
 from app.modules.quotations.application.liquor_taxes import LiquorTaxService
 from app.modules.quotations.application.list_review import ListReviewService
 from app.modules.quotations.application.main_board import MainBoardService
+from app.modules.quotations.application.sales_backfill import SalesBackfill
 from app.modules.quotations.application.service import QuotationService
 from app.modules.quotations.domain.entities import QuotationPolicy
 from app.modules.quotations.infrastructure.board_repository import SqlAlchemyBoardRepository
@@ -834,8 +835,15 @@ class V1Container(containers.DeclarativeContainer):
         managers=supplier_support_manager_policy,
         designated=internal_support_designated_policy,
     )
+    # The last sales of a list update built without them, read again in the background.
+    quotation_sales_backfill = providers.Factory(
+        SalesBackfill,
+        repository=quotation_repository,
+        warehouse=quotation_warehouse_source,
+    )
     quotation_service = providers.Factory(
         QuotationService,
+        sales_backfill=quotation_sales_backfill,
         support_requests=internal_support_request_links,
         sales=sales_scope_service,
         repository=quotation_repository,

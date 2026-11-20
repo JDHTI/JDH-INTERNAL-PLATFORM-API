@@ -117,7 +117,7 @@ async def test_start_up_runs_what_is_older_than_the_fresh_data(make_service, run
 
 
 async def test_the_fallback_runs_today_what_the_dwh_did_not(make_service, runs):
-    # Saturday in BogotÃ¡: abastecimiento does not run, so its job is not due.
+    # Saturday in Bogotá: abastecimiento does not run, so its job is not due.
     saturday = datetime(2026, 11, 7, 15, tzinfo=UTC)
     await runs.queue("masters-warm-identity", Trigger.DWH, saturday - timedelta(hours=2))
     done = runs.by_job("masters-warm-identity")[0]
@@ -163,13 +163,13 @@ async def test_execute_records_success_partial_and_failure(make_service, runs, r
     partial = await runs.queue("masters-warm-products", Trigger.MANUAL, NOW)
     broken = await runs.queue("commercial-sync-supply", Trigger.MANUAL, NOW)
     recorder.results["masters-warm-products"] = {"errors": ["productos: permiso denegado"]}
-    recorder.results["commercial-sync-supply"] = RuntimeError("se cayÃ³ el DWH")
+    recorder.results["commercial-sync-supply"] = RuntimeError("se cayó el DWH")
 
     assert (await service.execute(ok.id)).status is RunStatus.SUCCESS
     assert (await service.execute(partial.id)).status is RunStatus.PARTIAL
     failed = await service.execute(broken.id)
 
-    assert failed.status is RunStatus.FAILED and failed.error == "se cayÃ³ el DWH"
+    assert failed.status is RunStatus.FAILED and failed.error == "se cayó el DWH"
     assert runs.items[ok.id].started_at == NOW and runs.items[ok.id].detail == {"ok": True}
     assert recorder.calls == [
         "masters-warm-identity",

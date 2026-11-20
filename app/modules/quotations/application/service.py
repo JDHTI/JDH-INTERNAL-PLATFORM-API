@@ -26,6 +26,7 @@ from app.modules.identity.domain.principal import Principal
 from app.modules.order_validation.domain.catalog import Section
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope
 from app.modules.order_validation.domain.rules import BASIS
+from app.modules.quotations.application.sales_backfill import SalesBackfill
 from app.modules.quotations.domain import list_codes, offer, pricing, rules, vocabulary
 from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
@@ -384,6 +385,7 @@ class QuotationService:
         main_managers: ManagerPolicy | None = None,
         main_approvers: ManagerPolicy | None = None,
         support_requests: SupportRequestLinks | None = None,
+        sales_backfill: SalesBackfill | None = None,
     ) -> None:
         """Create the service.
 
@@ -416,8 +418,11 @@ class QuotationService:
             support_requests (SupportRequestLinks | None): Internal support requests asked
                 from a customer quotation (supports module): who reviews them and the latest
                 one of each SKU. Without it nobody asks from the quoter.
+            sales_backfill (SalesBackfill | None): Reads again, in the background, the last
+                sales of a list update built without them. Without it only a refresh does.
         """
 
+        self.sales_backfill = sales_backfill
         self.support_requests = support_requests
         self.list_managers = list_managers
         self.list_approvers = list_approvers
@@ -1476,7 +1481,7 @@ class QuotationService:
         if not lines:
             warnings.append("lista_sin_precios")
         if not read:
-            warnings.append("ultima_venta_no_leida")
+            warnings.append(vocabulary.SALES_NOT_READ)
         context = replace(context, warnings=tuple(warnings))
         fields = self._customer_fields(context)
         fields["list_action"] = vocabulary.UPDATE_LIST
@@ -1509,7 +1514,10 @@ class QuotationService:
             source=source,
             **fields,  # type: ignore[arg-type]
         )
-        return await self.repository.create(quotation, lines)
+        created = await self.repository.create(quotation, lines)
+        if not read:
+            self._retry_sales(created, audience)
+        return created
 
     async def _refresh_list(
         self, principal: Principal, detail: QuotationDetail, version: int
@@ -1544,14 +1552,13 @@ class QuotationService:
             for entry in map(_list_entry_of, detail.lines)
             if entry.sale is not None
         }
-        lines, snapshot, read = await self._build_list(
-            context, self._audience(branches, nit), added, previous, items
-        )
+        audience = self._audience(branches, nit)
+        lines, snapshot, read = await self._build_list(context, audience, added, previous, items)
         warnings = list(context.warnings)
         if not lines:
             warnings.append("lista_sin_precios")
         if not read:
-            warnings.append("ultima_venta_no_leida")
+            warnings.append(vocabulary.SALES_NOT_READ)
         context = replace(context, warnings=tuple(warnings))
         stored = {line.sku: line for line in detail.lines}
         lines = [_kept(line, stored.get(line.sku)) for line in lines]
@@ -1566,7 +1573,24 @@ class QuotationService:
             max_points_below_target=self.policy.max_points_below_target,
             **fields,  # type: ignore[arg-type]
         )
-        return await self.repository.save(refreshed, lines, version, replace_lines=True)
+        saved = await self.repository.save(refreshed, lines, version, replace_lines=True)
+        if not read:
+            self._retry_sales(saved, audience)
+        return saved
+
+    def _retry_sales(self, detail: QuotationDetail, audience: _Audience) -> None:
+        """Read the last sales of a list update built without them again, in the background
+        (:mod:`sales_backfill`): the warning goes away on its own when the warehouse answers."""
+
+        if self.sales_backfill is None:
+            return
+        skus = list(dict.fromkeys(line.sku for line in detail.lines if not line.is_local))
+        self.sales_backfill.start(detail.quotation.id, skus, audience.sale_keys)
+
+    def retrying_sales(self, quotation_id: UUID) -> bool:
+        """Whether the last sales of this list update are being read again right now."""
+
+        return self.sales_backfill is not None and self.sales_backfill.running(quotation_id)
 
     async def _stored_audience(self, quotation: Quotation) -> _Audience | None:
         """The audience of a stored list update (``None`` for a quotation)."""

@@ -191,6 +191,14 @@ class QuotationRepository(Protocol):
 
     async def set_categories(self, quotation_id: UUID, categories: dict[UUID, str]) -> None: ...
 
+    async def fill_last_sales(
+        self, quotation_id: UUID, by_sku: Mapping[str, Mapping[str, Any]], warning: str
+    ) -> bool:
+        """Write the lines' last-sale columns and drop ``warning`` without a new version."""
+        ...
+
+    async def has_warning(self, quotation_id: UUID, warning: str) -> bool: ...
+
 
 class StagingRepository(QuotationRepository, Protocol):
     """Quotations plus the staging of the list updates and their loads."""

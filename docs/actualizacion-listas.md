@@ -89,9 +89,20 @@ que el permiso de un módulo no abre las del otro.
      - Lista con más de `LIST_SALES_BRANCH_LIMIT` = 1.000 sucursales activas: toda la compañía,
        en dos pasos (el último mes y después el resto de la ventana). Leer las 28 mil
        sucursales de la lista 1 tardaba más de 20 s.
-   - Si el DWH no responde a tiempo, la actualización se crea igual con el aviso
-     `ultima_venta_no_leida`, y un refresco vuelve a intentar sin perder la última venta que ya
-     tenía cada línea.
+   - Si el DWH no responde a tiempo (90 s, al crear y al refrescar), la actualización se crea
+     igual con el aviso `ultima_venta_no_leida`, y un refresco vuelve a intentar sin perder la
+     última venta que ya tenía cada línea.
+   - **Reintento solo** (2026-11-20): con ese aviso, el API vuelve a leer las últimas ventas en
+     segundo plano a los 15, 30, 60, 120 y 240 s (cada lectura hasta 150 s; en el peor caso
+     unos 21 minutos). Cuando lee, escribe las columnas de última venta de las líneas y quita
+     el aviso **sin cambiar la `version`**: quien está poniendo precios no recibe 409. La última
+     venta solo informa en una actualización de lista; no mueve costo, piso, margen ni conteos.
+     - `GET /quotations/{id}/last-sales` → `{read, retrying, version}` solo lee la cabecera, para
+       consultarlo seguido. Con `read: true`, se relee el detalle una vez.
+     - `read: false` y `retrying: false`: el reintento se rindió o el API se reinició; solo un
+       refresco vuelve a intentar.
+     - Si un guardado en curso vuelve a poner el aviso (leyó la cabecera antes), el reintento lo
+       revisa a los 5 y 30 s y escribe otra vez.
    - Tiempos medidos el 2026-11-12 en la 10U: 0,7 s por sus clientes y 2,4 s de toda la
      compañía.
 6. **Apoyos:** cuentan los de **todos los clientes activos de la lista**.
