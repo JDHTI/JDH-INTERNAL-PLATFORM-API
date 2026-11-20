@@ -66,7 +66,7 @@ class EmployeeDetail(EmployeeSummary):
     birth_day: int | None
     manager: EmployeeRefResponse | None
     landline_phone: str | None
-    # Only when the person chose to show it in the directory.
+    # Always shown; null only when the person has not registered one.
     mobile_phone: str | None
 
 
@@ -193,6 +193,7 @@ class OnboardingRequest(BaseModel):
     siteId: UUID | None = None  # noqa: N815
     mobilePhone: str | None = Field(None, max_length=30)  # noqa: N815
     landlinePhone: str | None = Field(None, max_length=30)  # noqa: N815
+    # Kept for older intranet builds; the profile shows the mobile regardless.
     showInDirectory: bool | None = None  # noqa: N815
 
     def as_changes(self) -> dict[str, Any]:
@@ -297,7 +298,7 @@ def detail(employee: Employee) -> dict[str, Any]:
             else None
         ),
         "landline_phone": employee.landline_phone,
-        "mobile_phone": employee.mobile_phone if employee.show_mobile_in_directory else None,
+        "mobile_phone": employee.mobile_phone,
     }
 
 

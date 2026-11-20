@@ -137,8 +137,9 @@ Completar perfil pide dos cosas: la sede (`sede`, si el empleado no tiene) y el 
 - **Sede.** Solo acepta sedes activas.
 - **Teléfonos.** Se guardan como se escribieron. Admiten números, espacios, `+`, `-` y paréntesis,
   y deben tener al menos 7 dígitos.
-- **Celular en el perfil.** El perfil público muestra `landline_phone` siempre. `mobile_phone` solo
-  aparece cuando la persona marcó `showInDirectory`.
+- **Celular en el perfil.** El perfil público muestra siempre `landline_phone` y `mobile_phone`;
+  cada uno es `null` solo si la persona no lo registró. `showInDirectory` se sigue aceptando y
+  devolviendo por compatibilidad, pero ya no oculta el celular (la intranet dejó de usarlo).
 - **Horario de contacto.** Usa días de `LUNES` a `DOMINGO` y horas `HH:MM` (`directory_contact_schedules`).
 
 La foto se pide con `v = photo_version` del empleado. Con `v` se responde
