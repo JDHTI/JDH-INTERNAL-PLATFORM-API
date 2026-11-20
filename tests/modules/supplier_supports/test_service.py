@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
+from app.modules.supplier_supports.application.service import FieldError
 from app.modules.supplier_supports.domain.entities import SupportData, Tier
 from tests.modules.supplier_supports.conftest import FAMILIA_ID, SKU_1128, TODAY, person
 
@@ -16,6 +17,7 @@ D = Decimal
 
 def tactic(**values) -> SupportData:
     base = {
+        "value_unit": "unidad",
         "kind": "tactico_cliente",
         "calc_method": "costo_neto",
         "supplier_value": D("80"),
@@ -361,15 +363,18 @@ async def test_search_passes_state_and_review_filters_and_rejects_unknown_states
 async def test_the_pack_factor_and_the_unit_of_the_cost_are_completed_from_the_masters(
     service, manager
 ) -> None:
-    # Maizena: the sheet gives a cost of 13.783 and no pack factor or unit.
-    view = await service.create(
-        manager, tactic(product_sku="3474", reference_cost=D("13783")), supplier_code="233"
+    # Maizena: the sheet gives a cost of 13.783 and no pack factor or unit. A creation must
+    # say its unit (2026-11-20); the preview and the loads still infer it.
+    view = await service.preview(
+        manager,
+        tactic(product_sku="3474", reference_cost=D("13783"), value_unit=None),
+        supplier_code="233",
     )
 
     data = view.support.data
     assert data.pack_factor == D("24") and data.value_unit == "unidad"
     assert data.unit_basis_source == "inferido_dwh"
-    assert view.derived.cost.unit == D("13783") and view.derived.cost.box == D("330792")
+    assert view.derived.cost.unit == D("13783")
 
 
 async def test_a_unit_declared_by_the_sheet_or_by_a_person_is_never_overridden(
@@ -403,14 +408,35 @@ async def test_a_unit_declared_by_the_sheet_or_by_a_person_is_never_overridden(
 async def test_a_cost_that_matches_neither_unit_nor_box_stays_without_unit(
     service, manager
 ) -> None:
-    view = await service.create(
-        manager, tactic(product_sku="3474", reference_cost=D("60000")), supplier_code="233"
+    view = await service.preview(
+        manager,
+        tactic(product_sku="3474", reference_cost=D("60000"), value_unit=None),
+        supplier_code="233",
     )
 
     assert view.support.data.value_unit is None
     assert view.support.data.unit_basis_source == "desconocido"
     # The figures read an undeclared unit as per unit.
     assert view.derived.net_cost_per.unit == view.derived.net_cost
+
+
+async def test_a_new_support_must_say_its_value_unit(service, manager) -> None:
+    """BI, 2026-11-20: the «Unidad valor» is required when creating, by hand or in a batch."""
+
+    with pytest.raises(FieldError, match="Unidad valor es obligatoria") as raised:
+        await service.create(manager, tactic(value_unit=None), supplier_code="233")
+    assert raised.value.field == "value_unit"
+    with pytest.raises(FieldError, match="obligatoria"):
+        await service.create_many(manager, [(tactic(value_unit=None), "233")])
+    # A margin exception carries no money: it needs none.
+    exception = tactic(
+        kind="excepcion_margen",
+        calc_method="margen_minimo",
+        supplier_value=None,
+        supported_margin_pct=D("0.12"),
+        value_unit=None,
+    )
+    assert (await service.create(manager, exception)).support.data.value_unit is None
 
 
 async def test_changing_the_unit_by_hand_records_the_provenance(service, manager) -> None:

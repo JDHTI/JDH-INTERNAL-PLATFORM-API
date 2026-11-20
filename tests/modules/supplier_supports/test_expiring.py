@@ -16,6 +16,7 @@ from app.modules.supplier_supports.domain.validity import expiring_until, is_exp
 
 def tactic(sku: str, **values) -> SupportData:
     base = {
+        "value_unit": "unidad",
         "kind": "tactico_cliente",
         "calc_method": "pct_costo",
         "supplier_value": Decimal("0.05"),

@@ -27,6 +27,7 @@ NEW = {
     "valid_to": "2026-12-31",
     "regionals": ["antioquia"],
     "program": "PLAN 10X10",
+    "value_unit": "unidad",
 }
 
 
@@ -267,19 +268,23 @@ def test_state_is_one_value_and_voided_wins_over_validity(client, repo) -> None:
     assert "states" in client.get(f"{BASE}/catalogs").json()
 
 
-def test_prices_come_per_box_and_per_unit_and_the_unit_is_inferred(client) -> None:
-    # Maizena x720g: 24 per box; the sheet's 13.783 matches the warehouse unit cost.
+def test_prices_come_per_box_and_per_unit_and_the_unit_is_required(client) -> None:
+    # Maizena x720g: 24 per box; the 13.783 is per unit.
     created = client.post(
         BASE,
         json={**NEW, "product_sku": "3474", "reference_cost": "13783", "supplier_value": "0.05"},
     ).json()
 
     derived = created["derived"]
-    assert (created["value_unit"], created["unit_basis_source"]) == ("unidad", "inferido_dwh")
+    assert (created["value_unit"], created["unit_basis_source"]) == ("unidad", "manual")
     assert created["pack_factor"] in ("24", "24.0000") or float(created["pack_factor"]) == 24
     assert float(derived["cost"]["unit"]) == 13783 and float(derived["cost"]["box"]) == 330792
     assert float(derived["net_cost_per"]["unit"]) == pytest.approx(13093.85)
     assert float(derived["net_cost_per"]["box"]) == pytest.approx(13093.85 * 24)
+    # Without the unit a creation is a 422 that marks the field (2026-11-20).
+    missing = client.post(BASE, json={**NEW, "value_unit": None})
+    assert missing.status_code == 422 and missing.json()["field"] == "value_unit"
+    assert "Unidad valor es obligatoria" in missing.json()["detail"]
 
 
 def test_a_support_can_be_switched_off_and_on_from_the_actions_column(client) -> None:
