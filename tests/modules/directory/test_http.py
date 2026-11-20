@@ -196,8 +196,20 @@ def test_onboarding_tells_what_is_missing_and_saves_it(client, harness) -> None:
     empty = client.post(f"{BASE}/employees/me/onboarding", json={})
     assert bad_site.status_code == bad_phone.status_code == empty.status_code == 422
 
+    # The profile always shows the mobile; the old switch no longer hides it.
     client.post(f"{BASE}/employees/me/onboarding", json={"showInDirectory": False})
+    assert client.get(f"{BASE}/employees/{ana.id}").json()["mobile_phone"] == "300 123 4567"
+
+
+def test_profile_shows_the_mobile_without_the_switch(client, harness) -> None:
+    _, ana, _, _ = asyncio.run(_seed(harness))
+
     assert client.get(f"{BASE}/employees/{ana.id}").json()["mobile_phone"] is None
+    saved = client.post(f"{BASE}/employees/me/onboarding", json={"mobilePhone": "300 765 4321"})
+    assert saved.status_code == 200 and saved.json()["showInDirectory"] is False
+
+    profile = client.get(f"{BASE}/employees/{ana.id}").json()
+    assert profile["mobile_phone"] == "300 765 4321"
 
 
 def test_onboarding_needs_an_employee(client) -> None:
