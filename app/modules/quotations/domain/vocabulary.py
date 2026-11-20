@@ -176,8 +176,12 @@ WARNING_LABELS = {
     "costo Nacional",
     "lista_sin_precios": "La lista no tiene precios vigentes: agrega las referencias a actualizar",
     "ultima_venta_no_leida": "El datawarehouse no respondió a tiempo con la última venta de "
-    "cada referencia: actualiza para volver a intentarlo",
+    "cada referencia: se vuelve a intentar sola en los próximos minutos",
 }
+
+# A list update built without its last sales (2026-11-20): they are read again in the
+# background and the warning goes away on its own (see ``application/sales_backfill.py``).
+SALES_NOT_READ = "ultima_venta_no_leida"
 
 BASIS_LABELS = {
     "lista": "Margen Food Service",
