@@ -91,6 +91,36 @@ async def test_every_support_of_the_list_is_shown_and_the_lowest_price_applies(
     assert "apoyo_en_revision" in line.problems
 
 
+async def test_a_group_support_says_its_group_and_a_general_one_does_not(
+    service, lister, supports
+) -> None:
+    supports.clients = {
+        NIT: CustomerScope(NIT, channels=WHOLESALE),
+        "800111222": CustomerScope("800111222", channels=WHOLESALE, business_group="GRUPO X"),
+    }
+    general = agreement(supplier_value=Decimal("0.05"), product_sku="2537")
+    group = agreement(supplier_value=Decimal("0.10"), product_sku="2537", customer_group="Grupo X")
+    # A support of one NIT keeps its customer's group, and is still one customer's.
+    one = agreement(
+        supplier_value=Decimal("0.02"),
+        product_sku="2537",
+        customer_nit="800111222",
+        customer_group="Grupo X",
+    )
+    supports.items += [general, group, one]
+
+    detail = await service.create_list_update(lister, price_list_id="10U")
+
+    options = {item.support_id: item for item in detail.lines[0].support_options}
+    assert (options[group.id].customer_nit, options[group.id].customer_group) == (None, "Grupo X")
+    assert (options[general.id].customer_nit, options[general.id].customer_group) == (None, None)
+    assert options[one.id].customer_group is None
+    # Stored and read back with the line.
+    stored = await service.get(lister, detail.quotation.id)
+    kept = {item.support_id: item for item in stored.lines[0].support_options}
+    assert kept[group.id].customer_group == "Grupo X"
+
+
 async def test_the_main_lists_only_go_through_listas_principales(service, lister, approver) -> None:
     # Not from Actualización de listas, not even for its validators.
     with pytest.raises(ForbiddenError, match="lista principal"):

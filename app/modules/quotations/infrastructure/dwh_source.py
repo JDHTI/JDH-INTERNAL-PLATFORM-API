@@ -606,10 +606,15 @@ class WarehouseQuotationSource:
         the unit cost is ``costo / cantidad`` (the base of ``precio_unidad_inventario``). A
         cost of zero or less comes as ``None``. ``ventas`` has no index on ``sku`` (it comes
         from a join): the product keys are looked up first and the sales are bound by them.
+
+        Without ``timeout`` the sales reads get ``sales_timeout``, like a quotation's history
+        (2026-11-20: a list update used to get only the 30 s of the other reads).
         """
 
         if not skus:
             return {}
+        if timeout is None:
+            timeout = self.sales_timeout
         keys = [
             str(row["producto_key"]).strip()
             for row in await self._fetch(

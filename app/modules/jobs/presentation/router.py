@@ -59,8 +59,10 @@ class JobResponse(BaseModel):
     label: str
     description: str
     sequence: str | None
-    # ISO weekdays (1 = Monday) when the daily fallback runs it.
+    # ISO weekdays (1 = Monday) when the daily fallback runs it (or, with ``at``, it runs).
     fallback_days: list[int]
+    # Local time (HH:MM) it runs every day, for a job with a fixed time; null otherwise.
+    at: str | None = None
     last_run: JobRunResponse | None
     last_success_at: datetime | None
     # When the warehouse should have this job's data ready next.
@@ -130,6 +132,7 @@ async def list_jobs(_: UserModel = _reader, service: JobService = _service) -> d
                 "description": item.description,
                 "sequence": item.sequence,
                 "fallback_days": item.fallback_days,
+                "at": item.at,
                 "last_run": _run(item.last_run),
                 "last_success_at": item.last_success_at,
                 "next_expected_at": item.next_expected_at,

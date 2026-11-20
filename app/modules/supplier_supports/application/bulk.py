@@ -703,7 +703,8 @@ class SupportBulkService:
         self, rows: Sequence[_Row], required: bool
     ) -> tuple[list[_Row], list[RowIssue]]:
         """A row with a business group and no NIT becomes one support per customer of the
-        group (its active NITs in the customer master), each with the group's name."""
+        group (its active NITs in the customer master), each with the group's name and
+        marked ``group_wide``: it covers the whole group, also a customer that joins later."""
 
         names = sorted(
             {row.data.customer_group for row in rows if row.data.customer_group}
@@ -736,9 +737,10 @@ class SupportBulkService:
                     )
                 )
                 continue
-            given = row.given | {"customer_nit", "customer_name"}
+            # Re-uploading a group also marks the copies loaded before the flag existed.
+            given = row.given | {"customer_nit", "customer_name", "group_wide"}
             for nit, name in customers:
-                data = replace(row.data, customer_nit=nit, customer_name=name)
+                data = replace(row.data, customer_nit=nit, customer_name=name, group_wide=True)
                 expanded.append(replace(row, data=data, given=given, from_group=True))
         return expanded, issues
 

@@ -83,6 +83,8 @@ class JobOverview:
     last_run: JobRun | None
     last_success_at: datetime | None
     sequence_state: SequenceState | None
+    # Local time it runs every day (``HH:MM``), for a job with a fixed time.
+    at: str | None = None
 
     @property
     def next_expected_at(self) -> datetime | None:

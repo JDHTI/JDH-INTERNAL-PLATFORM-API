@@ -29,7 +29,9 @@ se recupera sola. Para eso está el respaldo diario.
 | `masters-warm-products` | `reporte_ventas` | Lee del DWH el maestro de productos para la caché |
 | `commercial-sync-products` | `reporte_ventas` | Maestros comerciales: proveedores comerciales y productos |
 | `commercial-sync-supply` | `abastecimiento` | Costo unitario promedio y el puente producto-proveedor |
+| `supplier-supports-costs` | `abastecimiento` | Costo DWH de cada apoyo con la regla del cotizador |
 | `main-lists-sync` | `abastecimiento` | Arma o refresca las 14 listas principales con SIESA, conservando precios nuevos, estados y observaciones (`docs/listas-principales.md`). También la encola el tablero con `POST /price-list-updates/main/sync` (`manage` del módulo, no solo admin). Va después de los costos |
+| `supplier-supports-rollover` | ninguna: **00:05** todos los días | Vence el día anterior el apoyo que reemplaza un programado (`docs/apoyos-proveedores.md`). No lee el DWH; hasta el 2026-11-20 esperaba a `identidad` (~03:42) |
 
 El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada uno en
 `infrastructure/handlers.py`.
@@ -43,6 +45,10 @@ El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada 
   reinicio no los repite.
 - **Respaldo (`scheduled`).** A las `JOBS_FALLBACK_AT` (10:00) corre lo que el DWH no disparó ese día,
   solo en los días en que corre su secuencia.
+- **A hora fija (`scheduled`).** Una tarea sin secuencia y con hora (`at` en el registro y en
+  `GET /jobs`) corre todos los días a esa hora local. Si la API arranca después de esa hora y la
+  tarea no ha corrido desde entonces, corre al arrancar. Hoy solo `supplier-supports-rollover`, a
+  las 00:05.
 - **Al arrancar (`startup`).** Cierra como fallidas las corridas que un proceso detenido dejó abiertas,
   y corre lo que tenga datos más frescos que su último éxito.
 - **A mano (`manual`).** `POST /jobs/{key}/run`.
@@ -65,7 +71,7 @@ El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada 
 
 | Método y ruta | Quién | Uso |
 | --- | --- | --- |
-| `GET /jobs` | admin o moderador | `{enabled, poll_seconds, fallback_at, timezone, dwh: {last_poll_at, error}, items}`. Cada tarea trae `last_run`, `last_success_at`, `next_expected_at` (la ETA del DWH) y `sequence_state` |
+| `GET /jobs` | admin o moderador | `{enabled, poll_seconds, fallback_at, timezone, dwh: {last_poll_at, error}, items}`. Cada tarea trae `last_run`, `last_success_at`, `next_expected_at` (la ETA del DWH), `sequence_state` y `at` (la hora fija, `HH:MM`, o `null`) |
 | `GET /jobs/runs?job=&limit=` | admin o moderador | Historial, más reciente primero |
 | `POST /jobs/{key}/run` | admin | 202 `{run_id}`; 404 si no existe; 409 si `JOBS_ENABLED=false` o ya hay una abierta |
 

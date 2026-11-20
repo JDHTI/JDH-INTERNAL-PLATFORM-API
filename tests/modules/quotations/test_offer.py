@@ -277,14 +277,30 @@ async def test_offer_totals_come_from_quantities(service, advisor, warehouse, ma
 
     summary = offer.offer_summary(on)
     # 2537: 10 x 4100 = 41000, VAT 7790. 26278: 1.5 x 80000 = 120000, VAT 6000, liquor
-    # round(1.5 x 42451) = 63677. Local: 2 x 12000 = 24000, VAT 1200. 1485 is not offered.
-    assert summary.item_count == 3
+    # round(1.5 x 42451) = 63677. Local: 2 x 12000 = 24000, VAT 1200. 1485 has no new price
+    # but a quantity: it goes in at its last price, 3 x 2000 = 6000, VAT 1140.
+    assert summary.item_count == 4
     assert [(group.vat_pct, group.base, group.vat) for group in summary.vat_groups] == [
-        (Decimal(19), Decimal(41000), Decimal(7790)),
+        (Decimal(19), Decimal(47000), Decimal(8930)),
         (Decimal(5), Decimal(144000), Decimal(7200)),
     ]
-    assert summary.subtotal == Decimal(185000) and summary.liquor_tax == Decimal(63677)
-    assert summary.total == Decimal(263667)
+    assert summary.subtotal == Decimal(191000) and summary.liquor_tax == Decimal(63677)
+    assert summary.total == Decimal(270807)
+
+
+async def test_quoting_quantities_an_unchanged_line_goes_at_its_last_price(
+    service, advisor, warehouse, masters
+) -> None:
+    detail = await offer_quotation(service, advisor, warehouse, masters)
+    unchanged = next(line for line in detail.lines if line.sku == "1485")
+
+    # Without quantities the «changed» scope leaves it out; with them its quantity brings it in.
+    assert unchanged.new_price is None and unchanged.quantity == Decimal(3)
+    assert not offer.in_offer(unchanged, "changed")
+    assert offer.in_offer(unchanged, "changed", quantities=True)
+    assert offer.offer_price(unchanged) == unchanged.last_price
+    # A line with no quantity still needs a new price to be offered.
+    assert not offer.in_offer(replace(unchanged, quantity=None), "changed", quantities=True)
 
 
 # ------------------------------------------------------------------ 6. customer workbook
@@ -309,12 +325,13 @@ async def test_the_customer_workbook(service, advisor, approver, warehouse, mast
     assert ["Teléfono", "3001234567"] in rows
     header = next(row for row in rows if row and row[0] == "Referencia")
     assert header[-4:] == ["Cantidad", "Subtotal", "IVA", "Total"]
-    items = rows[rows.index(header) + 1 : rows.index(header) + 4]
-    assert [row[0] for row in items] == ["2537", "26278", "Por crear"]
+    items = rows[rows.index(header) + 1 : rows.index(header) + 5]
+    # 1485 has a quantity and no new price: it goes at its last price.
+    assert [row[0] for row in items] == ["2537", "1485", "26278", "Por crear"]
     # 4100 x 1.19 = 4879; 80000 x 1.05 + 42451 = 126451.
     assert items[0][-5:] == [4879, 10, 41000, 7790, 48790]
-    assert items[1][6] == 126451
-    assert ["Total", 263667] in rows
+    assert items[2][6] == 126451
+    assert ["Total", 270807] in rows
     assert rows[-3:] == [
         ["Condiciones de la oferta"],
         ["• Precios válidos hasta el 8 de noviembre de 2026"],

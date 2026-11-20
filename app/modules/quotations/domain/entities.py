@@ -405,10 +405,13 @@ class SupportOption:
     reason: str | None = None
     customer_nit: str | None = None
     valid_to: date | None = None
+    # Set when the support is for a business group (it has no NIT): it covers that group only.
+    customer_group: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "support_id": str(self.support_id),
+            "customer_group": self.customer_group,
             "kind": self.kind,
             "calc_method": self.calc_method,
             "program": self.program,
@@ -439,6 +442,7 @@ class SupportOption:
             reason=data.get("reason"),
             customer_nit=data.get("customer_nit"),
             valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
+            customer_group=data.get("customer_group"),
         )
 
 

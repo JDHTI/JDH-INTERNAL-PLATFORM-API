@@ -297,6 +297,26 @@ def test_group_and_branch_supports_need_the_customer_in_them() -> None:
     assert rules.scope_of(branch, line(), other, day) == rules.OUT_OF_SCOPE
 
 
+def test_a_group_support_covers_a_customer_that_joined_the_group_later() -> None:
+    # 2026-11-20: loaded as one copy per customer of the group; 900315138 joined afterwards.
+    first = agreement(customer_nit="800111222", customer_group="Grupo Goddard")
+    second = replace(first, id=agreement().id, customer_nit="830012863", dwh_unit_cost=D(90))
+    one_nit = agreement(customer_nit="830012863", customer_group="Grupo Goddard")
+    general = agreement()
+
+    found = rules.whole_groups([(first, True), (second, True), (one_nit, False), (general, False)])
+
+    # The copies collapse into one support for the whole group, with no NIT.
+    assert found == [replace(first, customer_nit=None), one_nit, general]
+    late = CustomerScope("900315138", business_group="GRUPO  goddard")
+    day = date(2026, 11, 20)
+    assert rules.scope_of(found[0], line(), late, day) == rules.APPLIES
+    assert rules.scope_of(one_nit, line(), late, day) == rules.OUT_OF_SCOPE
+    # A customer's own copy is the one kept (its id and its DWH cost).
+    mine = rules.whole_groups([(first, True), (second, True)], own={"830012863"})
+    assert mine == [replace(second, customer_nit=None)]
+
+
 def test_the_client_margin_list_comes_from_its_center_and_team() -> None:
     product = ProductInfo(
         "1",

@@ -96,13 +96,30 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   uno que cruza responde 409 con `overlaps` (o error de fila), salvo `on_overlap`:
   `vencer_anterior` (termina el día antes; si empezaba después, se anula) o
   `anular_anterior`, en la misma transacción.
-- **Programados**: el job `supplier-supports-rollover` (cada mañana) corta el apoyo anterior el
-  día antes de que empiece el siguiente; `GET /supplier-supports/alerts` lista cada programado con
-  el que reemplaza, para dejarlo programado o vencer ya el anterior.
+- **Programados**: el job `supplier-supports-rollover` corta el apoyo anterior el día antes de que
+  empiece el siguiente. Desde el 2026-11-20 corre todos los días a las **00:05** (Bogotá), sin
+  esperar la carga del DWH; si el API arranca después, corre al arrancar. `GET
+  /supplier-supports/alerts` lista cada programado con el que reemplaza, para dejarlo programado o
+  vencer ya el anterior.
+- **Estados**: vigente, programado y vencido no se guardan, se calculan al leer con la fecha de
+  Bogotá. A las 12 a. m. cambian solos, sin job. Lo único que escribe datos al cambiar el día es
+  el job de programados.
 - **Grupo empresarial**: `POST /by-group` y la subida `POST /bulk/groups` crean un apoyo por
-  cliente activo del grupo (por nombre; el código no se conoce). El validador aplica un apoyo de
-  grupo sin NIT a los clientes del grupo y uno de sucursal solo al cliente que la tiene. Cada
-  apoyo muestra `business_group` y la lista de margen que usa (`margin_list`).
+  cliente activo del grupo (por nombre; el código no se conoce), marcados `group_wide`. Desde el
+  2026-11-20 esas copias **valen para todo el grupo**, también para un cliente que entró después o
+  estaba inactivo al cargar:
+  - el cotizador y el validador las toman como un solo apoyo del grupo, sin NIT, y lo aplican a
+    todo cliente cuyo grupo en el maestro sea ese (mayúsculas y espacios no cuentan); si el
+    cliente tiene su propia copia, se usa esa;
+  - el vendedor ve los apoyos de los grupos de sus clientes, y la búsqueda base por Cliente
+    también los trae;
+  - un apoyo de un solo NIT nunca vale para el grupo, aunque guarde el grupo de su cliente;
+  - una fila con grupo y sin NIT ya no se ve como «general» para todos los vendedores.
+
+  Las copias cargadas antes las marcó la migración `0076` (mismas condiciones, misma
+  transacción, dos o más clientes del mismo grupo). Volver a subir el grupo por `bulk/groups`
+  también las marca. Uno de sucursal vale solo para el cliente que la tiene. Cada apoyo muestra
+  `business_group`, `group_wide` y la lista de margen que usa (`margin_list`).
 - **Bodegas promocionales** (grupo 23 de SIESA, 18 bodegas): un apoyo aplica allí solo con
   `promo_warehouses`; si no, el pedido de esa bodega va a su costo, sin apoyo.
 
@@ -294,7 +311,8 @@ cotizador (`salespeople`):
 - **Todos los apoyos:** los gestores de `apoyos` (BI), quien ve todos los clientes (BI, el líder
   o responsable de Comercial) y los administradores.
 - **Vendedor o supervisor:** los apoyos de los NIT de su cartera (sucursales con su código de
-  vendedor, o los de su equipo) y los apoyos generales, sin NIT.
+  vendedor, o los de su equipo), los de los grupos empresariales de esos clientes (2026-11-20)
+  y los apoyos generales, sin NIT ni grupo.
 - **Sin clientes asignados:** ningún apoyo. El detalle de un apoyo fuera de la cartera es 404.
 
 `GET /supplier-supports/permissions` trae `customer_scope` (`all`, `team`, `mine` o `none`).
@@ -302,6 +320,7 @@ cotizador (`salespeople`):
 | Método y ruta | Uso |
 | --- | --- |
 | `POST /supplier-supports/search` | Filtrado dinámico (abajo) |
+| `POST /supplier-supports/summary` | Conteos por estado de la misma búsqueda (los KPI) |
 | `GET /supplier-supports/search/fields` | Campos, operadores y valores permitidos |
 | `GET /supplier-supports/catalogs` | Vocabularios y regionales, unidades, canales y programas en uso |
 | `POST /supplier-supports` | Crear (ligado a proveedor, producto y cliente reales) |
@@ -352,11 +371,21 @@ POST /api/v1/supplier-supports/search
   es 422; nada se interpola en el SQL.
 - **Búsqueda base**: `customer_nits`, `supplier_codes` y `product_skus` (listas) filtran
   por cliente, proveedor y referencia. Son independientes y opcionales (puede enviarse
-  uno, dos o los tres) y se combinan con AND entre sí y con `conditions`. Estado y tipo
+  uno, dos o los tres) y se combinan con AND entre sí y con `conditions`. Por cliente
+  también trae los apoyos de su grupo empresarial (`group_wide`, 2026-11-20). Estado y tipo
   se filtran libremente aparte.
 - `state` (`vigente`, `vencido`, `programado`, `inactivo`, `anulado`) y `needs_review`: los
   filtros rápidos (`inactivo` = desactivado a mano, reversible). `active_on` fija la fecha
-  de la vigencia (`validity` sigue aceptándose). `effective_only`: deja el apoyo
+  de la vigencia (`validity` sigue aceptándose).
+- **Por vencer** (2026-11-20): `state` y `validity` aceptan `por_vencer`: vigente y con
+  `valid_to` entre `active_on` y un mes calendario después, incluido (del 20 de noviembre, hasta
+  el 20 de diciembre; del 31 de enero, hasta el último día de febrero). No es un estado: esas
+  filas siguen `vigente` y traen `expiring: true`. Uno sin fecha fin nunca está por vencer.
+- **Conteos** (`POST /supplier-supports/summary`, mismo cuerpo que `/search`; la página y el
+  orden se ignoran): `vigente`, `por_vencer` (parte de `vigente`), `programado`, `vencido`,
+  `inactivo` y `total` (sin anulados), con los mismos filtros y la misma cartera del que
+  consulta. `state` y `validity` no cuentan, así que cada número es lo que listaría ese chip.
+  `effective_only`: deja el apoyo
   vigente efectivo por proveedor × cliente × SKU (el de inicio más reciente, p. ej. un
   «reemplazo temporal»). `has_conflicts`: apoyos que se solapan en la misma regla y
   periodo (mismo proveedor, tipo, programa, cliente, SKU, SKU del proveedor, bodega y

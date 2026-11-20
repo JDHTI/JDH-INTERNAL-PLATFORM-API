@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import and_, or_, select
 
@@ -12,12 +13,18 @@ from app.modules.commercial_masters.domain.margins import (
     branches_margin_field,
     majority,
 )
+from app.modules.commercial_masters.infrastructure.groups import (
+    group_key,
+    group_label,
+    groups_of_nits,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
     ProductModel,
 )
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, ProductInfo
+from app.modules.order_validation.domain.rules import whole_groups
 from app.modules.supplier_supports.domain.vocabulary import ACTIVE_KINDS
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportCostModel,
@@ -60,7 +67,19 @@ class SqlAlchemyAgreementSource:
         # PostgreSQL's 32,767 parameters per query: its customer supports are filtered here.
         many = len(nits) > _MAX_NITS
         wanted = set(nits)
-        customer = [] if many else [or_(S.customer_nit.is_(None), S.customer_nit.in_(list(nits)))]
+        # A business group's support covers every customer of the group (2026-11-20).
+        group_wide = and_(S.group_wide.is_(True), S.customer_group.is_not(None))
+        customer = (
+            []
+            if many
+            else [
+                or_(
+                    S.customer_nit.is_(None),
+                    S.customer_nit.in_(list(nits)),
+                    and_(group_wide, group_key(S.customer_group).in_(groups_of_nits(nits))),
+                )
+            ]
+        )
         product = or_(S.product_sku.is_(None), S.product_sku.in_(list(skus)))
         query = (
             select(
@@ -91,40 +110,62 @@ class SqlAlchemyAgreementSource:
         )
         async with self.database.session_factory() as session:
             rows = (await session.execute(query)).all()
-        return [
-            Agreement(
-                id=model.id,
-                supplier_code=code,
-                kind=model.kind,
-                calc_method=model.calc_method,
-                status=model.status,
-                program=model.program,
-                customer_nit=model.customer_nit,
-                product_sku=model.product_sku,
-                regionals=tuple(model.regionals or ()),
-                business_units=tuple(model.business_units or ()),
-                channels=tuple(model.channels or ()),
-                warehouse=model.warehouse,
-                supplier_value=model.supplier_value,
-                target_margin_pct=model.target_margin_pct,
-                min_margin_pct=model.min_margin_pct,
-                list_margin_pct=model.list_margin_pct,
-                reference_cost=model.reference_cost,
-                reference_list_price=model.reference_list_price,
-                min_quantity=model.min_quantity,
-                valid_from=model.valid_from,
-                valid_to=model.valid_to,
-                value_unit=model.value_unit,
-                pack_factor=pack if pack is not None else model.pack_factor,
-                dwh_unit_cost=unit_cost,
-                supported_margin_pct=model.supported_margin_pct,
-                customer_branch_id=model.customer_branch_id,
-                customer_group=model.customer_group,
-                promo_warehouses=model.promo_warehouses,
+            groups = await self._groups(session, nits) if many else set()
+
+        def wanted_row(model: SupplierSupportModel) -> bool:
+            if not many or model.customer_nit is None or model.customer_nit in wanted:
+                return True
+            return bool(model.group_wide) and group_label(model.customer_group) in groups
+
+        found = [
+            (
+                Agreement(
+                    id=model.id,
+                    supplier_code=code,
+                    kind=model.kind,
+                    calc_method=model.calc_method,
+                    status=model.status,
+                    program=model.program,
+                    customer_nit=model.customer_nit,
+                    product_sku=model.product_sku,
+                    regionals=tuple(model.regionals or ()),
+                    business_units=tuple(model.business_units or ()),
+                    channels=tuple(model.channels or ()),
+                    warehouse=model.warehouse,
+                    supplier_value=model.supplier_value,
+                    target_margin_pct=model.target_margin_pct,
+                    min_margin_pct=model.min_margin_pct,
+                    list_margin_pct=model.list_margin_pct,
+                    reference_cost=model.reference_cost,
+                    reference_list_price=model.reference_list_price,
+                    min_quantity=model.min_quantity,
+                    valid_from=model.valid_from,
+                    valid_to=model.valid_to,
+                    value_unit=model.value_unit,
+                    pack_factor=pack if pack is not None else model.pack_factor,
+                    dwh_unit_cost=unit_cost,
+                    supported_margin_pct=model.supported_margin_pct,
+                    customer_branch_id=model.customer_branch_id,
+                    customer_group=model.customer_group,
+                    promo_warehouses=model.promo_warehouses,
+                ),
+                bool(model.group_wide),
             )
             for model, code, pack, unit_cost in rows
-            if not many or model.customer_nit is None or model.customer_nit in wanted
+            if wanted_row(model)
         ]
+        return whole_groups(found, wanted)
+
+    @staticmethod
+    async def _groups(session: Any, nits: Sequence[str]) -> set[str]:
+        """The groups (:func:`group_label`) of these customers, read in chunks."""
+
+        unique = list(dict.fromkeys(nits))
+        found: set[str] = set()
+        for start in range(0, len(unique), _CHUNK):
+            rows = await session.execute(groups_of_nits(unique[start : start + _CHUNK]).distinct())
+            found.update(group_label(value) for (value,) in rows.all())
+        return found
 
     async def products(self, skus: Sequence[str]) -> dict[str, ProductInfo]:
         """Margin by channel and liquor tax of each product."""

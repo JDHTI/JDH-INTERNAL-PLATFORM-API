@@ -307,12 +307,34 @@ def test_base_search_accepts_client_supplier_and_reference_independently(client,
     )
     assert both.status_code == 200
     base = repo.last_search.group.items[:-1]
-    assert {item.field for item in base} == {"customer_nit", "supplier.code", "product_sku"}
+    assert {item.field for item in base} == {"supplier.code", "product_sku"}
+    assert repo.last_search.customer_nits == ("800116299",)
 
     client.post(f"{BASE}/search", json={"product_skus": ["1128"]})
     assert [item.field for item in repo.last_search.group.items[:-1]] == ["product_sku"]
     client.post(f"{BASE}/search", json={"state": "inactivo"})
     assert repo.last_search.state == "inactivo"
+
+
+def test_the_counts_by_state_and_por_vencer(client, repo) -> None:
+    client.post(BASE, json=NEW)
+
+    counts = client.post(f"{BASE}/summary", json={"state": "vencido", "page": 2, "size": 10})
+    listed = client.post(f"{BASE}/search", json={"validity": "por_vencer"})
+
+    assert counts.status_code == 200 and listed.status_code == 200
+    assert counts.json() == {
+        "vigente": 1,
+        "por_vencer": 0,
+        "programado": 0,
+        "vencido": 0,
+        "inactivo": 0,
+        "total": 1,
+    }
+    assert repo.last_search.validity == "por_vencer"
+    item = client.post(f"{BASE}/search", json={}).json()["items"][0]
+    assert item["expiring"] is False and item["group_wide"] is False
+    assert client.post(f"{BASE}/search", json={"state": "pronto"}).status_code == 422
 
 
 def test_a_crossing_support_is_a_409_with_the_overlaps_and_can_replace_it(client) -> None:

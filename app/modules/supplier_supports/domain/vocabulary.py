@@ -127,6 +127,12 @@ VALIDITIES = ("vigente", "vencido", "programado")
 # flag (``needs_review``), never a state.
 STATES = (*VALIDITIES, "inactivo", "anulado")
 
+# A filter, not a state (2026-11-20): in force and ending within a month (its rows stay
+# ``vigente``). ``validity`` and ``state`` both take it.
+EXPIRING = "por_vencer"
+VALIDITY_FILTERS = (*VALIDITIES, EXPIRING)
+STATE_FILTERS = (*STATES, EXPIRING)
+
 # Where the unit of a cost (``value_unit``: per box or per unit) comes from.
 UNIT_BASIS_SOURCES = ("hoja", "inferido_dwh", "manual", "desconocido")
 

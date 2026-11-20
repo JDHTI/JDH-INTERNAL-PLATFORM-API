@@ -40,6 +40,7 @@ from app.modules.supplier_supports.domain.entities import (
 from app.modules.supplier_supports.domain.filters import Group, SearchSpec
 from app.modules.supplier_supports.domain.overlap import overlaps
 from app.modules.supplier_supports.domain.profiles import Profile
+from app.modules.supplier_supports.domain.validity import is_expiring, validity_on
 from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
 
 TODAY = date(2026, 10, 9)
@@ -184,6 +185,8 @@ class FakeSupportRepository:
         self.loads: list[LoadPlan] = []
         # Customer NIT -> its salesperson code (the customers master).
         self.salespeople: dict[str, str] = {}
+        # Customer NIT -> its business group.
+        self.groups: dict[str, str] = {}
 
     async def live_in_groups(self, kinds):
         return [
@@ -355,19 +358,47 @@ class FakeSupportRepository:
             SupportRow(support=item, supplier_code="233")
             for item in self.items.values()
             if (spec.include_voided or item.data.status != "anulado")
-            and self._in_scope(item.data.customer_nit, spec.salesperson_codes)
+            and self._in_scope(item.data, spec.salesperson_codes)
         ]
         return rows, len(rows)
 
-    def _in_scope(self, nit: str | None, codes: tuple[str, ...] | None) -> bool:
+    def _in_scope(self, data: SupportData, codes: tuple[str, ...] | None) -> bool:
         if codes is None:
             return True
         if not codes:
             return False
-        return nit is None or self.salespeople.get(nit) in codes
+        nit, group = data.customer_nit, data.customer_group
+        if nit is None and not group:
+            return True
+        if nit is not None and self.salespeople.get(nit) in codes:
+            return True
+        return bool(group and (nit is None or data.group_wide) and self._has_group(group, codes))
+
+    def _has_group(self, group: str, codes) -> bool:
+        return any(
+            self.groups.get(nit, "").upper() == group.upper()
+            for nit, code in self.salespeople.items()
+            if code in codes
+        )
 
     async def customers_of(self, nits, salesperson_codes) -> set[str]:
         return {nit for nit in nits if self.salespeople.get(nit) in set(salesperson_codes)}
+
+    async def in_groups_of(self, group, salesperson_codes) -> bool:
+        return self._has_group(group, salesperson_codes)
+
+    async def state_counts(self, spec: SearchSpec) -> dict[str, int]:
+        self.last_search = spec
+        counts = dict.fromkeys(("vigente", "por_vencer", "programado", "vencido", "inactivo"), 0)
+        rows, total = await self.search(replace(spec, include_voided=False))
+        for row in rows:
+            data = row.support.data
+            if not data.is_enabled:
+                counts["inactivo"] += 1
+                continue
+            counts[validity_on(data.valid_from, data.valid_to, spec.active_on)] += 1
+            counts["por_vencer"] += is_expiring(data.valid_from, data.valid_to, spec.active_on)
+        return {**counts, "total": total}
 
     async def search_ids(self, spec: SearchSpec, limit: int) -> list[UUID]:
         self.last_search = spec

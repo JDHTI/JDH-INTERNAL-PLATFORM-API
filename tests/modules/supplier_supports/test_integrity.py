@@ -159,6 +159,7 @@ async def test_a_business_group_becomes_one_support_per_customer(service, manage
 
     assert {view.support.data.customer_nit for view in created} == {"900430148", "830012863"}
     assert {view.business_group for view in created} == {"Grupo Goddard"}
+    assert all(view.support.data.group_wide for view in created)
     assert await service.business_groups("godd") == [("GRUPO GODDARD", 2)]
     with pytest.raises(InvalidInputError, match="no tiene clientes"):
         await service.create_for_group(

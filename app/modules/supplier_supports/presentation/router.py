@@ -70,6 +70,9 @@ ValueUnit = Literal["unidad", "caja", "kg"]
 Validity = Literal["vigente", "vencido", "programado"]
 ThresholdType = Literal["unidades", "cajas", "monto_ventas"]
 State = Literal["vigente", "vencido", "programado", "inactivo", "anulado"]
+# Filters also take «por vencer»: in force and ending within a month (rows stay vigente).
+ValidityFilter = Literal["vigente", "vencido", "programado", "por_vencer"]
+StateFilter = Literal["vigente", "vencido", "programado", "por_vencer", "inactivo", "anulado"]
 OnOverlap = Literal["vencer_anterior", "anular_anterior"]
 
 
@@ -186,8 +189,8 @@ class RetireFilter(BaseModel):
     product_skus: list[str] = Field(default_factory=list, max_length=500)
     q: str | None = Field(default=None, max_length=100)
     active_on: date | None = None
-    validity: Validity | None = None
-    state: State | None = None
+    validity: ValidityFilter | None = None
+    state: StateFilter | None = None
     needs_review: bool | None = None
     has_issues: bool | None = None
     has_conflicts: bool | None = None
@@ -323,6 +326,11 @@ class SupportResponse(_SupportFields):
     # margin_market (Food service, Mayoristas, Masivo food, Market Apartadó).
     business_group: str | None = None
     margin_list: str | None = None
+    # A business group's support: it covers every customer of ``customer_group`` (also one
+    # that joined later), whatever NIT its copy carries.
+    group_wide: bool = False
+    # In force and ending within a month («por vencer»); its state stays vigente.
+    expiring: bool = False
     conflicts: list[UUID]
     issues: list[IssueResponse]
     tiers: list[TierBody]
@@ -367,10 +375,13 @@ class SearchRequest(BaseModel):
     )
     q: str | None = Field(default=None, max_length=100)
     active_on: date | None = Field(default=None, description="Day for `validity`; default today")
-    validity: Validity | None = None
-    state: State | None = Field(
+    validity: ValidityFilter | None = None
+    state: StateFilter | None = Field(
         default=None,
-        description="The state people see: vigente, vencido, programado, inactivo or anulado",
+        description=(
+            "The state people see: vigente, vencido, programado, inactivo or anulado; or"
+            " por_vencer (vigente and ending within a month)"
+        ),
     )
     needs_review: bool | None = None
     has_issues: bool | None = None
@@ -470,6 +481,7 @@ def _response(view: SupportView) -> SupportResponse:
         attachment_count=view.attachment_count,
         business_group=view.business_group,
         margin_list=view.margin_list,
+        expiring=view.expiring,
         conflicts=list(view.conflicts),
         issues=[_issue(issue) for issue in data.issues],
         tiers=[
@@ -529,6 +541,36 @@ async def search_supports(
         page=page.page,
         size=page.size,
     )
+
+
+class StateCountsResponse(BaseModel):
+    """How many supports of a search are in each state (the KPIs of the master)."""
+
+    vigente: int
+    por_vencer: int = Field(description="Part of vigente: in force and ending within a month")
+    programado: int
+    vencido: int
+    inactivo: int
+    total: int = Field(description="Every support of the search but the voided ones")
+
+
+@router.post(
+    "/summary",
+    dependencies=[_READ_GATE],
+    response_model=StateCountsResponse,
+    summary="Count the supports of a search by state",
+)
+@inject
+async def summarize_supports(
+    body: SearchRequest,
+    principal: Principal = _principal,
+    service: SupplierSupportService = _service,
+) -> StateCountsResponse:
+    """The body of ``/search`` (paging and sorting ignored): the same filters and the same
+    customers of the caller, counted by state whatever ``state`` and ``validity`` say, so
+    each count is what that chip would list on ``active_on`` (default today)."""
+
+    return StateCountsResponse(**await service.summary(principal, **body.model_dump()))
 
 
 @router.get("/search/fields", dependencies=[_READ_GATE], summary="Filterable fields and operators")

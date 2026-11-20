@@ -7,6 +7,8 @@ Rules:
   nothing stored, dispatches once; later restarts dispatch nothing new.
 - Every day at ``fallback_at`` a job whose sequence did not trigger it that day runs
   anyway (``trigger=scheduled``), on the weekdays the sequence runs.
+- A job with a fixed time (``at``, no sequence) runs every day at that local time
+  (``trigger=scheduled``); a start-up after it runs it if it has not run since.
 - At start-up, runs a stopped process left open are closed as failed, and a job whose
   sequence has fresher data than its last success runs (``trigger=startup``).
 - One open run per job (the database enforces it). Runs execute one at a time.
@@ -40,6 +42,7 @@ from app.modules.jobs.domain.registry import (
     Trigger,
     jobs_for,
     sequences,
+    timed_jobs,
 )
 
 logger = logging.getLogger(__name__)
@@ -245,6 +248,27 @@ class JobService:
                 queued.append(run.id)
         return queued
 
+    async def timed(self) -> list[UUID]:
+        """Queue the jobs with a fixed time (``at``) that is already past today and that
+        have not run since then: on time from the worker, or late after a start-up."""
+
+        zone = ZoneInfo(self.settings.timezone)
+        local = self.clock().astimezone(zone)
+        queued: list[UUID] = []
+        for job in timed_jobs():
+            if job.at is None or local.isoweekday() not in job.fallback_days:
+                continue
+            due = datetime.combine(local.date(), job.at, tzinfo=zone)
+            if local < due:
+                continue
+            last = await self.runs.last_success(job.key)
+            if last is not None and (last.started_at or last.queued_at) >= due:
+                continue
+            run = await self._queue(job.key, Trigger.SCHEDULED)
+            if run is not None:
+                queued.append(run.id)
+        return queued
+
     async def recover_stale_runs(self) -> int:
         """Close as failed the runs a stopped process left open."""
 
@@ -319,6 +343,7 @@ class JobService:
                     last_run=last,
                     last_success_at=(success.finished_at if success else None),
                     sequence_state=stored.get(job.sequence) if job.sequence else None,
+                    at=job.at.strftime("%H:%M") if job.at else None,
                 )
             )
         return self.settings, self.status, items

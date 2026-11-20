@@ -17,6 +17,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from app.modules.commercial_masters.domain.margins import channel_field, margin_for
 from app.modules.order_validation.domain import vocabulary
@@ -79,6 +80,33 @@ def pct(value: Decimal | None) -> str:
 
 def _round(value: Decimal | None) -> Decimal | None:
     return None if value is None else value.quantize(QUANTUM)
+
+
+_NO_ID = UUID(int=0)
+
+
+def whole_groups(
+    items: Iterable[tuple[Agreement, bool]], own: Collection[str] = ()
+) -> list[Agreement]:
+    """A business group's support covers every customer of its group (2026-11-20), also
+    one that joined after it was loaded.
+
+    ``items`` pairs each support with its ``group_wide`` flag. A group's copies (one per
+    customer) become one support with no NIT and no branch, which :func:`scope_of` matches
+    by the customer's group, and collapse into one: the copy of a customer in ``own`` when
+    there is one (its id and DWH cost), else the first.
+    """
+
+    kept: dict[Agreement, Agreement] = {}
+    for item, group_wide in items:
+        if not group_wide or not item.customer_group:
+            kept[item] = item
+            continue
+        whole = replace(item, customer_nit=None, customer_branch_id=None)
+        key = replace(whole, id=_NO_ID, dwh_unit_cost=None)
+        if key not in kept or item.customer_nit in own:
+            kept[key] = whole
+    return list(kept.values())
 
 
 def _label(value: str) -> str:

@@ -81,6 +81,23 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert "l.rn_co = 1" in query and "l.rn = 1" in query
 
 
+async def test_a_list_last_sales_get_the_sales_limit_unless_given_one() -> None:
+    source = WarehouseQuotationSource(
+        FakeConnection(responses=[[{"producto_key": "P1"}], []]), "consumo", sales_timeout=90
+    )
+
+    await source.list_last_sales(["2537"], 12, ["K1"])
+
+    # A list update from a request: the 90 s of the sales history, not the 30 s of the rest.
+    assert source.connection.timeout == 90
+
+    source.connection.responses = [[{"producto_key": "P1"}], []]
+    await source.list_last_sales(["2537"], 12, ["K1"], timeout=180)
+
+    # The main lists' sync gives its own.
+    assert source.connection.timeout == 180
+
+
 async def test_billing_centers_are_the_active_operation_centers() -> None:
     connection = FakeConnection(
         [

@@ -85,7 +85,9 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      llaves, 1,4 s). Las lecturas del cotizador corren sin JIT (`jit = off`, unos 2 s menos cada
      una), y si una se pasa del tiempo el mensaje lo dice: «El datawarehouse tardó más de 30 s en
      responder». El histórico de ventas tiene su propio límite, 90 s
-     (`QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS`, 2026-11-19). Una conexión del pool que el servidor
+     (`QUOTATIONS_DWH_SALES_TIMEOUT_SECONDS`, 2026-11-19); desde el 2026-11-20 también lo usan
+     las últimas ventas de una actualización de lista, que leen además sus sucursales y sus
+     precios a la vez (la sincronización de listas principales da 180 s). Una conexión del pool que el servidor
      o la red cerraron mientras estaba inactiva se reintenta una vez (antes salía como 500 la
      primera vez y el reintento cargaba de inmediato).
 3. **Costo**: el **mayor** entre:

@@ -391,6 +391,9 @@ class SupportOptionResponse(BaseModel):
     # Set when the support is for one customer of the list.
     customer_nit: str | None
     valid_to: date | None
+    # Set when the support is for a business group (no NIT): it covers that group, not the
+    # whole list. Both empty: a general support.
+    customer_group: str | None = None
 
 
 class SupportRequestRefResponse(BaseModel):
@@ -664,7 +667,9 @@ def _request_ref(item: Any) -> SupportRequestRefResponse | None:
     )
 
 
-def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
+def _line(
+    line: QuotationLine, scope: str, request: Any = None, *, quantities: bool = False
+) -> LineResponse:
     return LineResponse(
         id=line.id,
         position=line.position,
@@ -732,7 +737,7 @@ def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
         category=line.category or None,
         quantity=line.quantity,
         offer_price=offer.offer_price(line),
-        in_offer=offer.in_offer(line, scope),
+        in_offer=offer.in_offer(line, scope, quantities=quantities),
         last_sale_price=line.last_sale_price,
         last_sale_cost=line.last_sale_cost,
         support_options=[
@@ -750,6 +755,7 @@ def _line(line: QuotationLine, scope: str, request: Any = None) -> LineResponse:
                 reason=item.reason,
                 customer_nit=item.customer_nit,
                 valid_to=item.valid_to,
+                customer_group=item.customer_group,
             )
             for item in line.support_options
         ],
@@ -873,7 +879,12 @@ def _detail(
         seller_contact=_seller(quotation.seller_contact),
         offer_summary=_summary(detail),
         lines=[
-            _line(line, quotation.offer_scope, (requests or {}).get(line.sku))
+            _line(
+                line,
+                quotation.offer_scope,
+                (requests or {}).get(line.sku),
+                quantities=quotation.quote_quantities,
+            )
             for line in detail.lines
         ],
     )

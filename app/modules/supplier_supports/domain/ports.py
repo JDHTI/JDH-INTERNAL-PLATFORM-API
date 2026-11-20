@@ -129,6 +129,16 @@ class SupportRepository(Protocol):
         """The NITs (of ``nits``) with a branch of one of these salespeople."""
         ...
 
+    async def in_groups_of(self, group: str, salesperson_codes: Sequence[str]) -> bool:
+        """Whether one of these salespeople has a customer of this business group."""
+        ...
+
+    async def state_counts(self, spec: SearchSpec) -> dict[str, int]:
+        """How many supports of the search are in each state on ``spec.active_on``, whatever
+        ``spec.state`` and ``spec.validity`` say: ``vigente``, ``por_vencer`` (part of
+        ``vigente``), ``programado``, ``vencido``, ``inactivo`` and ``total``."""
+        ...
+
 
 class CustomerScope(Protocol):
     """The customers a person works on (the salespeople module's ``SalesScope``)."""

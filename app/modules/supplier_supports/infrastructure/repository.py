@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import fields as dataclass_fields
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -31,6 +32,11 @@ from app.modules.commercial_masters.domain.margins import (
     branches_margin_field,
     majority,
 )
+from app.modules.commercial_masters.infrastructure.groups import (
+    group_key,
+    groups_of_nits,
+    groups_of_salespeople,
+)
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CustomerModel,
@@ -56,6 +62,8 @@ from app.modules.supplier_supports.domain.filters import (
     SortKey,
 )
 from app.modules.supplier_supports.domain.overlap import Supersede, overlaps
+from app.modules.supplier_supports.domain.validity import expiring_until
+from app.modules.supplier_supports.domain.vocabulary import EXPIRING, VALIDITY_FILTERS
 from app.modules.supplier_supports.infrastructure.costs import upsert_costs
 from app.modules.supplier_supports.infrastructure.models import (
     SupplierSupportAttachmentModel,
@@ -216,6 +224,12 @@ def _in_force(table: Any, day: date) -> ColumnElement[bool]:
     )
 
 
+def _expiring(day: date) -> ColumnElement[bool]:
+    """In force on ``day`` and ending within a month (:func:`expiring_until`)."""
+
+    return and_(_in_force(S, day), S.valid_to.is_not(None), S.valid_to <= expiring_until(day))
+
+
 def _same(left: Any, right: Any) -> ColumnElement[bool]:
     return func.coalesce(left, "") == func.coalesce(right, "")
 
@@ -332,16 +346,39 @@ def _compile(node: Condition | Group) -> ColumnElement[bool]:
     return _leaf(column, kind, node)
 
 
+def _by_group(groups: Select[Any]) -> ColumnElement[bool]:
+    """A business group's support (a ``group_wide`` copy, or a group with no NIT) of one of
+    these groups (:func:`group_key`)."""
+
+    return and_(
+        S.customer_group.is_not(None),
+        or_(S.customer_nit.is_(None), S.group_wide.is_(True)),
+        group_key(S.customer_group).in_(groups),
+    )
+
+
 def _in_customers(codes: Sequence[str]) -> ColumnElement[bool]:
-    """The supports of the customers of these salespeople, plus the general ones (no NIT);
-    nothing without codes (2026-11-19: no customers, no supports)."""
+    """The supports of the customers of these salespeople, those of their customers'
+    business groups (2026-11-20) and the general ones (no NIT, no group); nothing without
+    codes (2026-11-19: no customers, no supports)."""
 
     if not codes:
         return false()
     owned = select(CustomerModel.nit).where(
         func.trim(CustomerModel.salesperson_code).in_(list(codes))
     )
-    return or_(S.customer_nit.is_(None), S.customer_nit.in_(owned))
+    return or_(
+        and_(S.customer_nit.is_(None), S.customer_group.is_(None)),
+        S.customer_nit.in_(owned),
+        _by_group(groups_of_salespeople(codes)),
+    )
+
+
+def _of_customers(nits: Sequence[str]) -> ColumnElement[bool]:
+    """The base search by customer: the supports of these NITs and those of their business
+    groups (2026-11-20)."""
+
+    return or_(S.customer_nit.in_(list(nits)), _by_group(groups_of_nits(nits)))
 
 
 def _free_text(term: str) -> ColumnElement[bool]:
@@ -898,9 +935,7 @@ class SqlAlchemySupportRepository:
         conditions: list[ColumnElement[bool]] = [_compile(spec.group)]
         if not spec.include_voided and spec.state != "anulado":
             conditions.append(S.status != "anulado")
-        validity = (
-            spec.state if spec.state in {"vigente", "vencido", "programado"} else spec.validity
-        )
+        validity = spec.state if spec.state in VALIDITY_FILTERS else spec.validity
         if spec.state == "anulado":
             conditions.append(S.status == "anulado")
         elif spec.state == "inactivo":
@@ -917,6 +952,8 @@ class SqlAlchemySupportRepository:
             conditions.append(and_(S.valid_to.is_not(None), S.valid_to < spec.active_on))
         elif validity == "programado":
             conditions.append(and_(S.valid_from.is_not(None), S.valid_from > spec.active_on))
+        elif validity == EXPIRING:
+            conditions.append(_expiring(spec.active_on))
         if spec.has_issues is not None:
             size = func.jsonb_array_length(S.issues)
             conditions.append(size > 0 if spec.has_issues else size == 0)
@@ -951,7 +988,53 @@ class SqlAlchemySupportRepository:
             conditions.append(link if spec.has_attachments else not_(link))
         if spec.salesperson_codes is not None:
             conditions.append(_in_customers(spec.salesperson_codes))
+        if spec.customer_nits:
+            conditions.append(_of_customers(spec.customer_nits))
         return conditions
+
+    async def state_counts(self, spec: SearchSpec) -> dict[str, int]:
+        """How many supports of the search are in each state (the KPIs of the master)."""
+
+        unfiltered = replace(spec, state=None, validity=None, include_voided=False)
+        day = spec.active_on
+        live = and_(S.status != "anulado", S.is_enabled.is_(True))
+        counts = {
+            "vigente": and_(live, _in_force(S, day)),
+            EXPIRING: and_(live, _expiring(day)),
+            "programado": and_(live, S.valid_from.is_not(None), S.valid_from > day),
+            "vencido": and_(live, S.valid_to.is_not(None), S.valid_to < day),
+            "inactivo": S.is_enabled.is_(False),
+        }
+        async with self.database.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(
+                        *(func.count().filter(clause) for clause in counts.values()),
+                        func.count(),
+                    )
+                    .select_from(S)
+                    .outerjoin(
+                        CommercialSupplierModel,
+                        CommercialSupplierModel.id == S.commercial_supplier_id,
+                    )
+                    .outerjoin(ProductModel, ProductModel.id == S.product_id)
+                    .where(*self._conditions(unfiltered))
+                )
+            ).one()
+        return {**dict(zip(counts, map(int, row[:-1]), strict=True)), "total": int(row[-1])}
+
+    async def in_groups_of(self, group: str, salesperson_codes: Sequence[str]) -> bool:
+        """Whether one of these salespeople has a customer of this business group."""
+
+        if not salesperson_codes:
+            return False
+        async with self.database.session_factory() as session:
+            found = await session.execute(
+                select(literal(1))
+                .where(group_key(literal(group)).in_(groups_of_salespeople(salesperson_codes)))
+                .limit(1)
+            )
+            return found.first() is not None
 
     async def customers_of(self, nits: Sequence[str], salesperson_codes: Sequence[str]) -> set[str]:
         """The NITs (of ``nits``) with a branch of one of these salespeople."""
