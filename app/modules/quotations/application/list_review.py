@@ -434,7 +434,9 @@ class ListReviewService:
         line = next((item for item in detail.lines if item.sku == sku), None)
         if line is None:
             raise NotFoundError(f"La referencia {sku} no está en la actualización")
-        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(
+            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+        )
         warehouses = scope.warehouses
         stock, history = await asyncio.gather(
             self.insights.stock([sku], scope.warehouses, scope.centers),
@@ -470,7 +472,9 @@ class ListReviewService:
         detail = await self.quotations.get(principal, quotation_id)
         quotation = detail.quotation
         _list_only(quotation.is_list_update)
-        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(
+            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+        )
         skus = [line.sku for line in detail.lines if not line.is_local]
         rows = await self.insights.stock(skus, scope.warehouses, scope.centers)
         return scope.warehouses, stock_totals(rows)

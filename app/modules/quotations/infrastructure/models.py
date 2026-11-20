@@ -163,6 +163,9 @@ class QuotationModel(Base):
     offer_scope: Mapped[str] = mapped_column(String(10), nullable=False, default="changed")
     seller_contact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     cost_centers: Mapped[list[str]] = mapped_column(ARRAY(String(10)), nullable=False, default=list)
+    cost_warehouses: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     billing_center_source: Mapped[str] = mapped_column(String(10), nullable=False, default="auto")
     billing_center_name: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

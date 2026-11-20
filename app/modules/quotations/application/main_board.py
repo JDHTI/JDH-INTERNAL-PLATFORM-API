@@ -324,7 +324,9 @@ class MainBoardService:
         """
 
         quotation = detail.quotation
-        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(
+            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+        )
         skus = [line.sku for line in detail.lines if not line.is_local]
         try:
             found = await self.insights.stock(skus, scope.warehouses, scope.centers)
@@ -395,7 +397,9 @@ class MainBoardService:
         totals: dict[tuple[UUID, str], StockTotal] = {}
         for quotation_id, items in skus.items():
             update = updates[quotation_id]
-            scope = pricing.stock_scope(update.price_list_id, update.cost_centers)
+            scope = pricing.stock_scope(
+                update.price_list_id, update.cost_centers, update.cost_warehouses
+            )
             found = await self.insights.stock(items, scope.warehouses, scope.centers)
             for sku, total in stock_totals(found).items():
                 totals[(quotation_id, sku)] = total

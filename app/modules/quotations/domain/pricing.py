@@ -136,6 +136,17 @@ CENTRAL_CENTER = "003"
 COAST_CENTERS = ("004",)
 # Source of the plan of a quotation costed *Nacional*: no center, every warehouse.
 NATIONAL_SOURCE = "nacional"
+# Source of the plan of a center whose warehouses were chosen (2026-11-20).
+WAREHOUSES_SOURCE = "bodegas"
+# SIESA's warehouse groups for the platform (``consumo.bodegas.clasificacion_bodega``,
+# 2026-11-19): the only warehouses that can be chosen inside a center. Filtered by the code:
+# other SIESA groups are also named "BODEGAS PRINCIPALES".
+MAIN_WAREHOUSES = "BP"
+SPOT_WAREHOUSES = "BSP"
+WAREHOUSE_CLASSES = {
+    MAIN_WAREHOUSES: "Bodegas principales",
+    SPOT_WAREHOUSES: "Bodegas solicitudes puntuales",
+}
 
 # A quotation above this many times the median last cost is a capture error in SIESA (a
 # case price keyed as a unit): it is not used and is shown to review.
@@ -149,22 +160,48 @@ class StockPlan:
     """Where the inventory cost of a quotation comes from.
 
     ``warehouses`` is ``(warehouse 1, warehouse 2)`` for one list or operation center; with
-    ``highest`` the cost is the highest among ``GENERAL_WAREHOUSES`` (list 1).
+    ``highest`` the cost is the highest among ``GENERAL_WAREHOUSES`` (list 1). ``selected``
+    are the warehouses chosen inside a center (2026-11-20) and ``cold_room`` the center's
+    cold room, if it is one of them.
     """
 
     warehouses: tuple[str, str] | None
     highest: bool
     source: str
     lactalis_branch: str
+    selected: tuple[str, ...] = ()
+    cold_room: str | None = None
 
     @property
     def label(self) -> str:
         if self.source == NATIONAL_SOURCE:
             return "Nacional: mayor costo entre todas las bodegas"
+        if self.selected:
+            return "Bodegas " + ", ".join(self.selected)
         if self.highest:
             return "Mayor costo entre las bodegas de la lista 1"
         primary, cold = self.warehouses or ("", "")
         return primary if primary == cold else f"{primary} / {cold} (congelados y refrigerados)"
+
+    def reads(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """The warehouses whose inventory cost a line reads: ``(other lines, frozen and
+        refrigerated lines)``; among several, the highest with stock.
+
+        - ``highest``: every list 1 warehouse, for every line.
+        - Chosen warehouses: frozen and refrigerated lines read the cold room when it was
+          chosen, the rest the other chosen ones; a line with none of its kind chosen reads
+          every chosen one.
+        - Otherwise warehouse 1 and warehouse 2.
+        """
+
+        if self.selected:
+            cold = tuple(code for code in self.selected if code == self.cold_room)
+            dry = tuple(code for code in self.selected if code != self.cold_room)
+            return dry or self.selected, cold or self.selected
+        if self.highest:
+            return GENERAL_WAREHOUSES, GENERAL_WAREHOUSES
+        primary, cold = self.warehouses or ("", "")
+        return (primary,), (cold,)
 
 
 def family(price_list_id: str | None, margin_basis: str | None = None) -> str:
@@ -206,14 +243,57 @@ def centers_set_cost(price_list_id: str | None) -> bool:
     return price_list_id != vocabulary.GENERAL_PRICE_LIST and price_list_id not in LIST_WAREHOUSES
 
 
-def stock_plans(price_list_id: str | None, centers: Sequence[str]) -> dict[str | None, StockPlan]:
+def warehouse_plan(center: str, warehouses: Sequence[str]) -> StockPlan:
+    """The plan of a center whose warehouses were chosen (2026-11-20): the highest cost
+    with stock among them, the cold room for frozen and refrigerated lines when chosen
+    (:meth:`StockPlan.reads`)."""
+
+    pair = CENTER_WAREHOUSES.get(center)
+    cold = pair[1] if pair is not None and pair[0] != pair[1] else None
+    branch = CENTRAL_CENTER if center == CENTRAL_CENTER else "001"
+    return StockPlan(
+        None,
+        False,
+        WAREHOUSES_SOURCE,
+        branch,
+        selected=tuple(dict.fromkeys(warehouses)),
+        cold_room=cold if cold in warehouses else None,
+    )
+
+
+def chosen_warehouses(
+    centers: Sequence[str], warehouses: Mapping[str, Sequence[str]] | None
+) -> dict[str, tuple[str, ...]]:
+    """The chosen warehouses of the chosen centers only, without empty entries."""
+
+    return {code: tuple(found) for code in centers if (found := (warehouses or {}).get(code))}
+
+
+def stock_plans(
+    price_list_id: str | None,
+    centers: Sequence[str],
+    warehouses: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str | None, StockPlan]:
     """The plans whose costs a quotation compares, by the center each one stands for.
 
+    - Warehouses chosen inside some center (2026-11-20): one plan per center, the chosen
+      warehouses for those centers (:func:`warehouse_plan`, whatever the list) and the
+      plan of today for the rest.
     - A list with its own warehouses: one plan, whatever the centers (key ``None``).
     - No centers (*Nacional*): one plan, the highest among every warehouse (key ``None``).
     - One or more centers: one plan per center; each SKU takes the costliest of them.
     """
 
+    chosen = chosen_warehouses(centers, warehouses)
+    if chosen:
+        return {
+            code: (
+                warehouse_plan(code, chosen[code])
+                if code in chosen
+                else stock_plan(price_list_id, code)
+            )
+            for code in centers
+        }
     if not centers_set_cost(price_list_id):
         return {None: stock_plan(price_list_id, centers[0] if centers else None)}
     if not centers:
@@ -241,12 +321,17 @@ class StockScope:
         return ", ".join(parts)
 
 
-def stock_scope(price_list_id: str | None, centers: Sequence[str]) -> StockScope:
+def stock_scope(
+    price_list_id: str | None,
+    centers: Sequence[str],
+    warehouses: Mapping[str, Sequence[str]] | None = None,
+) -> StockScope:
     """The warehouses whose stock is shown, consolidated: those of the chosen operation
     centers (2026-11-19).
 
     - One or more centers (the quotation's filter): the sellable warehouses of each, summed;
-      a center without a row is read by its own warehouses in SIESA.
+      a center without a row is read by its own warehouses in SIESA. A center whose
+      warehouses were chosen (2026-11-20) counts only those.
     - No center: *Nacional*, the 17 main warehouses of every center.
 
     The filter alone decides, whatever the list (a list's own warehouses still decide its
@@ -258,16 +343,27 @@ def stock_scope(price_list_id: str | None, centers: Sequence[str]) -> StockScope
     del price_list_id  # the list no longer decides the stock (2026-11-19)
     codes = tuple(dict.fromkeys(code for code in centers if code))
     if codes:
-        own = [code for center in codes for code in CENTER_STOCK_WAREHOUSES.get(center, ())]
-        others = tuple(code for code in codes if code not in CENTER_STOCK_WAREHOUSES)
+        chosen = chosen_warehouses(codes, warehouses)
+        own = [
+            code
+            for center in codes
+            for code in chosen.get(center, CENTER_STOCK_WAREHOUSES.get(center, ()))
+        ]
+        others = tuple(
+            code for code in codes if code not in CENTER_STOCK_WAREHOUSES and code not in chosen
+        )
         return StockScope(tuple(dict.fromkeys(own)), others)
     return StockScope(GENERAL_WAREHOUSES, national=True)
 
 
-def stock_warehouses(price_list_id: str | None, centers: Sequence[str]) -> tuple[str, ...]:
+def stock_warehouses(
+    price_list_id: str | None,
+    centers: Sequence[str],
+    warehouses: Mapping[str, Sequence[str]] | None = None,
+) -> tuple[str, ...]:
     """The warehouses of :func:`stock_scope` read by code (the main lists' board)."""
 
-    return stock_scope(price_list_id, centers).warehouses
+    return stock_scope(price_list_id, centers, warehouses).warehouses
 
 
 def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
@@ -275,6 +371,10 @@ def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
 
     if len(plans) == 1:
         return next(iter(plans.values())).label
+    if any(plan.selected for plan in plans.values()):
+        return "Mayor costo entre " + "; ".join(
+            f"C.O. {code}: {plan.label}" for code, plan in plans.items() if code
+        )
     return "Mayor costo entre los C.O. " + ", ".join(code for code in plans if code)
 
 
@@ -420,11 +520,16 @@ def round_price(value: Decimal, family_name: str) -> Decimal:
 __all__ = [
     "COST_FACTOR",
     "FAMILY_LABELS",
+    "MAIN_WAREHOUSES",
     "NATIONAL_SOURCE",
+    "SPOT_WAREHOUSES",
+    "WAREHOUSES_SOURCE",
+    "WAREHOUSE_CLASSES",
     "StockPlan",
     "StockScope",
     "stock_scope",
     "centers_set_cost",
+    "chosen_warehouses",
     "costliest_center",
     "effective_cost",
     "family",
@@ -437,4 +542,5 @@ __all__ = [
     "stock_plan",
     "stock_plans",
     "stock_warehouses",
+    "warehouse_plan",
 ]

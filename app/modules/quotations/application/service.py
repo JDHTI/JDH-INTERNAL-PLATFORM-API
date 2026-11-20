@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import unicodedata
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -32,6 +33,7 @@ from app.modules.quotations.domain.catalog import catalog
 from app.modules.quotations.domain.entities import (
     BillingCenter,
     Branch,
+    CenterWarehouse,
     CostInfo,
     CustomerContext,
     CustomerPage,
@@ -356,7 +358,9 @@ def _setup(context: CustomerContext) -> _Setup:
     basis = BASIS.get(_margin_field(context), "lista")
     return _Setup(
         family=pricing.family(context.price_list_id, basis),
-        plans=pricing.stock_plans(context.price_list_id, context.cost_centers),
+        plans=pricing.stock_plans(
+            context.price_list_id, context.cost_centers, context.cost_warehouses
+        ),
         regional=pricing.regional_of(context.cost_centers, context.billing_center_code),
     )
 
@@ -853,7 +857,9 @@ class QuotationService:
             nits = list(context.group_nits) or await self.masters.group_nits(group)
         else:
             nits = list(audience.nits) if audience is not None else [context.nit]
-        stock_scope = pricing.stock_scope(context.price_list_id, context.cost_centers)
+        stock_scope = pricing.stock_scope(
+            context.price_list_id, context.cost_centers, context.cost_warehouses
+        )
         (
             costs,
             prices,
@@ -1020,6 +1026,7 @@ class QuotationService:
             salesperson_name=quotation.salesperson_name,
             warnings=quotation.warnings,
             cost_centers=quotation.cost_centers,
+            cost_warehouses=quotation.cost_warehouses,
             # The group's NITs are read again when it is priced.
             business_group=quotation.business_group,
         )
@@ -1042,6 +1049,7 @@ class QuotationService:
             "salesperson_name": context.salesperson_name,
             "warnings": context.warnings,
             "cost_centers": context.cost_centers,
+            "cost_warehouses": context.cost_warehouses,
             "regional": setup.regional,
             "price_family": setup.family,
             "stock_source": setup.stock_label,
@@ -1061,14 +1069,31 @@ class QuotationService:
     # ------------------------------------------------------------ billing centers
 
     async def billing_centers(self, principal: Principal) -> list[BillingCenter]:
-        """Active operation centers a quotation can be billed and priced from, by code."""
+        """Active operation centers a quotation can be billed and priced from, by code, each
+        with the main and spot-request warehouses that can be chosen inside it (2026-11-20).
+
+        The warehouses are a convenience: when the warehouse master does not answer (its
+        views are rebuilt around 07:30) the centers come without them.
+        """
 
         if not (
             await self.can_read(principal, vocabulary.LIST_UPDATE)
             or await self.can_read(principal, vocabulary.MAIN_LIST)
         ):
             await self._require_reader(principal)
-        return sorted(await self.warehouse.billing_centers(), key=lambda item: item.code)
+        centers = await self.warehouse.billing_centers()
+        try:
+            found = await self.warehouse.center_warehouses()
+        except DependencyUnavailableError as exc:
+            logger.warning("quotations: center warehouses not read: %s", exc)
+            found = []
+        by_center: dict[str, list[CenterWarehouse]] = defaultdict(list)
+        for item in found:
+            by_center[item.center_code].append(item)
+        merged = [
+            replace(center, warehouses=tuple(by_center.get(center.code, ()))) for center in centers
+        ]
+        return sorted(merged, key=lambda item: item.code)
 
     async def _center(self, code: str | None) -> BillingCenter | None:
         """The active operation center ``code``, or ``None`` without one.
@@ -1264,7 +1289,9 @@ class QuotationService:
         wanted = list(dict.fromkeys(sku.strip() for sku in skus if sku.strip())) if skus else siesa
         if len(wanted) > MAX_STOCK_SKUS:
             raise InvalidInputError(f"Pide el desglose de hasta {MAX_STOCK_SKUS} referencias")
-        scope = pricing.stock_scope(quotation.price_list_id, quotation.cost_centers)
+        scope = pricing.stock_scope(
+            quotation.price_list_id, quotation.cost_centers, quotation.cost_warehouses
+        )
         known = set(siesa)
         asked = tuple(sku for sku in wanted if sku in known)
         rows = await self.warehouse.stock(list(asked), scope.warehouses, scope.centers)
@@ -1545,6 +1572,7 @@ class QuotationService:
                 context,
                 billing_center_code=quotation.billing_center_code,
                 cost_centers=quotation.cost_centers,
+                cost_warehouses=quotation.cost_warehouses,
             )
         added = [_list_entry_of(line) for line in detail.lines if line.origin == vocabulary.ADDED]
         # If the warehouse does not answer with the last sales, each line keeps the one it had.
@@ -2005,7 +2033,13 @@ class QuotationService:
         if detail.quotation.is_list_update:
             return await self._refresh_list(principal, detail, version)
         if detail.quotation.is_temporary_customer:
-            return await self._repriced(principal, detail, version, detail.quotation.cost_centers)
+            return await self._repriced(
+                principal,
+                detail,
+                version,
+                detail.quotation.cost_centers,
+                warehouses=detail.quotation.cost_warehouses,
+            )
         context = (
             await self._group_context(detail.quotation.business_group)
             if detail.quotation.business_group
@@ -2017,6 +2051,7 @@ class QuotationService:
                 context,
                 billing_center_code=detail.quotation.billing_center_code,
                 cost_centers=detail.quotation.cost_centers,
+                cost_warehouses=detail.quotation.cost_warehouses,
             )
         added = [line.sku for line in detail.lines if line.origin == vocabulary.ADDED]
         local = [line for line in detail.lines if line.is_local]
@@ -2058,9 +2093,10 @@ class QuotationService:
         version: int,
         centers: tuple[str, ...],
         source: str | None = None,
+        warehouses: Mapping[str, tuple[str, ...]] | None = None,
     ) -> QuotationDetail:
         """Price every SIESA line again as it is stored, costed from ``centers`` (none is
-        *Nacional*).
+        *Nacional*) and the ``warehouses`` chosen inside them.
 
         Cost (the stock plans of the centers), liquor tax (their regional), target, minimum,
         optimal price, margins and compliance are recomputed; new prices, quantities and
@@ -2068,7 +2104,10 @@ class QuotationService:
         """
 
         quotation = detail.quotation
-        context = replace(self._stored_context(quotation), cost_centers=centers)
+        chosen = pricing.chosen_warehouses(centers, warehouses)
+        context = replace(
+            self._stored_context(quotation), cost_centers=centers, cost_warehouses=chosen
+        )
         siesa = [line for line in detail.lines if not line.is_local]
         for_list = quotation.is_list_update
         priced, snapshot = await self._price(
@@ -2082,6 +2121,7 @@ class QuotationService:
         setup = _setup(context)
         values: dict[str, object] = {
             "cost_centers": centers,
+            "cost_warehouses": chosen,
             "regional": setup.regional,
             "price_family": setup.family,
             "stock_source": setup.stock_label,
@@ -2099,28 +2139,81 @@ class QuotationService:
         return await self.repository.save(changed, list(by_id.values()), version)
 
     async def set_billing_center(
-        self, principal: Principal, quotation_id: UUID, version: int, codes: Sequence[str]
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        version: int,
+        codes: Sequence[str],
+        warehouses: Sequence[str] = (),
     ) -> QuotationDetail:
         """Cost the quotation from other operation centers (``manual``); none is *Nacional*.
 
         *Nacional* takes, SKU by SKU, the highest cost among every warehouse. One center
         takes its warehouses; several take, SKU by SKU, the costliest of them, and each line
-        says which one it was. Same state and permission rules as :meth:`refresh`; the
-        quotation goes back to draft. Lines are priced again (stock plans and regional),
-        keeping new prices, quantities and local products. A refresh keeps the choice.
+        says which one it was. Inside a center some of its main or spot-request warehouses
+        can be chosen (2026-11-20): the center then costs and shows stock from those only
+        (:func:`pricing.warehouse_plan`); a center without any chosen keeps its own. Same
+        state and permission rules as :meth:`refresh`; the quotation goes back to draft.
+        Lines are priced again (stock plans and regional), keeping new prices, quantities
+        and local products. A refresh keeps the choice.
 
         Raises:
-            InvalidInputError: A code is not an active operation center.
+            InvalidInputError: A code is not an active operation center, or a warehouse is
+                not a main or spot-request one of the chosen centers.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
+        centers = await self._centers(codes)
         return await self._repriced(
-            principal, detail, version, await self._centers(codes), vocabulary.CENTER_MANUAL
+            principal,
+            detail,
+            version,
+            centers,
+            vocabulary.CENTER_MANUAL,
+            await self._warehouses(centers, warehouses),
         )
 
+    async def _warehouses(
+        self, centers: Sequence[str], codes: Sequence[str]
+    ) -> dict[str, tuple[str, ...]]:
+        """The chosen warehouses grouped by their center, in the master's order.
+
+        Raises:
+            InvalidInputError: Warehouses with *Nacional*, one that is not a main or
+                spot-request warehouse, or one outside the chosen centers.
+        """
+
+        wanted = list(dict.fromkeys(code.strip().upper() for code in codes if code.strip()))
+        if not wanted:
+            return {}
+        if not centers:
+            raise InvalidInputError(
+                "Las bodegas se eligen dentro de un centro de operación, no con Nacional"
+            )
+        known = {item.code.upper(): item for item in await self.warehouse.center_warehouses()}
+        unknown = [code for code in wanted if code not in known]
+        if unknown:
+            raise InvalidInputError(
+                f"La bodega {', '.join(unknown)} no es principal ni de solicitudes puntuales"
+            )
+        outside = [code for code in wanted if known[code].center_code not in centers]
+        if outside:
+            raise InvalidInputError(
+                f"La bodega {', '.join(outside)} no pertenece a los centros de operación elegidos"
+            )
+        chosen: dict[str, list[str]] = defaultdict(list)
+        for code, item in known.items():
+            if code in wanted:
+                chosen[item.center_code].append(item.code)
+        return {center: tuple(chosen[center]) for center in centers if chosen.get(center)}
+
     async def compare_centers(
-        self, principal: Principal, quotation_id: UUID, codes: Sequence[str]
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        codes: Sequence[str],
+        warehouses: Sequence[str] = (),
     ) -> str | None:
         """Which of two or more centers costs the most for the quotation's SIESA references,
         before choosing them (see :func:`pricing.costliest_center`).
@@ -2137,11 +2230,12 @@ class QuotationService:
         centers = await self._centers(codes)
         if len(centers) < 2:
             raise InvalidInputError("Elige al menos dos centros de operación para compararlos")
+        chosen = await self._warehouses(centers, warehouses)
         price_list_id = detail.quotation.price_list_id
         skus = sorted({line.sku for line in detail.lines if not line.is_local})
-        if not skus or not pricing.centers_set_cost(price_list_id):
+        if not skus or not (chosen or pricing.centers_set_cost(price_list_id)):
             return None
-        plans = pricing.stock_plans(price_list_id, centers)
+        plans = pricing.stock_plans(price_list_id, centers, chosen)
         rows = await asyncio.gather(*(self.warehouse.costs(skus, plan) for plan in plans.values()))
         return pricing.costliest_center(dict(zip(plans, rows, strict=True)))
 

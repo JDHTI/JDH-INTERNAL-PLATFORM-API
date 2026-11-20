@@ -342,6 +342,26 @@ def test_centers_and_temporary_customers_contract(client) -> None:
         "name": "COSTA",
         "regional": "costa",
         "regional_label": "Costa",
+        "warehouses": [
+            {
+                "code": "CTG1",
+                "name": "PRINCIPAL CARTAGENA",
+                "classification": "BP",
+                "classification_label": "Bodegas principales",
+            },
+            {
+                "code": "CTG15",
+                "name": "CAVA CARTAGENA",
+                "classification": "BP",
+                "classification_label": "Bodegas principales",
+            },
+            {
+                "code": "CTG14",
+                "name": "SOLICITUDES PUNTUALES",
+                "classification": "BSP",
+                "classification_label": "Bodegas solicitudes puntuales",
+            },
+        ],
     }
     assert [item["code"] for item in centers.json()] == ["001", "003", "004"]
 
@@ -410,8 +430,25 @@ def test_cost_centers_and_the_lines_workbook_contract(client, warehouse, masters
         "2537": "001",
         "26278": "003",
     }
-    national = client.patch(f"{url}/billing-center", json={"version": 2, "national": True})
+    narrowed = client.patch(
+        f"{url}/billing-center",
+        json={"version": 2, "cost_centers": ["001", "003"], "cost_warehouses": ["MDE4"]},
+    )
+    assert narrowed.status_code == 200 and narrowed.json()["cost_warehouses"] == ["MDE4"]
+    assert narrowed.json()["centers_set_cost"] is True
+    outside = client.patch(
+        f"{url}/billing-center",
+        json={"version": 3, "cost_centers": ["003"], "cost_warehouses": ["MDE4"]},
+    )
+    assert outside.status_code == 422 and "no pertenece" in outside.json()["detail"]
+    alone = client.patch(
+        f"{url}/billing-center",
+        json={"version": 3, "national": True, "cost_warehouses": ["MDE4"]},
+    )
+    assert alone.status_code == 422
+    national = client.patch(f"{url}/billing-center", json={"version": 3, "national": True})
     assert national.status_code == 200 and national.json()["cost_centers"] == []
+    assert national.json()["cost_warehouses"] == []
 
     assert client.get(f"{url}/lines.xlsx").status_code == 403
     client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)

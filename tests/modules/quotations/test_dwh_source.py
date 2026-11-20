@@ -183,8 +183,8 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
     assert '"consumo"."inventario_fecha"' in query
     assert '"consumo"."cotizaciones_proveedores"' in query
     assert "es_vigente" in query and "percentile_cont" in query
-    assert args[:5] == (["12779", "1081"], "003", "BTA9", "BTA8", False)
-    assert args[6:] == ("800245795", Decimal(3))
+    # Other lines read warehouse 1, frozen and refrigerated ones warehouse 2.
+    assert args == (["12779", "1081"], "003", ["BTA9"], ["BTA8"], "800245795", Decimal(3))
     assert costs["12779"].discarded_quote == Decimal("80552")
     assert costs["12779"].quote_cost is None and costs["12779"].inventory_cost == Decimal("2049")
     assert costs["12779"].snapshot_date == date(2026, 11, 3)
@@ -194,9 +194,33 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
     assert costs["1081"].inventory_stocked is None
     assert costs["1081"].quote_cost == Decimal("13104") and not costs["1081"].is_active
     await source.costs(["1"], pricing.stock_plan("1", None))
-    # List 1 takes the highest cost among its warehouses.
-    assert connection.queries[1][1][4] is True and "BAQ10" in connection.queries[1][1][5]
+    # List 1 takes the highest cost among its warehouses, for every line.
+    assert connection.queries[1][1][2] == connection.queries[1][1][3]
+    assert "BAQ10" in connection.queries[1][1][2]
+    # Warehouses chosen in a center: the cold room for cold lines, the rest for the others.
+    await source.costs(["1"], pricing.warehouse_plan("001", ["MDE1", "MDE3", "MDE4"]))
+    assert connection.queries[2][1][2:4] == (["MDE1", "MDE4"], ["MDE3"])
     assert await source.costs([], pricing.stock_plan("1", None)) == {}
+
+
+async def test_center_warehouses_read_main_and_spot_request_ones_by_code() -> None:
+    connection = FakeConnection(
+        [
+            {"codigo": "MDE1", "descripcion": "PRINCIPAL MEDELLIN", "co": "001", "clase": "BP"},
+            {"codigo": "MDE4", "descripcion": "SOLICITUDES PUNTUALES", "co": "001", "clase": "BSP"},
+        ]
+    )
+
+    found = await WarehouseQuotationSource(connection).center_warehouses()
+
+    query, args = connection.queries[0]
+    assert '"consumo"."bodegas"' in query and "clasificacion_bodega" in query
+    # By the code, never by the description: other SIESA groups share the name.
+    assert args == (["BP", "BSP"],) and "desc_clasificacion" not in query
+    assert [(item.code, item.center_code, item.classification) for item in found] == [
+        ("MDE1", "001", "BP"),
+        ("MDE4", "001", "BSP"),
+    ]
 
 
 async def test_price_list_exists() -> None:
