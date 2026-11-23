@@ -19,8 +19,8 @@ from uuid import uuid4
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0081_commercial_roles"
-down_revision: str | Sequence[str] | None = "0080_costs_novelties"
+revision: str = "0083_commercial_roles"
+down_revision: str | Sequence[str] | None = "0082_costs_increase_requests"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

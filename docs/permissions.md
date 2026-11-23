@@ -65,7 +65,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | call-center | `cotizador` | sus cotizaciones (el líder, las de todo el área); cualquier cliente | cotizar a cualquier cliente (rol «Operador call center», 2026-11-23) |
 | comercial (bloqueado) | `comercial-director` | — (no tiene pantalla) | director (2026-11-23): ve todas las cotizaciones de cliente, clientes y apoyos, y edita solo las suyas. Solo cuenta concedido **por nombre**; `*` no lo da. El líder y el responsable de Comercial lo tienen sin hacer nada. Un coordinador no necesita clave: su vínculo de supervisor SIESA en `/ti/administracion/vendedores` le da su equipo |
 
-**Roles de Comercial** (migración `0081_commercial_roles`, 2026-11-23):
+**Roles de Comercial** (migración `0083_commercial_roles`, 2026-11-23):
 
 | Rol | Permisos | Qué hace |
 | --- | --- | --- |
