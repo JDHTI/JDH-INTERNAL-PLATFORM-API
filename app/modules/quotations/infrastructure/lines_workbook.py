@@ -125,7 +125,13 @@ def _bold(sheet: WriteOnlyWorksheet, value: str) -> WriteOnlyCell:
 def _centers(quotation: Quotation, names: Mapping[str, str | None]) -> str:
     if not quotation.cost_centers:
         return f"{NATIONAL}: mayor costo entre todas las bodegas"
-    return ", ".join(_center(code, names) or code for code in quotation.cost_centers)
+    parts = []
+    for code in quotation.cost_centers:
+        text = _center(code, names) or code
+        chosen = list(quotation.cost_warehouses.get(code, ()))
+        chosen += [f"{item} promocional" for item in quotation.promo_warehouses.get(code, ())]
+        parts.append(f"{text} ({', '.join(chosen)})" if chosen else text)
+    return ", ".join(parts)
 
 
 def _header_rows(quotation: Quotation, names: Mapping[str, str | None]) -> list[tuple]:
