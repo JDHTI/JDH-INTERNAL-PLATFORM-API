@@ -21,8 +21,10 @@ from app.modules.commercial_masters.domain.entities import (
     LegalSupplier,
     Page,
     Product,
+    ProductFilterOptions,
     ProductMargins,
     ProductRef,
+    ProductSupplierOption,
     SupplierProductCode,
     TargetMargin,
     clean_nit,
@@ -138,7 +140,7 @@ def _product_ref(row: ProductModel) -> ProductRef:
     )
 
 
-def _product(model: ProductModel) -> Product:
+def _product(model: ProductModel, supplier_name: str | None = None) -> Product:
     return Product(
         id=model.id,
         sku=model.sku,
@@ -162,7 +164,6 @@ def _product(model: ProductModel) -> Product:
             wholesale=model.margin_wholesale,
             mass_food=model.margin_mass_food,
             market=model.margin_market,
-            salsamentarias=model.margin_salsamentarias,
             employee=model.margin_employee,
             notes=model.margin_notes,
             source=model.margin_source,
@@ -172,11 +173,30 @@ def _product(model: ProductModel) -> Product:
         liquor_tax=model.liquor_tax,
         liquor_tax_coast=model.liquor_tax_coast,
         liquor_tax_group=model.liquor_tax_group,
+        sales_vat_pct=model.sales_vat_pct,
+        commercial_supplier_name=supplier_name,
     )
 
 
 def _page_bounds(page: int, size: int) -> tuple[int, int]:
     return (page - 1) * size, size
+
+
+# A product pays the liquor consumption tax when its Nacional or Costa value is above 0;
+# ``coalesce`` keeps the negation true for the products with both empty.
+_PAYS_CONSUMPTION_TAX = or_(
+    func.coalesce(ProductModel.liquor_tax, 0) > 0,
+    func.coalesce(ProductModel.liquor_tax_coast, 0) > 0,
+)
+_SUPPLIER_OF_PRODUCT = CommercialSupplierModel.code == ProductModel.commercial_supplier_code
+
+
+def _with_supplier_name() -> Select[Any]:
+    """Products with the name of their commercial supplier (``None`` when it is unknown)."""
+
+    return select(ProductModel, CommercialSupplierModel.name).outerjoin(
+        CommercialSupplierModel, _SUPPLIER_OF_PRODUCT
+    )
 
 
 class SqlAlchemyCommercialMasterRepository:
@@ -571,8 +591,11 @@ class SqlAlchemyCommercialMasterRepository:
         page: int,
         size: int,
         has_margin: bool | None = None,
+        *,
+        has_consumption_tax: bool | None = None,
     ) -> Page[Product]:
-        """Page products by text/SKU, brand, category and commercial supplier."""
+        """Page products by text/SKU, brand, category, commercial supplier, margin and liquor
+        consumption tax, each with the name of its commercial supplier."""
 
         conditions = []
         if query:
@@ -593,14 +616,67 @@ class SqlAlchemyCommercialMasterRepository:
         if has_margin is not None:
             defined = or_(*(getattr(ProductModel, name).is_not(None) for name in MARGIN_FIELDS))
             conditions.append(defined if has_margin else ~defined)
+        if has_consumption_tax is not None:
+            conditions.append(
+                _PAYS_CONSUMPTION_TAX if has_consumption_tax else ~_PAYS_CONSUMPTION_TAX
+            )
+        offset, limit = _page_bounds(page, size)
         select_rows = (
-            select(ProductModel)
+            _with_supplier_name()
             .where(*conditions)
             .order_by(ProductModel.is_active.desc(), ProductModel.sku, ProductModel.id)
+            .offset(offset)
+            .limit(limit)
         )
         count = select(func.count()).select_from(ProductModel).where(*conditions)
-        rows, total = await self._page(select_rows, count, page, size)
-        return Page([_product(row) for row in rows], total, page, size)
+        async with self.database.session_factory() as session:
+            total = (await session.execute(count)).scalar_one()
+            rows = (await session.execute(select_rows)).all()
+        return Page([_product(row, name) for row, name in rows], int(total), page, size)
+
+    async def product_options(self) -> ProductFilterOptions:
+        """Distinct non-empty commercial suppliers (by name, then code) and categories of the
+        products."""
+
+        code = ProductModel.commercial_supplier_code
+        async with self.database.session_factory() as session:
+            suppliers = (
+                await session.execute(
+                    select(code, CommercialSupplierModel.name)
+                    .distinct()
+                    .outerjoin(CommercialSupplierModel, _SUPPLIER_OF_PRODUCT)
+                    .where(code.is_not(None), func.trim(code) != "")
+                )
+            ).all()
+            categories = (
+                (
+                    await session.execute(
+                        select(ProductModel.category)
+                        .distinct()
+                        .where(
+                            ProductModel.category.is_not(None),
+                            func.trim(ProductModel.category) != "",
+                        )
+                        .order_by(ProductModel.category)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        options = sorted(
+            (ProductSupplierOption(code=value, name=name) for value, name in suppliers),
+            key=lambda item: (item.name is None, (item.name or "").casefold(), item.code),
+        )
+        return ProductFilterOptions(suppliers=options, categories=list(categories))
+
+    async def _supplier_name(self, session: Any, code: str | None) -> str | None:
+        if not code:
+            return None
+        return (
+            await session.execute(
+                select(CommercialSupplierModel.name).where(CommercialSupplierModel.code == code)
+            )
+        ).scalar_one_or_none()
 
     # --------------------------------------------------------------- lookups
 
@@ -865,13 +941,13 @@ class SqlAlchemyCommercialMasterRepository:
         }
 
     async def get_product(self, sku: str) -> Product | None:
-        """One product by SKU, with its margins."""
+        """One product by SKU, with its margins and the name of its commercial supplier."""
 
         async with self.database.session_factory() as session:
-            model = (
-                await session.execute(select(ProductModel).where(ProductModel.sku == sku))
-            ).scalar_one_or_none()
-        return None if model is None else _product(model)
+            row = (
+                await session.execute(_with_supplier_name().where(ProductModel.sku == sku))
+            ).one_or_none()
+        return None if row is None else _product(row[0], row[1])
 
     async def update_product(
         self, sku: str, changes: Mapping[str, Any], actor: str, now: datetime
@@ -890,8 +966,9 @@ class SqlAlchemyCommercialMasterRepository:
                 model.margin_source = "manual"
                 model.margin_updated_by = actor
                 model.margin_updated_at = now
+            supplier_name = await self._supplier_name(session, model.commercial_supplier_code)
             await session.commit()
-            return _product(model)
+            return _product(model, supplier_name)
 
     async def margins_by_sku(self, skus: Sequence[str]) -> dict[str, Product]:
         """Products by exact SKU, to compare their margins with a file."""

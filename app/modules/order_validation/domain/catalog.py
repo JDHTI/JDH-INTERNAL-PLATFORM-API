@@ -57,9 +57,9 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     "margen_referencia",
                     "Margen de referencia por canal",
                     "Cada línea se compara con el margen del producto para su canal: Mayoristas "
-                    "y Distribuidores y Subdistribuidor usan el margen mayoristas; Salsamentarias, "
-                    "el suyo; cualquier otro canal, el margen lista 1. El canal es el del archivo "
-                    "o, si no lo trae, el del cliente en el maestro.",
+                    "y Distribuidores, Subdistribuidor y Salsamentarias usan el margen "
+                    "mayoristas; cualquier otro canal, el margen lista 1. El canal es el del "
+                    "archivo o, si no lo trae, el del cliente en el maestro.",
                     INFORMS,
                 ),
                 Rule(

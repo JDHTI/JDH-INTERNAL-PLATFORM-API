@@ -56,14 +56,12 @@ DEFAULT_POLICY = OrderPolicy()
 BASIS = {
     "margin_list": "lista",
     "margin_wholesale": "mayoristas",
-    "margin_salsamentarias": "salsamentarias",
     "margin_mass_food": "masivo_food",
     "margin_market": "market",
 }
 _BASIS_LABEL = {
     "lista": "margen Food Service",
     "mayoristas": "margen mayoristas",
-    "salsamentarias": "margen salsamentarias",
     "masivo_food": "margen Masivo Food",
     "market": "margen Market Apartadó",
 }

@@ -131,7 +131,6 @@ class ProductMargins:
     wholesale: Decimal | None = None
     mass_food: Decimal | None = None
     market: Decimal | None = None
-    salsamentarias: Decimal | None = None
     employee: Decimal | None = None
     notes: str | None = None
     source: str | None = None
@@ -143,14 +142,7 @@ class ProductMargins:
         """Whether at least one channel has a margin."""
 
         return any(
-            value is not None
-            for value in (
-                self.list,
-                self.wholesale,
-                self.mass_food,
-                self.market,
-                self.salsamentarias,
-            )
+            value is not None for value in (self.list, self.wholesale, self.mass_food, self.market)
         )
 
 
@@ -179,6 +171,26 @@ class Product:
     liquor_tax: Decimal | None = None
     liquor_tax_coast: Decimal | None = None
     liquor_tax_group: str | None = None
+    # Sales VAT in percentage points (19, 5, 0), as the warehouse gives it.
+    sales_vat_pct: Decimal | None = None
+    # Name of the commercial supplier of ``commercial_supplier_code``; ``None`` when unknown.
+    commercial_supplier_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductSupplierOption:
+    """A commercial supplier present in the products, for the product master's dropdown."""
+
+    code: str
+    name: str | None
+
+
+@dataclass(frozen=True)
+class ProductFilterOptions:
+    """What the product master's dropdowns offer: suppliers and categories of the products."""
+
+    suppliers: list[ProductSupplierOption]
+    categories: list[str]
 
 
 @dataclass(frozen=True)

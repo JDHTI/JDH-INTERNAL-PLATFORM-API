@@ -1,6 +1,7 @@
 """HTTP contract of the commercial master routes."""
 
 import io
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from app.modules.commercial_masters.application.service import CommercialMasterS
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
-from tests.modules.commercial_masters.test_service import Managers, Repo
+from tests.modules.commercial_masters.test_service import Managers, Repo, product
 
 BASE = "/api/v1/commercial"
 CSV = "text/csv"
@@ -105,7 +106,60 @@ def test_active_and_margin_filters_of_legal_suppliers_and_products(api) -> None:
     assert legal.status_code == 200 and repo.calls[-1][3] is False
     response = client.get(f"{BASE}/products", params={"is_active": "true", "has_margin": "false"})
     assert response.status_code == 200
-    assert repo.calls[-1][5] is True and repo.calls[-1][-1] is False
+    assert repo.calls[-1][5] is True and repo.calls[-1][8] is False
+
+
+def test_products_filter_by_consumption_tax_supplier_and_category(api) -> None:
+    client, repo = api
+
+    response = client.get(
+        f"{BASE}/products",
+        params={
+            "has_consumption_tax": "true",
+            "commercial_supplier_code": "233",
+            "category": "LICORES",
+        },
+    )
+
+    assert response.status_code == 200
+    assert repo.calls[-1][3:5] == ("LICORES", "233") and repo.calls[-1][9] is True
+    assert (
+        client.get(f"{BASE}/products", params={"has_consumption_tax": "false"}).status_code == 200
+    )
+    assert repo.calls[-1][9] is False
+    assert client.get(f"{BASE}/products").status_code == 200 and repo.calls[-1][9] is None
+    assert client.get(f"{BASE}/products", params={"has_consumption_tax": "x"}).status_code == 422
+
+
+def test_a_product_carries_its_supplier_name_and_vat(api) -> None:
+    client, repo = api
+    repo.products["7244"] = product(
+        "7244", commercial_supplier_name="COLOMBINA S.A.", sales_vat_pct=Decimal("19")
+    )
+
+    listed = client.get(f"{BASE}/products").json()["items"]
+    one = client.get(f"{BASE}/products/7244").json()
+
+    by_sku = {item["sku"]: item for item in listed}
+    assert by_sku["7244"]["commercial_supplier_name"] == "COLOMBINA S.A."
+    assert Decimal(by_sku["7244"]["vat_pct"]) == 19
+    # A product whose supplier is not in the master, or without VAT, says null.
+    assert by_sku["1569"]["commercial_supplier_name"] is None and by_sku["1569"]["vat_pct"] is None
+    assert one["commercial_supplier_name"] == "COLOMBINA S.A." and Decimal(one["vat_pct"]) == 19
+    assert "margin_salsamentarias" not in one
+
+
+def test_product_options_are_the_suppliers_and_categories(api) -> None:
+    client, _ = api
+
+    response = client.get(f"{BASE}/products/options")
+
+    # Registered before /products/{sku}: "options" is not read as a SKU (that would be a 404).
+    assert response.status_code == 200
+    assert response.json() == {
+        "suppliers": [{"code": "233", "name": "FAMILIA SANCELA"}],
+        "categories": ["ASEO"],
+    }
 
 
 def test_patch_of_a_supplier_only_handles_nits(api) -> None:
@@ -148,10 +202,30 @@ MARGINS = {
     "margin_wholesale": "0.12",
     "margin_mass_food": "0.15",
     "margin_market": "0.2",
-    "margin_salsamentarias": "0.1",
     "notes": "Revisado con compras",
     "liquor_tax": None,
 }
+
+
+def test_the_deprecated_salsamentarias_margin_is_accepted_and_ignored(api) -> None:
+    client, repo = api
+
+    response = client.put(
+        f"{BASE}/products/7244/margins", json={**MARGINS, "margin_salsamentarias": "0.1"}
+    )
+
+    assert response.status_code == 200
+    written = repo.calls[-1][2]
+    assert "margin_salsamentarias" not in written and written["margin_list"] == Decimal("0.18")
+    assert "margin_salsamentarias" not in response.json()
+    patched = client.patch(
+        f"{BASE}/products/7244", json={"margin_salsamentarias": None, "margin_list": "0.2"}
+    )
+    assert patched.status_code == 200 and repo.calls[-1][2] == {"margin_list": Decimal("0.2")}
+    # Alone it changes nothing: nothing is written.
+    calls = len(repo.calls)
+    alone = client.patch(f"{BASE}/products/7244", json={"margin_salsamentarias": "0.1"})
+    assert alone.status_code == 200 and len(repo.calls) == calls
 
 
 def test_put_sets_every_margin_of_one_product(api) -> None:
@@ -242,4 +316,5 @@ def test_non_managers_can_read_but_not_edit(outsider_api) -> None:
     assert client.put(f"{BASE}/products/7244/margins", json=MARGINS).status_code == 403
     assert client.get(f"{BASE}/suppliers/233").status_code == 200  # reading is open
     assert client.get(f"{BASE}/products/7244").status_code == 200
+    assert client.get(f"{BASE}/products/options").status_code == 200
     assert client.get(f"{BASE}/products/margins/template").status_code == 200

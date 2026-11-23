@@ -17,6 +17,7 @@ from app.modules.commercial_masters.domain.entities import (
     LegalSupplier,
     Page,
     Product,
+    ProductFilterOptions,
     ProductRef,
     SupplierProductCode,
     TargetMargin,
@@ -91,7 +92,6 @@ _MARGIN_ATTRIBUTE = {
     "margin_wholesale": "wholesale",
     "margin_mass_food": "mass_food",
     "margin_market": "market",
-    "margin_salsamentarias": "salsamentarias",
 }
 
 
@@ -263,8 +263,14 @@ class CommercialMasterService:
         page: int,
         size: int,
         has_margin: bool | None = None,
+        *,
+        has_consumption_tax: bool | None = None,
     ) -> Page[Product]:
-        """Page products by text/SKU, brand, category, supplier, active flag and margin."""
+        """Page products by text/SKU, brand, category, supplier, active flag and margin.
+
+        ``has_consumption_tax`` keeps the products that pay the liquor consumption tax
+        (``True``: Nacional or Costa above 0) or the ones that do not (``False``).
+        """
 
         _bounds(page, size)
         return await self.repository.list_products(
@@ -276,7 +282,13 @@ class CommercialMasterService:
             page,
             size,
             has_margin,
+            has_consumption_tax=has_consumption_tax,
         )
+
+    async def product_options(self) -> ProductFilterOptions:
+        """The commercial suppliers and categories present in the products (dropdowns)."""
+
+        return await self.repository.product_options()
 
     # --------------------------------------------------------------- products
 
@@ -353,7 +365,7 @@ class CommercialMasterService:
     ) -> Product:
         """Set every margin of one product by hand, without a file.
 
-        All five channel margins are required. The employee margin is optional: ``None``
+        All four channel margins are required. The employee margin is optional: ``None``
         keeps the product's. The liquor tax is stored only for the products that
         pay it: a product that already pays it must keep the three values (Nacional, Costa
         and the tax group); one that does not may start paying it.

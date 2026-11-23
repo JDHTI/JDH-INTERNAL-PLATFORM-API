@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, get_args
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -57,6 +57,9 @@ Reason = Literal[
 ]
 ReleaseBasis = Literal["lineas", "margen", "tolerancia", "manual"]
 AlertCode = Literal["margen_100", "bajo_objetivo", "falta_impuesto_licor"]
+# The Salsamentarias margin was removed on 2026-11-23 (those customers use Mayoristas).
+MarginBasis = Literal["lista", "mayoristas", "masivo_food", "market"]
+_BASES = frozenset(get_args(MarginBasis))
 
 
 class BatchResponse(BaseModel):
@@ -129,7 +132,7 @@ class LineResponse(BaseModel):
     support_id: UUID | None
     effective_margin_pct: Decimal | None
     required_margin_pct: Decimal | None
-    margin_basis: Literal["lista", "mayoristas", "salsamentarias", "masivo_food", "market"] | None
+    margin_basis: MarginBasis | None
     liquor_tax_value: Decimal | None
     liquor_tax: bool
     liquor_tax_amount: Decimal | None
@@ -328,7 +331,9 @@ def _line(item: StoredLine, order: OrderView) -> LineResponse:
         support_id=result.support_id,
         effective_margin_pct=result.effective_margin_pct,
         required_margin_pct=result.required_margin_pct,
-        margin_basis=result.margin_basis,  # type: ignore[arg-type]
+        # Lines stored before 2026-11-17 may say «salsamentarias», a margin that no longer
+        # exists: they show no basis.
+        margin_basis=result.margin_basis if result.margin_basis in _BASES else None,  # type: ignore[arg-type]
         liquor_tax_value=line.liquor_tax_value,
         liquor_tax=result.liquor_tax,
         liquor_tax_amount=result.liquor_tax_amount,

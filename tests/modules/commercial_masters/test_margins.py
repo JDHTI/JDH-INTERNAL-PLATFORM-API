@@ -120,19 +120,33 @@ def test_rows_follow_the_master_layout_and_ignore_other_columns() -> None:
     assert [row.sku for row in rows] == ["3144", "7244"]
     first, second = rows
     assert first.row_number == 2 and first.values["margin_list"] == D("0.2")
-    assert first.values["margin_salsamentarias"] == D("0.18")
+    # The Salsamentarias margin was removed (2026-11-23): its old column is not read.
+    assert "margin_salsamentarias" not in first.values
     # The master writes 0 where there is no note, and 0 where there is no margin.
     assert first.has_notes is False and first.notes is None
     assert second.values == dict.fromkeys(
-        (
-            "margin_list",
-            "margin_wholesale",
-            "margin_mass_food",
-            "margin_market",
-            "margin_salsamentarias",
-        )
+        ("margin_list", "margin_wholesale", "margin_mass_food", "margin_market")
     )
     assert second.notes == "Aseo 20%" and second.has_notes is True
+
+
+def test_an_old_file_with_the_salsamentarias_column_is_read_without_issues() -> None:
+    content = workbook(
+        {
+            "Margen Producto": [
+                ["Referencia", "Margen Lista 1", "Margen Salsamentarias", "Observaciones"],
+                ["7244", 0.2, "n/a", None],
+                ["1569", None, 0.18, None],
+            ]
+        }
+    )
+
+    rows = SpreadsheetMarginReader().read("Maestro Margen.xlsx", content)
+
+    assert [(row.sku, row.values, row.problems) for row in rows] == [
+        ("7244", {"margin_list": D("0.2")}, ()),
+        ("1569", {}, ()),
+    ]
 
 
 def test_blank_cells_leave_the_margin_and_bad_cells_flag_the_row() -> None:
@@ -286,6 +300,8 @@ def test_the_template_follows_the_master_layout() -> None:
     assert rows[0].taxes["liquor_tax_coast"] == D("4144")
     book = openpyxl.load_workbook(io.BytesIO(content))
     assert book.sheetnames == ["Margen Producto", "Margen Proveedor-Impuestos", "Instrucciones"]
+    header = [cell.value for cell in book["Margen Producto"][1]]
+    assert "Margen Salsamentarias" not in header and header[-2] == "Margen Market Apartadó"
     assert book["Margen Proveedor-Impuestos"]["I2"].value == "Sku"
 
 

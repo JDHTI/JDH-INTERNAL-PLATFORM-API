@@ -129,8 +129,9 @@ y documentadas, pero el validador las ignora.
 | `acuerdo_vencido` | pendiente | un apoyo cubriría la línea, pero no en la fecha del pedido |
 | `sin_acuerdo` | pendiente | ningún apoyo cubre la línea |
 
-Cada línea trae además `margin_basis` (`lista`, `mayoristas`, `salsamentarias`, `masivo_food` o
-`market`: con cuál margen del producto se comparó) y todos los apoyos evaluados (`checks`). Las líneas se
+Cada línea trae además `margin_basis` (`lista`, `mayoristas`, `masivo_food` o `market`: con cuál
+margen del producto se comparó; el margen Salsamentarias se eliminó el 2026-11-23 y esos clientes usan
+el de mayoristas, así que una línea guardada antes con `salsamentarias` llega con `null`) y todos los apoyos evaluados (`checks`). Las líneas se
 resumen en dos grupos: **sin apoyo** (`sin_acuerdo`, `without_support_line_count` del pedido) y
 **cumplen** (las listas, `ready_line_count`, con su descripción detallada en `detail`).
 

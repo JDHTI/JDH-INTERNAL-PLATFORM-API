@@ -145,6 +145,8 @@ class ProductResponse(BaseModel):
     state: str | None
     is_active: bool
     commercial_supplier_code: str | None
+    # Name of the commercial supplier of that code; null when the code is not in the master.
+    commercial_supplier_name: str | None = None
     manufacturer: str | None
     brand: str | None
     category: str | None
@@ -155,11 +157,12 @@ class ProductResponse(BaseModel):
     pack_factor: Decimal | None
     inventory_unit: str | None
     main_barcode: str | None
+    # Sales VAT in percentage points (19 = 19 %), the unit of the quoter line's vat_pct.
+    vat_pct: Decimal | None = None
     margin_list: Decimal | None
     margin_wholesale: Decimal | None
     margin_mass_food: Decimal | None
     margin_market: Decimal | None
-    margin_salsamentarias: Decimal | None
     # Margen Empleado JDH: the employee price list (MDE1 cost), not a channel margin.
     margin_employee: Decimal | None
     margin_notes: str | None
@@ -172,11 +175,21 @@ class ProductResponse(BaseModel):
     liquor_tax_group: str | None
 
 
+# The Salsamentarias margin was removed on 2026-11-23. The edit bodies still accept the field
+# while the UI deploys, and it is never written.
+_SALSAMENTARIAS_DEPRECATED = (
+    "Deprecado: el margen Salsamentarias se eliminó el 2026-11-23 (esos clientes usan el margen "
+    "Mayoristas). Se acepta y se ignora."
+)
+_IGNORED_FIELDS = frozenset({"margin_salsamentarias"})
+
+
 class ProductUpdate(BaseModel):
     """Fields of a product to change; omitted ones stay, ``null`` clears a margin or a text.
 
     Margins are fractions (0.18 = 18 %). Warehouse fields (state, supplier) are not editable
     and the others are overwritten by the next sync; margins and the liquor tax are not.
+    ``margin_salsamentarias`` is deprecated: accepted and ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -197,12 +210,14 @@ class ProductUpdate(BaseModel):
     margin_wholesale: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_mass_food: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_market: Decimal | None = Field(default=None, gt=0, lt=1)
-    margin_salsamentarias: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_employee: Decimal | None = Field(default=None, gt=0, lt=1)
     margin_notes: str | None = Field(default=None, max_length=1000)
     liquor_tax: Decimal | None = Field(default=None, ge=0)
     liquor_tax_coast: Decimal | None = Field(default=None, ge=0)
     liquor_tax_group: str | None = Field(default=None, max_length=20)
+    margin_salsamentarias: Decimal | None = Field(
+        default=None, deprecated=True, description=_SALSAMENTARIAS_DEPRECATED
+    )
 
 
 _Margin = Annotated[Decimal, Field(gt=0, lt=1)]
@@ -224,6 +239,7 @@ class ProductMarginsRequest(BaseModel):
     Margins are fractions (0.18 = 18 %). ``notes`` may be ``null``. ``liquor_tax`` is
     ``null`` for a product that does not pay it; a product that already pays it must send it.
     ``margin_employee`` (Margen Empleado JDH) may be left out to keep the product's.
+    ``margin_salsamentarias`` is deprecated: accepted and ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -232,10 +248,12 @@ class ProductMarginsRequest(BaseModel):
     margin_wholesale: _Margin
     margin_mass_food: _Margin
     margin_market: _Margin
-    margin_salsamentarias: _Margin
     margin_employee: _Margin | None = None
     notes: str | None = Field(max_length=1000)
     liquor_tax: LiquorTaxRequest | None
+    margin_salsamentarias: Decimal | None = Field(
+        default=None, deprecated=True, description=_SALSAMENTARIAS_DEPRECATED
+    )
 
 
 class MarginChangeResponse(BaseModel):
@@ -281,6 +299,7 @@ def _product(product: Product) -> ProductResponse:
         state=product.state,
         is_active=product.is_active,
         commercial_supplier_code=product.commercial_supplier_code,
+        commercial_supplier_name=product.commercial_supplier_name,
         manufacturer=product.manufacturer,
         brand=product.brand,
         category=product.category,
@@ -291,11 +310,11 @@ def _product(product: Product) -> ProductResponse:
         pack_factor=product.pack_factor,
         inventory_unit=product.inventory_unit,
         main_barcode=product.main_barcode,
+        vat_pct=product.sales_vat_pct,
         margin_list=margins.list,
         margin_wholesale=margins.wholesale,
         margin_mass_food=margins.mass_food,
         margin_market=margins.market,
-        margin_salsamentarias=margins.salsamentarias,
         margin_employee=margins.employee,
         margin_notes=margins.notes,
         margin_source=margins.source,
@@ -484,24 +503,73 @@ async def list_products(
     has_margin: bool | None = Query(
         default=None, description="Only products with (true) or without (false) a margin"
     ),
+    has_consumption_tax: bool | None = Query(
+        default=None,
+        description="Only products that pay (true) or do not pay (false) the liquor consumption "
+        "tax: Nacional or Costa above 0",
+    ),
     page: int = _PAGE,
     size: int = _SIZE,
     _: Principal = _principal,
     service: CommercialMasterService = _service,
 ) -> PageResponse[ProductResponse]:
-    """Search products by SKU, description, brand, category, supplier, active flag and margin.
+    """Search products by SKU, description, brand, category, supplier, active flag, margin and
+    liquor consumption tax. ``category`` and ``commercial_supplier_code`` take the values of
+    ``/products/options``.
 
     Active products come first, then the inactive ones.
     """
 
     result = await service.list_products(
-        q, brand, category, commercial_supplier_code, is_active, page, size, has_margin
+        q,
+        brand,
+        category,
+        commercial_supplier_code,
+        is_active,
+        page,
+        size,
+        has_margin,
+        has_consumption_tax=has_consumption_tax,
     )
     return PageResponse(
         items=[_product(item) for item in result.items],
         total=result.total,
         page=result.page,
         size=result.size,
+    )
+
+
+class ProductSupplierOptionResponse(BaseModel):
+    code: str
+    name: str | None
+
+
+class ProductOptionsResponse(BaseModel):
+    """What the product master's dropdowns offer."""
+
+    # Commercial suppliers present in the products, by name then code.
+    suppliers: list[ProductSupplierOptionResponse]
+    # Categories present in the products, sorted.
+    categories: list[str]
+
+
+@router.get(
+    "/products/options",
+    response_model=ProductOptionsResponse,
+    summary="Suppliers and categories of the products",
+)
+@inject
+async def product_options(
+    _: Principal = _principal,
+    service: CommercialMasterService = _service,
+) -> ProductOptionsResponse:
+    """The commercial suppliers (code and name) and the categories present in the products: the
+    supplier and category dropdowns of the product master."""
+
+    result = await service.product_options()
+    return ProductOptionsResponse(
+        suppliers=[ProductSupplierOptionResponse(**asdict(item)) for item in result.suppliers],
+        categories=result.categories,
     )
 
 
@@ -597,9 +665,10 @@ async def margin_template(
     description=(
         "multipart/form-data with `file` (.xlsx or .csv; columns Referencia and any of "
         "Margen Lista 1, Margen Mayorista, Margen Masivo Food, Margen Market Apartadó, "
-        "Margen Salsamentarias, IMPTOLIC, Observaciones). Blank cells keep the margin, 0 "
-        "clears it. An .xlsx may carry the IMPUESTOS table (Sku, Nacional, Costa, Grupo "
-        "impositivo) of `Margen Proveedor-Impuestos`: the liquor tax by regional. "
+        "IMPTOLIC, Observaciones; an old «Margen Salsamentarias» column is ignored). Blank "
+        "cells keep the margin, 0 clears it. An .xlsx may carry the IMPUESTOS table (Sku, "
+        "Nacional, Costa, Grupo impositivo) of `Margen Proveedor-Impuestos`: the liquor tax by "
+        "regional. "
         "A simulation unless `apply=true`."
     ),
 )
@@ -978,7 +1047,9 @@ async def update_product(
 ) -> ProductResponse:
     """Change only the fields sent, margins included. Managers only."""
 
-    changes: dict[str, Any] = {name: getattr(body, name) for name in body.model_fields_set}
+    changes: dict[str, Any] = {
+        name: getattr(body, name) for name in body.model_fields_set - _IGNORED_FIELDS
+    }
     return _product(await service.update_product(principal, sku, changes))
 
 
@@ -994,7 +1065,7 @@ async def set_product_margins(
     principal: Principal = _principal,
     service: CommercialMasterService = _service,
 ) -> ProductResponse:
-    """Fija los cinco márgenes de un producto, sus notas y su impuesto licor, sin archivo.
+    """Fija los cuatro márgenes de un producto, sus notas y su impuesto licor, sin archivo.
 
     Solo gestores. 422 si falta un margen o si el producto paga impuesto licor y no llega.
     """

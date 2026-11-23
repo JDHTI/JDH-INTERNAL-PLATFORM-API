@@ -1,8 +1,9 @@
 """Margins by product and business-unit list: how a value is read and which customer uses which.
 
 The margin master gives every product one optimal margin per business-unit list (Food service,
-Mayoristas, Masivo food, Market Apartadó; Salsamentarias is kept but no longer applied). The
-quoter, the order validator and the supports master pick it with :func:`customer_margin_field`.
+Mayoristas, Masivo food, Market Apartadó). The quoter, the order validator and the supports
+master pick it with :func:`customer_margin_field`. The Salsamentarias margin was removed on
+2026-11-23: those customers use the Mayoristas margin.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ MARGIN_FIELDS = (
     "margin_wholesale",
     "margin_mass_food",
     "margin_market",
-    "margin_salsamentarias",
 )
 
 MARGIN_LABELS = {
@@ -29,11 +29,9 @@ MARGIN_LABELS = {
     "margin_wholesale": "Margen Mayoristas",
     "margin_mass_food": "Margen Masivo Food",
     "margin_market": "Margen Market Apartadó",
-    "margin_salsamentarias": "Margen Salsamentarias",
 }
 
-# Margins the rules apply (see :func:`customer_margin_field`). Salsamentarias is loaded and
-# shown, but those customers use the Mayoristas margin.
+# Margins the rules apply (see :func:`customer_margin_field`).
 APPLIED_FIELDS = ("margin_list", "margin_wholesale", "margin_mass_food", "margin_market")
 
 # Billing operation center of JDH Market Apartadó (``cod_co_factura``).

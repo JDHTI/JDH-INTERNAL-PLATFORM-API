@@ -257,13 +257,13 @@ def test_order_status_and_batch_counts() -> None:
 
 
 def test_the_margin_of_the_channel_is_the_reference() -> None:
-    product = info(list=D("0.18"), wholesale=D("0.12"), salsamentarias=D("0.10"))
+    product = info(list=D("0.18"), wholesale=D("0.12"))
 
     assert decide(product=product, channel="HOTELES Y CLUBES").required_margin_pct == D("0.18")
     wholesale = decide(product=product, channel="MAYORISTAS Y DISTRIBUIDORES")
     assert wholesale.required_margin_pct == D("0.12") and wholesale.margin_basis == "mayoristas"
     assert decide(product=product, channel="SUBDISTRIBUIDOR").margin_basis == "mayoristas"
-    # Salsamentarias is on the Mayoristas list; its own column is no longer applied.
+    # Salsamentarias is on the Mayoristas list; its own margin was removed (2026-11-23).
     sal = decide(product=product, channel="SALSAMENTARIAS", margin_pct=D("0.12"))
     assert sal.reason == "cumple_margen_lista" and sal.margin_basis == "mayoristas"
     assert sal.detail == "Margen del pedido 12,00 % ≥ margen mayoristas 12,00 %"
