@@ -49,7 +49,7 @@ async def world():
     tag = uuid4().hex[:8]
     source = FakeSource(
         line(f"{tag}-up", day=DAY, price="52500", quotation="50000", sku="2548", nit=f"9{tag}"),
-        line(f"{tag}-up2", day=DAY, price="1050", quotation="1000", sku="7053", nit=f"9{tag}"),
+        line(f"{tag}-up2", day=DAY, price="1030", quotation="1000", sku="7053", nit=f"9{tag}"),
         line(f"{tag}-none", day=DAY, price="1000", quotation=None, sku="10042"),
         line(f"{tag}-ok", day=DAY, price="1000", quotation="1000", sku="1001"),
     )
