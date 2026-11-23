@@ -562,6 +562,30 @@ async def list_products(
     )
 
 
+class MasterPermissionsResponse(BaseModel):
+    """What the caller may do in the commercial masters."""
+
+    # Edit products, margins and suppliers, and upload the margins and price increases files:
+    # ``manage`` on ``maestros`` in BI (or a platform administrator). Reading is open to whoever
+    # has the module in any area where it is on.
+    can_manage: bool
+
+
+@router.get(
+    "/permissions",
+    response_model=MasterPermissionsResponse,
+    summary="What the caller may do in the commercial masters",
+)
+@inject
+async def master_permissions(
+    principal: Principal = _principal,
+    service: CommercialMasterService = _service,
+) -> MasterPermissionsResponse:
+    """Whether the caller edits the masters (``can_manage``); the UI offers the edits with it."""
+
+    return MasterPermissionsResponse(can_manage=await service.can_manage(principal))
+
+
 class ProductSupplierOptionResponse(BaseModel):
     code: str
     name: str | None

@@ -154,6 +154,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/commercial-budget/{period}/reopen` | `relaxed` |  |
 | `GET` | `/v1/commercial/customers` | `read` |  |
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
+| `GET` | `/v1/commercial/permissions` | `read` |  |
 | `GET` | `/v1/commercial/price-increases` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/analysis` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/export` | `read` |  |
