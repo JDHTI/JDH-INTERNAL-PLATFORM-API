@@ -213,6 +213,12 @@ class CommercialMasterService:
             raise NotFoundError("Proveedor comercial no encontrado")
         return updated
 
+    async def can_manage(self, principal: Principal) -> bool:
+        """Whether the caller edits the masters (products, margins, suppliers): ``manage`` on
+        ``maestros`` in the managers' area (BI) or a platform administrator."""
+
+        return await self.managers.is_manager(principal)
+
     async def list_legal_suppliers(
         self,
         query: str | None,

@@ -135,6 +135,7 @@ Lectura: cualquier usuario autenticado. Escritura: administradores y miembros de
 | --- | --- |
 | `GET /products` | Lista de productos con sus márgenes. Filtros: `q`, `brand`, `category`, `commercial_supplier_code`, `is_active`, `has_margin` (con o sin algún margen), `has_consumption_tax` (`true`: paga impuesto al consumo de licores, Nacional o Costa mayor que 0; `false`: los demás). Los activos van primero |
 | `GET /products/options` | Opciones de los filtros: `suppliers` (`code` y `name` de cada proveedor comercial que tiene productos, por nombre y luego código; `name` es `null` si el código no está en el maestro de proveedores) y `categories` (las categorías de los productos, ordenadas). Mismo permiso de lectura que `GET /products` |
+| `GET /permissions` | `{can_manage}`: si quien pregunta edita productos, márgenes y proveedores y sube los archivos (`manage` sobre `maestros` en BI, o administrador). Leer lo puede cualquiera con el módulo `maestros` (o `apoyos`, `cotizador`, `actualizacion-listas`, `validador-pedidos`) en un área donde esté encendido; editar, solo BI |
 | `GET /products/{sku}` | Un producto con sus márgenes e impuesto |
 | `PATCH /products/{sku}` | Cambia solo los campos enviados: descripción, marca, categoría, empaque…, los cuatro márgenes (fracción entre 0 y 1; `null` borra), `margin_notes` e impuesto al licor. El estado y el proveedor no se editan. Un campo desconocido es 422 (`margin_salsamentarias` se acepta y se ignora) |
 
