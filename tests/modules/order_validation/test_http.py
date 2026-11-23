@@ -12,6 +12,7 @@ from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.order_validation.application.service import (
     _by_document,
+    _by_margin,
     _same_number,
     document_key,
 )
@@ -207,6 +208,9 @@ def test_orders_carry_the_margin_flag_and_sort(client, source) -> None:
     descending = client.get(url, params={"sort": "document_desc"}).json()["items"]
     assert [item["document"] for item in ascending] == ["PV-1", "PV-2"]
     assert [item["document"] for item in descending] == ["PV-2", "PV-1"]
+    # By the order's margin (2026-11-23): the HTTP contract takes both directions.
+    for sort in ("margin_asc", "margin_desc"):
+        assert client.get(url, params={"sort": sort}).status_code == 200
 
 
 def test_documents_sort_in_natural_order_with_the_ones_without_number_last() -> None:
@@ -225,6 +229,35 @@ def test_documents_sort_in_natural_order_with_the_ones_without_number_last() -> 
     assert document_key("PV-0009") == document_key("pv-9")
     assert document_key("PV-02592133")[0] == 2592133
     assert _same_number("PV-02592133", "2592133") and not _same_number("PV-02592133", "259")
+
+
+def test_orders_sort_by_their_margin_with_the_ones_without_one_last() -> None:
+    """2026-11-23: lowest or highest margin first; no margin last either way; a tie goes by
+    the consecutive, then the file order."""
+
+    rows = [
+        ("PV-30", Decimal("0.12")),
+        ("PV-10", None),
+        ("PV-20", Decimal("0.05")),
+        ("PV-40", Decimal("0.12")),
+        ("PV-05", Decimal("0.20")),
+        ("PV-01", None),
+    ]
+    orders = [
+        OrderView(
+            document=document,
+            status="pendiente_validacion",
+            lines=[_stored(row)],
+            margin_pct=margin,
+        )
+        for row, (document, margin) in enumerate(rows, start=2)
+    ]
+
+    ascending = [order.document for order in _by_margin(orders, descending=False)]
+    descending = [order.document for order in _by_margin(orders, descending=True)]
+
+    assert ascending == ["PV-20", "PV-30", "PV-40", "PV-05", "PV-01", "PV-10"]
+    assert descending == ["PV-05", "PV-30", "PV-40", "PV-20", "PV-01", "PV-10"]
 
 
 def _stored(row: int) -> StoredLine:
