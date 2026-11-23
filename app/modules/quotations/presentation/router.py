@@ -89,6 +89,9 @@ class PermissionsResponse(BaseModel):
     can_request_support: bool = False
     # BI sees the calculation rules (GET /rules); Comercial the operating manual (GET /manual).
     can_see_rules: bool = False
+    # Sees others' quotations with ``mine=false`` («Todas»): validators, moderators, and the
+    # call center's leader those of its members (2026-11-23).
+    can_see_team: bool = False
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -974,6 +977,7 @@ async def permissions(
         sales_scope=result.sales_scope,  # type: ignore[arg-type]
         can_request_support=result.can_request_support,
         can_see_rules=result.can_see_rules,
+        can_see_team=result.can_see_team,
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller

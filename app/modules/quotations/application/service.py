@@ -269,6 +269,9 @@ class Permissions:
     can_request_support: bool = False
     # The calculation rules (costs, warehouses, formulas) are BI's; Comercial gets the manual.
     can_see_rules: bool = False
+    # Sees the quotations of others (``mine=false``): validators, and the call center's
+    # leader those of its members (2026-11-23).
+    can_see_team: bool = False
 
 
 @dataclass(frozen=True)
@@ -620,6 +623,8 @@ class QuotationService:
         can_request = (
             kind == vocabulary.QUOTATION and can_manage and self.support_requests is not None
         )
+        sees_all = await self._sees_all(principal, kind)
+        leads = kind == vocabulary.QUOTATION and await self._led_members(principal) is not None
         return Permissions(
             can_manage,
             seller,
@@ -627,6 +632,7 @@ class QuotationService:
             scope.scope if scope is not None else None,
             can_request,
             await self.can_see_rules(principal),
+            can_see_team=sees_all or leads,
         )
 
     async def can_see_rules(self, principal: Principal) -> bool:

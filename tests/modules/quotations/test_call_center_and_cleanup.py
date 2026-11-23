@@ -106,3 +106,6 @@ async def test_each_operator_sees_its_own_quotations_and_the_leader_every_one(
     assert (await service.get(leader, first)).quotation.id == first
     with pytest.raises(ForbiddenError, match="Solo puedes ver"):
         await service.get(operator, first)
+    # The UI offers «Todas» by this flag.
+    assert (await service.permissions(leader)).can_see_team
+    assert not (await service.permissions(operator)).can_see_team
