@@ -144,6 +144,22 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   transacción, dos o más clientes del mismo grupo). Volver a subir el grupo por `bulk/groups`
   también las marca. Uno de sucursal vale solo para el cliente que la tiene. Cada apoyo muestra
   `business_group`, `group_wide` y la lista de margen que usa (`margin_list`).
+
+  Correcciones del 2026-11-23:
+  - **Una fila por apoyo de grupo.** La búsqueda (`/search`, su conteo y los KPI) muestra cada
+    apoyo de grupo una sola vez, no una fila por cliente del grupo (eso parecían duplicados). La
+    fila es la copia del cliente buscado, si tiene una, o la del NIT más bajo. Son copias del mismo
+    apoyo las que comparten proveedor, clase, método, valor, referencia, vigencia y grupo.
+  - **Actuar sobre la fila actúa sobre todo el grupo.** Anular, vencer, eliminar o adjuntar por
+    selección o por filtro toma todas las copias.
+  - **Filtros.** `customer_nits` + `customer_nit_only: true` trae solo los apoyos propios del NIT,
+    sin los del grupo. `business_groups: [nombre]` trae los apoyos del grupo completo
+    (mayúsculas y espacios no cuentan). El campo `group_wide` también se filtra en `conditions`.
+  - **Cotización por grupo.** Ya no toma el apoyo de un solo NIT del grupo como si fuera del grupo
+    entero. Solo toma los generales y los `group_wide`.
+  - **Miembros del grupo.** Al crear o subir por grupo, un cliente cuyas sucursales escriben el
+    grupo distinto («Newrest» y «NEWREST ») ya no recibe dos copias. Se compara como al
+    emparejar: mayúsculas y espacios no cuentan, y va un cliente por NIT.
 - **Bodegas promocionales** (grupo 23 de SIESA, 18 bodegas): un apoyo aplica allí solo con
   `promo_warehouses`; si no, el pedido de esa bodega va a su costo, sin apoyo.
 

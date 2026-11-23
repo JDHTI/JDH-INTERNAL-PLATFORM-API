@@ -34,6 +34,7 @@ MAX_SUPPLIER_TAGS = 10
 _CRITERIA = (
     "conditions",
     "customer_nits",
+    "business_groups",
     "supplier_codes",
     "product_skus",
     "q",

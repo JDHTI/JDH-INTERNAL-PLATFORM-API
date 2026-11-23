@@ -190,6 +190,8 @@ class RetireFilter(BaseModel):
     match: Literal["all", "any"] = "all"
     conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     customer_nits: list[str] = Field(default_factory=list, max_length=500)
+    customer_nit_only: bool = False
+    business_groups: list[str] = Field(default_factory=list, max_length=500)
     supplier_codes: list[str] = Field(default_factory=list, max_length=500)
     product_skus: list[str] = Field(default_factory=list, max_length=500)
     q: str | None = Field(default=None, max_length=100)
@@ -382,7 +384,24 @@ class SearchRequest(BaseModel):
     match: Literal["all", "any"] = "all"
     conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     customer_nits: list[str] = Field(
-        default_factory=list, max_length=500, description="Base search: client NIT(s)"
+        default_factory=list,
+        max_length=500,
+        description="Base search: client NIT(s), with their business groups' supports",
+    )
+    customer_nit_only: bool = Field(
+        default=False,
+        description=(
+            "With customer_nits: only the supports of those NITs alone, never a business "
+            "group's (group_wide)"
+        ),
+    )
+    business_groups: list[str] = Field(
+        default_factory=list,
+        max_length=500,
+        description=(
+            "Base search: business group name(s); the supports loaded for the whole group "
+            "(group_wide), once each. Case and spaces do not matter"
+        ),
     )
     supplier_codes: list[str] = Field(
         default_factory=list, max_length=500, description="Base search: commercial supplier code(s)"

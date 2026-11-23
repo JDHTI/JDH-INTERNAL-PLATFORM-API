@@ -850,6 +850,8 @@ class SupplierSupportService:
         sort: Sequence[str] | None = None,
         page: int = 1,
         size: int = 50,
+        customer_nit_only: bool = False,
+        business_groups: Sequence[str] | None = None,
     ) -> SupportPage:
         """Filter supports with the dynamic filter language.
 
@@ -859,7 +861,12 @@ class SupplierSupportService:
             match (str): ``all`` (AND) or ``any`` (OR) for the top-level conditions.
             conditions (Sequence[Mapping[str, Any]] | None): Conditions or nested groups;
                 see :mod:`app.modules.supplier_supports.domain.filters`.
-            customer_nits (Sequence[str] | None): Base search by client NIT(s).
+            customer_nits (Sequence[str] | None): Base search by client NIT(s): their supports
+                and their business groups' ones.
+            customer_nit_only (bool): With ``customer_nits``, only the supports of those NITs
+                alone, never a business group's (2026-11-23).
+            business_groups (Sequence[str] | None): Base search by business group: the
+                supports loaded for the whole group (2026-11-23).
             supplier_codes (Sequence[str] | None): Base search by commercial supplier code(s).
             product_skus (Sequence[str] | None): Base search by JDH reference(s). The three base
                 filters are independent and optional (any one, two or all); the ones sent are
@@ -907,6 +914,8 @@ class SupplierSupportService:
             sort=sort,
             page=page,
             size=size,
+            customer_nit_only=customer_nit_only,
+            business_groups=business_groups,
         )
         if principal is not None:
             spec = replace(spec, salesperson_codes=(await self._scope(principal))[1])
@@ -952,6 +961,12 @@ class SupplierSupportService:
         criteria.pop("size", None)
         return await self.repository.search_ids(self._spec(**criteria), limit)
 
+    async def with_group_copies(self, ids: Sequence[UUID]) -> list[UUID]:
+        """``ids`` plus every other copy of the business group's supports among them: the
+        table shows a group's support once, so acting on it acts on the whole group."""
+
+        return await self.repository.with_group_copies(list(ids))
+
     def _spec(
         self,
         *,
@@ -973,6 +988,8 @@ class SupplierSupportService:
         sort: Sequence[str] | None = None,
         page: int = 1,
         size: int = 50,
+        customer_nit_only: bool = False,
+        business_groups: Sequence[str] | None = None,
     ) -> filters.SearchSpec:
         if page < 1:
             raise InvalidInputError("La página debe ser mayor o igual a 1")
@@ -984,13 +1001,23 @@ class SupplierSupportService:
             )
         if state is not None and state not in vocabulary.STATE_FILTERS:
             raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATE_FILTERS)}")
+        nits = _base_nits(customer_nits)
+        if customer_nit_only and not nits:
+            raise InvalidInputError("Para buscar solo por NIT escribe el NIT")
+        groups = tuple(
+            dict.fromkeys(name for value in business_groups or () if (name := _clean(value)))
+        )
+        if len(groups) > filters.MAX_LIST_VALUES:
+            raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
         return filters.SearchSpec(
             group=_with_base_filters(
                 filters.parse_group({"match": match, "conditions": list(conditions or [])}),
                 supplier_codes,
                 product_skus,
             ),
-            customer_nits=_base_nits(customer_nits),
+            customer_nits=nits,
+            customer_nit_only=customer_nit_only,
+            business_groups=groups,
             q=_clean(q),
             active_on=active_on or self.calendar.today(),
             validity=validity,
@@ -1468,6 +1495,9 @@ class SupplierSupportService:
         if criteria is not None:
             found = await self.search_ids(MAX_RETIRE + 1, **{**criteria, "include_voided": False})
             chosen.update((support_id, None) for support_id in found if support_id not in chosen)
+        # A business group's support is one row for all its copies: they all change.
+        for support_id in await self.with_group_copies(list(chosen)):
+            chosen.setdefault(support_id, None)
         if not 1 <= len(chosen) <= MAX_RETIRE:
             raise InvalidInputError(f"Selecciona entre 1 y {MAX_RETIRE} apoyos")
         day = None

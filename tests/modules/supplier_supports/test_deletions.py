@@ -79,6 +79,9 @@ class FakeSearch:
         self.criteria = criteria
         return self.found[:limit]
 
+    async def with_group_copies(self, ids):
+        return list(ids)
+
 
 async def test_deleting_supports_takes_a_selection_or_a_filter_with_a_reason() -> None:
     repository, chosen, filtered = FakeDeletions(), uuid4(), [uuid4(), uuid4()]

@@ -35,6 +35,8 @@ class SupportSearch(Protocol):
 
     async def search_ids(self, limit: int, **criteria: Any) -> list[UUID]: ...
 
+    async def with_group_copies(self, ids: Sequence[UUID]) -> list[UUID]: ...
+
 
 class SupportDeletionService:
     """Delete supports and requests: the area leader and the platform administrators."""
@@ -91,6 +93,9 @@ class SupportDeletionService:
                 MAX_DELETE + 1, **{**criteria, "include_voided": True}
             )
             chosen.update((support_id, None) for support_id in found if support_id not in chosen)
+        # A business group's support is one row for all its copies: they all go.
+        for support_id in await self.supports.with_group_copies(list(chosen)):
+            chosen.setdefault(support_id, None)
         if not 1 <= len(chosen) <= MAX_DELETE:
             raise InvalidInputError(f"Selecciona entre 1 y {MAX_DELETE} apoyos")
         return await self.repository.delete_supports(
