@@ -1,4 +1,4 @@
-"""Opt-in: the novelties repository on PostgreSQL, migrated to head (0080 seeds the reasons).
+"""Opt-in: the novelties repository on PostgreSQL, migrated to head (0081 seeds the reasons).
 
 Runs with ``COSTS_TEST_DATABASE_URL`` (never the shared database).
 """

@@ -11,6 +11,13 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.costs.domain.entries import EntryLine, NoveltyBrief
+from app.modules.costs.domain.increases import (
+    IncreaseRequest,
+    IncreaseRequestPage,
+    RequestLine,
+    SupplierItem,
+    WorkbookRows,
+)
 from app.modules.costs.domain.novelties import (
     Novelty,
     NoveltyFilters,
@@ -154,8 +161,85 @@ class NoveltyRepository(Protocol):
     async def set_statuses(self, statuses: Mapping[UUID, str], now: datetime) -> None: ...
 
 
+class WorkbookReader(Protocol):
+    """Reads a supplier's returned «MAESTRA» workbook."""
+
+    def read(self, filename: str | None, content: bytes) -> WorkbookRows: ...
+
+
+class SupplierItemSource(Protocol):
+    """Active products of a commercial supplier with their quotation in force (the warehouse)."""
+
+    async def items(
+        self, supplier_code: str, skus: list[str] | None = None
+    ) -> list[SupplierItem]: ...
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """An approved line as the history of increases keeps it."""
+
+    line_id: UUID
+    sku: str
+    notified_on: date
+    increased_on: date
+    supplier_sku: str | None
+    ean: str | None
+    icui_pct: Decimal | None
+    ibua: Decimal | None
+    old_cost: Decimal | None
+    old_cost_with_tax: Decimal | None
+    new_cost: Decimal
+    new_cost_with_tax: Decimal
+    variation_amount: Decimal | None
+    variation_pct: Decimal | None
+    status: str | None
+    observations: str | None
+    margin_pct: Decimal | None
+    price: Decimal | None
+
+
+class IncreaseLedger(Protocol):
+    """The history of increases of the products (``commercial_masters``)."""
+
+    async def margins(self, skus: Sequence[str]) -> dict[str, Decimal | None]: ...
+
+    async def record(
+        self, entries: Sequence[LedgerEntry], actor: str, now: datetime
+    ) -> dict[UUID, UUID]: ...
+
+
+class IncreaseRepository(Protocol):
+    """The suppliers' increase requests and their lines."""
+
+    async def create(self, request: IncreaseRequest) -> None: ...
+
+    async def page(
+        self, status: str | None, supplier: str | None, page: int, size: int
+    ) -> IncreaseRequestPage: ...
+
+    async def get(self, request_id: UUID, with_lines: bool = True) -> IncreaseRequest | None: ...
+
+    async def update_line(self, request_id: UUID, line: RequestLine, now: datetime) -> None: ...
+
+    async def decide(
+        self,
+        request_id: UUID,
+        status: str,
+        actor: str,
+        now: datetime,
+        note: str | None,
+        ledger_ids: Mapping[UUID, UUID],
+    ) -> None: ...
+
+
 __all__ = [
     "EntrySource",
+    "IncreaseLedger",
+    "IncreaseRepository",
+    "LedgerEntry",
+    "SupplierItemSource",
+    "WorkbookReader",
     "EntryWindow",
     "FileGuard",
     "ModulePolicy",

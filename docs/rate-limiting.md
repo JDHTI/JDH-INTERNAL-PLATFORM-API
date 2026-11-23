@@ -160,6 +160,16 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
 | `GET` | `/v1/costs/entries` | `read` |  |
 | `PUT` | `/v1/costs/entries/{line_key}/reason` | `relaxed` |  |
+| `GET` | `/v1/costs/increase-requests` | `read` |  |
+| `POST` | `/v1/costs/increase-requests` | `relaxed` |  |
+| `GET` | `/v1/costs/increase-requests/items` | `read` |  |
+| `GET` | `/v1/costs/increase-requests/template` | `read` |  |
+| `POST` | `/v1/costs/increase-requests/upload` | `relaxed` |  |
+| `GET` | `/v1/costs/increase-requests/{request_id}` | `read` |  |
+| `POST` | `/v1/costs/increase-requests/{request_id}/approve` | `relaxed` |  |
+| `GET` | `/v1/costs/increase-requests/{request_id}/file` | `read` |  |
+| `PATCH` | `/v1/costs/increase-requests/{request_id}/lines/{line_id}` | `relaxed` |  |
+| `POST` | `/v1/costs/increase-requests/{request_id}/reject` | `relaxed` |  |
 | `GET` | `/v1/costs/novelties` | `read` |  |
 | `GET` | `/v1/costs/novelties/{novelty_id}` | `read` |  |
 | `DELETE` | `/v1/costs/novelties/{novelty_id}/credit-note` | `relaxed` |  |
