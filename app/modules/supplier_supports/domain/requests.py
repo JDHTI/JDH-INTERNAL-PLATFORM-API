@@ -12,13 +12,37 @@ from app.modules.supplier_supports.domain.validity import validity_on
 # mínimo autorizado JDH, ``supported_margin_pct``). The JDH % and the JDH net cost are the
 # earlier modes: their pending requests can still be decided, no new one is created.
 MARGIN_MODE = "margen_minimo"
+# A % Margen Garantizado asks the supplier, not JDH (2026-11-23): a margin under the
+# supplier's guaranteed minimum (``supplier_min_margin_pct``), negative allowed. It is the
+# supplier's exception, not profitability JDH gives up.
+SUPPLIER_MARGIN_MODE = "margen_proveedor"
 LEGACY_MODES = ("porcentaje", "costo_neto")
+GUARANTEED_METHOD = "precio_neto"
 
 
 def request_mode(calc_method: str) -> str:
-    """Every new request asks for the authorized minimum margin, whatever the support type."""
+    """A % Margen Garantizado asks for the supplier's minimum margin; every other type asks
+    JDH for the authorized minimum margin."""
 
-    return MARGIN_MODE
+    return SUPPLIER_MARGIN_MODE if calc_method == GUARANTEED_METHOD else MARGIN_MODE
+
+
+def require_below_supplier_minimum(support: Any, value: Decimal) -> None:
+    """A supplier margin request asks for less than the margin in force: the supplier's
+    minimum when set, else the guaranteed margin.
+
+    Raises:
+        InvalidInputError: When it asks for that margin or more.
+    """
+
+    current = support.supplier_min_margin_pct
+    if current is None:
+        current = support.target_margin_pct
+    if current is not None and value >= current:
+        raise InvalidInputError(
+            f"El margen pedido debe ser menor que el margen mínimo del proveedor vigente "
+            f"({current * 100:.2f} %)"
+        )
 
 
 def legacy_mode(calc_method: str) -> str:
@@ -32,6 +56,10 @@ def validate_value(mode: str, value: Decimal) -> None:
         raise InvalidInputError("El valor debe ser finito y tener máximo seis decimales")
     if mode == MARGIN_MODE and not Decimal(0) <= value < Decimal(1):
         raise InvalidInputError("El margen mínimo debe estar entre 0 y 1 (0.12 = 12 %)")
+    if mode == SUPPLIER_MARGIN_MODE and not Decimal(-1) < value < Decimal(1):
+        raise InvalidInputError(
+            "El margen mínimo del proveedor debe estar entre -1 y 1 (0.07 = 7 %, -0.05 = -5 %)"
+        )
     if mode == "porcentaje" and not Decimal(-1) <= value <= Decimal(1):
         raise InvalidInputError("El porcentaje JDH debe estar entre -1 y 1 (0.05 = 5 %)")
     if mode == "costo_neto" and not Decimal(0) <= value < Decimal("1000000000000"):

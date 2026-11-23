@@ -56,6 +56,11 @@ class SupplierSupportModel(Base):
             "(supported_margin_pct >= 0 AND supported_margin_pct < 1)",
             name="ck_supplier_supports_supported_margin",
         ),
+        CheckConstraint(
+            "supplier_min_margin_pct IS NULL OR "
+            "(supplier_min_margin_pct > -1 AND supplier_min_margin_pct < 1)",
+            name="ck_supplier_supports_supplier_min_margin",
+        ),
         CheckConstraint(_in("kind", KINDS), name="ck_supplier_supports_kind"),
         CheckConstraint(_in("funding", FUNDINGS), name="ck_supplier_supports_funding"),
         CheckConstraint(_in("calc_method", CALC_METHODS), name="ck_supplier_supports_calc_method"),
@@ -152,6 +157,9 @@ class SupplierSupportModel(Base):
     list_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     # Margin the product may drop to on top of the supplier's support (supported price).
     supported_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    # % Margen Garantizado: the supplier's minimum margin, the one the supported price is set
+    # at (2026-11-23); it may be negative (the supplier's exception).
+    supplier_min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     pack_factor: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     reference_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     reference_list_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
@@ -344,7 +352,8 @@ class SupportRequestModel(Base):
             "status IN ('pendiente','aprobada','rechazada')", name="ck_support_request_status"
         ),
         CheckConstraint(
-            "mode IN ('porcentaje','costo_neto','margen_minimo')", name="ck_support_request_mode"
+            "mode IN ('porcentaje','costo_neto','margen_minimo','margen_proveedor')",
+            name="ck_support_request_mode",
         ),
         Index("ix_support_requests_owner_created", "requested_by_id", "created_at"),
         Index("ix_support_requests_status_created", "status", "created_at"),

@@ -123,6 +123,9 @@ class _SupportFields(BaseModel):
     list_margin_pct: Decimal | None = None
     # Margin the product may drop to on top of the supplier's support ("margen apoyado").
     supported_margin_pct: Decimal | None = None
+    # % Margen Garantizado: the supplier's minimum margin (-1 < margin < guaranteed); the
+    # supported price is the cost at it (2026-11-23).
+    supplier_min_margin_pct: Decimal | None = None
     pack_factor: Decimal | None = None
     reference_cost: Decimal | None = None
     reference_list_price: Decimal | None = None

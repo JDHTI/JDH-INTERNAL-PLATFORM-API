@@ -273,8 +273,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         CHOICE,
         ("unidad del valor", "unidad del costo", "unidad", "unidad costo", "costo por"),
         vocabulary.VALUE_UNITS,
-        "Unidad o Caja: un valor en pesos por caja se divide por la unidad de empaque del "
-        "maestro de productos (vacía = 1). Vacío = unidad.",
+        "Unidad, Caja o Kg: un valor en pesos por caja se divide por la unidad de empaque del "
+        "maestro de productos (vacía = 1). Obligatoria al crear, salvo en la Excepción margen "
+        "JDH.",
         core=True,
     ),
     FieldSpec(
@@ -283,7 +284,26 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         GROUP_BENEFIT,
         FRACTION,
         ("margen objetivo", "margen optimo", "% margen optimo", "% margen garantizado"),
-        help="Obligatorio con % Margen Garantizado (el Valor apoyo es el precio apoyado).",
+        help="Obligatorio con % Margen Garantizado: el margen con el apoyo que el proveedor "
+        "garantiza al precio apoyado.",
+    ),
+    FieldSpec(
+        "supplier_min_margin_pct",
+        "Margen mínimo garantizado proveedor",
+        GROUP_BENEFIT,
+        FRACTION,
+        (
+            "margen minimo proveedor",
+            "margen minimo garantizado",
+            "margen minimo garantizado proveedor",
+            "excepcion margen proveedor",
+        ),
+        help="Obligatorio con % Margen Garantizado: el margen sin apoyo al que se fija el precio "
+        "apoyado = costo / (1 − margen). El proveedor pone $ Apoyo = costo − precio apoyado × "
+        "(1 − margen garantizado). Puede ser 0 o negativo (excepción del proveedor). Bajarlo se "
+        "pide como solicitud de margen proveedor. Distinto de la Excepción margen mínimo "
+        "autorizado JDH, que es rentabilidad que pierde JDH.",
+        core=True,
     ),
     FieldSpec(
         "min_margin_pct",
@@ -447,6 +467,7 @@ _ORDER = (
     "supplier_value",
     "value_unit",
     "supported_margin_pct",
+    "supplier_min_margin_pct",
     "valid_from",
     "valid_to",
     "customer_nit",
@@ -521,11 +542,20 @@ METHOD_RULES: dict[str, MethodRule] = {
     ),
     "precio_neto": MethodRule(
         "none",
-        ("target_margin_pct",),
-        ("reference_cost", "reference_list_price", "pack_factor", "target_margin_pct"),
-        "% Margen Garantizado: el proveedor garantiza ese margen a cualquier precio de venta y "
-        "pone lo que falte: $ Apoyo = máx(0, costo − precio × (1 − margen)). No lleva valor; "
-        "el margen con el apoyo queda en máx(margen sin apoyo, margen garantizado).",
+        ("target_margin_pct", "supplier_min_margin_pct"),
+        (
+            "reference_cost",
+            "reference_list_price",
+            "pack_factor",
+            "value_unit",
+            "target_margin_pct",
+            "supplier_min_margin_pct",
+        ),
+        "% Margen Garantizado: precio apoyado = costo / (1 − margen mínimo proveedor); $ Apoyo "
+        "= costo − precio apoyado × (1 − margen garantizado). A ese precio el margen con el "
+        "apoyo es el garantizado, y es el precio mínimo de la línea. No lleva valor. Un margen "
+        "por debajo del mínimo del proveedor se pide como solicitud de margen proveedor (puede "
+        "ser 0 o negativo).",
     ),
     "puntos_margen": MethodRule(
         "percent",
@@ -551,6 +581,16 @@ METHOD_RULES: dict[str, MethodRule] = {
 # Required in every support: the form asks them and the bulk load rejects a row without them
 # (it deduces the class only for a file with no Clase apoyo column).
 REQUIRED_ALWAYS = ("kind", "calc_method")
+# Required when a support is created, by hand or by a bulk-load row that creates it
+# (2026-11-20); a row that updates keeps the stored value. The types with no money are exempt.
+REQUIRED_ON_CREATE = ("value_unit",)
+UNIT_EXEMPT_METHODS = ("margen_minimo",)
+
+
+def required_on_create(method: str) -> tuple[str, ...]:
+    """What the creation form must ask for a calc method, on top of its ``requires``."""
+
+    return () if method in UNIT_EXEMPT_METHODS else REQUIRED_ON_CREATE
 
 
 def active_methods() -> tuple[str, ...]:
@@ -590,6 +630,8 @@ def form_schema() -> dict[str, object]:
             name: {
                 "value_kind": rule.value_kind,
                 "requires": list(rule.requires),
+                # On top of ``requires``, only when creating by hand (``value_unit``).
+                "requires_on_create": list(required_on_create(name)),
                 "shows": list(rule.shows),
                 "help": rule.help,
             }

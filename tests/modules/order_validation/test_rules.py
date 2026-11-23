@@ -689,3 +689,30 @@ def test_a_guaranteed_margin_lets_the_line_pass_at_any_price() -> None:
     # JDH's authorized minimum, when there is one, is the target instead.
     authorized = replace(guarantee, supported_margin_pct=D("0.15"))
     assert decide([authorized], reference=D("0.16")).reason == "no_cumple_acuerdo"
+
+
+def test_a_guaranteed_margin_with_the_supplier_minimum_pays_a_fixed_share() -> None:
+    """2026-11-23: with the supplier's minimum margin s the share is (g − s) / (1 − s) of the
+    cost, whatever the margin sold at; under s the line falls below the guarantee."""
+
+    guarantee = agreement(
+        calc_method="precio_neto",
+        target_margin_pct=D("0.18"),
+        supplier_min_margin_pct=D("0.13"),
+    )
+
+    share, how = rules.share_of_cost(guarantee, margin=D("0.05"))
+    assert share == (D("0.18") - D("0.13")) / (D("1") - D("0.13"))
+    assert "mínimo del proveedor" in how
+    # Sold at the supplier's minimum, the margin with the support is the guaranteed one.
+    at_minimum = decide([guarantee], reference=D("0.25"), margin_pct=D("0.13"))
+    assert at_minimum.reason == "cumple_con_apoyo"
+    assert at_minimum.effective_margin_pct == D("0.180000")
+    # Under it the supplier does not pay more: the line needs a supplier margin request.
+    under = decide([guarantee], reference=D("0.25"), margin_pct=D("0.07"))
+    assert under.reason == "no_cumple_acuerdo"
+    # A negative minimum (the supplier's exception) is valid: at -5 % it still reaches 18 %.
+    negative = replace(guarantee, supplier_min_margin_pct=D("-0.05"))
+    assert decide([negative], reference=D("0.25"), margin_pct=D("-0.05")).reason == (
+        "cumple_con_apoyo"
+    )

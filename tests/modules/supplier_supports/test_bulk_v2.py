@@ -13,8 +13,8 @@ import pytest
 from app.core.errors import InvalidInputError
 from app.modules.supplier_supports.infrastructure.bulk_file import template_workbook
 
-HEADER = "Clase apoyo,Tipo apoyo,Valor apoyo,Fecha Inicio,Fecha Fin,NIT,SKU JDH\n"
-ROW = "Apoyo táctico,% Apoyo en Costo,5%,01/07/2026,31/12/2026,800116299,1128\n"
+HEADER = "Clase apoyo,Tipo apoyo,Valor apoyo,Unidad valor,Fecha Inicio,Fecha Fin,NIT,SKU JDH\n"
+ROW = "Apoyo táctico,% Apoyo en Costo,5%,Unidad,01/07/2026,31/12/2026,800116299,1128\n"
 
 
 async def load(bulk, manager, content: str, **kwargs):
@@ -29,6 +29,34 @@ async def test_kind_and_type_labels_are_read(bulk, repo, manager) -> None:
     assert report.errors == [] and report.to_create == 1
     saved = next(iter(repo.items.values()))
     assert (saved.data.kind, saved.data.calc_method) == ("tactico_cliente", "pct_costo")
+
+
+async def test_a_row_that_creates_a_support_must_say_its_value_unit(bulk, repo, manager) -> None:
+    # BI, 2026-11-20: «Unidad valor» is required to create a support, but not in a margin
+    # exception (it carries no money) nor in a row that updates a stored support.
+    report = await load(bulk, manager, HEADER + ROW.replace(",Unidad,", ",,"), apply=True)
+
+    assert report.blocked and not report.applied and repo.items == {}
+    assert [(issue.row_number, issue.field) for issue in report.errors] == [(2, "value_unit")]
+    assert "obligatoria" in report.errors[0].message
+
+    header = HEADER.replace("\n", ",Excepción margen mínimo autorizado JDH\n")
+    exception = "Excepción margen JDH,Margen mínimo autorizado,,,01/07/2026,,800116299,8749,6%\n"
+    accepted = await load(bulk, manager, header + exception, apply=True)
+
+    assert accepted.errors == [] and accepted.applied and accepted.to_create == 1
+    (saved,) = repo.items.values()
+    assert (saved.data.kind, saved.data.calc_method) == ("excepcion_margen", "margen_minimo")
+
+    await load(bulk, manager, HEADER + ROW.replace(",Unidad,", ",Caja,"), apply=True)
+    stored = next(item for item in repo.items.values() if item.data.product_sku == "1128")
+    blank = ROW.replace(",Unidad,", ",,").replace("5%", "6%")
+
+    updated = await load(bulk, manager, HEADER + blank, apply=True)
+
+    assert updated.errors == [] and (updated.to_create, updated.to_update) == (0, 1)
+    assert repo.items[stored.id].data.supplier_value == Decimal("0.06")
+    assert repo.items[stored.id].data.value_unit == "caja"
 
 
 async def test_a_row_that_crosses_a_stored_support_blocks_or_expires_it(
@@ -87,6 +115,7 @@ def test_the_short_template_has_bi_order_dropdowns_and_date_checks() -> None:
         "Valor apoyo",
         "Unidad valor",
         "Excepción margen mínimo autorizado JDH",
+        "Margen mínimo garantizado proveedor",
         "Fecha Inicio",
         "Fecha Fin",
         "NIT Cliente",
@@ -170,8 +199,11 @@ async def test_the_supplier_sku_comes_from_the_product_master(bulk, repo, lookup
 
 
 async def test_a_business_group_row_becomes_one_support_per_customer(bulk, repo, manager) -> None:
-    header = "Clase apoyo,Tipo apoyo,Valor apoyo,Fecha Inicio,Fecha Fin,Grupo Empresarial,SKU JDH\n"
-    row = "Apoyo táctico,% Apoyo en Costo,5%,01/07/2026,31/12/2026,Grupo Goddard,1128\n"
+    header = (
+        "Clase apoyo,Tipo apoyo,Valor apoyo,Unidad valor,Fecha Inicio,Fecha Fin,"
+        "Grupo Empresarial,SKU JDH\n"
+    )
+    row = "Apoyo táctico,% Apoyo en Costo,5%,Unidad,01/07/2026,31/12/2026,Grupo Goddard,1128\n"
 
     report = await load(bulk, manager, header + row, apply=True, groups=True)
 

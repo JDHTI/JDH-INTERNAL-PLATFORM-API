@@ -271,6 +271,16 @@ def column_requirements(
                 always.add(target)
             continue
         by_type[target] = tuple(dict.fromkeys((*by_type.get(target, ()), *methods)))
+    # Required when a row creates a support (2026-11-20), by every type that carries money.
+    for name in fields.REQUIRED_ON_CREATE:
+        if name not in names:
+            continue
+        methods = tuple(m for m in fields.active_methods() if name in fields.required_on_create(m))
+        if fixed is not None:
+            if fixed in methods:
+                always.add(name)
+            continue
+        by_type[name] = methods
     return by_type | {name: () for name in always & names}
 
 
@@ -342,11 +352,12 @@ def template_workbook(
         cell = sheet.cell(row=1, column=index, value=header)
         cell.font = _HEADER_FONT
         methods = required.get(name)
+        # Unidad valor is red: every type but the margin exception needs it (2026-11-20).
         color = (
             _OPTIONAL_COLOR
             if methods is None
             else _REQUIRED_COLOR
-            if not methods
+            if not methods or name in fields.REQUIRED_ON_CREATE
             else _BY_TYPE_COLOR
         )
         cell.fill = _fill(color)
@@ -388,8 +399,10 @@ def template_workbook(
         + ". Tipo apoyo: "
         + "; ".join(_active_methods())
         + " (listas desplegables).",
-        "Unidad valor: Unidad o Caja. Un valor en pesos por caja se divide por la unidad de "
-        "empaque del maestro de productos (vacía = 1).",
+        "Unidad valor: Unidad, Caja o Kg, obligatoria en la fila que crea un apoyo (salvo la "
+        "Excepción margen JDH). Un valor en pesos por caja se divide por la unidad de "
+        "empaque del maestro de productos (vacía = 1). La fila que actualiza un apoyo y la "
+        "deja vacía conserva la guardada.",
         "No se permiten dos apoyos de la misma clase, cliente, sucursal y referencia con "
         "vigencias que se cruzan: al cargar se elige si se vence o se anula el anterior.",
         "Validación (descarga con datos): Sí = el proveedor lo confirma (se actualiza con lo "
@@ -416,7 +429,12 @@ def template_workbook(
         guide.append([line])
     guide.append([])
     for color, title, meaning in (
-        (_REQUIRED_COLOR, "Rojo", "Obligatoria en toda fila."),
+        (
+            _REQUIRED_COLOR,
+            "Rojo",
+            "Obligatoria en toda fila (Unidad valor: en la que crea un apoyo, salvo la "
+            "Excepción margen JDH).",
+        ),
         (
             _BY_TYPE_COLOR,
             "Naranja",
@@ -473,7 +491,7 @@ def _list_values(name: str) -> list[str]:
     if name == "calc_method":
         return _active_methods()
     if name == "value_unit":
-        return ["Unidad", "Caja"]
+        return [_UNIT_LABELS[unit] for unit in vocabulary.VALUE_UNITS]
     if name in (VALIDATION, "promo_warehouses"):
         return ["Sí", "No"]
     if name == "funding":

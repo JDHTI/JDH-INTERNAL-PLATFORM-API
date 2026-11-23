@@ -8,10 +8,12 @@ import pytest
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.pricing import (
     derive,
+    fixed_guaranteed_amount,
     guaranteed_amount,
     guaranteed_share,
     minimum_price,
     supplier_amount,
+    supplier_supported_price,
     unit_amount,
 )
 
@@ -84,6 +86,58 @@ def test_a_guaranteed_margin_is_shown_at_the_list_price() -> None:
     )
     assert low.supplier_amount == D("0") and round(low.margin_recomposed, 6) == D("0.18")
     assert not low.support_above_cost
+
+
+@pytest.mark.parametrize(
+    ("supplier_min", "price", "amount"),
+    [
+        # Cost 1.000, 18 % guaranteed. At 13 %: PA 1.149,43, $ Apoyo 57,47.
+        (D("0.13"), D("1149.425287"), D("57.471264")),
+        # An exception at 0 %: PA is the cost, it pays 18 % of it.
+        (D("0"), D("1000"), D("180")),
+        # A negative exception (-5 %): PA under the cost, it pays more.
+        (D("-0.05"), D("952.380952"), D("219.047619")),
+    ],
+)
+def test_the_supplier_minimum_sets_the_supported_price_and_a_fixed_amount(
+    supplier_min, price, amount
+) -> None:
+    """2026-11-23: PA = cost / (1 − supplier minimum); $ Apoyo = cost − PA × (1 − g)."""
+
+    assert round(supplier_supported_price(D("1000"), supplier_min), 6) == price
+    assert round(fixed_guaranteed_amount(D("1000"), D("0.18"), supplier_min), 6) == amount
+    # The same amount whatever the price it is sold at.
+    assert unit_amount(
+        "precio_neto",
+        None,
+        cost=D("1000"),
+        list_price=D("1333"),
+        guaranteed_margin=D("0.18"),
+        sale_price=D("2000"),
+        supplier_min_margin=supplier_min,
+    ) == fixed_guaranteed_amount(D("1000"), D("0.18"), supplier_min)
+
+
+def test_a_guaranteed_margin_with_the_supplier_minimum_derives_its_prices() -> None:
+    # Cost 1.000 at the product's 25 % -> PL 1.333,33; 18 % guaranteed from a 13 % minimum.
+    result = derive(
+        data(
+            calc_method="precio_neto",
+            target_margin_pct=D("0.18"),
+            supplier_min_margin_pct=D("0.13"),
+        ),
+        dwh_unit_cost=D("1000"),
+        product_margin=D("0.25"),
+    )
+
+    assert round(result.supplier_amount, 2) == D("57.47")
+    # Suggested = PL − $ Apoyo, like the other types; the minimum is the supported price.
+    assert round(result.suggested_price, 2) == D("1275.86")
+    assert round(result.supported_price, 2) == D("1149.43")
+    # At the supported price the margin with the support is the guaranteed one.
+    assert round(result.margin_recomposed, 6) == D("0.18")
+    # The JDH authorized margin stays its own: it is not the guarantee.
+    assert result.supported_margin_pct is None
 
 
 def test_a_guaranteed_margin_pays_what_is_missing_at_the_price_sold() -> None:

@@ -14,10 +14,10 @@ from app.modules.supplier_supports.infrastructure.bulk_file import template_head
 from tests.modules.supplier_supports.conftest import person
 
 GENERAL = (
-    "Cod. Proveedor,Tipo,Método de cálculo,Valor Proveedor,Referencia JDH,NIT Cliente,"
-    "Fecha Inicio,Fecha Fin,Programa\n"
-    "233,tactico_cliente,pct_costo,5%,1128,800116299,01/10/2026,31/12/2026,PLAN 10X10\n"
-    "233,tactico_cliente,pct_costo,0.07,8749,,2026-10-01,,PLAN 7\n"
+    "Cod. Proveedor,Tipo,Método de cálculo,Valor Proveedor,Unidad valor,Referencia JDH,"
+    "NIT Cliente,Fecha Inicio,Fecha Fin,Programa\n"
+    "233,tactico_cliente,pct_costo,5%,Unidad,1128,800116299,01/10/2026,31/12/2026,PLAN 10X10\n"
+    "233,tactico_cliente,pct_costo,0.07,Unidad,8749,,2026-10-01,,PLAN 7\n"
 )
 
 
@@ -49,7 +49,7 @@ async def test_apply_creates_every_row_with_its_origin(bulk, repo, manager) -> N
 
 
 async def test_one_bad_row_blocks_the_whole_load_even_when_applying(bulk, repo, manager) -> None:
-    content = GENERAL + "233,tactico_cliente,pct_costo,5%,999999,,01/10/2026,,X\n"
+    content = GENERAL + "233,tactico_cliente,pct_costo,5%,Unidad,999999,,01/10/2026,,X\n"
 
     report = await load(bulk, manager, content, apply=True)
 
@@ -98,7 +98,7 @@ async def test_every_bad_row_is_reported_in_one_pass(bulk, manager) -> None:
 
 
 async def test_rows_repeated_in_the_file_are_flagged(bulk, manager) -> None:
-    line = "233,tactico_cliente,pct_costo,5%,1128,800116299,01/10/2026,31/12/2026,PLAN\n"
+    line = "233,tactico_cliente,pct_costo,5%,Unidad,1128,800116299,01/10/2026,31/12/2026,PLAN\n"
     header = GENERAL.splitlines()[0] + "\n"
 
     report = await load(bulk, manager, header + line + line)
@@ -110,7 +110,8 @@ async def test_rows_repeated_in_the_file_are_flagged(bulk, manager) -> None:
 
 async def test_supplier_is_required_from_the_request_or_a_column(bulk, manager) -> None:
     content = (
-        "Tipo,Método de cálculo,Valor Proveedor,Referencia JDH\ntactico_cliente,pct_costo,5%,1128\n"
+        "Tipo,Método de cálculo,Valor Proveedor,Unidad valor,Referencia JDH\n"
+        "tactico_cliente,pct_costo,5%,Unidad,1128\n"
     )
 
     report = await load(bulk, manager, content)
@@ -129,6 +130,7 @@ async def test_a_suppliers_own_layout_is_read_through_its_profile(
         defaults={
             "kind": "Táctico Cliente",
             "calc_method": "pct_costo",
+            "value_unit": "unidad",
             "regionals": ["antioquia"],
         },
         column_map={
@@ -167,7 +169,7 @@ async def test_mapping_and_defaults_can_be_sent_with_the_request(bulk, manager) 
         manager,
         content,
         supplier_code="233",
-        defaults={"kind": "actividad_temporal", "calc_method": "pct_costo"},
+        defaults={"kind": "actividad_temporal", "calc_method": "pct_costo", "value_unit": "unidad"},
         column_map={"supplier_value": ["DESCUENTO"]},
     )
     assert sent.errors == [] and sent.preview[0].supplier_value == Decimal("0.1")
@@ -177,8 +179,17 @@ async def test_excel_file_with_real_dates_and_numbers(bulk, repo, manager) -> No
     book = openpyxl.Workbook()
     sheet = book.active
     sheet.title = "Apoyos"
-    sheet.append(["Tipo", "Método de cálculo", "Valor Proveedor", "Referencia JDH", "Fecha Inicio"])
-    sheet.append(["tactico_cliente", "valor_unidad", 250.5, 1128.0, date(2026, 10, 1)])
+    sheet.append(
+        [
+            "Tipo",
+            "Método de cálculo",
+            "Valor Proveedor",
+            "Unidad valor",
+            "Referencia JDH",
+            "Fecha Inicio",
+        ]
+    )
+    sheet.append(["tactico_cliente", "valor_unidad", 250.5, "Unidad", 1128.0, date(2026, 10, 1)])
     buffer = io.BytesIO()
     book.save(buffer)
 
@@ -288,6 +299,7 @@ async def test_template_follows_the_profile_layout(profiles, manager) -> None:
         "Valor apoyo",
         "Unidad valor",
         "Excepción margen mínimo autorizado JDH",
+        "Margen mínimo garantizado proveedor",
         "Fecha Inicio",
         "Fecha Fin",
         "NIT Cliente",

@@ -14,10 +14,10 @@ from app.modules.supplier_supports.application.bulk import SupportBulkService
 from app.modules.supplier_supports.application.costs import SupportCostService
 from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSupportReader
 
-HEADER = "Clase apoyo,Tipo apoyo,Valor apoyo,Fecha Inicio,NIT Cliente,SKU JDH\n"
+HEADER = "Clase apoyo,Tipo apoyo,Valor apoyo,Unidad valor,Fecha Inicio,NIT Cliente,SKU JDH\n"
 ROWS = (
-    "Apoyo táctico,% Apoyo en Costo,5%,01/07/2026,800116299,1128\n"
-    "Actividad descuento temporal,% Apoyo en Costo,5%,01/07/2026,,8749\n"
+    "Apoyo táctico,% Apoyo en Costo,5%,Unidad,01/07/2026,800116299,1128\n"
+    "Actividad descuento temporal,% Apoyo en Costo,5%,Unidad,01/07/2026,,8749\n"
 )
 
 

@@ -354,3 +354,35 @@ def test_the_response_of_a_guaranteed_margin_carries_it_and_its_money_at_the_lin
     assert shown.guaranteed_margin_pct == Decimal("0.3")
     # At 3.500 it pays 3.000 - 3.500 x 70 % = 550; at the list price 3.750 it would pay 375.
     assert shown.amount == Decimal("550.00") and shown.list_amount == Decimal("375.00")
+
+
+def test_a_guaranteed_margin_with_the_supplier_minimum_pays_a_fixed_amount() -> None:
+    """2026-11-23: the supported price is the cost at the supplier's minimum margin; the
+    supplier pays cost − price × (1 − guaranteed) there, and that is the line's minimum."""
+
+    line = build(
+        [
+            agreement(
+                calc_method="precio_neto",
+                target_margin_pct=Decimal("0.30"),
+                supplier_min_margin_pct=Decimal("0.20"),
+            )
+        ]
+    )
+
+    assert line.support is not None and line.support.supplier_min_margin_pct == Decimal("0.2")
+    # Supported price 3.000 / 0.8 = 3.750; it pays 3.000 - 3.750 x 70 % = 375.
+    assert line.support_amount == Decimal("375.00")
+    assert line.min_price == Decimal("3750") and line.min_margin_pct == Decimal("0.3")
+    # The list price (3.750 at the product's 20 %) minus 375 is under the minimum: the minimum.
+    assert line.optimal_price == Decimal("3750")
+    # The amount does not follow the price: under the supported price it falls below 30 %.
+    cheaper = rules.reprice(line, Decimal("3500"))
+    assert cheaper.support_amount == Decimal("375.00")
+    assert cheaper.new_margin_with_support_pct == Decimal("0.25")
+    assert cheaper.compliance != "cumple"
+    at_minimum = rules.reprice(line, Decimal("3750"))
+    assert at_minimum.new_margin_with_support_pct == Decimal("0.3")
+    assert at_minimum.compliance == "cumple"
+    shown = _support(cheaper.support, cheaper)
+    assert shown.amount == Decimal("375.00") and shown.supplier_min_margin_pct == Decimal("0.2")

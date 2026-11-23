@@ -145,6 +145,7 @@ class SqlAlchemyAgreementSource:
                     pack_factor=pack if pack is not None else model.pack_factor,
                     dwh_unit_cost=unit_cost,
                     supported_margin_pct=model.supported_margin_pct,
+                    supplier_min_margin_pct=model.supplier_min_margin_pct,
                     customer_branch_id=model.customer_branch_id,
                     customer_group=model.customer_group,
                     promo_warehouses=model.promo_warehouses,

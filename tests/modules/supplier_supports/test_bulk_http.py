@@ -16,9 +16,9 @@ from tests.modules.supplier_supports.conftest import person
 BASE = "/api/v1/supplier-supports"
 PROFILES = "/api/v1/supplier-support-profiles"
 FILE = (
-    "Tipo,Método de cálculo,Valor Proveedor,Referencia JDH,NIT Cliente,Fecha Inicio\n"
-    "tactico_cliente,pct_costo,5%,1128,800116299,01/10/2026\n"
-    "tactico_cliente,pct_costo,7%,8749,,01/10/2026\n"
+    "Tipo,Método de cálculo,Valor Proveedor,Unidad valor,Referencia JDH,NIT Cliente,Fecha Inicio\n"
+    "tactico_cliente,pct_costo,5%,Unidad,1128,800116299,01/10/2026\n"
+    "tactico_cliente,pct_costo,7%,Unidad,8749,,01/10/2026\n"
 )
 
 
@@ -62,7 +62,10 @@ def test_form_schema_is_not_swallowed_by_the_support_id_route(client) -> None:
     names = {item["name"] for item in body["fields"]}
     assert {"kind", "calc_method", "supplier_value", "product_sku", "regionals"} <= names
     # A guaranteed margin asks only for the margin: it has no value (BI, 2026-11-18).
-    assert body["methods"]["precio_neto"]["requires"] == ["target_margin_pct"]
+    assert body["methods"]["precio_neto"]["requires"] == [
+        "target_margin_pct",
+        "supplier_min_margin_pct",
+    ]
     assert body["methods"]["precio_neto"]["value_kind"] == "none"
     assert body["methods"]["pct_costo"]["value_kind"] == "percent"
     kind = next(item for item in body["fields"] if item["name"] == "kind")
@@ -87,7 +90,7 @@ def test_bulk_simulates_then_applies(client) -> None:
 
 
 def test_bulk_reports_errors_and_saves_nothing(client) -> None:
-    bad = FILE + "tactico_cliente,pct_costo,7%,999999,,01/10/2026\n"
+    bad = FILE + "tactico_cliente,pct_costo,7%,Unidad,999999,,01/10/2026\n"
 
     body = upload(client, bad, apply="true").json()
 
@@ -103,7 +106,9 @@ def test_bulk_accepts_defaults_and_column_map_as_json_form_fields(client) -> Non
         f"{BASE}/bulk",
         params={"supplier_code": "233"},
         data={
-            "defaults": json.dumps({"kind": "actividad_temporal", "calc_method": "pct_costo"}),
+            "defaults": json.dumps(
+                {"kind": "actividad_temporal", "calc_method": "pct_costo", "value_unit": "unidad"}
+            ),
             "column_map": json.dumps({"supplier_value": ["DESCUENTO PACTADO"]}),
         },
         files={"file": ("a.csv", b"SKU,DESCUENTO PACTADO\n1128,0.1\n", "text/csv")},

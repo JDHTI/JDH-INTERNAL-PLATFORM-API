@@ -74,6 +74,8 @@ class Agreement:
     dwh_unit_cost: Decimal | None = None
     supported_margin_pct: Decimal | None = None
     customer_branch_id: str | None = None
+    # % Margen Garantizado: the supplier's minimum margin (fixes its amount, 2026-11-23).
+    supplier_min_margin_pct: Decimal | None = None
     customer_group: str | None = None
     promo_warehouses: bool = False
 

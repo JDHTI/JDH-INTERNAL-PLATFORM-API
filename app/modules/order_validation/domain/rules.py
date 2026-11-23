@@ -207,7 +207,9 @@ def share_of_cost(
     A % Margen Garantizado pays what is missing to reach its margin at the price sold: from
     the line's ``margin`` without the support it is ``max(0, (g − m) / (1 − m))`` of the cost
     (the margin with it is ``max(m, g)``); without a sale margin, at the list price
-    (``target``).
+    (``target``). With the supplier's minimum margin ``s`` set (2026-11-23) the share is fixed,
+    ``(g − s) / (1 − s)``: what it pays at its supported price ``cost / (1 − s)``, whatever
+    the price sold at.
 
     Returns:
         tuple[Decimal | None, str]: The share, or ``None`` with the reason it is unknown.
@@ -217,6 +219,15 @@ def share_of_cost(
         guaranteed = agreement.target_margin_pct
         if guaranteed is None:
             return None, "el margen garantizado no tiene margen"
+        supplier_min = agreement.supplier_min_margin_pct
+        if supplier_min is not None:
+            share = guaranteed_share(supplier_min, guaranteed)
+            if share is None:
+                return None, "el margen mínimo del proveedor no es válido"
+            return share, (
+                f"margen garantizado {pct(guaranteed)} desde el mínimo del proveedor "
+                f"{pct(supplier_min)}"
+            )
         share = guaranteed_share(margin if margin is not None else target, guaranteed)
         if share is None:
             return None, "sin margen de venta ni margen objetivo para el margen garantizado"
