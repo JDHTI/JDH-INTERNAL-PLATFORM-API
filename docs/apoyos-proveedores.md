@@ -276,6 +276,12 @@ sabemos (`unit_basis_source`):
   parece a ninguno queda sin decidir.
 - `manual`: lo fijó una persona al crear o editar. `desconocido`: no se pudo decidir.
 
+**Obligatoria al crear** (2026-11-20): un apoyo creado a mano (`POST /supplier-supports`,
+el lote `/batch` y el de grupo empresarial) debe traer la **Unidad valor** (`unidad`, `caja`
+o `kg`). Si no la trae, responde 422 con `field: "value_unit"`. Se exceptúa la Excepción
+margen JDH, que no lleva dinero. La vista previa del formulario y la carga masiva la siguen
+infiriendo cuando falta, y editar un apoyo no la exige.
+
 `derived` trae los importes en la unidad original y, cuando se conocen la unidad y el
 empaque, también por caja y por unidad: `cost`, `list_price`, `supplier_amount_per`,
 `net_cost_per` y `suggested_price_per`, cada uno con `{box, unit}`. Sin empaque no hay

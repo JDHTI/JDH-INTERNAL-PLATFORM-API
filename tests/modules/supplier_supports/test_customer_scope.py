@@ -44,6 +44,7 @@ def scoped(repo, lookup) -> SupplierSupportService:
 
 def support(**values) -> SupportData:
     base = {
+        "value_unit": "unidad",
         "kind": "tactico_cliente",
         "calc_method": "costo_neto",
         "supplier_value": Decimal("80"),

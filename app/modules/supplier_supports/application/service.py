@@ -233,6 +233,27 @@ def _label(name: str) -> str:
     return spec.label if spec is not None else name
 
 
+def value_unit_missing() -> FieldError:
+    """A new support without its «Unidad valor» (BI, 2026-11-20: required when creating)."""
+
+    units = ", ".join(unit.capitalize() for unit in vocabulary.VALUE_UNITS)
+    return FieldError(
+        f"La {_label('value_unit')} es obligatoria al crear un apoyo: {units}", "value_unit"
+    )
+
+
+def _require_value_unit(data: SupportData) -> None:
+    """A support being created must say its value unit: it is no longer guessed from the
+    warehouse's cost. A margin exception carries no money, so it needs none.
+
+    Raises:
+        FieldError: Without ``value_unit``.
+    """
+
+    if not data.value_unit and data.calc_method != "margen_minimo":
+        raise value_unit_missing()
+
+
 def _branch_in(branch: str, branches: Sequence[str]) -> str | None:
     """The master's spelling of a branch id: ``1`` and ``1.0`` (a number in Excel) are ``001``."""
 
@@ -678,9 +699,13 @@ class SupplierSupportService:
         strict: bool,
         previous: SupportData | None = None,
         masters: MasterLookup | None = None,
+        creating: bool = False,
     ) -> SupportData:
+        normalized = self._normalize(data)
+        if creating:
+            _require_value_unit(normalized)
         prepared = await self._resolve(
-            self._normalize(data),
+            normalized,
             supplier_code=supplier_code,
             strict=strict,
             previous=previous,
@@ -1016,7 +1041,9 @@ class SupplierSupportService:
         """
 
         await self._require_manager(principal)
-        prepared = await self._prepare(data, supplier_code=supplier_code, strict=True)
+        prepared = await self._prepare(
+            data, supplier_code=supplier_code, strict=True, creating=True
+        )
         plan = await self._overlaps([prepared], on_overlap, overlap_reason)
         saved = await self.repository.create(
             uuid4(), prepared, principal.email, datetime.now(UTC), supersede=plan
@@ -1095,7 +1122,8 @@ class SupplierSupportService:
         if not 1 <= len(items) <= MAX_BATCH:
             raise InvalidInputError(f"Envía entre 1 y {MAX_BATCH} apoyos por lote")
         prepared = [
-            await self._prepare(data, supplier_code=code, strict=True) for data, code in items
+            await self._prepare(data, supplier_code=code, strict=True, creating=True)
+            for data, code in items
         ]
         plan = await self._overlaps(prepared, on_overlap, overlap_reason)
         return await self._save_all(principal, prepared, plan)

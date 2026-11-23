@@ -20,6 +20,7 @@ async def make_support(service, manager, sku: str, nit: str | None = None) -> ob
         kind="tactico_cliente",
         calc_method="pct_costo",
         supplier_value=Decimal("0.05"),
+        value_unit="unidad",
         product_sku=sku,
         customer_nit=nit,
         reference_cost=Decimal("1000"),
