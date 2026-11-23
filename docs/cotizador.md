@@ -405,6 +405,25 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
   Con `mine=true` ve solo las suyas.
 - **Validar:** el call center no valida. La validación sigue en BI.
 
+**Coordinadores y directores de Comercial** (2026-11-23):
+- **Coordinador:** una persona vinculada a uno o más códigos de supervisor de SIESA
+  (`cod_supervisor`) en `/ti/administracion/vendedores`. No necesita un permiso aparte: el vínculo
+  le da el alcance `team`. Sus vendedores son los que tienen ese supervisor en SIESA.
+  - Con `mine=false` ve sus cotizaciones y las de los clientes de sus vendedores
+    (`quotations.salesperson_code` dentro del equipo). También abre su detalle.
+  - No las edita: solo cambia las que creó.
+- **Director:** quien tenga `manage` **por nombre** sobre `comercial-director` en Comercial, o el
+  líder o responsable del área. `*` no lo da (`ExplicitGrantPolicy`).
+  - Ve todas las cotizaciones de cliente, y además todos los clientes y apoyos (alcance `all`).
+  - Solo edita las que creó.
+- **`GET /permissions`:** `team_scope` dice qué lista `mine=false`. `all` («Todas») es para
+  validadores, moderadores y directores. `assigned` («Mi equipo») es para un coordinador o el
+  líder del call center. `null` es para quien solo ve las suyas. `can_see_team` es `true` cuando
+  `team_scope` no es nulo.
+- **Detalle:** `can_edit` dice si quien pregunta puede cambiar la cotización, sin importar el
+  estado: el creador, sus validadores y, en las listas principales, quien las gestiona. Vale
+  `false` para quien solo la ve.
+
 **Fecha del alza:** cada línea trae `increase_on`, la fecha de la última alza de precio del
 proveedor para ese SKU, si tiene una.
 

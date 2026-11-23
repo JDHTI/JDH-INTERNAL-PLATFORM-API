@@ -53,6 +53,7 @@ def test_fixed_paths_are_not_taken_for_an_id(client) -> None:
         "can_request_support": False,
         "can_see_rules": False,
         "can_see_team": False,
+        "team_scope": None,
         "seller_linked": True,
         "seller": {"code": "0051", "name": "PEREZ ANA", "email": MANAGER},
     }
@@ -77,6 +78,8 @@ def test_quote_price_confirm_validate_and_download(client) -> None:
     assert created.status_code == 201
     quotation = created.json()
     assert quotation["status"] == "borrador" and quotation["status_label"] == "Borrador"
+    # Its creator may change it.
+    assert quotation["can_edit"] is True
     assert quotation["list_action"] == "actualizacion" and quotation["regional"] == "nacional"
     assert quotation["price_family_label"] == "Generales"
     assert {"code": "lista_compartida", "label": quotation["warnings"][0]["label"]} in quotation[

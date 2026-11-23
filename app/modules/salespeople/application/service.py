@@ -3,10 +3,11 @@
 Rules:
 - The scope is decided by the server from the person's role and links, never by a
   parameter of the client.
-- ``all``: platform administrators and moderators, anyone in BI (member or responsible)
-  and the leader or responsible of Comercial.
-- ``team``: a person linked to supervisor codes sees their sellers' customers, plus their
-  own seller codes.
+- ``all``: platform administrators and moderators, anyone in BI or the call center, the
+  leader or responsible of Comercial and Comercial's directors (``manage`` on
+  ``comercial-director``, 2026-11-23).
+- ``team``: a person linked to supervisor codes (a coordinator) sees their sellers'
+  customers, plus their own seller codes.
 - ``mine``: a person linked to seller codes sees those customers.
 - ``none``: everyone else, until an administrator links them.
 - A link comes from the corporate e-mail (``auto``) or from an administrator (``manual``).
@@ -84,6 +85,7 @@ class SalesScopeService:
         audit=None,
         all_area_slugs: Sequence[str] = ("bi",),
         leader_area_slugs: Sequence[str] = ("comercial",),
+        directors=None,
     ) -> None:
         """Create the service.
 
@@ -96,8 +98,11 @@ class SalesScopeService:
             all_area_slugs (Sequence[str]): Areas whose members see every customer.
             leader_area_slugs (Sequence[str]): Areas whose leader or responsible sees every
                 customer.
+            directors: Optional policy (``is_manager``) of Comercial's directors (permission
+                ``comercial-director``): they see every customer.
         """
 
+        self.directors = directors
         self.links = links
         self.roster = roster
         self.users = users
@@ -140,7 +145,7 @@ class SalesScopeService:
                 return True
             if slug in self.leader_area_slugs and (grants.is_leader or grants.is_responsible):
                 return True
-        return False
+        return self.directors is not None and await self.directors.is_manager(principal)
 
     async def _email_codes(self, email: str | None) -> list[str]:
         """Seller codes the e-mail gives, minus codes someone holds or that were unlinked."""

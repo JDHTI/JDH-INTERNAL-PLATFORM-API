@@ -79,6 +79,9 @@ from app.modules.quotations.domain.ports import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The salespeople module's scope of a person linked to SIESA supervisor codes: a coordinator.
+TEAM_SCOPE = "team"
 MAX_PAGE_SIZE = 100
 MAX_PRICE = Decimal(10) ** 15
 # Most SKUs of a list update: list 1 (GENERAL) has about 7,600.
@@ -272,6 +275,9 @@ class Permissions:
     # Sees the quotations of others (``mine=false``): validators, and the call center's
     # leader those of its members (2026-11-23).
     can_see_team: bool = False
+    # What ``mine=false`` lists: ``all`` (validators, moderators, Comercial's directors),
+    # ``assigned`` (a coordinator's sellers or the call center's members) or ``None``.
+    team_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +405,7 @@ class QuotationService:
         support_requests: SupportRequestLinks | None = None,
         sales_backfill: SalesBackfill | None = None,
         team: TeamLookup | None = None,
+        directors: ManagerPolicy | None = None,
     ) -> None:
         """Create the service.
 
@@ -435,8 +442,12 @@ class QuotationService:
                 sales of a list update built without them. Without it only a refresh does.
             team (TeamLookup | None): The call center (2026-11-23): its leader sees the
                 customer quotations of every member of the area.
+            directors (ManagerPolicy | None): Comercial's directors (permission
+                ``comercial-director``, 2026-11-23): they read every customer quotation and
+                edit only their own.
         """
 
+        self.directors = directors
         self.team = team
         self.sales_backfill = sales_backfill
         self.support_requests = support_requests
@@ -513,23 +524,36 @@ class QuotationService:
         )
 
     async def _sees_all(self, principal: Principal, kind: str = vocabulary.QUOTATION) -> bool:
-        """Validators and moderators read every quotation; anyone else only the ones they made."""
+        """Validators and moderators read every quotation, and Comercial's directors every
+        customer quotation (2026-11-23); anyone else only the ones they reach."""
 
-        return principal.is_moderator or await self.can_validate(principal, kind)
+        if principal.is_moderator or await self.can_validate(principal, kind):
+            return True
+        return (
+            kind == vocabulary.QUOTATION
+            and self.directors is not None
+            and await self.directors.is_manager(principal)
+        )
+
+    async def can_edit(self, principal: Principal, quotation: Quotation) -> bool:
+        """Whether the caller may change the quotation, whatever its status: its creator, its
+        validators and, on the main lists, whoever manages them. Those who only see it (a
+        coordinator's team, a director, the call center's leader) never do."""
+
+        if quotation.created_by_id == principal.user_id or await self.can_validate(
+            principal, quotation.kind
+        ):
+            return True
+        # The main lists are one shared board: whoever manages the module edits every list.
+        return quotation.kind == vocabulary.MAIN_LIST and await self.can_manage(
+            principal, quotation.kind
+        )
 
     async def _require_owner_or_validator(
         self, principal: Principal, quotation: Quotation, action: str
     ) -> None:
-        if quotation.created_by_id == principal.user_id or await self.can_validate(
-            principal, quotation.kind
-        ):
-            return
-        # The main lists are one shared board: whoever manages the module edits every list.
-        if quotation.kind == vocabulary.MAIN_LIST and await self.can_manage(
-            principal, quotation.kind
-        ):
-            return
-        raise ForbiddenError(f"Solo quien creó {self._noun(quotation.kind)} puede {action}")
+        if not await self.can_edit(principal, quotation):
+            raise ForbiddenError(f"Solo quien creó {self._noun(quotation.kind)} puede {action}")
 
     async def _require_manager(
         self, principal: Principal, kind: str = vocabulary.QUOTATION
@@ -624,7 +648,10 @@ class QuotationService:
             kind == vocabulary.QUOTATION and can_manage and self.support_requests is not None
         )
         sees_all = await self._sees_all(principal, kind)
-        leads = kind == vocabulary.QUOTATION and await self._led_members(principal) is not None
+        assigned = kind == vocabulary.QUOTATION and (
+            await self._led_members(principal) is not None or self._coordinates(scope)
+        )
+        team_scope = "all" if sees_all else "assigned" if assigned else None
         return Permissions(
             can_manage,
             seller,
@@ -632,7 +659,8 @@ class QuotationService:
             scope.scope if scope is not None else None,
             can_request,
             await self.can_see_rules(principal),
-            can_see_team=sees_all or leads,
+            can_see_team=team_scope is not None,
+            team_scope=team_scope,
         )
 
     async def can_see_rules(self, principal: Principal) -> bool:
@@ -681,6 +709,12 @@ class QuotationService:
     def _restricted(scope: SalesScope | None) -> bool:
         return scope is not None and not scope.is_all
 
+    @staticmethod
+    def _coordinates(scope: SalesScope | None) -> bool:
+        """A coordinator: linked to SIESA supervisor codes, so the scope is their sellers'."""
+
+        return scope is not None and scope.scope == TEAM_SCOPE and bool(scope.codes)
+
     async def _led_members(self, principal: Principal) -> frozenset[UUID] | None:
         """The members of the call center when the caller leads it; ``None`` otherwise."""
 
@@ -699,6 +733,10 @@ class QuotationService:
         if quotation.kind == vocabulary.QUOTATION:
             members = await self._led_members(principal)
             if members is not None and quotation.created_by_id in members:
+                return
+            # A coordinator sees the quotations of their sellers' customers (2026-11-23).
+            scope = await self._scope(principal)
+            if self._coordinates(scope) and scope.allows(quotation.salesperson_code):  # type: ignore[union-attr]
                 return
         # The main lists are one shared board: whoever reads the module sees every list.
         if quotation.kind == vocabulary.MAIN_LIST and await self.can_read(
@@ -1811,14 +1849,23 @@ class QuotationService:
             raise InvalidInputError("Estado desconocido")
         own_only = mine or not await self._sees_all(principal, kind)
         team: frozenset[UUID] | None = None
+        visible_to: tuple[UUID, tuple[str, ...]] | None = None
         if own_only and not mine and kind == vocabulary.QUOTATION:
             # The call center's leader lists the quotations of every member (and its own).
             members = await self._led_members(principal)
             if members is not None:
                 team = members | {principal.user_id}
+            else:
+                # A coordinator: their own and those of their sellers' customers.
+                scope = await self._scope(principal)
+                if self._coordinates(scope):
+                    visible_to = (principal.user_id, tuple(scope.codes or ()))  # type: ignore[union-attr]
         return await self.repository.list(
-            created_by_id=principal.user_id if own_only and team is None else None,
+            created_by_id=(
+                principal.user_id if own_only and team is None and visible_to is None else None
+            ),
             created_by_ids=team,
+            visible_to=visible_to,
             status=status,
             customer_nit=normalize_nit(customer_nit) if customer_nit else None,
             q=q.strip() if q and q.strip() else None,

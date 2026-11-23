@@ -183,6 +183,22 @@ async def test_bi_the_comercial_leader_and_admins_see_everything(world, people) 
     assert (await service.scope_for(moderator)).is_all
 
 
+class Directors:
+    def __init__(self, *emails: str) -> None:
+        self.emails = set(emails)
+
+    async def is_manager(self, who) -> bool:
+        return who.email in self.emails
+
+
+async def test_a_comercial_director_sees_everything(world, people) -> None:
+    service, *_ = world
+    service.directors = Directors(PAULA)
+
+    assert (await service.scope_for(people["paula"])).is_all
+    assert (await service.scope_for(people["ana"])).scope == "mine"
+
+
 async def test_a_supervisor_sees_their_team(world, people) -> None:
     service, *_ = world
     await service.link(people["admin"], LUIS, "supervisor", "S01")
