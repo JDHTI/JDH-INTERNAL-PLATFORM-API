@@ -54,9 +54,18 @@ from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.entries import EntryAnalysisService, EntryCache
+from app.modules.costs.application.increases import IncreaseService
 from app.modules.costs.application.novelties import NoveltyService
 from app.modules.costs.infrastructure.dwh_source import WarehouseEntrySource
+from app.modules.costs.infrastructure.increase_file import (
+    IncreaseWorkbookReader,
+    template_workbook,
+    workbook_name,
+)
+from app.modules.costs.infrastructure.increase_repository import SqlAlchemyIncreaseRepository
+from app.modules.costs.infrastructure.ledger import CommercialIncreaseLedger
 from app.modules.costs.infrastructure.repository import SqlAlchemyNoveltyRepository
+from app.modules.costs.infrastructure.supplier_items import WarehouseSupplierItems
 from app.modules.directory.application.service import DirectoryService
 from app.modules.directory.application.sync import DirectorySyncService
 from app.modules.directory.infrastructure.graph import GraphDirectoryClient
@@ -1044,6 +1053,25 @@ class V1Container(containers.DeclarativeContainer):
         threshold=config.costs.threshold,
         sync_days=config.costs.sync_days,
         start_date=config.costs.start_date,
+    )
+    # The price increases suppliers send («MAESTRA» or the form), approved into the history.
+    cost_increase_service = providers.Factory(
+        IncreaseService,
+        repository=providers.Factory(SqlAlchemyIncreaseRepository, database=database),
+        items=providers.Factory(
+            WarehouseSupplierItems,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            timeout=config.costs.dwh_timeout,
+        ),
+        ledger=providers.Factory(CommercialIncreaseLedger, repository=price_increase_repository),
+        access=cost_access,
+        storage=storage,
+        reader=providers.Singleton(IncreaseWorkbookReader),
+        writer=providers.Object(template_workbook),
+        namer=providers.Object(workbook_name),
+        reasons=cost_novelty_repository.provided.reasons,
+        max_upload_bytes=config.costs.increases_max_upload_bytes,
     )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)

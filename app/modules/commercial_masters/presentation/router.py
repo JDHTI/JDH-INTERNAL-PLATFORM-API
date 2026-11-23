@@ -725,6 +725,9 @@ class PriceIncreaseResponse(BaseModel):
     price: Decimal | None
     notified: bool
     siesa_changed: bool
+    # ``libro`` (the area's workbook) or ``solicitud`` (a supplier's request approved in Costos).
+    source: Literal["libro", "solicitud"]
+    request_line_id: UUID | None
     # No system update date: SIESA does not have it, so the quoter compares its new cost.
     is_pending: bool
     updated_by: str

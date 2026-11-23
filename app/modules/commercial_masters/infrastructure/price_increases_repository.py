@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -70,6 +71,32 @@ class SqlAlchemyPriceIncreaseRepository:
                 )
                 known.update(rows)
         return known
+
+    async def ids_by_key(self, keys: Sequence[str]) -> dict[str, UUID]:
+        """The identifier of each stored row key."""
+
+        found: dict[str, UUID] = {}
+        async with self.database.session_factory() as session:
+            for start in range(0, len(keys), _CHUNK):
+                chunk = list(keys[start : start + _CHUNK])
+                rows = await session.execute(select(P.row_key, P.id).where(P.row_key.in_(chunk)))
+                found.update({key: row_id for key, row_id in rows})
+        return found
+
+    async def list_margins(self, skus: Sequence[str]) -> dict[str, Decimal | None]:
+        """The «Lista 1» margin of the references the product master has."""
+
+        margins: dict[str, Decimal | None] = {}
+        async with self.database.session_factory() as session:
+            for start in range(0, len(skus), _CHUNK):
+                chunk = list(skus[start : start + _CHUNK])
+                rows = await session.execute(
+                    select(ProductModel.sku, ProductModel.margin_list).where(
+                        ProductModel.sku.in_(chunk)
+                    )
+                )
+                margins.update({sku: margin for sku, margin in rows})
+        return margins
 
     async def upsert(self, rows: Sequence[PriceIncreaseValues], actor: str, now: datetime) -> None:
         """Insert new keys and overwrite the values of existing ones, in one transaction."""

@@ -228,6 +228,8 @@ class Settings(BaseSettings):
     # The supplier's credit note: one PDF or picture.
     COSTS_CREDIT_NOTE_MAX_MB: int = 10
     COSTS_CREDIT_NOTE_EXTENSIONS: str = "pdf,png,jpg,jpeg"
+    # Largest «MAESTRA» workbook a supplier may return.
+    COSTS_INCREASES_MAX_UPLOAD_MB: int = 10
 
     # Area whose roles grant `validador-pedidos: manage` (upload, approve, re-run). Empty means
     # every area the catalog lists for the module (BI and Comercial); a slug narrows it to one.
@@ -711,6 +713,7 @@ class Settings(BaseSettings):
                 "start_date": self.COSTS_NOVELTIES_START_DATE,
                 "credit_note_max_bytes": self.COSTS_CREDIT_NOTE_MAX_MB * 1024 * 1024,
                 "credit_note_extensions": _split_lower(self.COSTS_CREDIT_NOTE_EXTENSIONS),
+                "increases_max_upload_bytes": self.COSTS_INCREASES_MAX_UPLOAD_MB * 1024 * 1024,
             },
             "order_validation": {
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,
