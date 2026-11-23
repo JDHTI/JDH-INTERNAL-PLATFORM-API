@@ -15,11 +15,19 @@ definido»**: el libro escribe 0 donde no tiene, y al cargarlo queda vacío.
 | Columna | Hoja `Margen Producto` | Lo aplica el validador a |
 | --- | --- | --- |
 | `margin_list` | Margen Lista 1 | todo canal que no sea mayorista, subdistribuidor ni salsamentarias |
-| `margin_wholesale` | Margen Mayorista | `MAYORISTAS Y DISTRIBUIDORES` y `SUBDISTRIBUIDOR` |
-| `margin_salsamentarias` | Margen Salsamentarias | `SALSAMENTARIAS` |
+| `margin_wholesale` | Margen Mayorista | `MAYORISTAS Y DISTRIBUIDORES`, `SUBDISTRIBUIDOR` y `SALSAMENTARIAS` |
 | `margin_mass_food` | Margen Masivo Food | todavía a ninguno (se carga y se muestra) |
 | `margin_market` | Margen Market Apartadó | todavía a ninguno (se carga y se muestra) |
 | `margin_notes` | Observaciones | texto libre («Aseo 20 %», «Mixes Maquinas 14 %»…) |
+
+**Margen Salsamentarias eliminado (2026-11-23).** Desde el 2026-11-17 los clientes del canal
+`SALSAMENTARIAS` usan el margen Mayoristas, así que la columna `margin_salsamentarias` ya no la leía
+ninguna regla; la migración `0080_drop_salsamentarias_margin` la borra (al revertir vuelve vacía, los
+valores no se recuperan). Mientras la UI se despliega, `PATCH /products/{sku}` y
+`PUT /products/{sku}/margins` aún aceptan `margin_salsamentarias`, pero **se ignora**; las respuestas
+ya no lo traen. Un archivo de márgenes con la columna `Margen Salsamentarias` se lee sin error y esa
+columna se ignora. La familia de listas Salsamentarias (10X, 10R, 10S) del cotizador no cambia: es
+una familia de listas de precios, no un margen.
 
 Además: `margin_source` (`importacion` o `manual`), `margin_updated_by` y `margin_updated_at`, para saber
 de dónde viene el valor y quién lo cambió por última vez.
@@ -98,7 +106,7 @@ Para cambiar muchos márgenes a la vez se sube un archivo `.xlsx` o `.csv` con l
 | Columna | |
 | --- | --- |
 | `Referencia` | referencia JDH (SKU); obligatoria |
-| `Margen Lista 1`, `Margen Mayorista`, `Margen Masivo Food`, `Margen Market Apartadó`, `Margen Salsamentarias` | al menos una; el resto de columnas se ignora |
+| `Margen Lista 1`, `Margen Mayorista`, `Margen Masivo Food`, `Margen Market Apartadó` | al menos una; el resto de columnas se ignora (también `Margen Salsamentarias`, eliminado el 2026-11-23) |
 | `IMPTOLIC` | opcional: impuesto al licor Nacional por unidad; 0 lo quita |
 | `Observaciones` | opcional |
 
@@ -125,9 +133,14 @@ Lectura: cualquier usuario autenticado. Escritura: administradores y miembros de
 
 | Método y ruta | Uso |
 | --- | --- |
-| `GET /products` | Lista de productos con sus márgenes. Filtros: `q`, `brand`, `category`, `commercial_supplier_code`, `is_active`, `has_margin` (con o sin algún margen). Los activos van primero |
+| `GET /products` | Lista de productos con sus márgenes. Filtros: `q`, `brand`, `category`, `commercial_supplier_code`, `is_active`, `has_margin` (con o sin algún margen), `has_consumption_tax` (`true`: paga impuesto al consumo de licores, Nacional o Costa mayor que 0; `false`: los demás). Los activos van primero |
+| `GET /products/options` | Opciones de los filtros: `suppliers` (`code` y `name` de cada proveedor comercial que tiene productos, por nombre y luego código; `name` es `null` si el código no está en el maestro de proveedores) y `categories` (las categorías de los productos, ordenadas). Mismo permiso de lectura que `GET /products` |
 | `GET /products/{sku}` | Un producto con sus márgenes e impuesto |
-| `PATCH /products/{sku}` | Cambia solo los campos enviados: descripción, marca, categoría, empaque…, los cinco márgenes (fracción entre 0 y 1; `null` borra), `margin_notes` e impuesto al licor. El estado y el proveedor no se editan. Un campo desconocido es 422 |
+| `PATCH /products/{sku}` | Cambia solo los campos enviados: descripción, marca, categoría, empaque…, los cuatro márgenes (fracción entre 0 y 1; `null` borra), `margin_notes` e impuesto al licor. El estado y el proveedor no se editan. Un campo desconocido es 422 (`margin_salsamentarias` se acepta y se ignora) |
+
+Cada producto trae además `commercial_supplier_name` (el nombre del proveedor comercial de
+`commercial_supplier_code`, `null` si no está en el maestro) y `vat_pct` (el IVA de venta del producto en
+puntos, 19 = 19 %, la misma unidad del `vat_pct` de una línea del cotizador).
 | `PUT /products/{sku}/margins` | Actualización manual de un producto, sin archivo. Ver abajo |
 | `POST /products/margins` | Actualizador (`multipart/form-data`, campo `file`; `apply=true` para escribir; `sheet`) |
 | `GET /products/margins/template` | Plantilla `.xlsx`; `with_data=false` la trae vacía |
@@ -142,14 +155,14 @@ Para corregir uno o dos productos sin armar un archivo. Todos los campos son obl
   "margin_wholesale": 0.12,
   "margin_mass_food": 0.15,
   "margin_market": 0.20,
-  "margin_salsamentarias": 0.10,
   "notes": "Revisado con compras",
   "liquor_tax": {"national": 1200, "coast": 1350, "group": "0509"}
 }
 ```
 
-- **Márgenes.** Los cinco, como fracción entre 0 y 1 (`0.18` = 18 %). Ninguno puede ir vacío ni en 0;
-  para dejar un producto sin margen está el `PATCH` o el archivo.
+- **Márgenes.** Los cuatro, como fracción entre 0 y 1 (`0.18` = 18 %). Ninguno puede ir vacío ni en 0;
+  para dejar un producto sin margen está el `PATCH` o el archivo. `margin_salsamentarias` está
+  deprecado: se acepta y se ignora.
 - **`notes`.** Se envía siempre; `null` o vacío las borra.
 - **`liquor_tax`.** Se envía siempre. `null` si el producto no paga impuesto al licor. Si el producto ya lo
   paga (tiene Nacional, Costa o grupo guardados) es obligatorio, con los tres valores: Nacional y Costa

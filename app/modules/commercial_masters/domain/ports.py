@@ -18,6 +18,7 @@ from app.modules.commercial_masters.domain.entities import (
     LegalSupplier,
     Page,
     Product,
+    ProductFilterOptions,
     ProductRef,
     SupplierProductCode,
     TargetMargin,
@@ -129,7 +130,11 @@ class CommercialMasterRepository(Protocol):
         page: int,
         size: int,
         has_margin: bool | None = None,
+        *,
+        has_consumption_tax: bool | None = None,
     ) -> Page[Product]: ...
+
+    async def product_options(self) -> ProductFilterOptions: ...
 
     async def get_product(self, sku: str) -> Product | None: ...
 

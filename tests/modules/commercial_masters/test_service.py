@@ -16,7 +16,9 @@ from app.modules.commercial_masters.domain.entities import (
     CommercialSupplier,
     Page,
     Product,
+    ProductFilterOptions,
     ProductMargins,
+    ProductSupplierOption,
 )
 from app.modules.commercial_masters.domain.margins import MarginRow
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
@@ -77,12 +79,38 @@ class Repo:
         return Page([], 0, page, size)
 
     async def list_products(
-        self, query, brand, category, supplier, is_active, page, size, has_margin=None
+        self,
+        query,
+        brand,
+        category,
+        supplier,
+        is_active,
+        page,
+        size,
+        has_margin=None,
+        *,
+        has_consumption_tax=None,
     ):
         self.calls.append(
-            ("products", query, brand, category, supplier, is_active, page, size, has_margin)
+            (
+                "products",
+                query,
+                brand,
+                category,
+                supplier,
+                is_active,
+                page,
+                size,
+                has_margin,
+                has_consumption_tax,
+            )
         )
         return Page(list(self.products.values()), len(self.products), page, size)
+
+    async def product_options(self):
+        return ProductFilterOptions(
+            suppliers=[ProductSupplierOption("233", "FAMILIA SANCELA")], categories=["ASEO"]
+        )
 
     async def get_commercial_supplier(self, code):
         return self.supplier if code == "233" else None
@@ -163,7 +191,24 @@ async def test_active_and_margin_filters_reach_the_repository(service, repo) -> 
     await service.list_products(None, None, None, None, True, 1, 50, False)
 
     assert repo.calls[0] == ("legal", "x", None, False, 1, 50)
-    assert repo.calls[1][5] is True and repo.calls[1][-1] is False
+    assert repo.calls[1][5] is True and repo.calls[1][8] is False
+    assert repo.calls[1][9] is None
+
+
+async def test_the_consumption_tax_filter_reaches_the_repository(service, repo) -> None:
+    await service.list_products(None, None, " LICORES ", " 233 ", None, 1, 50)
+    await service.list_products(None, None, None, None, None, 1, 50, has_consumption_tax=True)
+    await service.list_products(None, None, None, None, None, 1, 50, has_consumption_tax=False)
+
+    assert repo.calls[0][3:5] == ("LICORES", "233") and repo.calls[0][9] is None
+    assert repo.calls[1][9] is True and repo.calls[2][9] is False
+
+
+async def test_the_product_options_come_from_the_repository(service) -> None:
+    options = await service.product_options()
+
+    assert options.suppliers == [ProductSupplierOption("233", "FAMILIA SANCELA")]
+    assert options.categories == ["ASEO"]
 
 
 async def test_unknown_commercial_supplier_is_not_found(service) -> None:
@@ -247,27 +292,26 @@ async def test_warehouse_fields_are_not_editable(service) -> None:
         await service.get_product("0")
 
 
-FIVE = {
+FOUR = {
     "margin_list": D("0.18"),
     "margin_wholesale": D("0.12"),
     "margin_mass_food": D("0.15"),
     "margin_market": D("0.2"),
-    "margin_salsamentarias": D("0.1"),
 }
 
 
 async def test_setting_the_margins_of_one_product_by_hand(service, repo) -> None:
     with pytest.raises(ForbiddenError):
-        await service.set_product_margins(principal(), "7244", FIVE, None, None)
+        await service.set_product_margins(principal(), "7244", FOUR, None, None)
 
     updated = await service.set_product_margins(
-        principal(admin=True), " 7244 ", FIVE, "  Revisado   con compras ", None
+        principal(admin=True), " 7244 ", FOUR, "  Revisado   con compras ", None
     )
 
     assert repo.calls[-1] == (
         "update_product",
         "7244",
-        {**FIVE, "margin_notes": "Revisado con compras"},
+        {**FOUR, "margin_notes": "Revisado con compras"},
         "ana@jdh.com.co",
     )
     assert updated.margins.market == D("0.2") and updated.margins.source == "manual"
@@ -278,14 +322,14 @@ async def test_the_employee_margin_is_optional_and_does_not_count_as_a_margin(
 ) -> None:
     admin = principal(admin=True)
 
-    await service.set_product_margins(admin, "7244", FIVE, None, None)
+    await service.set_product_margins(admin, "7244", FOUR, None, None)
     assert "margin_employee" not in repo.calls[-1][2]
     await service.set_product_margins(
-        admin, "7244", FIVE, None, None, employee_margin=D("0.1500004")
+        admin, "7244", FOUR, None, None, employee_margin=D("0.1500004")
     )
     assert repo.calls[-1][2]["margin_employee"] == D("0.150000")
     with pytest.raises(InvalidInputError, match="Margen Empleado JDH"):
-        await service.set_product_margins(admin, "7244", FIVE, None, None, employee_margin=D("1"))
+        await service.set_product_margins(admin, "7244", FOUR, None, None, employee_margin=D("1"))
 
     updated = await service.update_product(admin, "1569", {"margin_employee": D("0.13")})
     assert updated.margins.employee == D("0.13") and updated.margins.defined is False
@@ -295,19 +339,19 @@ async def test_the_employee_margin_is_optional_and_does_not_count_as_a_margin(
 
 async def test_every_margin_is_required_and_a_fraction(service) -> None:
     admin = principal(admin=True)
-    partial = {k: v for k, v in FIVE.items() if k != "margin_market"}
+    partial = {k: v for k, v in FOUR.items() if k != "margin_market"}
 
     with pytest.raises(InvalidInputError, match="Faltan márgenes: Margen Market Apartadó"):
         await service.set_product_margins(admin, "7244", partial, None, None)
     with pytest.raises(InvalidInputError, match="Faltan"):
-        await service.set_product_margins(admin, "7244", {**FIVE, "margin_list": None}, None, None)
+        await service.set_product_margins(admin, "7244", {**FOUR, "margin_list": None}, None, None)
     for bad in (D("0"), D("1"), D("18")):
         with pytest.raises(InvalidInputError, match="entre 0 y 1"):
             await service.set_product_margins(
-                admin, "7244", {**FIVE, "margin_wholesale": bad}, None, None
+                admin, "7244", {**FOUR, "margin_wholesale": bad}, None, None
             )
     with pytest.raises(NotFoundError):
-        await service.set_product_margins(admin, "0", FIVE, None, None)
+        await service.set_product_margins(admin, "0", FOUR, None, None)
 
 
 async def test_the_liquor_tax_stays_with_the_products_that_pay_it(service, repo) -> None:
@@ -317,13 +361,13 @@ async def test_the_liquor_tax_stays_with_the_products_that_pay_it(service, repo)
     )
 
     with pytest.raises(InvalidInputError, match="paga impuesto licor"):
-        await service.set_product_margins(admin, "9001", FIVE, None, None)
+        await service.set_product_margins(admin, "9001", FOUR, None, None)
 
     await service.set_product_margins(
-        admin, "9001", FIVE, None, LiquorTax(D("1250.12345"), D("1400"), " 0509 ")
+        admin, "9001", FOUR, None, LiquorTax(D("1250.12345"), D("1400"), " 0509 ")
     )
     assert repo.calls[-1][2] == {
-        **FIVE,
+        **FOUR,
         "margin_notes": None,
         "liquor_tax": D("1250.1235"),
         "liquor_tax_coast": D("1400.0000"),
@@ -331,13 +375,13 @@ async def test_the_liquor_tax_stays_with_the_products_that_pay_it(service, repo)
     }
 
     # A product that did not pay it may start paying it; the group is required.
-    await service.set_product_margins(admin, "1569", FIVE, None, LiquorTax(D("0"), D("0"), "0503"))
+    await service.set_product_margins(admin, "1569", FOUR, None, LiquorTax(D("0"), D("0"), "0503"))
     assert repo.calls[-1][2]["liquor_tax_group"] == "0503"
     with pytest.raises(InvalidInputError, match="grupo impositivo"):
-        await service.set_product_margins(admin, "1569", FIVE, None, LiquorTax(D("1"), D("1"), " "))
+        await service.set_product_margins(admin, "1569", FOUR, None, LiquorTax(D("1"), D("1"), " "))
     with pytest.raises(InvalidInputError, match="negativo"):
         await service.set_product_margins(
-            admin, "1569", FIVE, None, LiquorTax(D("-1"), D("1"), "0503")
+            admin, "1569", FOUR, None, LiquorTax(D("-1"), D("1"), "0503")
         )
 
 

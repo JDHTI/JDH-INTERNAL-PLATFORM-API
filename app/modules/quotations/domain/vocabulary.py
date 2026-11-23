@@ -190,7 +190,6 @@ SALES_NOT_READ = "ultima_venta_no_leida"
 BASIS_LABELS = {
     "lista": "Margen Food Service",
     "mayoristas": "Margen Mayoristas",
-    "salsamentarias": "Margen Salsamentarias",
     "masivo_food": "Margen Masivo Food",
     "market": "Margen Market Apartadó",
     "apoyo": "Objetivo del apoyo",

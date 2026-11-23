@@ -196,7 +196,6 @@ class ProductModel(Base):
     margin_wholesale: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     margin_mass_food: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     margin_market: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
-    margin_salsamentarias: Mapped[Decimal | None] = mapped_column(Numeric(8, 6))
     # Margin of the JDH employee price list (MDE1 cost); 13 % for every product by default.
     margin_employee: Mapped[Decimal | None] = mapped_column(
         Numeric(8, 6), server_default=text("0.130000")

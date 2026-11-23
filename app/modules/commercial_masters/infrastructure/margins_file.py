@@ -49,8 +49,10 @@ _MARGIN_HEADERS: dict[str, str] = {
     "margen mayoristas": "margin_wholesale",
     "margen masivo food": "margin_mass_food",
     "margen market apartado": "margin_market",
-    "margen salsamentarias": "margin_salsamentarias",
 }
+# The Salsamentarias margin was removed on 2026-11-23 (those customers use the Mayoristas
+# margin). Older files still carry the column «Margen Salsamentarias»: being no margin header,
+# it is ignored like any other unknown column.
 # Liquor tax columns a margin sheet may carry next to the margins.
 _ROW_TAX_HEADERS: dict[str, str] = {
     "imptolic": "liquor_tax",
@@ -397,7 +399,6 @@ def template_workbook(products: Sequence[Product]) -> bytes:
                         margins.wholesale,
                         margins.mass_food,
                         margins.market,
-                        margins.salsamentarias,
                     )
                 ),
                 margins.notes,

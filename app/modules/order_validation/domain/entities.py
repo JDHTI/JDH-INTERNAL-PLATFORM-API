@@ -181,7 +181,7 @@ class LineResult:
     effective_margin_pct: Decimal | None = None
     required_margin_pct: Decimal | None = None
     checks: tuple[AgreementCheck, ...] = ()
-    # Which product margin the line was compared with: lista, mayoristas, salsamentarias.
+    # Which product margin the line was compared with: lista, mayoristas, masivo_food or market.
     margin_basis: str | None = None
     # The product has liquor tax and the order may have been keyed without it.
     liquor_tax: bool = False

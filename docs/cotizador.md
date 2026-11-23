@@ -179,7 +179,8 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
       (`consumo.vendedores.clase_equipo`, copiado al maestro de clientes como
       `sales_team_class`).
    3. **Mayoristas**: canal `MAYORISTAS Y DISTRIBUIDORES`, `SUBDISTRIBUIDOR` o `SALSAMENTARIAS`.
-      El margen Salsamentarias del maestro ya no se aplica.
+      El margen Salsamentarias se eliminó del maestro el 2026-11-23: esos clientes usan el margen
+      Mayoristas.
    4. **Food service** (`margin_list`): cualquier otro canal, o sin cliente.
 
    Con varias sucursales decide la mayoría de las activas. Si el producto no tiene margen Masivo

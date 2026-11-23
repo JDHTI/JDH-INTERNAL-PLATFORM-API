@@ -1,5 +1,6 @@
 """HTTP contract of the retained orders validator routes."""
 
+from dataclasses import replace
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -96,6 +97,21 @@ def test_list_get_and_revalidate(client) -> None:
     assert again.status_code == 200 and again.json()["order_count"] == 2
     missing = client.get(f"{BASE}/00000000-0000-0000-0000-000000000000")
     assert missing.status_code == 404
+
+
+def test_a_line_stored_with_the_removed_salsamentarias_basis_shows_none(client, batches) -> None:
+    batch = upload(client).json()
+    batch_id = next(iter(batches.lines_by_batch))
+    batches.lines_by_batch[batch_id] = [
+        replace(item, result=replace(item.result, margin_basis="salsamentarias"))
+        for item in batches.lines_by_batch[batch_id]
+    ]
+
+    response = client.get(f"{BASE}/{batch['id']}/orders")
+
+    assert response.status_code == 200
+    lines = [line for order in response.json()["items"] for line in order["lines"]]
+    assert lines and all(line["margin_basis"] is None for line in lines)
 
 
 def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
