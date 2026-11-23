@@ -522,7 +522,9 @@ async def list_orders(
     q: str | None = Query(default=None, max_length=100),
     operation_center: str | None = Query(default=None, max_length=20),
     margin_threshold_points: Decimal | None = _TRY_THRESHOLD,
-    sort: Literal["attention", "file"] = Query(default="attention"),
+    sort: Literal["attention", "file", "document_asc", "document_desc"] = Query(
+        default="attention"
+    ),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
     _: Principal = _principal,
@@ -531,7 +533,9 @@ async def list_orders(
     """Orders of a file with every line, its decision and the supports checked.
 
     `attention` (default) lists first the orders, and inside each the lines, that have no
-    support, then by margin from lowest to highest; `file` keeps the file order. With
+    support, then by margin from lowest to highest; `file` keeps the file order;
+    `document_asc` / `document_desc` sort by the document number (the sales consecutive) in
+    natural order, numbers as numbers, with documents without a number last. With
     `margin_threshold_points` the statuses and counts come out as if the file had that
     threshold, without saving it; `PUT /{id}/margin-threshold` saves it. `operation_center`
     keeps the orders of one C.O. factura; `operation_centers` lists every one in the file.

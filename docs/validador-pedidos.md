@@ -261,6 +261,16 @@ apoyo** (`sin_acuerdo`), y dentro de cada grupo por **margen del pedido de menor
 (los que no tienen margen, al final). Las líneas de cada pedido se ordenan igual: sin apoyo
 primero y por margen de menor a mayor. `sort=file` conserva el orden del archivo.
 
+`sort=document_asc` y `sort=document_desc` (2026-11-23) ordenan por **consecutivo**, es decir,
+por el número de documento:
+- El orden es natural: los números se comparan como números (PV-9 antes que PV-10), sin
+  distinguir mayúsculas y sin importar los ceros a la izquierda.
+- Los documentos leídos sin número («(sin documento, fila N)») van al final en los dos
+  sentidos.
+- Un empate conserva el orden del archivo, y las líneas de cada pedido quedan como en el
+  archivo.
+- El orden se hace en el servidor, antes de paginar. La UI guarda la elección en el navegador.
+
 ## Marcar como liberado
 
 Quien gestiona marca pedidos como **liberados** (`liberado`), por selección y en bloque,
