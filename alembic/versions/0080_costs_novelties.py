@@ -21,7 +21,10 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0080_costs_novelties"
-down_revision: str | Sequence[str] | None = "0079_call_center_and_deletions"
+# Chained after the Salsamentarias migration (2026-11-23): both were written on 0079 and the
+# other one reached production first (API #109/#111). The id stays so the migrations already
+# written on top of this one keep their chain.
+down_revision: str | Sequence[str] | None = "0080_drop_salsamentarias_margin"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
