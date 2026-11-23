@@ -167,7 +167,7 @@ Desde el 2026-11-23 el acumulado también es una vista de Costos (Abastecimiento
 `maestros` en BI. Las alzas que aprueba la vista «Alzas de proveedor» llegan aquí solas; ver
 [`costos.md`](costos.md).
 
-Cada fila dice de dónde vino (`source`, migración `0081`):
+Cada fila dice de dónde vino (`source`, migración `0082`):
 - `libro`: la carga de este libro. Es lo que tienen todas las filas anteriores.
 - `solicitud`: una solicitud de proveedor aprobada en Costos. Trae `request_line_id`, está
   notificada y queda sin fecha de SIESA.

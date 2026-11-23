@@ -88,7 +88,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 
 `/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,
 `validador-pedidos` y las cuatro claves de Costos, porque esas pantallas buscan proveedores y
-productos. El área Abastecimiento la crea la migración `0080` con tres roles: «Líder de área»
+productos. El área Abastecimiento la crea la migración `0081` con tres roles: «Líder de área»
 (`*`), «Analista de costos» (las cuatro claves) y «Comprador» (`novedades-compras`).
 
 `/quotations/*` lo abren `cotizador`, `actualizacion-listas` y `listas-principales`: comparten

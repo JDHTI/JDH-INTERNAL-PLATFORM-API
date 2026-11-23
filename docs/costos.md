@@ -16,7 +16,7 @@ clave de permiso:
 | Alzas de proveedor | `alzas-proveedor` | solicitudes y plantilla | cargar, crear, editar, aprobar, rechazar |
 | Acumulado de alzas | `acumulado-alzas` | histórico y análisis (`/commercial/price-increases`) | fecha de SIESA y carga del libro |
 
-La migración `0080` crea el área con tres roles:
+La migración `0081` crea el área con tres roles:
 - «Líder de área»: `*`.
 - «Analista de costos»: las cuatro claves.
 - «Comprador»: `novedades-compras`. Equivale al rol COMPRADOR del aplicativo anterior, que
@@ -25,7 +25,7 @@ La migración `0080` crea el área con tres roles:
 `GET /costs/permissions` dice qué puede hacer la persona en cada vista. No exige permiso:
 quien no tiene acceso recibe `false`, no un 403.
 
-Código: `app/modules/costs/`. Tablas: migración `0080_costs_novelties`.
+Código: `app/modules/costs/`. Tablas: migración `0081_costs_novelties`.
 
 ## Análisis de entradas
 
@@ -196,7 +196,7 @@ aprueba o la rechaza.
 
 Código: `application/increases.py`, `infrastructure/increase_file.py` (plantilla y lector),
 `infrastructure/supplier_items.py` (DWH) y `infrastructure/ledger.py` (paso al acumulado).
-Tablas: migración `0081_costs_increase_requests`.
+Tablas: migración `0082_costs_increase_requests`.
 
 ### La plantilla MAESTRA
 
