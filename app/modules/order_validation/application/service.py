@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace
@@ -36,7 +37,29 @@ MAX_PAGE_SIZE = 200
 MAX_NOTE_LENGTH = 500
 MAX_APPROVALS = 1000
 MAX_THRESHOLD_POINTS = Decimal(20)
-SORTS = ("attention", "file")
+SORTS = ("attention", "file", "document_asc", "document_desc")
+# The document number of a line read without one (``order_file``): it sorts last.
+_NO_DOCUMENT = "(sin documento"
+_DIGITS = re.compile(r"(\d+)")
+
+
+def document_key(document: str) -> tuple[tuple[int, str], ...]:
+    """Natural order of a document number (the sales consecutive): its digits compare as
+    numbers, so ``PV-9`` goes before ``PV-10`` (2026-11-23). Case is ignored."""
+
+    parts = _DIGITS.split(document.strip().casefold())
+    return tuple((1, part.zfill(30)) if part.isdigit() else (0, part) for part in parts if part)
+
+
+def _by_document(orders: list[OrderView], descending: bool) -> list[OrderView]:
+    """Orders by document number, ascending or descending; the ones read without a number go
+    last either way, and a tie keeps the file order."""
+
+    numbered = [order for order in orders if not order.document.startswith(_NO_DOCUMENT)]
+    unnumbered = [order for order in orders if order.document.startswith(_NO_DOCUMENT)]
+    by_file = sorted(numbered, key=lambda order: order.first.row_number)
+    ordered = sorted(by_file, key=lambda order: document_key(order.document), reverse=descending)
+    return ordered + unnumbered
 
 
 def _matches(order: OrderView, term: str) -> bool:
@@ -487,6 +510,8 @@ class OrderValidationService:
             orders = [order for order in orders if order.status == status]
         if sort == "attention":
             orders = [_attention_lines(order) for order in sorted(orders, key=_order_key)]
+        elif sort in ("document_asc", "document_desc"):
+            orders = _by_document(orders, descending=sort == "document_desc")
         start = (page - 1) * size
         return OrderPage(
             items=orders[start : start + size],
