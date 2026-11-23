@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,13 @@ from fastapi.testclient import TestClient
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
-from app.modules.order_validation.domain.entities import ProductInfo
+from app.modules.order_validation.application.service import _by_document, document_key
+from app.modules.order_validation.domain.entities import (
+    OrderLine,
+    OrderView,
+    ProductInfo,
+    StoredLine,
+)
 from tests.modules.order_validation.conftest import MANAGER, agreement
 from tests.modules.order_validation.test_service import report
 from tests.modules.supplier_supports.conftest import person
@@ -191,6 +198,34 @@ def test_orders_carry_the_margin_flag_and_sort(client, source) -> None:
     in_file = client.get(url, params={"sort": "file"}).json()["items"]
     assert [item["document"] for item in in_file] == ["PV-1", "PV-2"]
     assert client.get(url, params={"sort": "margen"}).status_code == 422
+    # The sales consecutive, ascending or descending (2026-11-23).
+    ascending = client.get(url, params={"sort": "document_asc"}).json()["items"]
+    descending = client.get(url, params={"sort": "document_desc"}).json()["items"]
+    assert [item["document"] for item in ascending] == ["PV-1", "PV-2"]
+    assert [item["document"] for item in descending] == ["PV-2", "PV-1"]
+
+
+def test_documents_sort_in_natural_order_with_the_ones_without_number_last() -> None:
+    documents = ["PV-10", "pv-9", "PV-100", "(sin documento, fila 4)", "PV-9A", "FV-2"]
+    orders = [
+        OrderView(document=item, status="pendiente_validacion", lines=[_stored(row)])
+        for row, item in enumerate(documents, start=2)
+    ]
+
+    ascending = [order.document for order in _by_document(orders, descending=False)]
+    descending = [order.document for order in _by_document(orders, descending=True)]
+
+    assert ascending == ["FV-2", "pv-9", "PV-9A", "PV-10", "PV-100", "(sin documento, fila 4)"]
+    assert descending == ["PV-100", "PV-10", "PV-9A", "pv-9", "FV-2", "(sin documento, fila 4)"]
+    assert document_key("PV-0009") == document_key("pv-9")
+
+
+def _stored(row: int) -> StoredLine:
+    return StoredLine(
+        id=uuid4(),
+        line=OrderLine(row_number=row, document="", customer_nit="1", sku="1"),
+        result=None,  # type: ignore[arg-type]
+    )
 
 
 def test_threshold_on_upload_try_save_and_revalidate(client, source) -> None:
