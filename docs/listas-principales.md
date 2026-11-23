@@ -35,6 +35,16 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   chip: revisión (`sin_marcar`, `por_validar`, `validada`, `cargada`) o margen (`alza`, `objetivo`,
   `encima`, `alerta`, con ±0,5 puntos). Cada chip trae cuántas filas mostraría con los demás
   filtros; `todos`, el total.
+- **Reglas del 2026-11-23:**
+  - **Solo lo que tiene existencia:** una fila que la sincronización leyó en 0 no aparece en el
+    tablero, ni en los conteos ni en «todas las filas del filtro». Una cuyo inventario no se leyó
+    (`null`, por ejemplo con el DWH caído) sí aparece.
+  - **«Alza» solo desde el 1 %:** una fila bajo el objetivo cuenta como `alza` solo si su precio
+    debe subir al menos 1 % sobre el actual (el precio nuevo elegido o, si no hay, el óptimo).
+    Si sube menos, cuenta como `objetivo`.
+  - **Fecha del alza:** cada fila trae `increase_on`, la fecha de la última alza de precio del
+    proveedor para ese SKU (cuándo rige, o cuándo se notificó), si tiene una
+    ([alzas-precios.md](alzas-precios.md)).
 - **Acciones sobre filas de cualquier lista:** precio nuevo por fila, precio óptimo, mínimo o
   limpiar sobre la selección, el estado de revisión (en la UI se cambia fila por fila, en el chip
   de cada una o en su detalle) y la observación. Cada una va a la actualización de su lista, en la

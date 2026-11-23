@@ -17,6 +17,18 @@ Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`
   apoyo para todos. Es una solicitud interna desde la línea de la cotización (`kind =
   proveedor`, ver abajo).
 
+## Eliminar solicitudes (2026-11-23)
+
+- **Rutas:**
+  - `POST /supplier-support-requests/delete {ids}` (JDH): borra la solicitud con su historial.
+  - `POST /internal-support-requests/delete {ids}` (internas): borra la solicitud con sus ítems.
+- **Alcance:** de 1 a 500 por llamada, pendientes o decididas, todo o nada. Responde 404 si una
+  no existe.
+- **Lo ya aprobado se queda:** el margen que se escribió en el apoyo y los apoyos que creó una
+  aprobación siguen; estos últimos quedan sin el vínculo a la solicitud.
+- **Quién:** solo el líder del área de apoyos (BI) o su responsable, y los administradores de la
+  plataforma. `can_delete` en `GET /supplier-supports/permissions`.
+
 ## Solicitud de margen proveedor (% Margen Garantizado)
 
 Un % Margen Garantizado trae el margen garantizado (18 %) y el margen mínimo del proveedor

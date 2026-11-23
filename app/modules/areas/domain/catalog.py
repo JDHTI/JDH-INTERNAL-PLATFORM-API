@@ -81,7 +81,7 @@ MODULES: tuple[Module, ...] = (
         ("calidad",),
         "Acciones correctivas, preventivas y de mejora del SIG (P.04.F.02)",
     ),
-    Module("cotizador", "Cotizador", ("comercial", "bi"), "Cotizaciones a clientes"),
+    Module("cotizador", "Cotizador", ("comercial", "bi", "call-center"), "Cotizaciones a clientes"),
     Module(
         "actualizacion-listas",
         "Actualización de listas",

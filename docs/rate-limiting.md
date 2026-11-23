@@ -208,6 +208,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/dwh-publish/retry` | `relaxed` |  |
 | `GET` | `/v1/internal-support-requests` | `read` |  |
 | `POST` | `/v1/internal-support-requests` | `relaxed` |  |
+| `POST` | `/v1/internal-support-requests/delete` | `relaxed` |  |
 | `GET` | `/v1/internal-support-requests/target-margins` | `read` |  |
 | `GET` | `/v1/internal-support-requests/{request_id}` | `read` |  |
 | `POST` | `/v1/internal-support-requests/{request_id}/approve` | `relaxed` |  |
@@ -397,6 +398,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/supplier-support-profiles/{supplier_code}` | `read` |  |
 | `PUT` | `/v1/supplier-support-profiles/{supplier_code}` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-requests` | `read` |  |
+| `POST` | `/v1/supplier-support-requests/delete` | `relaxed` |  |
 | `GET` | `/v1/supplier-support-requests/{request_id}` | `read` |  |
 | `POST` | `/v1/supplier-support-requests/{request_id}/approve` | `relaxed` |  |
 | `POST` | `/v1/supplier-support-requests/{request_id}/reject` | `relaxed` |  |
@@ -412,6 +414,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/supplier-supports/business-groups` | `read` |  |
 | `POST` | `/v1/supplier-supports/by-group` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/catalogs` | `read` |  |
+| `POST` | `/v1/supplier-supports/delete` | `relaxed` |  |
 | `GET` | `/v1/supplier-supports/form-schema` | `read` |  |
 | `GET` | `/v1/supplier-supports/permissions` | `read` |  |
 | `POST` | `/v1/supplier-supports/preview` | `relaxed` |  |

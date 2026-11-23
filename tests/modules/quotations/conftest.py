@@ -367,6 +367,10 @@ class FakeMasters:
     async def pending_increases(self, skus):
         return {sku: self.increases[sku] for sku in skus if sku in self.increases}
 
+    async def increase_dates(self, skus):
+        dates = getattr(self, "increase_on", {})
+        return {sku: dates[sku] for sku in skus if sku in dates}
+
     async def customers(self, seller_codes, q, page, size):
         items = [
             item
@@ -461,6 +465,7 @@ class FakeRepository:
         size,
         visible_to=None,
         kind="cotizacion",
+        created_by_ids=None,
     ):
         items = [
             detail.quotation
@@ -472,6 +477,7 @@ class FakeRepository:
                 or detail.quotation.salesperson_code in visible_to[1]
             )
             and (created_by_id is None or detail.quotation.created_by_id == created_by_id)
+            and (created_by_ids is None or detail.quotation.created_by_id in created_by_ids)
             and (status is None or detail.quotation.status == status)
             and (customer_nit is None or detail.quotation.customer_nit == customer_nit)
         ]
@@ -515,6 +521,19 @@ class FakeRepository:
 
     async def delete(self, quotation_id):
         return self.items.pop(quotation_id, None) is not None
+
+    async def delete_stale_drafts(self, created_before):
+        stale = [
+            key
+            for key, detail in self.items.items()
+            if detail.quotation.kind == "cotizacion"
+            and detail.quotation.status == "borrador"
+            and detail.quotation.confirmed_at is None
+            and detail.quotation.created_at < created_before
+        ]
+        for key in stale:
+            del self.items[key]
+        return stale
 
     async def reserved_list_ids(self):
         return sorted(

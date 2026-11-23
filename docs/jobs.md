@@ -47,8 +47,12 @@ El registro está en `app/modules/jobs/domain/registry.py` y el trabajo de cada 
   solo en los días en que corre su secuencia.
 - **A hora fija (`scheduled`).** Una tarea sin secuencia y con hora (`at` en el registro y en
   `GET /jobs`) corre todos los días a esa hora local. Si la API arranca después de esa hora y la
-  tarea no ha corrido desde entonces, corre al arrancar. Hoy solo `supplier-supports-rollover`, a
-  las 00:05.
+  tarea no ha corrido desde entonces, corre al arrancar. Hoy son dos:
+  - `supplier-supports-rollover`, a las 00:05;
+  - `quotations-stale-drafts`, a las 00:15 (2026-11-23): borra por completo las cotizaciones de
+    cliente en borrador que nunca se enviaron a validación (`confirmed_at` vacío) y tienen más de
+    30 días de creadas. Una que se envió y volvió a borrador no se borra. Las actualizaciones de
+    lista nunca entran.
 - **Al arrancar (`startup`).** Cierra como fallidas las corridas que un proceso detenido dejó abiertas,
   y corre lo que tenga datos más frescos que su último éxito.
 - **A mano (`manual`).** `POST /jobs/{key}/run`.

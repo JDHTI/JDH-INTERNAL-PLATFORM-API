@@ -62,6 +62,14 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | calidad | `planes-accion` | toda la matriz P.04, indicadores y exportación a Excel | crear acciones (a mano o desde un caso), correcciones, causas, plan, calificar eficacia, nuevo intento, procedencias. Sin el módulo, un responsable ve sus acciones, marca sus filas y sube evidencias |
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
+| call-center | `cotizador` | sus cotizaciones (el líder, las de todo el área); cualquier cliente | cotizar a cualquier cliente (rol «Operador call center», 2026-11-23) |
+
+**Eliminar para siempre** (2026-11-23):
+- **Qué incluye:** borrado masivo de apoyos y borrado de solicitudes de apoyo (JDH e internas).
+- **Quién:** solo el **líder del área de apoyos** (BI: su rol líder o su responsable) y los
+  **administradores de la plataforma** (owner, admin). No lo da ningún permiso de módulo, ni
+  siquiera `*` manage; el moderador tampoco.
+- **Dónde está:** `AreaLeaderPolicy` en `areas/infrastructure/policies.py`.
 | bi | `actualizacion-listas` | actualizaciones de listas, búsqueda de listas, staging y cargas | crear y editar actualizaciones de cualquier lista **salvo las principales** y marcar ítems «Por validar». Desde un rol de BI (`QUOTATIONS_APPROVER_AREA_SLUG`): validar ítems, descargar el staging y marcarlo cargado |
 | bi (bloqueado) | `listas-principales` | el tablero de las listas principales (`LIST_UPDATES_MAIN_LISTS`), staging, cargas e impuesto licor | armar y refrescar las listas, poner precios en cualquiera de ellas y marcar ítems «Por validar» |
 | bi (bloqueado) | `validacion-listas` | — (no tiene pantalla) | validar los ítems de las listas principales, descargar el staging y marcarlo cargado (analistas y líder de BI) |

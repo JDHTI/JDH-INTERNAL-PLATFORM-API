@@ -10,7 +10,11 @@ from fastapi.testclient import TestClient
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
-from app.modules.order_validation.application.service import _by_document, document_key
+from app.modules.order_validation.application.service import (
+    _by_document,
+    _same_number,
+    document_key,
+)
 from app.modules.order_validation.domain.entities import (
     OrderLine,
     OrderView,
@@ -215,9 +219,12 @@ def test_documents_sort_in_natural_order_with_the_ones_without_number_last() -> 
     ascending = [order.document for order in _by_document(orders, descending=False)]
     descending = [order.document for order in _by_document(orders, descending=True)]
 
+    # By the PV number, whatever the prefix (2026-11-23): FV-2 and pv-9 before PV-10.
     assert ascending == ["FV-2", "pv-9", "PV-9A", "PV-10", "PV-100", "(sin documento, fila 4)"]
     assert descending == ["PV-100", "PV-10", "PV-9A", "pv-9", "FV-2", "(sin documento, fila 4)"]
     assert document_key("PV-0009") == document_key("pv-9")
+    assert document_key("PV-02592133")[0] == 2592133
+    assert _same_number("PV-02592133", "2592133") and not _same_number("PV-02592133", "259")
 
 
 def _stored(row: int) -> StoredLine:

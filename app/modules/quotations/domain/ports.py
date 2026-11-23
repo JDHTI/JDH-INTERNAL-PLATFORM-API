@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from datetime import date
+from collections.abc import Collection, Mapping, Sequence
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
@@ -114,6 +114,8 @@ class MasterSource(Protocol):
 
     async def pending_increases(self, skus: Sequence[str]) -> dict[str, Decimal]: ...
 
+    async def increase_dates(self, skus: Sequence[str]) -> dict[str, date]: ...
+
     async def customers(
         self, seller_codes: Sequence[str] | None, q: str | None, page: int, size: int
     ) -> CustomerPage: ...
@@ -163,6 +165,7 @@ class QuotationRepository(Protocol):
         size: int,
         visible_to: tuple[UUID, Sequence[str]] | None = None,
         kind: str = "cotizacion",
+        created_by_ids: Collection[UUID] | None = None,
     ) -> QuotationPage: ...
 
     async def save(
@@ -186,6 +189,10 @@ class QuotationRepository(Protocol):
     ) -> None: ...
 
     async def delete(self, quotation_id: UUID) -> bool: ...
+
+    async def delete_stale_drafts(self, created_before: datetime) -> list[UUID]:
+        """Delete the customer drafts never sent to validation created before that moment."""
+        ...
 
     async def reserved_list_ids(self) -> list[str]:
         """Codes of the new lists already validated (pending load or loaded): SIESA may not
@@ -254,6 +261,14 @@ class SalesScopeResolver(Protocol):
     """Decides each person's sales scope from their role and salesperson links."""
 
     async def scope_for(self, principal: Principal) -> SalesScope: ...
+
+
+class TeamLookup(Protocol):
+    """The call center (2026-11-23): who its leader sees."""
+
+    async def led_members(self, principal: Principal) -> frozenset[UUID] | None:
+        """The members of the area when the caller leads it; ``None`` otherwise."""
+        ...
 
 
 class ManagerPolicy(Protocol):

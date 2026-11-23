@@ -264,8 +264,10 @@ primero y por margen de menor a mayor. `sort=file` conserva el orden del archivo
 
 `sort=document_asc` y `sort=document_desc` (2026-11-23) ordenan por **consecutivo**, es decir,
 por el número de documento:
-- El orden es natural: los números se comparan como números (PV-9 antes que PV-10), sin
-  distinguir mayúsculas y sin importar los ceros a la izquierda.
+- La llave es el **número del PV**: `PV-02592133` es 2592133, sin importar el prefijo ni los
+  ceros a la izquierda; los números se comparan como números (PV-9 antes que PV-10). Un empate
+  se resuelve con el orden natural del texto completo.
+- La búsqueda (`q`) con solo el número (`2592133`) encuentra ese pedido.
 - Los documentos leídos sin número («(sin documento, fila N)») van al final en los dos
   sentidos.
 - Un empate conserva el orden del archivo, y las líneas de cada pedido quedan como en el

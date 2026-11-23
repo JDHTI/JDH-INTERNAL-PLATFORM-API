@@ -151,6 +151,18 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 
 - `POST /supplier-supports/retire`: anula o vence hasta 2.000 apoyos (elegidos o por filtro) con
   observación obligatoria; todo o nada.
+- `POST /supplier-supports/delete` (2026-11-23): **elimina** hasta 2.000 apoyos para siempre.
+  - Selección: los elegidos, con `version`, o los de un filtro (anulados incluidos). Pide un
+    motivo y es todo o nada.
+  - Se borran con sus solicitudes, su historial JDH, costos, escalas y vínculos a documentos. Los
+    documentos quedan en el gestor.
+  - El DWH no tiene borrado: cada apoyo que no estaba anulado se publica antes como anulado
+    («Eliminado: motivo»).
+  - **Solo el líder del área de apoyos (BI) o su responsable, y los administradores de la
+    plataforma**; los demás reciben 403. `GET /supplier-supports/permissions` lo dice en
+    `can_delete`.
+  - Los triggers de solo inserción de solicitudes e historial solo dejan borrar dentro de esa
+    transacción (`app.allow_support_delete`, migración `0079`).
 - `POST /supplier-supports/preview`: las cifras del formulario antes de guardar.
 - Un apoyo nuevo o editado a mano trae su costo DWH en segundo plano, sin esperar el job.
 - **La carga masiva asigna el costo ella misma** (BI, 2026-11-18). Al aplicar, lee del DWH el

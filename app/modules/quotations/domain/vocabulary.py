@@ -119,6 +119,9 @@ LOCAL_VAT_POINTS = (19, 5, 0)
 # The customer offer: how long it holds, which lines it carries, its conditions.
 # 15 days since 2026-11-20 (it was 30); a quotation already saved keeps its own.
 DEFAULT_VALIDITY_DAYS = 15
+# A customer quotation still in draft and never sent to validation is deleted this many days
+# after it was created (job ``quotations-stale-drafts``, 2026-11-23).
+STALE_DRAFT_DAYS = 30
 MAX_VALIDITY_DAYS = 365
 # ``changed``: active lines with a new price (local products too); ``all``: every active
 # line with an offer price.

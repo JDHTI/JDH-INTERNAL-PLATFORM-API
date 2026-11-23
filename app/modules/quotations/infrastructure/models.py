@@ -270,6 +270,8 @@ class QuotationLineModel(Base):
     cost_source: Mapped[str | None] = mapped_column(String(20))
     cost_center: Mapped[str | None] = mapped_column(String(10))
     increase_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    # The date of the SKU's latest supplier price increase (2026-11-23).
+    increase_on: Mapped[date | None] = mapped_column(Date)
     optimal_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     below_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import fields
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -24,7 +25,7 @@ from app.modules.quotations.domain.entities import (
     SupportOption,
     TemporaryCustomer,
 )
-from app.modules.quotations.domain.vocabulary import LIST_KINDS, QUOTATION, VALIDATED
+from app.modules.quotations.domain.vocabulary import DRAFT, LIST_KINDS, QUOTATION, VALIDATED
 from app.modules.quotations.infrastructure.models import (
     PriceListLoadModel,
     QuotationLineModel,
@@ -202,11 +203,14 @@ class SqlAlchemyQuotationRepository:
         size: int,
         visible_to: tuple[UUID, Sequence[str]] | None = None,
         kind: str = QUOTATION,
+        created_by_ids: Collection[UUID] | None = None,
     ) -> QuotationPage:
         """Quotations of one kind, newest first.
 
         Args:
             kind (str): ``cotizacion``, ``lista`` or ``principal`` (list updates).
+            created_by_ids (Collection[UUID] | None): Only the ones these users created (the
+                call center's leader and its members).
             visible_to (tuple[UUID, Sequence[str]] | None): ``(user, salesperson codes)``:
                 only the ones the user created or whose customer is of those salespeople.
             created_by_id (UUID | None): Only the ones this user created.
@@ -231,6 +235,8 @@ class SqlAlchemyQuotationRepository:
             )
         if created_by_id is not None:
             conditions.append(Q.created_by_id == created_by_id)
+        if created_by_ids is not None:
+            conditions.append(Q.created_by_id.in_(list(created_by_ids)))
         if status:
             conditions.append(Q.status == status)
         if customer_nit:
@@ -369,6 +375,27 @@ class SqlAlchemyQuotationRepository:
         async with self.database.session_factory() as session, session.begin():
             result = await session.execute(delete(Q).where(Q.id == quotation_id))
         return bool(result.rowcount)
+
+    async def delete_stale_drafts(self, created_before: datetime) -> list[UUID]:
+        """Delete the customer quotations still in draft that were never sent to validation
+        (no ``confirmed_at``) and were created before ``created_before`` (2026-11-23).
+
+        Returns:
+            list[UUID]: The deleted quotations.
+        """
+
+        async with self.database.session_factory() as session, session.begin():
+            result = await session.execute(
+                delete(Q)
+                .where(
+                    Q.kind == QUOTATION,
+                    Q.status == DRAFT,
+                    Q.confirmed_at.is_(None),
+                    Q.created_at < created_before,
+                )
+                .returning(Q.id)
+            )
+            return list(result.scalars())
 
     async def reserved_list_ids(self) -> list[str]:
         """Codes of the new lists already validated (pending load or loaded)."""

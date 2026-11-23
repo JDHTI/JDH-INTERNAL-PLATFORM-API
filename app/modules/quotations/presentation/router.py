@@ -89,6 +89,9 @@ class PermissionsResponse(BaseModel):
     can_request_support: bool = False
     # BI sees the calculation rules (GET /rules); Comercial the operating manual (GET /manual).
     can_see_rules: bool = False
+    # Sees others' quotations with ``mine=false`` («Todas»): validators, moderators, and the
+    # call center's leader those of its members (2026-11-23).
+    can_see_team: bool = False
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -451,6 +454,8 @@ class LineResponse(BaseModel):
     cost_center: str | None
     # New cost of a price increase SIESA does not have yet, the third value compared.
     increase_cost: Decimal | None
+    # The date of the SKU's latest supplier price increase, when it has one (2026-11-23).
+    increase_on: date | None = None
     target_margin_pct: Decimal | None
     margin_basis: str | None
     margin_basis_label: str | None
@@ -601,6 +606,9 @@ class SummaryResponse(BaseModel):
     # When SIESA activates the prices (set at /confirm). In «Por cargar», one already past
     # means the files come out with today's date (SIESA does not load a past one).
     activation_date: date | None = None
+    # A customer draft never sent to validation is deleted for good on this day (30 days
+    # after it was created, 2026-11-23); ``null`` for any other.
+    deleted_on: date | None = None
 
 
 class QuotationResponse(SummaryResponse):
@@ -733,6 +741,7 @@ def _line(
         stock_on_hand=line.stock_on_hand,
         stock_available=line.stock_available,
         increase_cost=line.increase_cost,
+        increase_on=line.increase_on,
         target_margin_pct=line.target_margin_pct,
         margin_basis=line.margin_basis,
         margin_basis_label=BASIS_LABELS.get(line.margin_basis or ""),
@@ -864,7 +873,21 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         "source": quotation.source,
         "price_list_name": quotation.price_list_name,
         "activation_date": quotation.activation_date,
+        "deleted_on": _deleted_on(quotation),
     }
+
+
+def _deleted_on(quotation: Quotation) -> date | None:
+    """When a customer draft never sent to validation is deleted (job
+    ``quotations-stale-drafts``, 2026-11-23); ``None`` for any other."""
+
+    if (
+        quotation.kind != vocabulary.QUOTATION
+        or quotation.status != vocabulary.DRAFT
+        or quotation.confirmed_at is not None
+    ):
+        return None
+    return quotation.created_at.date() + timedelta(days=vocabulary.STALE_DRAFT_DAYS)
 
 
 def _detail(
@@ -954,6 +977,7 @@ async def permissions(
         sales_scope=result.sales_scope,  # type: ignore[arg-type]
         can_request_support=result.can_request_support,
         can_see_rules=result.can_see_rules,
+        can_see_team=result.can_see_team,
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller

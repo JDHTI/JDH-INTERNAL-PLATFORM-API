@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel
 from app.modules.dwh_publish.infrastructure.models import DwhOutboxModel
@@ -20,6 +20,9 @@ from app.modules.supplier_supports.domain.internal_requests import (
     Approval,
     NewRequest,
     RequestItem,
+)
+from app.modules.supplier_supports.infrastructure.deletions_repository import (
+    SqlAlchemySupportDeletionRepository,
 )
 from app.modules.supplier_supports.infrastructure.internal_requests_repository import (
     SqlAlchemyInternalRequestRepository,
@@ -143,6 +146,46 @@ async def test_approving_creates_linked_supports_published_to_the_dwh(storage) -
     assert refs["SKU-A"].status == "aprobada" and refs["SKU-B"].approved_margin_pct is None
     with pytest.raises(ConflictError):  # already decided
         await repo.reject(created.id, 2, "No", "bi", datetime.now(UTC))
+
+
+async def test_the_leader_deletes_internal_requests_and_their_supports_stay(storage) -> None:
+    """2026-11-23: the request and its items go; a support its approval created stays,
+    without the link."""
+
+    database, supplier_id, quotation_id = storage
+    repo = SqlAlchemyInternalRequestRepository(database)
+    created = await repo.create(
+        new_request(supplier_id, quotation_id), uuid4(), "v", datetime.now(UTC)
+    )
+    day = date(2026, 11, 13)
+    data = SupportData(
+        kind="excepcion_margen",
+        calc_method="margen_minimo",
+        commercial_supplier_id=supplier_id,
+        customer_nit="800116299",
+        product_sku="SKU-A",
+        min_margin_pct=D("0.14"),
+        supported_margin_pct=D("0.14"),
+        valid_from=day,
+        valid_to=day,
+    )
+    approved = await repo.approve(
+        created.id,
+        1,
+        Approval("unica_vez", day, day, "Puntual", {"SKU-A": D("0.14")}, {"SKU-A": data}),
+        "bi@jdh.com.co",
+        datetime.now(UTC),
+    )
+    support_id = approved.items[0].support_id
+
+    deletions = SqlAlchemySupportDeletionRepository(database)
+    assert await deletions.delete_internal_requests([created.id]) == 1
+
+    assert await repo.get(created.id) is None
+    kept = await SqlAlchemySupportRepository(database).get(support_id)
+    assert kept is not None and kept.internal_request_id is None
+    with pytest.raises(NotFoundError):
+        await deletions.delete_internal_requests([created.id])
 
 
 async def test_a_supplier_request_stores_a_negative_minimum_and_its_copy(storage) -> None:

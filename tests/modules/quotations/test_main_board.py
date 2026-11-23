@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
 
@@ -12,7 +13,7 @@ from app.modules.jobs.domain.entities import JobRun
 from app.modules.jobs.domain.registry import OPEN_STATUSES, RunStatus
 from app.modules.quotations.application.main_board import MainBoardService, PriceInput
 from app.modules.quotations.domain.board import BoardFilter, BoardKey, BoardRow
-from app.modules.quotations.domain.entities import ItemInfo, ListItem, PriceListInfo
+from app.modules.quotations.domain.entities import ItemInfo, ListItem, PriceListInfo, StockRow
 from app.modules.quotations.domain.vocabulary import MAIN_LIST
 from tests.modules.quotations.conftest import MAIN_APPROVER, MAIN_MANAGER, NIT, branch
 from tests.modules.supplier_supports.conftest import person
@@ -20,16 +21,26 @@ from tests.modules.supplier_supports.conftest import person
 TOLERANCE = Decimal("0.005")
 
 
+def _rise(line) -> bool:
+    """The price needs at least 1 % more (the new price, else the optimal one)."""
+
+    price = line.new_price if line.new_price is not None else line.optimal_price
+    last = line.last_price
+    return bool(last and last > 0 and price is not None and price >= last * Decimal("1.01"))
+
+
 def _chip(line, chip: str) -> bool:
     margin, target = line.current_margin_with_support_pct, line.target_margin_pct
     judged = line.last_price is not None and margin is not None and target is not None
+    below = judged and margin < target - TOLERANCE
     return {
         "sin_marcar": line.review_status == "sin_marcar" and line.load_id is None,
         "por_validar": line.review_status == "por_validar" and line.load_id is None,
         "validada": line.review_status == "validada" and line.load_id is None,
         "cargada": line.load_id is not None,
-        "alza": judged and margin < target - TOLERANCE,
-        "objetivo": judged and target - TOLERANCE <= margin <= target + TOLERANCE,
+        "alza": below and _rise(line),
+        "objetivo": judged
+        and (target - TOLERANCE <= margin <= target + TOLERANCE or (below and not _rise(line))),
         "encima": judged and margin > target + TOLERANCE,
         "alerta": line.is_active
         and (line.below_target or line.cost is None or "precio_marcador" in line.problems),
@@ -75,6 +86,8 @@ class FakeBoardRepository:
                 if with_chip and board.chip and not _chip(line, board.chip):
                     continue
                 on_hand, available = self.stock.get((quotation.id, line.sku), (None, None))
+                if on_hand is not None and on_hand <= 0:
+                    continue  # only what is in stock (2026-11-23)
                 yield BoardRow(
                     quotation.id,
                     quotation.version,
@@ -140,6 +153,11 @@ def board(service, review, repository, insights, warehouse) -> MainBoardService:
         ListItem(
             ItemInfo("26278", "Ginebra Selva x700ml", "UNID", Decimal(5), "359"), Decimal(90000)
         ),
+    ]
+    # Both are in stock in Occidente (the board only shows what is in stock, 2026-11-23).
+    insights.stock_rows += [
+        StockRow("2537", "OCC1", "PEREIRA PRINCIPAL", "002", Decimal(30), Decimal(30)),
+        StockRow("26278", "OCC1", "PEREIRA PRINCIPAL", "002", Decimal(12), Decimal(10)),
     ]
     return MainBoardService(
         quotations=service,
@@ -307,10 +325,10 @@ async def test_the_sync_stores_the_stock_and_the_board_sorts_by_it(
     result = await board.rows(collaborator, BoardFilter(sort="existencia", descending=True), 1, 50)
 
     first = result.page.rows[0]
-    # 2537 has 80 in MDE1 (list 001); list 002's warehouses have none.
+    # 2537 has 80 in MDE1 (list 001); list 002's warehouses have 30 and 12.
     assert (first.price_list_id, first.line.sku, first.stock_on_hand) == ("001", "2537", 80)
     assert result.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
-    assert [row.stock_on_hand for row in result.page.rows[1:]] == [0, 0]
+    assert [row.stock_on_hand for row in result.page.rows[1:]] == [30, 12]
     # The page does not read the warehouse: the sync stored the stock of every row.
     assert not [call for call in insights.calls if call[0] == "stock"]
 
@@ -320,6 +338,36 @@ async def test_the_sync_stores_the_stock_and_the_board_sorts_by_it(
     assert again.stock_read and again.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
     # One read per list.
     assert [call[0] for call in insights.calls] == ["stock", "stock"]
+
+
+async def test_the_board_hides_what_is_out_of_stock_and_small_rises(
+    board, insights, collaborator
+) -> None:
+    """2026-11-23: a row the sync read at 0 is not on the board; one needing less than 1 %
+    more is on target, not an «alza»."""
+
+    insights.stock_rows = [row for row in insights.stock_rows if row.sku != "26278"]
+    await board.build(collaborator, "002")
+
+    result = await board.rows(collaborator, BoardFilter(), 1, 50)
+
+    assert [row.line.sku for row in result.page.rows] == ["2537"]
+    assert result.page.counts["todos"] == 1
+    line = result.page.rows[0].line
+    below = replace(
+        line,
+        current_margin_with_support_pct=Decimal("0.10"),
+        target_margin_pct=Decimal("0.20"),
+        last_price=Decimal("1000"),
+        new_price=None,
+    )
+    assert _chip(replace(below, optimal_price=Decimal("1009")), "objetivo")
+    assert not _chip(replace(below, optimal_price=Decimal("1009")), "alza")
+    assert _chip(replace(below, optimal_price=Decimal("1010")), "alza")
+    # A new price chosen decides over the optimal one.
+    assert not _chip(
+        replace(below, optimal_price=Decimal("1500"), new_price=Decimal("1005")), "alza"
+    )
 
 
 class FakeRuns:
