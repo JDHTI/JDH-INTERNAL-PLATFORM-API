@@ -1,7 +1,7 @@
 """Typed application configuration loaded from environment variables."""
 
 import re
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from functools import lru_cache
@@ -213,6 +213,21 @@ class Settings(BaseSettings):
     MASTERS_DWH_MAX_CONCURRENT: int = 3
     # Largest margin file a manager can upload to update the product margins.
     PRODUCT_MARGINS_MAX_UPLOAD_MB: int = 20
+
+    # Costos (Abastecimiento). An entry within this fraction of its quotation is no novelty.
+    COSTS_NOVELTY_THRESHOLD: Decimal = Decimal("0.001")
+    # Longest period the entries analysis reads at once, and how long a period is kept.
+    COSTS_ENTRIES_MAX_RANGE_DAYS: int = 200
+    COSTS_ENTRIES_CACHE_SECONDS: int = 600
+    # Seconds for the warehouse's entries query (half a year reads in about 10 s).
+    COSTS_DWH_TIMEOUT_SECONDS: float = 60.0
+    # The novelties job re-reads these days (the warehouse re-reads 45) and never copies
+    # entries older than the start date.
+    COSTS_NOVELTIES_SYNC_DAYS: int = 45
+    COSTS_NOVELTIES_START_DATE: date = date(2026, 11, 1)
+    # The supplier's credit note: one PDF or picture.
+    COSTS_CREDIT_NOTE_MAX_MB: int = 10
+    COSTS_CREDIT_NOTE_EXTENSIONS: str = "pdf,png,jpg,jpeg"
 
     # Area whose roles grant `validador-pedidos: manage` (upload, approve, re-run). Empty means
     # every area the catalog lists for the module (BI and Comercial); a slug narrows it to one.
@@ -686,6 +701,16 @@ class Settings(BaseSettings):
             },
             "product_margins": {
                 "max_upload_bytes": self.PRODUCT_MARGINS_MAX_UPLOAD_MB * 1024 * 1024,
+            },
+            "costs": {
+                "threshold": self.COSTS_NOVELTY_THRESHOLD,
+                "max_range_days": self.COSTS_ENTRIES_MAX_RANGE_DAYS,
+                "cache_seconds": self.COSTS_ENTRIES_CACHE_SECONDS,
+                "dwh_timeout": self.COSTS_DWH_TIMEOUT_SECONDS,
+                "sync_days": self.COSTS_NOVELTIES_SYNC_DAYS,
+                "start_date": self.COSTS_NOVELTIES_START_DATE,
+                "credit_note_max_bytes": self.COSTS_CREDIT_NOTE_MAX_MB * 1024 * 1024,
+                "credit_note_extensions": _split_lower(self.COSTS_CREDIT_NOTE_EXTENSIONS),
             },
             "order_validation": {
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,

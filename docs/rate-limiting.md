@@ -157,6 +157,17 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/suppliers` | `read` |  |
 | `GET` | `/v1/commercial/suppliers/{code}` | `read` |  |
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
+| `GET` | `/v1/costs/entries` | `read` |  |
+| `PUT` | `/v1/costs/entries/{line_key}/reason` | `relaxed` |  |
+| `GET` | `/v1/costs/novelties` | `read` |  |
+| `GET` | `/v1/costs/novelties/{novelty_id}` | `read` |  |
+| `DELETE` | `/v1/costs/novelties/{novelty_id}/credit-note` | `relaxed` |  |
+| `POST` | `/v1/costs/novelties/{novelty_id}/credit-note` | `relaxed` |  |
+| `GET` | `/v1/costs/novelties/{novelty_id}/credit-note/file` | `read` |  |
+| `PUT` | `/v1/costs/novelties/{novelty_id}/reason` | `relaxed` |  |
+| `GET` | `/v1/costs/permissions` | `read` |  |
+| `GET` | `/v1/costs/reasons` | `read` |  |
+| `PATCH` | `/v1/costs/reasons/{reason_id}` | `relaxed` |  |
 | `GET` | `/v1/directory/admin/employees` | `read` |  |
 | `POST` | `/v1/directory/admin/employees` | `relaxed` |  |
 | `DELETE` | `/v1/directory/admin/employees/{employee_id}` | `relaxed` |  |

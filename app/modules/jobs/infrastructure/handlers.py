@@ -84,6 +84,19 @@ def _main_lists(build: Callable[[], MainListsSync]) -> JobHandler:
     return handler
 
 
+class CostNovelties(Protocol):
+    """The novelties of the purchase entries (Costos), as the job runs them."""
+
+    async def sync(self) -> Mapping[str, Any]: ...
+
+
+def _cost_novelties(build: Callable[[], CostNovelties]) -> JobHandler:
+    async def handler() -> Mapping[str, Any]:
+        return await build().sync()
+
+    return handler
+
+
 def build_job_handlers(
     masters: Callable[[], MasterService],
     commercial_sync: Callable[[], MasterSyncService],
@@ -91,6 +104,7 @@ def build_job_handlers(
     main_lists: Callable[[], MainListsSync] | None = None,
     support_rollover: Callable[[], Rollover] | None = None,
     stale_drafts: Callable[[], StaleDrafts] | None = None,
+    cost_novelties: Callable[[], CostNovelties] | None = None,
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
@@ -99,6 +113,7 @@ def build_job_handlers(
         commercial_sync (Callable[[], MasterSyncService]): Builds the commercial sync.
         support_costs (Callable[[], SupportCostService]): Builds the supports' DWH costs.
         main_lists (Callable[[], MainListsSync] | None): Builds the board of the main lists.
+        cost_novelties (Callable[[], CostNovelties] | None): Builds the Costos novelties.
 
     Returns:
         dict[str, JobHandler]: Job key -> handler.
@@ -109,6 +124,8 @@ def build_job_handlers(
         extra["supplier-supports-rollover"] = _rollover(support_rollover)
     if stale_drafts is not None:
         extra["quotations-stale-drafts"] = _stale_drafts(stale_drafts)
+    if cost_novelties is not None:
+        extra["costs-novelties-sync"] = _cost_novelties(cost_novelties)
     return {
         **extra,
         "masters-warm-identity": _warm(masters, "identidad"),

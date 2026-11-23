@@ -46,6 +46,11 @@ router = APIRouter(
                 "cotizador",
                 "actualizacion-listas",
                 "validador-pedidos",
+                # Costos: the supplier search and the price increase history.
+                "analisis-entradas",
+                "novedades-compras",
+                "alzas-proveedor",
+                "acumulado-alzas",
             )
         )
     ]

@@ -142,6 +142,15 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
+    # The purchase entries and quotations come with the supply load (2026-11-23).
+    JobDefinition(
+        "costs-novelties-sync",
+        "Costos: novedades de las entradas",
+        "Copia las entradas de compra de los últimos 45 días que no cuadran con la cotización "
+        "vigente, refresca las que ya estaban y marca anuladas las que SIESA ya no tiene",
+        "abastecimiento",
+        MONDAY_TO_FRIDAY,
+    ),
 )
 JOBS_BY_KEY = {job.key: job for job in JOBS}
 

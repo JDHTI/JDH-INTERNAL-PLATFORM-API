@@ -77,6 +77,10 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
   archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
   calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).
+- Costos (Abastecimiento) vive en `/api/v1/costs`: las entradas de compra del DWH contra la
+  cotización vigente en su fecha, sus novedades con un motivo y la nota crédito del proveedor,
+  y las alzas que envían los proveedores; reemplaza el aplicativo «Control de Precios JDH». Ver
+  [`docs/costos.md`](docs/costos.md).
 - El directorio de empleados vive en `/api/v1/directory` (lectura para toda persona
   autenticada) y `/api/v1/directory/admin` (administradores): copia nocturna de Entra
   que además crea los usuarios de la plataforma; ver [`docs/directory.md`](docs/directory.md).
