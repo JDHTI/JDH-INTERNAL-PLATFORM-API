@@ -10,9 +10,10 @@ from fastapi.testclient import TestClient
 from app.core.config import Environment, Settings
 from app.main import create_app
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.deletions import SupportDeletionService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.domain.entities import SupportCost
-from tests.modules.supplier_supports.conftest import person
+from tests.modules.supplier_supports.conftest import FakeManagers, person
 
 BASE = "/api/v1/supplier-supports"
 NEW = {
@@ -83,6 +84,10 @@ def client(service):
         ),
         container.v1_container.internal_support_request_service.override(NoInternalRequests()),
         container.v1_container.supplier_support_cost_service.override(FakeCosts()),
+        # Nobody here leads BI: deleting for good is never offered (no database involved).
+        container.v1_container.supplier_support_deletion_service.override(
+            SupportDeletionService(None, FakeManagers([]), service)
+        ),
         TestClient(app) as test_client,
     ):
         yield test_client
