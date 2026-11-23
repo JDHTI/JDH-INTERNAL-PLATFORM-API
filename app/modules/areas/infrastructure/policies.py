@@ -136,6 +136,48 @@ class PermissionPolicy:
 AreaManagerPolicy = PermissionPolicy
 
 
+class AnyPermissionPolicy:
+    """Several module permissions where any one is enough: the price increase history is
+    managed by BI's masters (``maestros``) and by Abastecimiento's ``acumulado-alzas``."""
+
+    def __init__(self, *policies: PermissionPolicy) -> None:
+        """Create the policy.
+
+        Args:
+            *policies (PermissionPolicy): The policies; holding one is enough.
+        """
+
+        if not policies:
+            raise ValueError("AnyPermissionPolicy needs at least one policy")
+        self.policies = policies
+
+    async def is_manager(self, principal: Principal) -> bool:
+        """Whether the caller manages any of the modules."""
+
+        for policy in self.policies:
+            if await policy.is_manager(principal):
+                return True
+        return False
+
+    async def can_read(self, principal: Principal) -> bool:
+        """Whether the caller reads any of the modules."""
+
+        for policy in self.policies:
+            if await policy.can_read(principal):
+                return True
+        return False
+
+    async def require(self, principal: Principal) -> None:
+        """Raise unless the caller manages one of the modules.
+
+        Raises:
+            ForbiddenError: When not allowed.
+        """
+
+        if not await self.is_manager(principal):
+            raise ForbiddenError("No tienes permiso para gestionar este módulo")
+
+
 class AreaLeaderPolicy:
     """Only the leader of one area (its leader role or its responsible) and the platform
     administrators (owner, admin): for what no module grant gives, like deleting records for

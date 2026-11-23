@@ -81,9 +81,15 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza los pide (también un aprobador, que no aprueba los propios) |
 | comercial | `mapa-comercial` | mapa de prospectos, ficha, zonas, rutas | cargar el archivo mensual, corregir ubicación, marcar visitas, crear y editar zonas y rutas. El responsable de una ruta marca sus visitas sin `manage` |
 | bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
+| abastecimiento | `analisis-entradas` | entradas de compra contra la cotización vigente (`/costs/entries`), motivos | asignar el motivo de una línea |
+| abastecimiento | `novedades-compras` | bandeja de novedades (`/costs/novelties`), su historial y la nota crédito | asignar motivo, registrar o quitar la nota crédito, editar el catálogo de motivos |
+| abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla | cargar, crear, editar, aprobar y rechazar alzas |
+| abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`) | poner o quitar la fecha de SIESA, cargar el libro (igual que `maestros` en BI) |
 
-`/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas` y
-`validador-pedidos`, porque esas pantallas buscan proveedores y productos.
+`/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,
+`validador-pedidos` y las cuatro claves de Costos, porque esas pantallas buscan proveedores y
+productos. El área Abastecimiento la crea la migración `0080` con tres roles: «Líder de área»
+(`*`), «Analista de costos» (las cuatro claves) y «Comprador» (`novedades-compras`).
 
 `/quotations/*` lo abren `cotizador`, `actualizacion-listas` y `listas-principales`: comparten
 los endpoints, y el servicio revisa cada cotización contra el módulo de su tipo (`kind`), así que

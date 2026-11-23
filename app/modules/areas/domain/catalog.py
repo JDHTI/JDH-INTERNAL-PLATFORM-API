@@ -151,6 +151,32 @@ MODULES: tuple[Module, ...] = (
         ("comercial",),
         "Prospectos y clientes por zona, y rutas de visita",
     ),
+    # Costos (Abastecimiento): the former «Control de Precios JDH», one key per view so a buyer
+    # can hold only the novelties and an analyst all four (2026-11-23).
+    Module(
+        "analisis-entradas",
+        "Análisis de entradas",
+        ("abastecimiento",),
+        "Entradas de compra contra la cotización vigente del proveedor",
+    ),
+    Module(
+        "novedades-compras",
+        "Novedades y notas crédito",
+        ("abastecimiento",),
+        "Novedades de las entradas de compra, su motivo y la nota crédito del proveedor",
+    ),
+    Module(
+        "alzas-proveedor",
+        "Alzas de proveedor",
+        ("abastecimiento",),
+        "Plantilla, carga y revisión de las alzas que envían los proveedores",
+    ),
+    Module(
+        "acumulado-alzas",
+        "Acumulado de alzas",
+        ("abastecimiento",),
+        "Histórico y análisis de las alzas de costo de los productos",
+    ),
     Module(
         MASTERS_MODULE,
         "Maestros",

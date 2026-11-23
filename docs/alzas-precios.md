@@ -160,7 +160,12 @@ Las tres vistas (maestro de productos, histórico de alzas y análisis) son de l
 módulo `maestros`: **dar acceso al módulo da acceso a las tres**, sin permisos por vista.
 Cambiar algo (cargar el libro, poner la fecha de SIESA, editar márgenes) exige **gestionar** el
 módulo (BI). En la API, leer está abierto a quien tenga cualquiera de los módulos comerciales
-(`maestros`, `apoyos`, `cotizador`, `validador-pedidos`).
+(`maestros`, `apoyos`, `cotizador`, `validador-pedidos`) o de Costos.
+
+Desde el 2026-11-23 el acumulado también es una vista de Costos (Abastecimiento), con la clave
+`acumulado-alzas`. Quien la gestiona carga el libro y pone o quita la fecha de SIESA, igual que
+`maestros` en BI. Las alzas que aprueba la vista «Alzas de proveedor» llegan aquí solas; ver
+[`costos.md`](costos.md).
 
 ## API (`/api/v1/commercial`)
 

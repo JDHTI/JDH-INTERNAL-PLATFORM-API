@@ -20,6 +20,7 @@ from app.modules.app_monitoring.infrastructure.prober import HttpProber
 from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyApplicationRepository
 from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import (
+    AnyPermissionPolicy,
     AreaLeaderPolicy,
     AreaTeam,
     ExplicitGrantPolicy,
@@ -51,6 +52,11 @@ from app.modules.commercial_masters.infrastructure.repository import (
 from app.modules.consumption.application.cursor import ClientCursorCodec
 from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
+from app.modules.costs.application.access import CostAccess
+from app.modules.costs.application.entries import EntryAnalysisService, EntryCache
+from app.modules.costs.application.novelties import NoveltyService
+from app.modules.costs.infrastructure.dwh_source import WarehouseEntrySource
+from app.modules.costs.infrastructure.repository import SqlAlchemyNoveltyRepository
 from app.modules.directory.application.service import DirectoryService
 from app.modules.directory.application.sync import DirectorySyncService
 from app.modules.directory.infrastructure.graph import GraphDirectoryClient
@@ -575,7 +581,14 @@ class V1Container(containers.DeclarativeContainer):
     price_increase_service = providers.Factory(
         PriceIncreaseService,
         repository=price_increase_repository,
-        managers=commercial_master_manager_policy,
+        # BI's masters, and Abastecimiento's history of increases (Costos, 2026-11-23).
+        managers=providers.Factory(
+            AnyPermissionPolicy,
+            commercial_master_manager_policy,
+            providers.Factory(
+                PermissionPolicy, areas=area_service, area_slug=None, module="acumulado-alzas"
+            ),
+        ),
         reader=price_increase_reader,
         max_upload_bytes=config.product_margins.max_upload_bytes,
         cache=price_increase_analysis_cache,
@@ -969,6 +982,69 @@ class V1Container(containers.DeclarativeContainer):
         sync_interval=config.dwh_monitoring.sync_interval,
         request_sync=dwh_monitoring_trigger.provided.set,
     )
+    # --- Costos (Abastecimiento): entries against the quotation, novelties, credit notes ---
+    cost_access = providers.Factory(
+        CostAccess,
+        entries=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="analisis-entradas"
+        ),
+        novelties=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="novedades-compras"
+        ),
+        increases=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="alzas-proveedor"
+        ),
+        ledger=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="acumulado-alzas"
+        ),
+    )
+    cost_entry_source = providers.Factory(
+        WarehouseEntrySource,
+        connection=data_provider,
+        schema=settings.provided.DWH_SCHEMA,
+        timeout=config.costs.dwh_timeout,
+    )
+    cost_novelty_repository = providers.Factory(SqlAlchemyNoveltyRepository, database=database)
+    # Kept across requests: a period's entries are read from the DWH once every few minutes.
+    cost_entry_cache = providers.Singleton(EntryCache)
+    cost_entry_service = providers.Factory(
+        EntryAnalysisService,
+        source=cost_entry_source,
+        novelties=cost_novelty_repository,
+        threshold=config.costs.threshold,
+        max_range_days=config.costs.max_range_days,
+        cache_seconds=config.costs.cache_seconds,
+        cache=cost_entry_cache,
+    )
+    cost_credit_note_guard = providers.Factory(
+        AttachmentGuard,
+        image_processor=providers.Singleton(
+            PillowImageProcessor,
+            max_bytes=config.costs.credit_note_max_bytes,
+            max_pixels=config.pqrsf.max_image_pixels,
+        ),
+        malware_scanner=providers.Singleton(
+            ClamAVScanner,
+            host=config.pqrsf.clamav_host,
+            port=config.pqrsf.clamav_port,
+            timeout=config.pqrsf.clamav_timeout,
+        ),
+        allowed_extensions=config.costs.credit_note_extensions,
+        max_attachments=1,
+        max_attachment_bytes=config.costs.credit_note_max_bytes,
+        max_total_attachment_bytes=config.costs.credit_note_max_bytes,
+    )
+    cost_novelty_service = providers.Factory(
+        NoveltyService,
+        repository=cost_novelty_repository,
+        source=cost_entry_source,
+        access=cost_access,
+        storage=storage,
+        guard=cost_credit_note_guard,
+        threshold=config.costs.threshold,
+        sync_days=config.costs.sync_days,
+        start_date=config.costs.start_date,
+    )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)
     job_watermarks = providers.Factory(SqlAlchemySequenceWatermarks, database=database)
@@ -1031,6 +1107,7 @@ class V1Container(containers.DeclarativeContainer):
         main_lists=main_board_service.provider,
         support_rollover=supplier_support_rollover_service.provider,
         stale_drafts=quotation_service.provider,
+        cost_novelties=cost_novelty_service.provider,
     )
     job_service = providers.Factory(
         JobService,
