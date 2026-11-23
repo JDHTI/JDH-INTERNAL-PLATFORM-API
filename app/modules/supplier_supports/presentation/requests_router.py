@@ -7,7 +7,7 @@ from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
@@ -30,15 +30,11 @@ class VersionBody(BaseModel):
 
 class RequestBody(VersionBody):
     # Rules v2: the authorized minimum margin JDH is asked for, as a fraction (0.12 = 12 %).
-    # On a % Margen Garantizado it is the supplier's minimum margin instead (2026-11-23).
     value: Decimal = Field(
         max_digits=18,
         decimal_places=6,
         allow_inf_nan=False,
-        description=(
-            "Excepción margen mínimo autorizado JDH, 0 ≤ valor < 1; en un % Margen "
-            "Garantizado, el margen mínimo del proveedor, -1 < valor < margen vigente"
-        ),
+        description="Excepción margen mínimo autorizado JDH, 0 ≤ valor < 1",
     )
     reason: str = Field(min_length=3, max_length=2000)
 
@@ -77,10 +73,8 @@ class RequestResponse(BaseModel):
     support_id: UUID
     supplier_name: str | None = None
     supplier_code: str | None = None
-    # margen_minimo since rules v2 (JDH); margen_proveedor on a % Margen Garantizado (the
-    # supplier's exception, 2026-11-23); porcentaje / costo_neto are the earlier requests.
-    mode: Literal["margen_minimo", "margen_proveedor", "porcentaje", "costo_neto"]
-    mode_label: str = ""
+    # margen_minimo since rules v2; porcentaje / costo_neto are the earlier requests.
+    mode: Literal["margen_minimo", "porcentaje", "costo_neto"]
     value: Decimal
     reason: str
     requested_by_id: UUID
@@ -93,23 +87,6 @@ class RequestResponse(BaseModel):
     decided_by: str | None
     decided_at: datetime | None
     decision_reason: str | None
-
-    @model_validator(mode="after")
-    def _label(self) -> "RequestResponse":
-        if not self.mode_label:
-            if self.mode == "margen_proveedor":
-                supplier = self.supplier_name or self.supplier_code or "proveedor"
-                self.mode_label = f"Solicitud de margen proveedor {supplier}"
-            else:
-                self.mode_label = _MODE_LABELS.get(self.mode, self.mode)
-        return self
-
-
-_MODE_LABELS = {
-    "margen_minimo": "Excepción margen mínimo autorizado JDH",
-    "porcentaje": "% JDH",
-    "costo_neto": "Costo pactado JDH",
-}
 
 
 class RequestDetailResponse(RequestResponse):

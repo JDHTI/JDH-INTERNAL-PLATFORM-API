@@ -66,8 +66,11 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
   - A PA, el margen con apoyo es exactamente `g`. Ejemplo: costo 1.000, s = 13 %, g = 18 % →
     PA 1.149,43, $ Apoyo 57,47.
   - **PA es el precio mínimo de la línea** en el cotizador. Vender por debajo deja el margen con
-    apoyo por debajo de `g`, porque el proveedor no pone más. Para bajar de `s` se pide una
-    **solicitud de margen proveedor** en el módulo de solicitudes (ver Solicitudes).
+    apoyo por debajo de `g`, porque el proveedor no pone más. Para bajar de `s` en una
+    cotización puntual, el vendedor pide desde la línea una **solicitud de margen proveedor**,
+    que se decide en el módulo de solicitudes. Al aprobarse crea una copia del apoyo para ese
+    cliente con el mínimo aprobado; el apoyo base no cambia (ver
+    [solicitudes-apoyos.md](solicitudes-apoyos.md#solicitud-de-margen-proveedor-margen-garantizado)).
   - `s` puede ser 0 % o negativo: es la excepción que asume el proveedor. Es distinto de la
     **Excepción margen mínimo autorizado JDH** (`supported_margin_pct`), que es rentabilidad que
     pierde JDH. Debe ser menor que `g`.

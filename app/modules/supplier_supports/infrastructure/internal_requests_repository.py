@@ -45,6 +45,7 @@ def _item(model: InternalSupportRequestItemModel) -> RequestItem:
         approved_margin_pct=model.approved_margin_pct,
         support_id=model.support_id,
         target_margin_pct=model.target_margin_pct,
+        base_support_id=model.base_support_id,
     )
 
 
@@ -76,6 +77,7 @@ def _request(
         decided_at=model.decided_at,
         decision_reason=model.decision_reason,
         items=tuple(_item(item) for item in sorted(items, key=lambda value: value.position)),
+        kind=model.kind,
     )
 
 
@@ -136,6 +138,7 @@ class SqlAlchemyInternalRequestRepository:
             model = R(
                 id=uuid4(),
                 status=PENDING,
+                kind=request.kind,
                 quotation_id=request.quotation_id,
                 quotation_label=request.quotation_label,
                 customer_nit=request.customer_nit,
@@ -167,6 +170,7 @@ class SqlAlchemyInternalRequestRepository:
                     min_margin_pct=item.min_margin_pct,
                     requested_margin_pct=item.requested_margin_pct,
                     target_margin_pct=item.target_margin_pct,
+                    base_support_id=item.base_support_id,
                 )
                 for index, item in enumerate(request.items)
             ]

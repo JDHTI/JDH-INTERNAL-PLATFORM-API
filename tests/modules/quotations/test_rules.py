@@ -1,5 +1,6 @@
 """Pricing a quotation line: cost, margins, supports and the general rule."""
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -386,3 +387,21 @@ def test_a_guaranteed_margin_with_the_supplier_minimum_pays_a_fixed_amount() -> 
     assert at_minimum.compliance == "cumple"
     shown = _support(cheaper.support, cheaper)
     assert shown.amount == Decimal("375.00") and shown.supplier_min_margin_pct == Decimal("0.2")
+
+
+def test_an_approved_supplier_request_lowers_the_minimum_for_its_customer() -> None:
+    """The copy a supplier margin request creates (lower minimum, same customer) pays more,
+    so the line takes it over the base guarantee."""
+
+    base = agreement(
+        calc_method="precio_neto",
+        target_margin_pct=Decimal("0.30"),
+        supplier_min_margin_pct=Decimal("0.20"),
+    )
+    copy = replace(base, id=uuid4(), supplier_min_margin_pct=Decimal("0"))
+
+    line = build([base, copy])
+
+    assert line.support is not None and line.support.support_id == copy.id
+    # Supported price 3.000 (the cost at 0 %): it pays 3.000 x 30 % = 900.
+    assert line.support_amount == Decimal("900.00") and line.min_price == Decimal("3000")

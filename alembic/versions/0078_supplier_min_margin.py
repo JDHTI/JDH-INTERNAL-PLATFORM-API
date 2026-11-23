@@ -3,30 +3,27 @@
 - ``supplier_supports.supplier_min_margin_pct``: the margin the supported price is set at
   (cost / (1 − margin)); the supplier pays up to the guaranteed margin. It may be negative:
   it is the supplier's exception, not profitability JDH gives up.
-- ``supplier_support_requests.mode`` takes ``margen_proveedor``: a request for a margin under
-  that minimum, decided in the requests module like the JDH ones.
+- ``internal_support_requests.kind``: ``jdh`` (every request so far) or ``proveedor``, a
+  supplier margin request asked from a quotation line, under the supplier's minimum, for that
+  quotation's customer; its items may ask a negative margin and keep the support they lower
+  (``base_support_id``), which approving copies with the approved minimum.
 - The JDH audit also watches the supplier's minimum margin.
 
-Existing supports keep it empty, so nothing changes until it is written.
+Existing rows stay as they are.
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0078_supplier_min_margin"
 down_revision: str | Sequence[str] | None = "0077_quotation_cost_warehouses"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-
-def _modes(modes: str) -> None:
-    op.drop_constraint("ck_support_request_mode", "supplier_support_requests", type_="check")
-    op.create_check_constraint(
-        "ck_support_request_mode", "supplier_support_requests", f"mode IN ({modes})"
-    )
-
+_ITEMS = "internal_support_request_items"
 
 _AUDIT = """CREATE OR REPLACE FUNCTION audit_supplier_support_jdh() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -47,6 +44,18 @@ LANGUAGE plpgsql AS $$
     END $$"""
 
 
+def _margin_checks(low: str) -> None:
+    for name, column, nullable in (
+        ("ck_internal_support_request_items_requested", "requested_margin_pct", False),
+        ("ck_internal_support_request_items_approved", "approved_margin_pct", True),
+    ):
+        op.drop_constraint(name, _ITEMS, type_="check")
+        rule = f"{column} {low} AND {column} < 1"
+        op.create_check_constraint(
+            name, _ITEMS, f"{column} IS NULL OR ({rule})" if nullable else rule
+        )
+
+
 def upgrade() -> None:
     op.add_column("supplier_supports", sa.Column("supplier_min_margin_pct", sa.Numeric(10, 6)))
     op.create_check_constraint(
@@ -55,7 +64,24 @@ def upgrade() -> None:
         "supplier_min_margin_pct IS NULL OR "
         "(supplier_min_margin_pct > -1 AND supplier_min_margin_pct < 1)",
     )
-    _modes("'porcentaje','costo_neto','margen_minimo','margen_proveedor'")
+    op.add_column(
+        "internal_support_requests",
+        sa.Column("kind", sa.String(10), nullable=False, server_default="jdh"),
+    )
+    op.create_check_constraint(
+        "ck_internal_support_requests_kind",
+        "internal_support_requests",
+        "kind IN ('jdh', 'proveedor')",
+    )
+    op.add_column(
+        _ITEMS,
+        sa.Column(
+            "base_support_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("supplier_supports.id", ondelete="SET NULL"),
+        ),
+    )
+    _margin_checks("> -1")
     op.execute(
         _AUDIT.format(
             old_supplier="OLD.supplier_min_margin_pct,", new_supplier="NEW.supplier_min_margin_pct,"
@@ -64,10 +90,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Back to the JDH modes (fails while a supplier margin request exists)."""
+    """Back to JDH requests only (fails while a negative margin is stored)."""
 
     op.execute(_AUDIT.format(old_supplier="", new_supplier=""))
-    _modes("'porcentaje','costo_neto','margen_minimo'")
+    _margin_checks(">= 0")
+    op.drop_column(_ITEMS, "base_support_id")
+    op.drop_constraint(
+        "ck_internal_support_requests_kind", "internal_support_requests", type_="check"
+    )
+    op.drop_column("internal_support_requests", "kind")
     op.drop_constraint(
         "ck_supplier_supports_supplier_min_margin", "supplier_supports", type_="check"
     )

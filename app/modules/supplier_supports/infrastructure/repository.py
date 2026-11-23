@@ -576,6 +576,9 @@ class SqlAlchemySupportRepository:
             S.is_enabled.is_(True),
             S.kind == data.kind,
             _same(S.customer_nit, data.customer_nit),
+            # The supports an internal request creates (a margin exception, or a supplier
+            # margin request's copy of a guarantee) lie on top of the master: never a crossing.
+            S.internal_request_id.is_(None),
         ]
         if data.commercial_supplier_id is None:
             conditions.append(S.commercial_supplier_id.is_(None))

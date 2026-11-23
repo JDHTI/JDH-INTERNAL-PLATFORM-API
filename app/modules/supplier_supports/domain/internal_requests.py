@@ -13,6 +13,13 @@ The support is ``excepcion_margen`` / ``margen_minimo`` with ``min_margin_pct`` 
 ``supported_margin_pct`` set to the approved margin, which the order validator already applies
 (customer x SKU x supplier, in force on the order's date). It is published to the DWH like any
 other change of the master, and a bulk load never closes it.
+
+A **supplier margin request** (``kind = proveedor``, 2026-11-23) is asked from a quotation line
+covered by a % Margen Garantizado with the supplier's minimum margin (13 %, say): a lower
+minimum (7 %, 0 % or negative) for that quotation's customer. Approving copies the guaranteed
+support for the customer and SKU with the approved minimum (once, or with a validity); the
+base support keeps its minimum for everyone else. The quoter then picks the copy, which pays
+more. It is the supplier's exception, not a margin JDH gives up.
 """
 
 from __future__ import annotations
@@ -29,7 +36,17 @@ from app.modules.supplier_supports.domain.entities import SupportData
 
 PENDING, APPROVED, REJECTED = "pendiente", "aprobada", "rechazada"
 FOR_GOOD, ONCE = "persistente", "unica_vez"
+JDH_KIND, SUPPLIER_KIND = "jdh", "proveedor"
+KINDS = (JDH_KIND, SUPPLIER_KIND)
 MAX_ITEMS = 200
+
+
+def kind_label(kind: str, supplier_name: str | None, supplier_code: str | None) -> str:
+    """How the requests module names a request."""
+
+    if kind == SUPPLIER_KIND:
+        return f"Solicitud de margen proveedor {supplier_name or supplier_code or ''}".strip()
+    return "Excepción margen mínimo autorizado JDH"
 
 
 @dataclass(frozen=True)
@@ -49,8 +66,10 @@ class RequestItem:
     approved_margin_pct: Decimal | None = None
     support_id: UUID | None = None
     # The product's optimal margin on the customer's list when it was asked: the margin asked
-    # must be lower (BI, 2026-11-18).
+    # must be lower (BI, 2026-11-18). In a supplier request, the supplier's minimum in force.
     target_margin_pct: Decimal | None = None
+    # A supplier request: the % Margen Garantizado it lowers (approving copies it).
+    base_support_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +100,7 @@ class InternalRequest:
     decided_at: datetime | None
     decision_reason: str | None
     items: tuple[RequestItem, ...]
+    kind: str = JDH_KIND
 
 
 @dataclass(frozen=True)
@@ -99,6 +119,7 @@ class NewRequest:
     agreed_with: str
     reason: str
     items: tuple[RequestItem, ...]
+    kind: str = JDH_KIND
 
 
 @dataclass(frozen=True)
@@ -125,6 +146,10 @@ class QuotedLine:
     margin_pct: Decimal | None
     min_margin_pct: Decimal | None
     is_local: bool = False
+    # The support applied to the line: a supplier request lowers its supplier's minimum.
+    support_id: UUID | None = None
+    support_calc_method: str | None = None
+    supplier_min_margin_pct: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -197,7 +222,11 @@ class InternalRequestRepository(Protocol):
 __all__ = [
     "APPROVED",
     "FOR_GOOD",
+    "JDH_KIND",
+    "KINDS",
     "MAX_ITEMS",
+    "SUPPLIER_KIND",
+    "kind_label",
     "ONCE",
     "PENDING",
     "REJECTED",

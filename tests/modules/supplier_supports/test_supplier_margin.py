@@ -1,19 +1,27 @@
-"""% Margen Garantizado with the supplier's minimum margin and its requests (2026-11-23)."""
+"""% Margen Garantizado with the supplier's minimum margin, and the supplier margin request
+asked from a quotation line (2026-11-23)."""
 
+from dataclasses import replace
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 
-from app.core.errors import InvalidInputError
+from app.core.errors import ConflictError, InvalidInputError
+from app.modules.supplier_supports.application.internal_requests import (
+    InternalRequestLinks,
+    InternalRequestService,
+)
 from app.modules.supplier_supports.application.service import FieldError
 from app.modules.supplier_supports.domain.entities import SupportData
-from app.modules.supplier_supports.domain.requests import (
-    MARGIN_MODE,
-    SUPPLIER_MARGIN_MODE,
-    request_mode,
-    require_below_supplier_minimum,
-    validate_value,
+from app.modules.supplier_supports.presentation.internal_requests_router import _response
+from tests.modules.supplier_supports.conftest import FakeLookup, FakeManagers, FixedCalendar
+from tests.modules.supplier_supports.test_internal_requests import (
+    QUOTATION_ID,
+    QUOTER,
+    REVIEWER,
+    FakeAccess,
+    FakeRepository,
+    line,
 )
 
 D = Decimal
@@ -32,6 +40,9 @@ def guarantee(**values) -> SupportData:
         "valid_to": None,
     }
     return SupportData(**{**base, **values})
+
+
+# ------------------------------------------------------------------ the master
 
 
 async def test_a_guaranteed_margin_is_created_with_the_supplier_minimum(service, manager) -> None:
@@ -74,25 +85,128 @@ async def test_the_supplier_minimum_may_be_zero_or_negative(service, manager) ->
     assert negative.support.data.supplier_min_margin_pct == D("-0.05")
 
 
-def test_a_guaranteed_margin_asks_the_supplier_not_jdh() -> None:
-    assert request_mode("precio_neto") == SUPPLIER_MARGIN_MODE
-    assert request_mode("pct_costo") == MARGIN_MODE
-    # Negative margins are valid for the supplier, never for JDH.
-    validate_value(SUPPLIER_MARGIN_MODE, D("-0.05"))
-    with pytest.raises(InvalidInputError):
-        validate_value(MARGIN_MODE, D("-0.05"))
-    with pytest.raises(InvalidInputError):
-        validate_value(SUPPLIER_MARGIN_MODE, D("-1"))
+# ------------------------------------------------------------------ the supplier request
 
 
-def test_a_supplier_margin_request_asks_for_less_than_the_minimum_in_force() -> None:
-    support = SimpleNamespace(supplier_min_margin_pct=D("0.13"), target_margin_pct=D("0.18"))
+@pytest.fixture
+async def base(service, manager):
+    """The general guarantee of SKU 1128 (no customer): 18 % from a 13 % minimum."""
 
-    require_below_supplier_minimum(support, D("0.07"))
-    require_below_supplier_minimum(support, D("-0.10"))
-    with pytest.raises(InvalidInputError, match="13.00 %"):
-        require_below_supplier_minimum(support, D("0.13"))
-    # A support saved before, without the minimum: under the guaranteed margin.
-    older = SimpleNamespace(supplier_min_margin_pct=None, target_margin_pct=D("0.18"))
-    with pytest.raises(InvalidInputError, match="18.00 %"):
-        require_below_supplier_minimum(older, D("0.20"))
+    return (
+        await service.create(manager, guarantee(customer_nit=None), supplier_code="233")
+    ).support
+
+
+@pytest.fixture
+def access(base) -> FakeAccess:
+    covered = FakeAccess()
+    guaranteed = replace(
+        line("1128"),
+        support_id=base.id,
+        support_calc_method="precio_neto",
+        supplier_min_margin_pct=D("0.13"),
+    )
+    covered.current = replace(covered.current, lines={**covered.current.lines, "1128": guaranteed})
+    return covered
+
+
+@pytest.fixture
+def requests_repo() -> FakeRepository:
+    return FakeRepository()
+
+
+@pytest.fixture
+def supplier_requests(requests_repo, access, repo) -> InternalRequestService:
+    links = InternalRequestLinks(requests_repo, FakeManagers([REVIEWER.email]), FakeManagers([]))
+    return InternalRequestService(
+        requests_repo, links, access, FakeLookup(), FixedCalendar(), supports=repo
+    )
+
+
+async def ask(service, margin: str, sku: str = "1128"):
+    return await service.create(
+        QUOTER,
+        QUOTATION_ID,
+        kind="proveedor",
+        version=7,
+        supplier_code="233",
+        requested_for=None,
+        agreed_with="Gerente Familia",
+        reason="Cotización puntual del vendedor",
+        items=[(sku, D(margin))],
+    )
+
+
+async def approve(service, request, margin: str, decision: str = "unica_vez"):
+    return await service.approve(
+        REVIEWER,
+        request.id,
+        version=request.version,
+        decision=decision,
+        valid_from=None,
+        valid_to=None,
+        note="Autorizado por el proveedor",
+        items=[("1128", D(margin))],
+    )
+
+
+async def test_a_supplier_request_asks_a_lower_minimum_from_the_line(
+    supplier_requests, base
+) -> None:
+    request = await ask(supplier_requests, "-0.05")
+
+    assert request.kind == "proveedor"
+    item = request.items[0]
+    # The minimum in force when it was asked, and the guarantee it lowers.
+    assert item.target_margin_pct == D("0.13") and item.base_support_id == base.id
+    assert item.requested_margin_pct == D("-0.050000")
+    shown = _response(request)
+    assert shown.kind == "proveedor"
+    assert shown.kind_label == "Solicitud de margen proveedor FAMILIA SANCELA"
+
+
+@pytest.mark.parametrize(
+    ("margin", "sku", "fragment"),
+    [
+        ("0.13", "1128", "menor que el margen mínimo del proveedor"),
+        ("0.20", "1128", "menor que el margen mínimo del proveedor"),
+        ("0.10", "8749", "no tiene un % Margen Garantizado"),
+    ],
+)
+async def test_a_supplier_request_needs_a_guarantee_and_a_lower_margin(
+    supplier_requests, margin, sku, fragment
+) -> None:
+    with pytest.raises(InvalidInputError, match=fragment):
+        await ask(supplier_requests, margin, sku)
+
+
+async def test_approving_copies_the_guarantee_for_the_customer_once(
+    supplier_requests, requests_repo, base, repo
+) -> None:
+    request = await ask(supplier_requests, "0.07")
+
+    approved = await approve(supplier_requests, request, "0.07")
+
+    assert approved.status == "aprobada" and approved.decision == "unica_vez"
+    copy = requests_repo.approvals[request.id].supports["1128"]
+    # The same guarantee, for this customer, from the approved minimum, on the order's day.
+    assert copy.calc_method == "precio_neto" and copy.target_margin_pct == D("0.18")
+    assert copy.supplier_min_margin_pct == D("0.070000")
+    assert copy.customer_nit == "800116299" and copy.product_sku == "1128"
+    assert copy.valid_from == copy.valid_to == request.requested_for
+    assert copy.program.startswith("Solicitud de margen proveedor #")
+    # The base guarantee keeps its 13 % for everyone else.
+    assert (await repo.get(base.id)).data.supplier_min_margin_pct == D("0.13")
+
+
+async def test_the_approved_minimum_stays_under_the_one_asked_against(
+    supplier_requests, requests_repo, base, service, manager
+) -> None:
+    request = await ask(supplier_requests, "0.07")
+
+    with pytest.raises(InvalidInputError, match="entre -100 % y el mínimo del proveedor"):
+        await approve(supplier_requests, request, "0.13")
+    # A base guarantee voided meanwhile cannot be copied.
+    await service.void(manager, base.id, expected_version=base.version, reason="Ya no aplica")
+    with pytest.raises(ConflictError, match="ya no existe o cambió"):
+        await approve(supplier_requests, request, "0.05")

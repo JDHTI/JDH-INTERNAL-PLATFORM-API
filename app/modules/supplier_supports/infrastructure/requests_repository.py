@@ -11,12 +11,9 @@ from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.infrastructure.database import Database
 from app.modules.commercial_masters.infrastructure.models import CommercialSupplierModel as C
 from app.modules.supplier_supports.domain.requests import (
-    GUARANTEED_METHOD,
     MARGIN_MODE,
-    SUPPLIER_MARGIN_MODE,
     legacy_mode,
     request_mode,
-    require_below_supplier_minimum,
     require_eligible,
     validate_value,
 )
@@ -43,8 +40,6 @@ def snapshot(model: S) -> dict[str, Any]:
         "jdh_net_cost",
         "supported_margin_pct",
         "min_margin_pct",
-        "target_margin_pct",
-        "supplier_min_margin_pct",
         "reference_cost",
         "reference_list_price",
         "value_unit",
@@ -151,10 +146,7 @@ class SqlAlchemySupportRequestRepository:
                 support = supports[support_id]
                 self._version(support.version, version)
                 require_eligible(support, today)
-                mode = request_mode(support.calc_method)
-                validate_value(mode, value)
-                if mode == SUPPLIER_MARGIN_MODE:
-                    require_below_supplier_minimum(support, value)
+                validate_value(request_mode(support.calc_method), value)
                 customer = (
                     ("nit", support.customer_nit)
                     if support.customer_nit
@@ -291,15 +283,7 @@ class SqlAlchemySupportRequestRepository:
                 self._version(support.version, support_version)
                 require_eligible(support, today)
                 validate_value(model.mode, model.value)
-                if model.mode == SUPPLIER_MARGIN_MODE:
-                    # The supplier's exception: the minimum the supported price is set at
-                    # (% Margen Garantizado, 2026-11-23); it may be negative.
-                    if support.calc_method != GUARANTEED_METHOD:
-                        raise ConflictError(
-                            "El apoyo ya no es de margen garantizado; rechaza y solicita de nuevo"
-                        )
-                    support.supplier_min_margin_pct = model.value
-                elif model.mode == MARGIN_MODE:
+                if model.mode == MARGIN_MODE:
                     # Rules v2: the authorized minimum margin (Precio Apoyado Mínimo).
                     support.supported_margin_pct = model.value
                     if support.calc_method == "margen_minimo":

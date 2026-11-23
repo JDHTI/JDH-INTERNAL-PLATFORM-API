@@ -13,18 +13,37 @@ Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`
 - Sin notificaciones, retiro de propuestas ni filtro por vendedor en esta entrega.
 - **Reglas v2:** toda solicitud nueva pide la Excepción margen mínimo autorizado JDH
   (`mode = margen_minimo`, de 0 a menos de 1). Al aprobarse escribe `supported_margin_pct`.
-- **Solicitud de margen proveedor** (`mode = margen_proveedor`, 2026-11-23): la de un apoyo
-  % Margen Garantizado.
-  - Pide un margen mínimo del proveedor menor que el vigente (`supplier_min_margin_pct`; si el
-    apoyo no lo tiene, menor que el margen garantizado).
-  - Puede ser 0 o negativo, mayor que -1.
-  - Al aprobarse escribe `supplier_min_margin_pct`, y con él baja el precio apoyado
-    (costo / (1 − margen)). No toca el margen autorizado JDH: es la excepción del proveedor, no
-    rentabilidad que pierde JDH.
-  - Se pide y se decide con las mismas rutas y permisos. La API elige el modo según el tipo
-    del apoyo.
-  - La respuesta trae `mode_label`: «Solicitud de margen proveedor {proveedor}» o «Excepción
-    margen mínimo autorizado JDH».
+- **Solicitud de margen proveedor** (2026-11-23): no va por estas rutas, que trabajan sobre el
+  apoyo para todos. Es una solicitud interna desde la línea de la cotización (`kind =
+  proveedor`, ver abajo).
+
+## Solicitud de margen proveedor (% Margen Garantizado)
+
+Un % Margen Garantizado trae el margen garantizado (18 %) y el margen mínimo del proveedor
+(13 %), por plantilla o al crearlo. Bajar ese mínimo es una autorización puntual: un vendedor
+la pide para la cotización de un cliente.
+
+- **Pedir:** `POST /quotations/{id}/support-requests` con `kind: "proveedor"`.
+  - Cada referencia debe estar cubierta en la cotización por un % Margen Garantizado con
+    margen mínimo del proveedor.
+  - El margen pedido debe ser menor que ese mínimo. Puede ser 0 o negativo, mayor que -1.
+  - El ítem guarda el mínimo vigente en `target_margin_pct` y el apoyo que se baja en
+    `base_support_id`.
+  - Las de JDH (`kind: "jdh"`, por defecto) siguen igual: de 0 a menos que el margen óptimo.
+- **Decidir:** con las mismas rutas y permisos de las solicitudes internas. El aprobado va de
+  -100 % a menos que el mínimo vigente. Puede ser `unica_vez` (el día del pedido) o
+  `persistente` (con vigencia).
+- **Al aprobar:** se crea una copia del % Margen Garantizado para el cliente de la solicitud y
+  esa referencia, con el mínimo aprobado y la vigencia decidida, enlazada a la solicitud
+  (`internal_request_id`).
+  - El apoyo base conserva su 13 % para todos los demás.
+  - En el cotizador la copia paga más, así que es la que toma la línea de ese cliente.
+  - La copia nunca cuenta como cruce con el apoyo base, ni el job de relevo vence el base por
+    ella.
+- **Respuesta:** trae `kind` y `kind_label` («Solicitud de margen proveedor {proveedor}» o
+  «Excepción margen mínimo autorizado JDH»).
+- **Qué es:** la excepción del proveedor, no rentabilidad que pierde JDH. No toca
+  `supported_margin_pct`.
 
 ## Permisos y contrato
 
@@ -44,7 +63,7 @@ Rutas relativas al prefijo vigente `/api/v1`:
 
 La lista siempre filtra por usuario para Comercial. `mine=true` fuerza ese filtro también para BI; usarlo en lista y detalle del contexto Comercial. Buscar por solicitante, motivo, SKU, NIT o nombre del cliente. `size` máximo 100; respuesta `items,total,page,size`.
 
-Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `margen_minimo` o `margen_proveedor`; `porcentaje` y `costo_neto` son las solicitudes anteriores a las reglas v2. Además trae `mode_label`. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
+Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `margen_minimo`; `porcentaje` y `costo_neto` son las solicitudes anteriores a las reglas v2. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
 
 La lista y el detalle añaden `supplier_name` y `supplier_code`, resueltos desde el
 maestro para mostrar «Apoyo JDH · proveedor» también en solicitudes anteriores.

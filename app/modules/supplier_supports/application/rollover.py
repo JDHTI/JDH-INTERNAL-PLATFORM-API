@@ -65,6 +65,10 @@ def successions(supports: Sequence[Support]) -> list[tuple[Support, Support]]:
 
     groups: dict[tuple[Any, ...], list[Support]] = {}
     for support in supports:
+        if support.internal_request_id is not None:
+            # An internal request's support (a supplier margin request's copy of a guarantee,
+            # for one customer) lies on top of the master: it never replaces the base one.
+            continue
         groups.setdefault(_key(support), []).append(support)
     pairs: list[tuple[Support, Support]] = []
     for members in groups.values():
