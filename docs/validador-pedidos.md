@@ -73,7 +73,8 @@ con la del pedido.
 | `pct_precio_lista` | PL × % |
 | `valor_unidad`, `valor_precio_lista` | $ por unidad |
 | `costo_neto` | costo − $ costo apoyado |
-| `precio_neto` (% Margen Garantizado) | `máx(0, (g − m) / (1 − m))` del costo: lo que falta para llegar al margen garantizado `g` desde el margen de la línea `m`. El margen con apoyo queda en `máx(m, g)`. No usa `supplier_value` |
+| `precio_neto` (% Margen Garantizado) con margen mínimo del proveedor `s` (2026-11-23) | `(g − s) / (1 − s)` del costo, fijo: lo que paga en su precio apoyado costo / (1 − s). Una línea vendida por debajo de `s` queda bajo `g` y necesita una solicitud de margen proveedor |
+| `precio_neto` sin `s` (guardados antes) | `máx(0, (g − m) / (1 − m))` del costo: lo que falta para llegar al margen garantizado `g` desde el margen de la línea `m`. El margen con apoyo queda en `máx(m, g)`. No usa `supplier_value` |
 | `margen_minimo` | — (margen de la línea ≥ `min_margin_pct`) |
 | `puntos_margen` | — (margen de la línea ≥ margen lista − puntos) |
 | `pct_ventas` | no evaluable: el rebate se liquida por periodo |

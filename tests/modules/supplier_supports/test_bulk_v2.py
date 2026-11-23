@@ -131,12 +131,12 @@ def test_the_short_template_has_bi_order_dropdowns_and_date_checks() -> None:
     ]
     checks = {str(item.sqref).split(":")[0]: item for item in sheet.data_validations.dataValidation}
     assert checks["A2"].type == "list" and checks["B2"].type == "list"
-    assert checks["D2"].type == "list" and checks["F2"].type == "date"
+    assert checks["D2"].type == "list" and checks["G2"].type == "date"
     # The date columns are dates down to Excel's last row (it used to stop at row 2001), so
     # what is typed in any row is a date.
-    assert str(checks["F2"].sqref) == "F2:F1048576"
-    assert {sheet.column_dimensions[column].number_format for column in "FG"} == {"dd/mm/yyyy"}
-    assert sheet.column_dimensions["H"].number_format == "General"
+    assert str(checks["G2"].sqref) == "G2:G1048576"
+    assert {sheet.column_dimensions[column].number_format for column in "GH"} == {"dd/mm/yyyy"}
+    assert sheet.column_dimensions["I"].number_format == "General"
     assert "Apoyo táctico" in [cell.value for cell in book["Valores"]["A"]]
     grouped = openpyxl.load_workbook(io.BytesIO(template_workbook(groups=True)))["Apoyos"]
     group_headers = [cell.value for cell in grouped[1]]

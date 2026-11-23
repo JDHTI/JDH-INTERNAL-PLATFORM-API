@@ -11,6 +11,20 @@ Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`
 - Crear o aprobar requiere acuerdo vigente, habilitado y sin revisión pendiente. El rechazo exige motivo y no altera valores.
 - Cancelar JDH limpia exclusivamente su aporte vigente; conserva acuerdo, proveedor y trazabilidad. Anular el acuerdo completo es una operación distinta.
 - Sin notificaciones, retiro de propuestas ni filtro por vendedor en esta entrega.
+- **Reglas v2:** toda solicitud nueva pide la Excepción margen mínimo autorizado JDH
+  (`mode = margen_minimo`, de 0 a menos de 1). Al aprobarse escribe `supported_margin_pct`.
+- **Solicitud de margen proveedor** (`mode = margen_proveedor`, 2026-11-23): la de un apoyo
+  % Margen Garantizado.
+  - Pide un margen mínimo del proveedor menor que el vigente (`supplier_min_margin_pct`; si el
+    apoyo no lo tiene, menor que el margen garantizado).
+  - Puede ser 0 o negativo, mayor que -1.
+  - Al aprobarse escribe `supplier_min_margin_pct`, y con él baja el precio apoyado
+    (costo / (1 − margen)). No toca el margen autorizado JDH: es la excepción del proveedor, no
+    rentabilidad que pierde JDH.
+  - Se pide y se decide con las mismas rutas y permisos. La API elige el modo según el tipo
+    del apoyo.
+  - La respuesta trae `mode_label`: «Solicitud de margen proveedor {proveedor}» o «Excepción
+    margen mínimo autorizado JDH».
 
 ## Permisos y contrato
 
@@ -30,7 +44,7 @@ Rutas relativas al prefijo vigente `/api/v1`:
 
 La lista siempre filtra por usuario para Comercial. `mine=true` fuerza ese filtro también para BI; usarlo en lista y detalle del contexto Comercial. Buscar por solicitante, motivo, SKU, NIT o nombre del cliente. `size` máximo 100; respuesta `items,total,page,size`.
 
-Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `porcentaje` o `costo_neto`. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
+Solicitud: `id,support_id,mode,value,reason,requested_by_id,requested_by,created_at,status,version,support_version,snapshot,decided_by,decided_at,decision_reason`. `mode` es `margen_minimo` o `margen_proveedor`; `porcentaje` y `costo_neto` son las solicitudes anteriores a las reglas v2. Además trae `mode_label`. El detalle añade `support` y `events`. Aprobar/rechazar devuelven la solicitud resuelta.
 
 La lista y el detalle añaden `supplier_name` y `supplier_code`, resueltos desde el
 maestro para mostrar «Apoyo JDH · proveedor» también en solicitudes anteriores.

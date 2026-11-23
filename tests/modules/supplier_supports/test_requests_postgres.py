@@ -242,6 +242,38 @@ async def test_a_request_pending_from_before_rules_v2_can_still_be_decided(stora
     assert (await requests.get(pending["id"], None))["status"] == "pendiente"
 
 
+async def test_a_guaranteed_margin_asks_the_supplier_for_a_lower_minimum(storage):
+    """2026-11-23: on a % Margen Garantizado the request is a supplier margin request: under
+    the supplier's minimum, negative allowed, and its approval writes that minimum."""
+
+    _, master, requests, support = storage
+    support = await master.update(
+        support.id,
+        replace(
+            support.data,
+            calc_method="precio_neto",
+            supplier_value=None,
+            target_margin_pct=D("0.18"),
+            supplier_min_margin_pct=D("0.13"),
+        ),
+        1,
+        "bi",
+        datetime.now(UTC),
+    )
+    with pytest.raises(InvalidInputError, match="menor que el margen mínimo del proveedor"):
+        await propose(requests, support, "0.13")
+
+    pending = await propose(requests, support, "-0.05")
+
+    assert pending["mode"] == "margen_proveedor"
+    assert pending["snapshot"]["supplier_min_margin_pct"] == "0.130000"
+    await requests.decide(pending["id"], 1, 2, "bi", True, None, FixedCalendar().today())
+    current = await master.get(support.id)
+    assert current.data.supplier_min_margin_pct == D("-0.05")
+    # It is the supplier's exception, not JDH's authorized margin.
+    assert current.data.supported_margin_pct is None
+
+
 async def test_concurrent_approvals_and_explicit_rereview(storage):
     _, master, requests, support = storage
     first, second = await propose(requests, support), await propose(requests, support, "0.10")
