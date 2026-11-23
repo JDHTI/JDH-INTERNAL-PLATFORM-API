@@ -262,6 +262,12 @@ apoyo** (`sin_acuerdo`), y dentro de cada grupo por **margen del pedido de menor
 (los que no tienen margen, al final). Las líneas de cada pedido se ordenan igual: sin apoyo
 primero y por margen de menor a mayor. `sort=file` conserva el orden del archivo.
 
+`sort=margin_asc` y `sort=margin_desc` (2026-11-23) ordenan por el **margen del pedido**
+(`margin_pct`), de menor a mayor o al revés:
+- Los pedidos sin margen van al final en los dos sentidos.
+- Un empate se resuelve por consecutivo, de menor a mayor, y luego por el orden del archivo.
+- En la UI, el orden se elige desde los encabezados de la tabla.
+
 `sort=document_asc` y `sort=document_desc` (2026-11-23) ordenan por **consecutivo**, es decir,
 por el número de documento:
 - La llave es el **número del PV**: `PV-02592133` es 2592133, sin importar el prefijo ni los

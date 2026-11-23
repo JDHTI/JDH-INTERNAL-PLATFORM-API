@@ -37,7 +37,7 @@ MAX_PAGE_SIZE = 200
 MAX_NOTE_LENGTH = 500
 MAX_APPROVALS = 1000
 MAX_THRESHOLD_POINTS = Decimal(20)
-SORTS = ("attention", "file", "document_asc", "document_desc")
+SORTS = ("attention", "file", "document_asc", "document_desc", "margin_asc", "margin_desc")
 # The document number of a line read without one (``order_file``): it sorts last.
 _NO_DOCUMENT = "(sin documento"
 _DIGITS = re.compile(r"(\d+)")
@@ -64,6 +64,25 @@ def _by_document(orders: list[OrderView], descending: bool) -> list[OrderView]:
     by_file = sorted(numbered, key=lambda order: order.first.row_number)
     ordered = sorted(by_file, key=lambda order: document_key(order.document), reverse=descending)
     return ordered + unnumbered
+
+
+def _by_margin(orders: list[OrderView], descending: bool) -> list[OrderView]:
+    """Orders by their margin (the order's ``margin_pct``), lowest or highest first
+    (2026-11-23); the ones without a margin go last either way, and a tie goes by the sales
+    consecutive (ascending), then the file order."""
+
+    with_margin = [order for order in orders if order.margin_pct is not None]
+    without = [order for order in orders if order.margin_pct is None]
+    tie = _by_document(with_margin, descending=False)
+    position = {id(order): index for index, order in enumerate(tie)}
+    ordered = sorted(
+        tie,
+        key=lambda order: (
+            -order.margin_pct if descending else order.margin_pct,  # type: ignore[operator]
+            position[id(order)],
+        ),
+    )
+    return ordered + _by_document(without, descending=False)
 
 
 def _same_number(document: str, term: str) -> bool:
@@ -526,6 +545,8 @@ class OrderValidationService:
             orders = [_attention_lines(order) for order in sorted(orders, key=_order_key)]
         elif sort in ("document_asc", "document_desc"):
             orders = _by_document(orders, descending=sort == "document_desc")
+        elif sort in ("margin_asc", "margin_desc"):
+            orders = _by_margin(orders, descending=sort == "margin_desc")
         start = (page - 1) * size
         return OrderPage(
             items=orders[start : start + size],
