@@ -6,7 +6,7 @@ from uuid import UUID
 
 from app.core.errors import ForbiddenError, NotFoundError
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.domain.catalog import MANAGE, READ
+from app.modules.areas.domain.catalog import MANAGE, READ, is_enabled
 from app.modules.areas.domain.entities import Area
 from app.modules.areas.domain.ports import AreaRepository
 from app.modules.identity.domain.principal import Principal
@@ -162,6 +162,40 @@ class AreaLeaderPolicy:
             return False
         grants = (await self.areas.profile(principal)).areas.get(self.area_slug)
         return grants is not None and (grants.is_leader or grants.is_responsible)
+
+
+class ExplicitGrantPolicy:
+    """``manage`` on one module of one area granted by name, never through the wildcard ``*``
+    (2026-11-23): for a key that widens what a person sees, like ``comercial-director``, which
+    a Comercial role holding ``*`` must not get by accident. The area's leader or responsible
+    and the platform administrators pass; a moderator never does."""
+
+    def __init__(self, areas: AreaService, area_slug: str | None, module: str) -> None:
+        """Create the policy.
+
+        Args:
+            areas (AreaService): Area access use cases.
+            area_slug (str | None): The area whose roles grant the module; blank leaves only
+                the platform administrators.
+            module (str): Module key of the catalog.
+        """
+
+        self.areas = areas
+        self.area_slug = (area_slug or "").strip() or None
+        self.module = module
+
+    async def is_manager(self, principal: Principal) -> bool:
+        """Whether the caller holds ``manage`` on the module by name in the area."""
+
+        if principal.is_platform_admin:
+            return True
+        if self.area_slug is None or principal.is_moderator:
+            return False
+        profile = await self.areas.profile(principal)
+        grants = profile.areas.get(self.area_slug)
+        if grants is None or not is_enabled(self.area_slug, self.module, profile.overrides):
+            return False
+        return grants.is_leader or grants.is_responsible or grants.grants.get(self.module) == MANAGE
 
 
 class AreaTeam:

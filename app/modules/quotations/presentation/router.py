@@ -92,6 +92,10 @@ class PermissionsResponse(BaseModel):
     # Sees others' quotations with ``mine=false`` («Todas»): validators, moderators, and the
     # call center's leader those of its members (2026-11-23).
     can_see_team: bool = False
+    # What ``mine=false`` lists (2026-11-23): ``all`` («Todas»: validators, moderators,
+    # Comercial's directors) or ``assigned`` («Mi equipo»: a coordinator's sellers, the call
+    # center's members); null when the caller sees only their own.
+    team_scope: Literal["all", "assigned"] | None = None
     seller_linked: bool
     seller: SellerResponse | None
 
@@ -614,6 +618,9 @@ class SummaryResponse(BaseModel):
 class QuotationResponse(SummaryResponse):
     """A quotation with its header and lines."""
 
+    # Whether the caller may change it, whatever its status: false for those who only see it
+    # (a coordinator's team, a director, the call center's leader; 2026-11-23).
+    can_edit: bool = True
     channel_code: str | None
     price_list_customers: int | None
     billing_center_code: str | None
@@ -891,11 +898,14 @@ def _deleted_on(quotation: Quotation) -> date | None:
 
 
 def _detail(
-    detail: QuotationDetail, requests: Mapping[str, Any] | None = None
+    detail: QuotationDetail,
+    requests: Mapping[str, Any] | None = None,
+    can_edit: bool = True,
 ) -> QuotationResponse:
     quotation = detail.quotation
     return QuotationResponse(
         **_summary_values(quotation),  # type: ignore[arg-type]
+        can_edit=can_edit,
         channel_code=quotation.channel_code,
         price_list_customers=quotation.price_list_customers,
         billing_center_code=quotation.billing_center_code,
@@ -953,10 +963,17 @@ def _detail(
     )
 
 
-async def _respond(service: QuotationService, detail: QuotationDetail) -> QuotationResponse:
-    """The quotation with the internal support request of each line."""
+async def _respond(
+    principal: Principal, service: QuotationService, detail: QuotationDetail
+) -> QuotationResponse:
+    """The quotation with the internal support request of each line, and whether the caller
+    may change it."""
 
-    return _detail(detail, await service.support_requests_for(detail))
+    return _detail(
+        detail,
+        await service.support_requests_for(detail),
+        can_edit=await service.can_edit(principal, detail.quotation),
+    )
 
 
 @router.get("/permissions", response_model=PermissionsResponse, summary="What the caller may do")
@@ -978,6 +995,7 @@ async def permissions(
         can_request_support=result.can_request_support,
         can_see_rules=result.can_see_rules,
         can_see_team=result.can_see_team,
+        team_scope=result.team_scope,  # type: ignore[arg-type]
         seller_linked=seller is not None,
         seller=SellerResponse(code=seller.code, name=seller.name, email=seller.email)
         if seller
@@ -1146,6 +1164,7 @@ async def create_quotation(
 
     temporary = body.temporary_customer
     return await _respond(
+        principal,
         service,
         await service.create(
             principal,
@@ -1460,6 +1479,7 @@ async def create_list_update(
     customers) and every support of the list's customers. No offer and no quantities."""
 
     return await _respond(
+        principal,
         service,
         await service.create_list_update(
             principal,
@@ -1524,7 +1544,7 @@ async def get_quotation(
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> QuotationResponse:
-    return await _respond(service, await service.get(principal, quotation_id))
+    return await _respond(principal, service, await service.get(principal, quotation_id))
 
 
 @router.put(
@@ -1547,7 +1567,7 @@ async def update_lines(
 
     changes = [item.change() for item in body.lines]
     detail, skipped = await service.update_lines(principal, quotation_id, body.version, changes)
-    response = await _respond(service, detail)
+    response = await _respond(principal, service, detail)
     response.skipped = [_skipped(item) for item in skipped]
     return response
 
@@ -1576,7 +1596,7 @@ async def add_lines(
 
     values = [*body.skus, *([body.text] if body.text else [])]
     detail, result = await service.add_lines(principal, quotation_id, body.version, values)
-    response = await _respond(service, detail)
+    response = await _respond(principal, service, detail)
     response.import_result = ImportResultResponse(
         added=list(result.added),
         revalidated=list(result.revalidated),
@@ -1606,6 +1626,7 @@ async def add_local_line(
     the quotation changed since it was read or awaits validation."""
 
     return await _respond(
+        principal,
         service,
         await service.add_local_line(
             principal,
@@ -1636,6 +1657,7 @@ async def update_offer(
     keys sent change. Any status; never changes it. 409 on a stale version."""
 
     return await _respond(
+        principal,
         service,
         await service.update_offer(
             principal,
@@ -1690,7 +1712,9 @@ async def remove_line(
     """SKUs the advisor added, local products, or SKUs inactive in SIESA; an active
     sales-window SKU stays (leave its new price empty)."""
 
-    return await _respond(service, await service.remove_line(principal, quotation_id, version, sku))
+    return await _respond(
+        principal, service, await service.remove_line(principal, quotation_id, version, sku)
+    )
 
 
 @router.post(
@@ -1708,7 +1732,9 @@ async def refresh_quotation(
 ) -> QuotationResponse:
     """Last sales, cost and supports as they are now; new prices are kept by SKU."""
 
-    return await _respond(service, await service.refresh(principal, quotation_id, body.version))
+    return await _respond(
+        principal, service, await service.refresh(principal, quotation_id, body.version)
+    )
 
 
 @router.post(
@@ -1731,6 +1757,7 @@ async def confirm_quotation(
     customers always go by creation). The quotation is ``pendiente_validacion``."""
 
     return await _respond(
+        principal,
         service,
         await service.confirm(
             principal,
@@ -1760,7 +1787,9 @@ async def return_quotation(
     an advisor withdraws it."""
 
     return await _respond(
-        service, await service.return_to_draft(principal, quotation_id, body.version, body.note)
+        principal,
+        service,
+        await service.return_to_draft(principal, quotation_id, body.version, body.note),
     )
 
 
@@ -1782,6 +1811,7 @@ async def validate_quotation(
     SIESA); ``new_list_name`` may change its description."""
 
     return await _respond(
+        principal,
         service,
         await service.validate(
             principal,
@@ -1810,7 +1840,7 @@ async def mark_uploaded(
     and when (``uploaded_by``, ``uploaded_at``)."""
 
     return await _respond(
-        service, await service.mark_uploaded(principal, quotation_id, body.version)
+        principal, service, await service.mark_uploaded(principal, quotation_id, body.version)
     )
 
 
@@ -1869,6 +1899,7 @@ async def set_billing_center(
     not a main or spot-request one of the chosen centers."""
 
     return await _respond(
+        principal,
         service,
         await service.set_billing_center(
             principal, quotation_id, body.version, body.codes, body.cost_warehouses

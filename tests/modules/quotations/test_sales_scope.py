@@ -63,7 +63,6 @@ async def test_quoting_a_customer_outside_the_portfolio_is_refused(service, sale
     "scope",
     [
         EVERYTHING,
-        SalesScope("team", (), ("S01",), ("0051",)),
         SalesScope("mine", ("0051",), (), ("0051",)),
     ],
 )
@@ -98,3 +97,77 @@ async def test_permissions_report_the_scope(service, sales, advisor) -> None:
     sales.scopes[advisor.email] = SalesScope("team", (), ("S01",), ("0051",))
 
     assert (await service.permissions(advisor)).sales_scope == "team"
+
+
+async def _two_quotations(service, sales, repository, advisor, approver):
+    """One made by ``approver`` for a customer of seller 0051, one for seller 0099."""
+
+    sales.scopes[advisor.email] = EVERYTHING
+    detail = await service.create(advisor, NIT, 6)
+    made_by_other = replace(detail.quotation, created_by_id=approver.user_id)
+    team = replace(made_by_other, id=detail.quotation.id.__class__(int=1))
+    outside = replace(
+        made_by_other, id=detail.quotation.id.__class__(int=2), salesperson_code="0099"
+    )
+    del repository.items[detail.quotation.id]
+    for quotation in (team, outside):
+        repository.items[quotation.id] = replace(detail, quotation=quotation)
+    return team, outside
+
+
+async def test_a_coordinator_sees_the_quotations_of_their_sellers_but_edits_none(
+    service, sales, repository, advisor, approver
+) -> None:
+    team, outside = await _two_quotations(service, sales, repository, advisor, approver)
+    sales.scopes[advisor.email] = SalesScope("team", (), ("S01",), ("0051",))
+
+    page = await service.list(
+        advisor, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert [q.id for q in page.items] == [team.id]
+    seen = await service.get(advisor, team.id)
+    assert not await service.can_edit(advisor, seen.quotation)
+    with pytest.raises(ForbiddenError):
+        await service.get(advisor, outside.id)
+    mine = await service.list(
+        advisor, mine=True, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert mine.items == ()
+
+    permissions = await service.permissions(advisor)
+    assert permissions.can_see_team and permissions.team_scope == "assigned"
+
+
+class Directors:
+    def __init__(self, *emails: str) -> None:
+        self.emails = set(emails)
+
+    async def is_manager(self, principal) -> bool:
+        return principal.email in self.emails
+
+
+async def test_a_director_sees_every_quotation_and_edits_only_their_own(
+    service, sales, repository, advisor, approver
+) -> None:
+    team, outside = await _two_quotations(service, sales, repository, advisor, approver)
+    sales.scopes[advisor.email] = NOTHING
+    service.directors = Directors(advisor.email)
+
+    page = await service.list(
+        advisor, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert {q.id for q in page.items} == {team.id, outside.id}
+    seen = await service.get(advisor, outside.id)
+    assert not await service.can_edit(advisor, seen.quotation)
+    assert await service.can_edit(approver, seen.quotation)
+
+    permissions = await service.permissions(advisor)
+    assert permissions.can_see_team and permissions.team_scope == "all"
+
+
+async def test_someone_who_sees_only_their_own_has_no_team_scope(service, sales, advisor) -> None:
+    sales.scopes[advisor.email] = SalesScope("mine", ("0051",), (), ("0051",))
+
+    permissions = await service.permissions(advisor)
+
+    assert not permissions.can_see_team and permissions.team_scope is None

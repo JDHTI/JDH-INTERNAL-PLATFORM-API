@@ -22,6 +22,7 @@ from app.modules.areas.application.service import AreaService
 from app.modules.areas.infrastructure.policies import (
     AreaLeaderPolicy,
     AreaTeam,
+    ExplicitGrantPolicy,
     PermissionPolicy,
     UnrestrictedAreaAccess,
 )
@@ -518,8 +519,17 @@ class V1Container(containers.DeclarativeContainer):
         schema=settings.provided.DWH_SCHEMA,
         timeout=config.quotations.dwh_timeout,
     )
+    # Comercial's directors (2026-11-23): every customer, support and customer quotation. Only
+    # granted by name, so a Comercial role holding ``*`` is not a director.
+    commercial_director_policy = providers.Factory(
+        ExplicitGrantPolicy,
+        areas=area_service,
+        area_slug=config.quotations.manager_area_slug,
+        module="comercial-director",
+    )
     sales_scope_service = providers.Factory(
         SalesScopeService,
+        directors=commercial_director_policy,
         links=salesperson_link_repository,
         roster=sales_roster,
         users=user_directory,
@@ -876,6 +886,7 @@ class V1Container(containers.DeclarativeContainer):
         main_lists=config.quotations.main_lists,
         main_managers=main_list_manager_policy,
         main_approvers=main_list_approver_policy,
+        directors=commercial_director_policy,
         # The call center's leader sees the quotations of every member of the area.
         team=providers.Factory(
             AreaTeam,

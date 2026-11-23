@@ -82,6 +82,16 @@ MODULES: tuple[Module, ...] = (
         "Acciones correctivas, preventivas y de mejora del SIG (P.04.F.02)",
     ),
     Module("cotizador", "Cotizador", ("comercial", "bi", "call-center"), "Cotizaciones a clientes"),
+    # A permission without a screen of its own (2026-11-23): ``manage`` makes a director of
+    # Comercial, who sees every customer, support and customer quotation, and edits only their
+    # own quotations. Coordinators need no key: their SIESA supervisor link gives the team.
+    Module(
+        "comercial-director",
+        "Director comercial",
+        ("comercial",),
+        "Ve todas las cotizaciones, clientes y apoyos de Comercial",
+        locked=True,
+    ),
     Module(
         "actualizacion-listas",
         "Actualización de listas",
