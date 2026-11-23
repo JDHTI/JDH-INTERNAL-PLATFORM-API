@@ -11,10 +11,10 @@ from app.modules.supplier_supports.application.bulk import QuietHours
 from app.modules.supplier_supports.domain.entities import Trace
 
 # The v0.3 TI template headers (supplier chosen in the Suite) plus the optional JDH column.
-V03 = "Vigencia inicial,Vigencia final,NIT,SKU JDH,Tipo apoyo,Valor apoyo proveedor\n"
+V03 = "Vigencia inicial,Vigencia final,NIT,SKU JDH,Tipo apoyo,Valor apoyo proveedor,Unidad valor\n"
 ROWS = (
-    "01/10/2026,31/12/2026,800116299,1128,% sobre costo,5%\n"
-    "01/10/2026,INDEFINIDO,,8749,% sobre precio lista,7\n"
+    "01/10/2026,31/12/2026,800116299,1128,% sobre costo,5%,Unidad\n"
+    "01/10/2026,INDEFINIDO,,8749,% sobre precio lista,7,Unidad\n"
 )
 
 
@@ -61,7 +61,9 @@ async def test_a_second_upload_updates_by_key_and_keeps_what_it_does_not_bring(
     assert report.load_id != first.load_id and len(repo.items) == 2
 
     # Even a file that brings the JDH column does not replace an approved contribution.
-    with_jdh = V03.replace("\n", ",% Apoyo JDH\n", 1) + changed.replace("6%\n", "6%,5%\n", 1)
+    with_jdh = V03.replace("\n", ",% Apoyo JDH\n", 1) + changed.replace(
+        "6%,Unidad\n", "6%,Unidad,5%\n", 1
+    )
     again = await load(bulk, manager, with_jdh, supplier_code="233", apply=True)
     assert again.to_update == 0 and repo.items[target.id].data.jdh_pct == Decimal("0.02")
 
@@ -116,7 +118,7 @@ async def test_rows_with_the_same_key_block_the_load(bulk, manager) -> None:
 
 async def test_an_unknown_type_lists_the_labels(bulk, manager) -> None:
     report = await load(
-        bulk, manager, V03 + "01/10/2026,,800116299,1128,regalo,5%\n", supplier_code="233"
+        bulk, manager, V03 + "01/10/2026,,800116299,1128,regalo,5%,Unidad\n", supplier_code="233"
     )
 
     assert report.errors[0].field == "calc_method"
@@ -124,10 +126,13 @@ async def test_an_unknown_type_lists_the_labels(bulk, manager) -> None:
 
 
 async def test_the_supported_margin_column_and_the_minimum_margin_type(bulk, repo, manager) -> None:
-    header = "Fecha Inicio,NIT Cliente,SKU JDH,Tipo de apoyo,Valor apoyo,Margen apoyado\n"
+    header = (
+        "Fecha Inicio,NIT Cliente,SKU JDH,Tipo de apoyo,Valor apoyo,Margen apoyado,Unidad valor\n"
+    )
     rows = (
-        "01/10/2026,800116299,1128,% sobre costo,10%,12%\n"
-        "01/10/2026,800116299,8749,Margen mínimo,,6%\n"
+        "01/10/2026,800116299,1128,% sobre costo,10%,12%,Unidad\n"
+        # A minimum margin carries no money: it is created without its value unit.
+        "01/10/2026,800116299,8749,Margen mínimo,,6%,\n"
     )
 
     report = await load(bulk, manager, header + rows, supplier_code="233", apply=True)

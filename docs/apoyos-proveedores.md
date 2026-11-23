@@ -52,9 +52,33 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 | % Apoyo en Precio Lista | PL × % (su valor absoluto se resta al costo) | PL − $ Apoyo |
 | $ Apoyo en Costo / en Precio Lista | $ | PL − $ Apoyo |
 | $ Costo Apoyado | costo − $ costo apoyado | PL − $ Apoyo |
-| % Margen Garantizado | máx(0, costo − precio de venta × (1 − g)); sin precio de venta, al PL | PL |
+| % Margen Garantizado (con margen mínimo del proveedor `s`, 2026-11-23) | costo − PA<sub>s</sub> × (1 − g), con PA<sub>s</sub> = costo / (1 − s): fijo | PL − $ Apoyo; precio mínimo PA<sub>s</sub> |
+| % Margen Garantizado sin `s` (guardados antes) | máx(0, costo − precio de venta × (1 − g)); sin precio de venta, al PL | PL |
 
-- **% Margen Garantizado** (BI, 2026-11-18): el proveedor garantiza el margen `g` a **cualquier**
+- **% Margen Garantizado con margen mínimo del proveedor** (2026-11-23). Es la regla vigente:
+  - El apoyo lleva dos márgenes:
+    - el **margen garantizado** `g` (`target_margin_pct`, por ejemplo 18 %);
+    - el **margen mínimo garantizado proveedor** `s` (`supplier_min_margin_pct`, por ejemplo
+      13 %). Los dos son obligatorios al crear.
+  - Con `s` se calcula el **precio apoyado**: PA = costo / (1 − s). El proveedor pone
+    $ Apoyo = costo − PA × (1 − g) = costo × (g − s) / (1 − s), un monto fijo que no cambia con
+    el precio de venta.
+  - A PA, el margen con apoyo es exactamente `g`. Ejemplo: costo 1.000, s = 13 %, g = 18 % →
+    PA 1.149,43, $ Apoyo 57,47.
+  - **PA es el precio mínimo de la línea** en el cotizador. Vender por debajo deja el margen con
+    apoyo por debajo de `g`, porque el proveedor no pone más. Para bajar de `s` en una
+    cotización puntual, el vendedor pide desde la línea una **solicitud de margen proveedor**,
+    que se decide en el módulo de solicitudes. Al aprobarse crea una copia del apoyo para ese
+    cliente con el mínimo aprobado; el apoyo base no cambia (ver
+    [solicitudes-apoyos.md](solicitudes-apoyos.md#solicitud-de-margen-proveedor-margen-garantizado)).
+  - `s` puede ser 0 % o negativo: es la excepción que asume el proveedor. Es distinto de la
+    **Excepción margen mínimo autorizado JDH** (`supported_margin_pct`), que es rentabilidad que
+    pierde JDH. Debe ser menor que `g`.
+  - El precio apoyado sugerido es PL − $ Apoyo, como en los demás tipos, y nunca baja de PA.
+  - En el validador la parte del costo es fija, (g − s) / (1 − s), y la línea debe llegar a `g`.
+  - Un apoyo guardado antes sin `s` sigue con la regla anterior, descrita abajo, hasta que se le
+    escriba `s`.
+- **% Margen Garantizado sin margen mínimo del proveedor** (BI, 2026-11-18; regla anterior): el proveedor garantiza el margen `g` a **cualquier**
   precio de venta y pone lo que falte; no fija precio ni valor (`supplier_value` no se usa, solo
   `target_margin_pct`). El margen con apoyo queda en máx(margen sin apoyo, g). Ejemplo del
   usuario: vendido a 10.000 con margen 10 % (costo 9.000) y g = 14 % → el proveedor pone 400.

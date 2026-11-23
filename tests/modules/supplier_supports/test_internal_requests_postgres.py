@@ -143,3 +143,62 @@ async def test_approving_creates_linked_supports_published_to_the_dwh(storage) -
     assert refs["SKU-A"].status == "aprobada" and refs["SKU-B"].approved_margin_pct is None
     with pytest.raises(ConflictError):  # already decided
         await repo.reject(created.id, 2, "No", "bi", datetime.now(UTC))
+
+
+async def test_a_supplier_request_stores_a_negative_minimum_and_its_copy(storage) -> None:
+    """2026-11-23: ``kind = proveedor``; the item keeps the guarantee it lowers and may ask a
+    negative minimum; approving writes the copy for the customer, which never crosses the
+    base guarantee."""
+
+    database, supplier_id, quotation_id = storage
+    supports = SqlAlchemySupportRepository(database)
+    guarantee = SupportData(
+        kind="tactico_cliente",
+        calc_method="precio_neto",
+        commercial_supplier_id=supplier_id,
+        product_sku="SKU-G",
+        value_unit="unidad",
+        target_margin_pct=D("0.18"),
+        supplier_min_margin_pct=D("0.13"),
+        customer_nit="800116299",
+    )
+    base = await supports.create(uuid4(), guarantee, "bi", datetime.now(UTC))
+    asked = NewRequest(
+        **{
+            **new_request(supplier_id, quotation_id).__dict__,
+            "kind": "proveedor",
+            "items": (
+                RequestItem(
+                    "SKU-G", D("-0.05"), target_margin_pct=D("0.13"), base_support_id=base.id
+                ),
+            ),
+        }
+    )
+    repo = SqlAlchemyInternalRequestRepository(database)
+    created = await repo.create(asked, uuid4(), "v", datetime.now(UTC))
+
+    assert created.kind == "proveedor"
+    assert created.items[0].base_support_id == base.id
+    assert created.items[0].requested_margin_pct == D("-0.05")
+    day = date(2026, 11, 13)
+    copy = SupportData(
+        **{
+            **guarantee.__dict__,
+            "supplier_min_margin_pct": D("-0.05"),
+            "valid_from": day,
+            "valid_to": day,
+        }
+    )
+    approved = await repo.approve(
+        created.id,
+        1,
+        Approval("unica_vez", day, day, "Puntual", {"SKU-G": D("-0.05")}, {"SKU-G": copy}),
+        "bi@jdh.com.co",
+        datetime.now(UTC),
+    )
+
+    stored = await supports.get(approved.items[0].support_id)
+    assert stored.internal_request_id == created.id
+    assert stored.data.supplier_min_margin_pct == D("-0.05")
+    # Same class, customer and SKU as the base guarantee, but it lies on top: no crossing.
+    assert [item.id for item in await supports.overlapping(guarantee)] == [base.id]

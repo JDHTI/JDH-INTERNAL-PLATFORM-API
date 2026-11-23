@@ -119,6 +119,7 @@ _SCALES = {
             "min_margin_pct",
             "list_margin_pct",
             "supported_margin_pct",
+            "supplier_min_margin_pct",
         ),
         Decimal("0.000001"),
     ),
@@ -154,6 +155,7 @@ EDITABLE_FIELDS = frozenset(
         "min_margin_pct",
         "list_margin_pct",
         "supported_margin_pct",
+        "supplier_min_margin_pct",
         "pack_factor",
         "reference_cost",
         "reference_list_price",
@@ -242,16 +244,37 @@ def value_unit_missing() -> FieldError:
     )
 
 
-def _require_value_unit(data: SupportData) -> None:
-    """A support being created must say its value unit: it is no longer guessed from the
-    warehouse's cost. A margin exception carries no money, so it needs none.
+def missing_on_create(data: SupportData) -> FieldError | None:
+    """What a support being created lacks, or ``None``.
 
-    Raises:
-        FieldError: Without ``value_unit``.
+    - The value unit: it is no longer guessed from the warehouse's cost (2026-11-20). A
+      margin exception carries no money, so it needs none.
+    - A % Margen Garantizado, the supplier's minimum margin: it sets the supported price
+      (2026-11-23). One saved before keeps working without it.
     """
 
-    if not data.value_unit and data.calc_method != "margen_minimo":
-        raise value_unit_missing()
+    if not data.value_unit and "value_unit" in fields.required_on_create(data.calc_method):
+        return value_unit_missing()
+    if data.calc_method == "precio_neto" and data.supplier_min_margin_pct is None:
+        method = vocabulary.CALC_METHOD_LABELS.get(data.calc_method, data.calc_method)
+        return FieldError(
+            f"El tipo «{method}» necesita el «{_label('supplier_min_margin_pct')}»: con él se "
+            "calcula el precio apoyado",
+            "supplier_min_margin_pct",
+        )
+    return None
+
+
+def _require_on_create(data: SupportData) -> None:
+    """Stop the creation of a support that lacks a field (:func:`missing_on_create`).
+
+    Raises:
+        FieldError: The first field missing.
+    """
+
+    problem = missing_on_create(data)
+    if problem is not None:
+        raise problem
 
 
 def _branch_in(branch: str, branches: Sequence[str]) -> str | None:
@@ -455,6 +478,21 @@ class SupplierSupportService:
             value = getattr(data, name)
             if value is not None and not Decimal(0) <= value < Decimal(1):
                 raise FieldError(f"«{_label(name)}» debe estar entre 0 % y 100 %", name)
+        supplier_min = data.supplier_min_margin_pct
+        if supplier_min is not None:
+            # The supplier's exception may be 0 or negative (a price under the cost).
+            if not Decimal(-1) < supplier_min < Decimal(1):
+                raise FieldError(
+                    f"«{_label('supplier_min_margin_pct')}» debe estar entre -100 % y 100 %",
+                    "supplier_min_margin_pct",
+                )
+            guaranteed = data.target_margin_pct
+            if guaranteed is not None and supplier_min >= guaranteed:
+                raise FieldError(
+                    f"«{_label('supplier_min_margin_pct')}» debe ser menor que el "
+                    f"«{_label('target_margin_pct')}»: si no, el proveedor no pone nada",
+                    "supplier_min_margin_pct",
+                )
         if data.jdh_pct is not None and not Decimal(-1) <= data.jdh_pct <= Decimal(1):
             raise FieldError("jdh_pct debe estar entre -1 y 1", "jdh_pct")
         if data.jdh_net_cost is not None:
@@ -703,7 +741,7 @@ class SupplierSupportService:
     ) -> SupportData:
         normalized = self._normalize(data)
         if creating:
-            _require_value_unit(normalized)
+            _require_on_create(normalized)
         prepared = await self._resolve(
             normalized,
             supplier_code=supplier_code,

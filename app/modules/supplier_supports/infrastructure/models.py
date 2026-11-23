@@ -56,6 +56,11 @@ class SupplierSupportModel(Base):
             "(supported_margin_pct >= 0 AND supported_margin_pct < 1)",
             name="ck_supplier_supports_supported_margin",
         ),
+        CheckConstraint(
+            "supplier_min_margin_pct IS NULL OR "
+            "(supplier_min_margin_pct > -1 AND supplier_min_margin_pct < 1)",
+            name="ck_supplier_supports_supplier_min_margin",
+        ),
         CheckConstraint(_in("kind", KINDS), name="ck_supplier_supports_kind"),
         CheckConstraint(_in("funding", FUNDINGS), name="ck_supplier_supports_funding"),
         CheckConstraint(_in("calc_method", CALC_METHODS), name="ck_supplier_supports_calc_method"),
@@ -152,6 +157,9 @@ class SupplierSupportModel(Base):
     list_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     # Margin the product may drop to on top of the supplier's support (supported price).
     supported_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    # % Margen Garantizado: the supplier's minimum margin, the one the supported price is set
+    # at (2026-11-23); it may be negative (the supplier's exception).
+    supplier_min_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     pack_factor: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     reference_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     reference_list_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
@@ -410,6 +418,7 @@ class InternalSupportRequestModel(Base):
             "valid_from IS NULL OR valid_to IS NULL OR valid_to >= valid_from",
             name="ck_internal_support_requests_validity",
         ),
+        CheckConstraint("kind IN ('jdh', 'proveedor')", name="ck_internal_support_requests_kind"),
         Index("ix_internal_support_requests_status_created", "status", "created_at"),
         Index("ix_internal_support_requests_owner_created", "requested_by_id", "created_at"),
         Index("ix_internal_support_requests_quotation", "quotation_id"),
@@ -424,6 +433,9 @@ class InternalSupportRequestModel(Base):
     )
     status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="pendiente")
     decision: Mapped[str | None] = mapped_column(String(12))
+    # ``jdh``: an authorized margin JDH gives up; ``proveedor`` (2026-11-23): a supplier's
+    # minimum margin under the one of a % Margen Garantizado, for one quotation's customer.
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, server_default="jdh")
     quotation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="SET NULL")
     )
@@ -459,12 +471,13 @@ class InternalSupportRequestItemModel(Base):
     __tablename__ = "internal_support_request_items"
     __table_args__ = (
         UniqueConstraint("request_id", "sku", name="uq_internal_support_request_items_sku"),
+        # A supplier's minimum may be negative (its exception); JDH's are checked in the service.
         CheckConstraint(
-            "requested_margin_pct >= 0 AND requested_margin_pct < 1",
+            "requested_margin_pct > -1 AND requested_margin_pct < 1",
             name="ck_internal_support_request_items_requested",
         ),
         CheckConstraint(
-            "approved_margin_pct IS NULL OR (approved_margin_pct >= 0 AND approved_margin_pct < 1)",
+            "approved_margin_pct IS NULL OR (approved_margin_pct > -1 AND approved_margin_pct < 1)",
             name="ck_internal_support_request_items_approved",
         ),
         Index("ix_internal_support_request_items_request", "request_id", "position"),
@@ -489,5 +502,10 @@ class InternalSupportRequestItemModel(Base):
     support_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="SET NULL")
     )
-    # The product's optimal margin on the customer's list when it was asked (0070).
+    # The product's optimal margin on the customer's list when it was asked (0070); in a
+    # supplier request, the supplier's minimum margin in force: the margin asked is under it.
     target_margin_pct: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    # A supplier request: the % Margen Garantizado it lowers; approving copies it (0078).
+    base_support_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("supplier_supports.id", ondelete="SET NULL")
+    )

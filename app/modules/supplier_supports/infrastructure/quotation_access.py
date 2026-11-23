@@ -35,6 +35,9 @@ def _line(line: QuotationLine) -> QuotedLine:
         ),
         min_margin_pct=line.min_margin_pct,
         is_local=line.is_local,
+        support_id=line.support.support_id if line.support else None,
+        support_calc_method=line.support.calc_method if line.support else None,
+        supplier_min_margin_pct=line.support.supplier_min_margin_pct if line.support else None,
     )
 
 

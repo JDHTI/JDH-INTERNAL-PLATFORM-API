@@ -24,7 +24,11 @@ from app.modules.supplier_supports.application.internal_requests import (
     MAX_PAGE_SIZE,
     InternalRequestService,
 )
-from app.modules.supplier_supports.domain.internal_requests import MAX_ITEMS, InternalRequest
+from app.modules.supplier_supports.domain.internal_requests import (
+    MAX_ITEMS,
+    InternalRequest,
+    kind_label,
+)
 
 router = APIRouter(
     dependencies=[
@@ -40,17 +44,25 @@ _principal = Depends(get_current_principal)
 
 Status = Literal["pendiente", "aprobada", "rechazada"]
 Decision = Literal["persistente", "unica_vez"]
+Kind = Literal["jdh", "proveedor"]
 
 
 class RequestItemBody(BaseModel):
     sku: str = Field(min_length=1, max_length=50)
-    requested_margin_pct: Decimal = Field(ge=0, lt=1)
+    # 0 ≤ margin < 1 for JDH; a supplier's minimum may be negative (-1 < margin).
+    requested_margin_pct: Decimal = Field(gt=-1, lt=1)
 
 
 class CreateRequestBody(BaseModel):
-    """Ask a supported margin for SKUs of one supplier of the quotation's customer."""
+    """Ask a supported margin for SKUs of one supplier of the quotation's customer.
+
+    ``kind``: ``jdh`` (default), an authorized margin under the product's optimal margin; or
+    ``proveedor``, a supplier margin request: each line is covered by a % Margen Garantizado
+    with the supplier's minimum, and the margin asked is a lower minimum (it may be negative).
+    """
 
     version: int = Field(ge=1)
+    kind: Kind = "jdh"
     supplier_code: str = Field(min_length=1, max_length=20)
     # The order's date; empty = today (Bogotá).
     requested_for: date | None = None
@@ -92,7 +104,8 @@ class TargetMarginsResponse(BaseModel):
 
 class ApproveItemBody(BaseModel):
     sku: str = Field(min_length=1, max_length=50)
-    approved_margin_pct: Decimal = Field(ge=0, lt=1)
+    # A supplier request may approve a negative minimum; the service checks each kind.
+    approved_margin_pct: Decimal = Field(gt=-1, lt=1)
 
 
 class ApproveBody(BaseModel):
@@ -122,13 +135,16 @@ class RequestItemResponse(BaseModel):
     margin_pct: Decimal | None
     # Minimum of the product or the rule on that line.
     min_margin_pct: Decimal | None
-    # The product's current (optimal) margin for the customer when it was asked.
+    # The product's current (optimal) margin for the customer when it was asked; in a
+    # supplier request, the supplier's minimum in force (the margin asked is under it).
     target_margin_pct: Decimal | None = None
     requested_margin_pct: Decimal
     # Null when that SKU was not approved.
     approved_margin_pct: Decimal | None
     # The support created for it.
     support_id: UUID | None
+    # A supplier request: the % Margen Garantizado it lowers.
+    base_support_id: UUID | None = None
 
 
 class InternalRequestResponse(BaseModel):
@@ -136,6 +152,9 @@ class InternalRequestResponse(BaseModel):
     number: int
     status: Status
     decision: Decision | None
+    kind: Kind = "jdh"
+    # «Excepción margen mínimo autorizado JDH» or «Solicitud de margen proveedor {proveedor}».
+    kind_label: str = ""
     quotation_id: UUID | None
     quotation_label: str | None
     customer_nit: str
@@ -171,6 +190,8 @@ def _response(request: InternalRequest) -> InternalRequestResponse:
         number=request.number,
         status=request.status,  # type: ignore[arg-type]
         decision=request.decision,  # type: ignore[arg-type]
+        kind=request.kind,  # type: ignore[arg-type]
+        kind_label=kind_label(request.kind, request.supplier_name, request.supplier_code),
         quotation_id=request.quotation_id,
         quotation_label=request.quotation_label,
         customer_nit=request.customer_nit,
@@ -202,6 +223,7 @@ def _response(request: InternalRequest) -> InternalRequestResponse:
                 requested_margin_pct=item.requested_margin_pct,
                 approved_margin_pct=item.approved_margin_pct,
                 support_id=item.support_id,
+                base_support_id=item.base_support_id,
             )
             for item in request.items
         ],
@@ -222,12 +244,15 @@ async def create_request(
     service: InternalRequestService = _service,
 ) -> InternalRequestResponse:
     """One customer and SKUs of one supplier of the quotation, with the margin asked.
-    409 when the quotation changed or a SKU is already pending for it."""
+    ``kind=proveedor`` asks the supplier a lower minimum on a % Margen Garantizado line;
+    approving copies that support for this customer with the minimum approved. 409 when the
+    quotation changed or a SKU is already pending for it."""
 
     return _response(
         await service.create(
             principal,
             quotation_id,
+            kind=body.kind,
             version=body.version,
             supplier_code=body.supplier_code,
             requested_for=body.requested_for,

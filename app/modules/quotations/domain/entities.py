@@ -320,14 +320,24 @@ class AppliedSupport:
     valid_to: date | None = None
     # JDH's authorized minimum margin (rules v2): the floor of the line's minimum price.
     authorized_margin_pct: Decimal | None = None
-    # A % Margen Garantizado: the supplier pays what is missing to this margin at the price
-    # sold, so its money is :meth:`amount_at` the line's price (``amount`` is at list price).
+    # A % Margen Garantizado: the margin the supplier guarantees, the line's floor. Without
+    # the supplier's minimum it pays what is missing to it at the price sold, so its money is
+    # :meth:`amount_at` the line's price (``amount`` is at list price).
     guaranteed_margin_pct: Decimal | None = None
+    # The supplier's minimum margin of a % Margen Garantizado (2026-11-23): its amount is
+    # then fixed, the one at its supported price ``cost / (1 − margin)``, the line's minimum.
+    supplier_min_margin_pct: Decimal | None = None
+
+    @property
+    def open_guarantee(self) -> bool:
+        """A % Margen Garantizado that pays at whatever price (no supplier minimum)."""
+
+        return self.guaranteed_margin_pct is not None and self.supplier_min_margin_pct is None
 
     def amount_at(self, cost: Decimal | None, price: Decimal | None) -> Decimal | None:
         """The supplier's money per unit at ``price``."""
 
-        if self.guaranteed_margin_pct is None:
+        if not self.open_guarantee:
             return self.amount
         found = guaranteed_amount(cost, price, self.guaranteed_margin_pct)
         return None if found is None else found.quantize(Decimal("0.01"))
@@ -337,6 +347,7 @@ class AppliedSupport:
 
         return {
             "guaranteed_margin_pct": _text(self.guaranteed_margin_pct),
+            "supplier_min_margin_pct": _text(self.supplier_min_margin_pct),
             "support_id": str(self.support_id),
             "kind": self.kind,
             "calc_method": self.calc_method,
@@ -371,6 +382,7 @@ class AppliedSupport:
             valid_to=date.fromisoformat(data["valid_to"]) if data.get("valid_to") else None,
             authorized_margin_pct=_decimal(data.get("authorized_margin_pct")),
             guaranteed_margin_pct=_decimal(data.get("guaranteed_margin_pct")),
+            supplier_min_margin_pct=_decimal(data.get("supplier_min_margin_pct")),
         )
 
 

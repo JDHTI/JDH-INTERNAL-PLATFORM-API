@@ -114,6 +114,7 @@ class FakeRepository:
             decided_at=None,
             decision_reason=None,
             items=request.items,
+            kind=request.kind,
         )
         self.items[stored.id] = stored
         return stored

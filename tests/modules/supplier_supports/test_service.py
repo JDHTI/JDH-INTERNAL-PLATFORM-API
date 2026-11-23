@@ -9,6 +9,7 @@ import pytest
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.supplier_supports.application.service import FieldError
+from app.modules.supplier_supports.domain import fields
 from app.modules.supplier_supports.domain.entities import SupportData, Tier
 from tests.modules.supplier_supports.conftest import FAMILIA_ID, SKU_1128, TODAY, person
 
@@ -68,7 +69,18 @@ async def test_create_normalizes_scope_and_nit(service, manager) -> None:
         ({"valid_to": date(2026, 1, 1)}, "anterior"),
         ({"calc_method": "pct_costo", "supplier_value": D("5")}, "entre 0 % y 100 %"),
         ({"supplier_value": None}, "necesita el «Valor apoyo»"),
-        ({"calc_method": "precio_neto", "target_margin_pct": None}, "«Margen garantizado»"),
+        (
+            {
+                "calc_method": "precio_neto",
+                "target_margin_pct": None,
+                "supplier_min_margin_pct": D("0.1"),
+            },
+            "«Margen garantizado»",
+        ),
+        (
+            {"calc_method": "precio_neto", "target_margin_pct": D("0.18")},
+            "«Margen mínimo garantizado proveedor»",
+        ),
         ({"reference_cost": D("0")}, "mayor que cero"),
         ({"tiers": (Tier("unidades", D("10"), D("5"), D("1")),)}, "escala"),
     ],
@@ -437,6 +449,17 @@ async def test_a_new_support_must_say_its_value_unit(service, manager) -> None:
         value_unit=None,
     )
     assert (await service.create(manager, exception)).support.data.value_unit is None
+
+
+def test_the_form_shows_every_field_a_creation_requires() -> None:
+    """A field the API requires on create must be shown by the form for that method."""
+
+    schema = fields.form_schema()
+    for method in fields.active_methods():
+        rule = schema["methods"][method]
+        assert set(rule["requires_on_create"]) <= set(rule["shows"]) | set(rule["requires"])
+    assert schema["methods"]["precio_neto"]["requires_on_create"] == ["value_unit"]
+    assert schema["methods"]["margen_minimo"]["requires_on_create"] == []
 
 
 async def test_changing_the_unit_by_hand_records_the_provenance(service, manager) -> None:

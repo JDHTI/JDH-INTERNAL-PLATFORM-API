@@ -61,6 +61,29 @@ def guaranteed_amount(
     return max(ZERO, cost - price * (ONE - guaranteed_margin))
 
 
+def supplier_supported_price(
+    cost: Decimal | None, supplier_min_margin: Decimal | None
+) -> Decimal | None:
+    """The supported price of a % Margen Garantizado (2026-11-23): the cost at the supplier's
+    minimum margin, ``cost / (1 − m)``; ``m`` may be negative (a price under the cost)."""
+
+    if cost is None or supplier_min_margin is None or supplier_min_margin >= ONE:
+        return None
+    return cost / (ONE - supplier_min_margin)
+
+
+def fixed_guaranteed_amount(
+    cost: Decimal | None, guaranteed_margin: Decimal | None, supplier_min_margin: Decimal | None
+) -> Decimal | None:
+    """What a % Margen Garantizado pays with the supplier's minimum margin set:
+    ``cost − PA × (1 − g)`` at its supported price ``PA = cost / (1 − m)``, that is
+    ``cost × (g − m) / (1 − m)``. A fixed share of the cost, whatever price it is sold at:
+    at ``PA`` the margin with the support is exactly ``g``."""
+
+    price = supplier_supported_price(cost, supplier_min_margin)
+    return guaranteed_amount(cost, price, guaranteed_margin)
+
+
 def guaranteed_share(margin: Decimal | None, guaranteed_margin: Decimal | None) -> Decimal | None:
     """The same as a share of the cost, from the margin without the support ``m``:
     ``max(0, (g − m) / (1 − m))``, which leaves the margin at ``max(m, g)``. No units."""
@@ -114,6 +137,7 @@ def unit_amount(
     pack_factor: Decimal | None = None,
     guaranteed_margin: Decimal | None = None,
     sale_price: Decimal | None = None,
+    supplier_min_margin: Decimal | None = None,
 ) -> Decimal | None:
     """The supplier's money per inventory unit ($ Apoyo), or ``None`` when it has none.
 
@@ -127,6 +151,8 @@ def unit_amount(
         guaranteed_margin (Decimal | None): The guaranteed margin of a % Margen Garantizado.
         sale_price (Decimal | None): The price sold at, per inventory unit; a % Margen
             Garantizado without it is taken at the list price.
+        supplier_min_margin (Decimal | None): The supplier's minimum margin of a % Margen
+            Garantizado: with it the amount is fixed at its supported price (2026-11-23).
 
     Returns:
         Decimal | None: The amount; ``None`` for margin-only exceptions, rebates over sales,
@@ -134,6 +160,8 @@ def unit_amount(
     """
 
     if calc_method == GUARANTEED_METHOD:
+        if supplier_min_margin is not None:
+            return fixed_guaranteed_amount(cost, guaranteed_margin, supplier_min_margin)
         price = sale_price if sale_price is not None else list_price
         return guaranteed_amount(cost, price, guaranteed_margin)
     if value is None:
@@ -154,14 +182,16 @@ def suggested_price(
     calc_method: str,
     amount: Decimal | None,
     list_price: Decimal | None,
+    fixed: bool = False,
 ) -> Decimal | None:
     """Precio Apoyado Sugerido: the list price minus the supplier's money.
 
-    A % Margen Garantizado is sold at the list price: the supplier tops the margin up to the
-    guaranteed one at whatever price, so it does not lower the price.
+    A % Margen Garantizado without the supplier's minimum margin is sold at the list price:
+    the supplier tops the margin up to the guaranteed one at whatever price. With it
+    (``fixed``) its amount is known, so it is the list price minus it like the others.
     """
 
-    if calc_method == GUARANTEED_METHOD:
+    if calc_method == GUARANTEED_METHOD and not fixed:
         return list_price
     if amount is None or list_price is None:
         return None
@@ -188,6 +218,7 @@ def supplier_amount(data: SupportData) -> Decimal | None:
         value_unit=data.value_unit,
         pack_factor=data.pack_factor,
         guaranteed_margin=data.target_margin_pct,
+        supplier_min_margin=data.supplier_min_margin_pct,
     )
 
 
@@ -252,7 +283,10 @@ def derive(
         value_unit=data.value_unit,
         pack_factor=pack,
         guaranteed_margin=data.target_margin_pct,
+        supplier_min_margin=data.supplier_min_margin_pct,
     )
+    # A guaranteed margin with the supplier's minimum set pays a fixed amount (2026-11-23).
+    fixed = method == GUARANTEED_METHOD and data.supplier_min_margin_pct is not None
     # A supported cost above today's cost (or a negative value) brings no money: the support
     # does not raise the price over the list price, it just stops counting until the cost
     # goes back up. ``support_above_cost`` tells the screen why.
@@ -262,7 +296,7 @@ def derive(
     net_cost = cost - amount if cost is not None and amount is not None else None
     if method in ("margen_minimo", "puntos_margen"):
         net_cost = cost
-    price = suggested_price(method, amount, listed)
+    price = suggested_price(method, amount, listed, fixed)
 
     min_margin = data.min_margin_pct
     if method == "puntos_margen" and data.supplier_value is not None:
@@ -270,8 +304,15 @@ def derive(
         min_margin = base - data.supplier_value if base is not None else min_margin
 
     floor_margin = authorized_margin(data)
-    # A guaranteed margin has no minimum price: the supplier covers any price down to it.
-    min_price = None if method == GUARANTEED_METHOD else minimum_price(net_cost, floor_margin)
+    price_floor = floor_margin
+    if fixed and price_floor is None:
+        # Its minimum price is the supported price: the net cost at the guaranteed margin,
+        # which is the cost at the supplier's minimum margin.
+        price_floor = data.target_margin_pct
+    # A guaranteed margin without the supplier's minimum has no minimum price: the supplier
+    # covers any price down to it.
+    open_guarantee = method == GUARANTEED_METHOD and not fixed
+    min_price = None if open_guarantee else minimum_price(net_cost, price_floor)
     # The recomposed margin is the one the support leaves at the price it is sold at: the
     # Precio Apoyado Mínimo when JDH authorized a minimum margin, else the suggested price.
     # Never at the list price (BI, 2026-11-18).

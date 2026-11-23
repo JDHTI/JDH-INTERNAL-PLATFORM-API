@@ -28,7 +28,10 @@ from app.modules.supplier_supports.application.profiles import (
     normalize_column_map,
     normalize_defaults,
 )
-from app.modules.supplier_supports.application.service import SupplierSupportService
+from app.modules.supplier_supports.application.service import (
+    SupplierSupportService,
+    missing_on_create,
+)
 from app.modules.supplier_supports.domain import fields, overlap, vocabulary
 from app.modules.supplier_supports.domain.bulk import (
     CREATE,
@@ -495,6 +498,14 @@ class SupportBulkService:
                     retirements[match.id] = Supersede(match.id, match.version, last_day, note)
                 continue
             if match is None:
+                # A row that creates a support must say its value unit (2026-11-20, as it
+                # came: not the one inferred) and, on a % Margen Garantizado, the supplier's
+                # minimum margin (2026-11-23); one that updates keeps what is stored.
+                unit = rows_in[index].data.value_unit
+                problem = missing_on_create(replace(item, value_unit=unit))
+                if problem is not None:
+                    issues.append(RowIssue(number, problem.field, problem.detail))
+                    continue
                 actions[index] = (CREATE, None, item)
                 continue
             merged = merge(match.data, item, row.given)

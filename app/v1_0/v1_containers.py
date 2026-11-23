@@ -874,6 +874,8 @@ class V1Container(containers.DeclarativeContainer):
         calendar=pqrsf_calendar,
         # Comercial asks an authorized margin from the requests panel too (by customer + SKU).
         requesters=supplier_support_requester_policy,
+        # A supplier margin request copies the guaranteed support it lowers.
+        supports=supplier_support_repository,
     )
     list_review_service = providers.Factory(
         ListReviewService,

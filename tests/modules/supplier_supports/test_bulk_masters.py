@@ -21,6 +21,11 @@ def colors(content: bytes) -> dict[str, str]:
     return {cell.value: cell.fill.start_color.rgb[-6:] for cell in sheet[1]}
 
 
+def comments(content: bytes) -> dict[str, str]:
+    sheet = openpyxl.load_workbook(io.BytesIO(content))["Apoyos"]
+    return {cell.value: cell.comment.text for cell in sheet[1] if cell.comment}
+
+
 def xlsx(header: list[str], *rows: list[object]) -> bytes:
     book = openpyxl.Workbook()
     sheet = book.active
@@ -37,13 +42,27 @@ async def load(bulk, manager, content: bytes, **kwargs):
     return await bulk.load(manager, "apoyos.xlsx", content, supplier_code="233", **kwargs)
 
 
-HEADER = ["Clase apoyo", "Tipo apoyo", "Valor apoyo", "NIT Cliente", "Sucursal", "SKU JDH"]
+HEADER = [
+    "Clase apoyo",
+    "Tipo apoyo",
+    "Valor apoyo",
+    "Unidad valor",
+    "NIT Cliente",
+    "Sucursal",
+    "SKU JDH",
+]
 
 
 def test_headers_are_red_when_always_required_orange_by_type_and_blue_otherwise() -> None:
     short = colors(template_workbook())
 
     assert short["Clase apoyo"] == RED and short["Tipo apoyo"] == RED
+    # Creating a support needs its value unit, in every type but the margin exception
+    # (2026-11-20): red, with the exception in the header's note.
+    assert short["Unidad valor"] == RED
+    assert comments(template_workbook())["Unidad valor"] == (
+        "Obligatorio: Sí, salvo con Tipo apoyo Margen mínimo autorizado."
+    )
     # Every type but the minimum margin needs a value; the margin column is the minimum
     # margin's and the guaranteed margin's.
     assert short["Valor apoyo"] == ORANGE
@@ -85,8 +104,14 @@ def test_the_instructions_explain_the_colors_and_which_types_require_a_column() 
     rows = {row[0]: row for row in guide.iter_rows(values_only=True) if row[0]}
     swatches = {row[0].value: row[0].fill.start_color.rgb[-6:] for row in guide.iter_rows()}
 
-    assert rows["Rojo"][1] == "Obligatoria en toda fila."
+    assert rows["Rojo"][1] == (
+        "Obligatoria en toda fila (Unidad valor: en la que crea un apoyo, salvo la "
+        "Excepción margen JDH)."
+    )
     assert (swatches["Rojo"], swatches["Naranja"], swatches["Azul"]) == (RED, ORANGE, BLUE)
+    assert rows["value_unit"][2] == "Sí, salvo con Tipo apoyo Margen mínimo autorizado"
+    unit = next(line for line in rows if str(line).startswith("Unidad valor:"))
+    assert "obligatoria en la fila que crea un apoyo" in unit and "conserva la guardada" in unit
     assert rows["supplier_value"][2] == (
         "Sí, salvo con Tipo apoyo % Margen Garantizado o Margen mínimo autorizado"
     )
@@ -97,7 +122,7 @@ def test_the_instructions_explain_the_colors_and_which_types_require_a_column() 
 
 
 async def test_a_blank_class_is_an_error_when_the_file_has_the_column(bulk, manager) -> None:
-    content = xlsx(HEADER, [None, "% Apoyo en Costo", 0.05, 800116299, None, 1128])
+    content = xlsx(HEADER, [None, "% Apoyo en Costo", 0.05, "Unidad", 800116299, None, 1128])
 
     report = await load(bulk, manager, content)
 
@@ -111,15 +136,26 @@ async def test_a_blank_class_is_an_error_when_the_file_has_the_column(bulk, mana
 async def test_the_margin_column_is_the_guaranteed_margin_of_a_guaranteed_margin(
     bulk, repo, manager
 ) -> None:
-    header = [*HEADER, "Excepción margen mínimo autorizado JDH"]
-    row = ["Apoyo táctico", "% Margen Garantizado", 5000, 800116299, None, 1128, 0.2]
+    header = [
+        *HEADER,
+        "Excepción margen mínimo autorizado JDH",
+        "Margen mínimo garantizado proveedor",
+    ]
+    row = ["Apoyo táctico", "% Margen Garantizado", 5000, "Unidad", 800116299, None, 1128, 0.2]
 
-    report = await load(bulk, manager, xlsx(header, row), apply=True)
+    report = await load(bulk, manager, xlsx(header, [*row, 0.13]), apply=True)
 
     assert report.errors == []
     (saved,) = repo.items.values()
     assert saved.data.target_margin_pct == Decimal("0.2")
+    assert saved.data.supplier_min_margin_pct == Decimal("0.13")
     assert saved.data.supported_margin_pct is None
+    # A new % Margen Garantizado needs the supplier's minimum margin (2026-11-23); a negative
+    # one is the supplier's exception and is read.
+    missing = await load(bulk, manager, xlsx(header, [*row[:6], 8749, 0.2, None]))
+    assert missing.blocked and missing.errors[0].field == "supplier_min_margin_pct"
+    negative = await load(bulk, manager, xlsx(header, [*row[:6], 8749, 0.2, "-5%"]))
+    assert negative.errors == []
 
 
 def test_the_dian_check_digit() -> None:
@@ -141,7 +177,18 @@ async def test_customer_and_product_come_from_the_masters_however_they_are_typed
 ) -> None:
     lookup.products["1128"] = replace(lookup.products["1128"], supplier_sku="FAM-77")
     header = [*HEADER, "Cliente", "Grupo Empresarial", "SKU Proveedor"]
-    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, nit, branch, sku, "OTRO", "OTRO", "X"]
+    row = [
+        "Apoyo táctico",
+        "% Apoyo en Costo",
+        0.05,
+        "Unidad",
+        nit,
+        branch,
+        sku,
+        "OTRO",
+        "OTRO",
+        "X",
+    ]
 
     report = await load(bulk, manager, xlsx(header, row), apply=True)
 
@@ -154,7 +201,7 @@ async def test_customer_and_product_come_from_the_masters_however_they_are_typed
 
 
 async def test_a_branch_the_customer_does_not_have_is_an_error(bulk, manager) -> None:
-    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, 800116299, 9, 1128]
+    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, "Unidad", 800116299, 9, 1128]
 
     report = await load(bulk, manager, xlsx(HEADER, row))
 
@@ -164,7 +211,7 @@ async def test_a_branch_the_customer_does_not_have_is_an_error(bulk, manager) ->
 
 async def test_the_business_group_of_a_nit_is_the_masters(bulk, repo, manager) -> None:
     header = [*HEADER, "Grupo Empresarial"]
-    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, 900430148, None, 1128, "Otro grupo"]
+    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, "Unidad", 900430148, None, 1128, "Otro grupo"]
 
     report = await load(bulk, manager, xlsx(header, row), apply=True)
 
@@ -184,8 +231,8 @@ async def test_the_business_group_of_a_nit_is_the_masters(bulk, repo, manager) -
 async def test_a_supplier_sku_without_jdh_sku_finds_it_or_fails(
     bulk, repo, manager, code, message
 ) -> None:
-    header = ["Clase apoyo", "Tipo apoyo", "Valor apoyo", "SKU Proveedor"]
-    row = ["Actividad descuento temporal", "% Apoyo en Costo", 0.05, code]
+    header = ["Clase apoyo", "Tipo apoyo", "Valor apoyo", "Unidad valor", "SKU Proveedor"]
+    row = ["Actividad descuento temporal", "% Apoyo en Costo", 0.05, "Unidad", code]
 
     report = await load(bulk, manager, xlsx(header, row), apply=message is None)
 
@@ -202,8 +249,10 @@ async def test_promotional_warehouses_come_from_the_load_or_from_each_row(
 ) -> None:
     header = [*HEADER, "Bodega promocional"]
     rows = [
-        ["Apoyo táctico", "% Apoyo en Costo", 0.05, 800116299, None, 1128, None],  # the default
-        ["Apoyo táctico", "% Apoyo en Costo", 0.05, 900430148, None, 1128, "No"],  # its own
+        # the default
+        ["Apoyo táctico", "% Apoyo en Costo", 0.05, "Unidad", 800116299, None, 1128, None],
+        # its own
+        ["Apoyo táctico", "% Apoyo en Costo", 0.05, "Unidad", 900430148, None, 1128, "No"],
     ]
 
     report = await load(
@@ -244,7 +293,7 @@ def test_the_promotional_column_is_in_the_full_template_and_the_download_only() 
 
 
 async def test_the_download_with_data_reads_the_masters_again(bulk, repo, lookup, manager) -> None:
-    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, 900430148, None, 1128]
+    row = ["Apoyo táctico", "% Apoyo en Costo", 0.05, "Unidad", 900430148, None, 1128]
     await load(bulk, manager, xlsx(HEADER, row), apply=True)
     lookup.products["1128"] = replace(lookup.products["1128"], supplier_sku="FAM-NUEVO")
     lookup.names_by_nit["900430148"] = "GODDARD RENOMBRADO"

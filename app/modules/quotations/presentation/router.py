@@ -367,9 +367,13 @@ class SupportResponse(BaseModel):
     valid_to: date | None
     # JDH's authorized minimum margin: when set, the line's minimum price uses it.
     authorized_margin_pct: Decimal | None = None
-    # % Margen Garantizado: the margin the supplier guarantees at any price. Its ``amount`` is
-    # what it pays at the line's price (new, else last); ``list_amount`` at the list price.
+    # % Margen Garantizado: the margin the supplier guarantees. Without the supplier's
+    # minimum its ``amount`` is what it pays at the line's price (new, else last) and
+    # ``list_amount`` the one at the list price.
     guaranteed_margin_pct: Decimal | None = None
+    # The supplier's minimum margin (2026-11-23): the amount is then fixed, the one at the
+    # supported price cost / (1 − margin), which is the line's minimum price.
+    supplier_min_margin_pct: Decimal | None = None
     list_amount: Decimal | None = None
 
 
@@ -660,15 +664,17 @@ class QuotationPageResponse(BaseModel):
 def _support(item: AppliedSupport | None, line: QuotationLine) -> SupportResponse | None:
     if item is None:
         return None
-    guaranteed = item.guaranteed_margin_pct is not None
+    guaranteed = item.open_guarantee
     return SupportResponse(
         support_id=item.support_id,
         kind=item.kind,
         calc_method=item.calc_method,
         program=item.program,
-        # A guaranteed margin pays what is missing at the line's price: that is its amount.
+        # A guaranteed margin with no supplier minimum pays what is missing at the line's
+        # price: that is its amount.
         amount=line.support_amount if guaranteed else item.amount,
         guaranteed_margin_pct=item.guaranteed_margin_pct,
+        supplier_min_margin_pct=item.supplier_min_margin_pct,
         list_amount=item.amount,
         share_of_cost=item.share_of_cost,
         required_margin_pct=item.required_margin_pct,

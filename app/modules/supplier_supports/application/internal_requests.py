@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -23,18 +24,28 @@ from app.modules.identity.domain.principal import Principal
 from app.modules.supplier_supports.domain.entities import SupportData
 from app.modules.supplier_supports.domain.internal_requests import (
     FOR_GOOD,
+    JDH_KIND,
+    KINDS,
     MAX_ITEMS,
     ONCE,
     PENDING,
+    SUPPLIER_KIND,
     Approval,
     InternalRequest,
     InternalRequestRepository,
     NewRequest,
     QuotationAccess,
+    QuotedLine,
     RequestItem,
     RequestRef,
 )
-from app.modules.supplier_supports.domain.ports import Calendar, ManagerPolicy, MasterLookup
+from app.modules.supplier_supports.domain.ports import (
+    Calendar,
+    ManagerPolicy,
+    MasterLookup,
+    SupportRepository,
+)
+from app.modules.supplier_supports.domain.pricing import GUARANTEED_METHOD
 from app.modules.supplier_supports.domain.vocabulary import INTERNAL_STATUSES
 
 QUOTATION_KIND = "cotizacion"
@@ -63,6 +74,51 @@ def _margin(value: Decimal, sku: str) -> Decimal:
 
 def _pct(value: Decimal) -> str:
     return f"{value * 100:.2f}".replace(".", ",") + " %"
+
+
+def _approved_supplier_margin(sku: str, value: Decimal, item: RequestItem) -> Decimal:
+    """The supplier minimum a reviewer approves: from -100 % and under the one in force when
+    it was asked.
+
+    Raises:
+        InvalidInputError: Out of that range.
+    """
+
+    current = item.target_margin_pct
+    if not Decimal(-1) < value < Decimal(1) or (current is not None and value >= current):
+        limit = _pct(current) if current is not None else "100 %"
+        raise InvalidInputError(
+            f"El margen aprobado de {sku} debe estar entre -100 % y el mínimo del proveedor "
+            f"({limit})"
+        )
+    return value.quantize(Decimal("0.000001"))
+
+
+def _below_supplier_minimum(sku: str, value: Decimal, line: QuotedLine) -> tuple[Decimal, Decimal]:
+    """The margin asked in a supplier request, and the supplier's minimum it must be under.
+
+    Raises:
+        InvalidInputError: The line is not covered by a % Margen Garantizado with the
+            supplier's minimum, or the margin is not between -100 % and that minimum.
+    """
+
+    current = line.supplier_min_margin_pct
+    if line.support_calc_method != GUARANTEED_METHOD or current is None or not line.support_id:
+        raise InvalidInputError(
+            f"La referencia {sku} no tiene un % Margen Garantizado con margen mínimo del "
+            "proveedor: pide un margen autorizado JDH"
+        )
+    if not Decimal(-1) < value < Decimal(1):
+        raise InvalidInputError(
+            f"El margen de {sku} debe ser una fracción entre -1 y 1 (0.07 = 7 %, -0.05 = -5 %)"
+        )
+    asked = value.quantize(Decimal("0.000001"))
+    if asked >= current:
+        raise InvalidInputError(
+            f"El margen pedido para {sku} ({_pct(asked)}) debe ser menor que el margen mínimo "
+            f"del proveedor ({_pct(current)})"
+        )
+    return asked, current
 
 
 def _below_target(sku: str, asked: Decimal, target: TargetMargin | None) -> Decimal:
@@ -139,6 +195,7 @@ class InternalRequestService:
         masters: MasterLookup,
         calendar: Calendar,
         requesters: ManagerPolicy | None = None,
+        supports: SupportRepository | None = None,
     ) -> None:
         """Create the service.
 
@@ -151,6 +208,8 @@ class InternalRequestService:
             calendar (Calendar): Bogotá calendar (the default order date).
             requesters (ManagerPolicy | None): Who asks JDH supports from the requests panel
                 (``solicitudes-apoyos``); they may ask by customer and SKU too.
+            supports (SupportRepository | None): The master: a supplier margin request copies
+                the guaranteed support it lowers.
         """
 
         self.repository = repository
@@ -159,6 +218,7 @@ class InternalRequestService:
         self.masters = masters
         self.calendar = calendar
         self.requesters = requesters
+        self.supports = supports
 
     # ------------------------------------------------------------ access
 
@@ -195,8 +255,14 @@ class InternalRequestService:
         agreed_with: str,
         reason: str,
         items: Sequence[tuple[str, Decimal]],
+        kind: str = JDH_KIND,
     ) -> InternalRequest:
         """Ask a supported margin for SKUs of one supplier of a customer quotation.
+
+        ``kind``: ``jdh`` (an authorized margin, under the product's optimal margin) or
+        ``proveedor`` (2026-11-23): each line is covered by a % Margen Garantizado with the
+        supplier's minimum margin, and the margin asked is a lower minimum for this customer
+        (it may be 0 or negative).
 
         Raises:
             ForbiddenError: The caller does not quote, or reviews.
@@ -223,6 +289,8 @@ class InternalRequestService:
         supplier_id = (await self.masters.commercial_suppliers_by_code([code])).get(code)
         if supplier_id is None:
             raise InvalidInputError(f"Proveedor comercial desconocido: {code}")
+        if kind not in KINDS:
+            raise InvalidInputError(f"kind debe ser uno de: {', '.join(KINDS)}")
         if not 1 <= len(items) <= MAX_ITEMS:
             raise InvalidInputError(f"Pide entre 1 y {MAX_ITEMS} referencias")
         skus = [sku.strip() for sku, _ in items]
@@ -230,7 +298,7 @@ class InternalRequestService:
             raise InvalidInputError("Una referencia está repetida en la solicitud")
         request_items: list[RequestItem] = []
         supplier_name: str | None = None
-        targets = await self.masters.target_margins(nit, skus)
+        targets = await self.masters.target_margins(nit, skus) if kind == JDH_KIND else {}
         for sku, (_, margin) in zip(skus, items, strict=True):
             line = quotation.lines.get(sku)
             if line is None or line.is_local:
@@ -240,7 +308,12 @@ class InternalRequestService:
                     f"La referencia {sku} es de otro proveedor: todas deben ser de {code}"
                 )
             supplier_name = supplier_name or line.supplier_name
-            asked = _margin(margin, sku)
+            if kind == SUPPLIER_KIND:
+                asked, current = _below_supplier_minimum(sku, margin, line)
+                base = line.support_id
+            else:
+                asked = _margin(margin, sku)
+                current, base = _below_target(sku, asked, targets.get(sku)), None
             request_items.append(
                 RequestItem(
                     sku=sku,
@@ -251,7 +324,8 @@ class InternalRequestService:
                     quoted_price=line.quoted_price,
                     margin_pct=line.margin_pct,
                     min_margin_pct=line.min_margin_pct,
-                    target_margin_pct=_below_target(sku, asked, targets.get(sku)),
+                    target_margin_pct=current,
+                    base_support_id=base,
                 )
             )
         new = NewRequest(
@@ -266,6 +340,7 @@ class InternalRequestService:
             agreed_with=_text(agreed_with, "agreed_with", "con quién se acordó") or "",
             reason=_text(reason, "reason", "el motivo") or "",
             items=tuple(request_items),
+            kind=kind,
         )
         return await self.repository.create(
             new, principal.user_id, principal.email, datetime.now(UTC)
@@ -468,7 +543,10 @@ class InternalRequestService:
                 raise InvalidInputError(f"La referencia {key} no está en la solicitud")
             if key in margins:
                 raise InvalidInputError(f"La referencia {key} está repetida")
-            margins[key] = _margin(margin, key)
+            if request.kind == SUPPLIER_KIND:
+                margins[key] = _approved_supplier_margin(key, margin, asked[key])
+            else:
+                margins[key] = _margin(margin, key)
         text = _text(note, "note", "la nota", required=decision == ONCE)
         if decision == ONCE:
             start, end = request.requested_for, request.requested_for
@@ -477,6 +555,17 @@ class InternalRequestService:
             end = valid_to
             if end is not None and end < start:
                 raise InvalidInputError("La vigencia final no puede ser anterior a la inicial")
+        if request.kind == SUPPLIER_KIND:
+            supplier_supports = await self._supplier_copies(
+                request, asked, margins, decision, start, end, text, principal
+            )
+            return await self.repository.approve(
+                request_id,
+                version,
+                Approval(decision, start, end, text, margins, supplier_supports),
+                principal.email,
+                datetime.now(UTC),
+            )
         products = await self.masters.products_by_sku(sorted(margins))
         supports: dict[str, SupportData] = {}
         for sku, margin in margins.items():
@@ -509,6 +598,65 @@ class InternalRequestService:
             principal.email,
             datetime.now(UTC),
         )
+
+    async def _supplier_copies(
+        self,
+        request: InternalRequest,
+        asked: dict[str, RequestItem],
+        margins: dict[str, Decimal],
+        decision: str,
+        start: date,
+        end: date | None,
+        note: str | None,
+        principal: Principal,
+    ) -> dict[str, SupportData]:
+        """The supports a supplier margin request creates: per SKU, the guaranteed support it
+        lowers, for the request's customer, with the approved supplier minimum and the
+        decided validity. The base support keeps its minimum for everyone else.
+
+        Raises:
+            ConflictError: The base support is gone, voided or no longer a guarantee.
+        """
+
+        if self.supports is None:
+            raise ConflictError("No se puede leer el maestro de apoyos para aprobar")
+        once = f"Única vez: pedido del {request.requested_for.isoformat()}"
+        copies: dict[str, SupportData] = {}
+        for sku, margin in margins.items():
+            base_id = asked[sku].base_support_id
+            base = await self.supports.get(base_id) if base_id else None
+            if (
+                base is None
+                or base.data.status == "anulado"
+                or base.data.calc_method != GUARANTEED_METHOD
+            ):
+                raise ConflictError(
+                    f"El % Margen Garantizado de {sku} ya no existe o cambió: rechaza la "
+                    "solicitud y pídela de nuevo"
+                )
+            copies[sku] = replace(
+                base.data,
+                supplier_min_margin_pct=margin,
+                customer_nit=request.customer_nit,
+                customer_name=request.customer_name,
+                customer_branch_id=None,
+                customer_group=None,
+                group_wide=False,
+                product_sku=sku,
+                program=f"Solicitud de margen proveedor #{request.number}",
+                valid_from=start,
+                valid_to=end,
+                authorized_by=principal.email[:200],
+                conditions=once if decision == ONCE else None,
+                notes=note,
+                source=f"solicitud margen proveedor #{request.number}",
+                source_key=None,
+                external_ref=None,
+                status="activo",
+                is_enabled=True,
+                issues=(),
+            )
+        return copies
 
     async def reject(
         self, principal: Principal, request_id: UUID, *, version: int, reason: str
