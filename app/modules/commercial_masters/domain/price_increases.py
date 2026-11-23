@@ -34,6 +34,9 @@ DOWN = "bajo"
 FLAT = "estable"
 STATUSES = (UP, DOWN, FLAT)
 STATUS_LABELS = {UP: "Subió", DOWN: "Bajó", FLAT: "Estable"}
+SOURCE_BOOK = "libro"
+SOURCE_REQUEST = "solicitud"
+SOURCES = (SOURCE_BOOK, SOURCE_REQUEST)
 _STATUS_WORDS = {"subio": UP, "bajo": DOWN, "estable": FLAT}
 
 # The system update date set by hand in the portal cannot be older than this (a typo). The
@@ -196,6 +199,9 @@ class PriceIncreaseValues:
     price: Decimal | None = None
     notified: bool = False
     siesa_changed: bool = False
+    # ``libro``: the area's workbook; ``solicitud``: a supplier's request approved in Costos.
+    source: str = SOURCE_BOOK
+    request_line_id: UUID | None = None
 
     @property
     def key(self) -> str:
@@ -337,6 +343,9 @@ def pending_cost(values: PriceIncreaseValues) -> Decimal | None:
 __all__ = [
     "DOWN",
     "FLAT",
+    "SOURCES",
+    "SOURCE_BOOK",
+    "SOURCE_REQUEST",
     "STATUSES",
     "STATUS_LABELS",
     "UP",

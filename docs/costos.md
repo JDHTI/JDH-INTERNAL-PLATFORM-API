@@ -187,20 +187,102 @@ antivirus.
 El DWH publica estos datos de lunes a sábado hacia las 06:00, con lo movido hasta la noche
 anterior. Las anulaciones de documentos con más de 45 días no llegan al DWH.
 
-## Alzas de proveedor (en construcción)
+## Alzas de proveedor
 
-La plantilla para el proveedor sigue el formato «MAESTRA» del área: el archivo de ejemplo es
-`MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx`.
+El proveedor informa sus alzas en la plantilla «MAESTRA» del área o, si son pocas referencias,
+alguien las digita en un formulario. En los dos casos queda una **solicitud en revisión**.
+Quien gestiona `alzas-proveedor` la revisa: corrige líneas o deja alguna por fuera, y luego la
+aprueba o la rechaza.
+
+Código: `application/increases.py`, `infrastructure/increase_file.py` (plantilla y lector),
+`infrastructure/supplier_items.py` (DWH) y `infrastructure/ledger.py` (paso al acumulado).
+Tablas: migración `0081_costs_increase_requests`.
+
+### La plantilla MAESTRA
+
+Sigue el archivo del área `MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx` (formulario P.17.F.04).
+
 - **Nombre del archivo:** `MAESTRA <código> - <proveedor> <dd-mm-aaaa>.xlsx`.
-- **Encabezado:** el del SIG, con el logo, el código P.17.F.04 y la versión 01.
-- **Instrucciones:** en las filas 4 a 7. Las columnas van en la fila 8 y los datos desde la 9.
-- **Fórmulas:** se conservan las de costo con impuesto saludable, variación en pesos y en %, y
-  estado del incremento (SUBIO, BAJO, ESTABLE), con sus colores.
-- **ICUI:** sale del producto en SIESA.
-- **Regional (decisión del 2026-11-23):** la columna «Regional» se quita y se agrega al final
-  una columna de descuento por regional: Antioquia, Bogotá, Pereira, Bucaramanga, Cartagena y
-  Barranquilla. Así el ítem no se repite. Una celda vacía toma el «Descuento Regular».
+- **Encabezado:** el del SIG, con el logo, el código P.17.F.04, la versión 01 y la fecha.
+- **Instrucciones:** en las filas 4 a 7. Las columnas van en la fila 8, los datos desde la 9 y
+  los paneles quedan congelados ahí.
+- **Columnas:** las mismas de la MAESTRA, con sus colores.
+  - Datos de JDH en gris: fecha, NIT, referencia, proveedor, descripción, unidad de empaque,
+    estado, categoría, grupo impositivo y costo anterior.
+  - SKU proveedor y EAN en verde: el proveedor los completa.
+  - Costo nuevo sin impuesto saludable en amarillo: lo que el proveedor diligencia.
+  - Al final, «Estado» (SI/NO) y una columna de descuento por cada regional.
+- **Fórmulas:** costo anterior y nuevo con impuesto saludable (`costo × (1 + ICUI) + IBUA`),
+  variación en pesos y en %, y estado del incremento (SUBIO, BAJO, ESTABLE), con los colores
+  del área. Una fila sin costo nuevo queda en blanco; la plantilla anterior la marcaba «BAJO».
+- **Listas:** OBSERVACIONES (DESCONTINUADO, CAMBIO_DE_REFERENCIA, DUPLICADO) y Estado (SI/NO).
+  Validaciones de fecha, costo mayor que 0 y descuentos entre 0 % y 100 %.
+- **Hoja `Motivos`:** se conserva oculta, como en la plantilla del área.
 
-Las alzas cargadas o digitadas quedan en revisión. Al aprobarlas pasan al acumulado
-(`product_price_increases`), sin fecha de SIESA, así que el cotizador las toma como alza
-pendiente. El margen y el precio se calculan con el margen Lista 1 del maestro de márgenes.
+**Qué cambió frente a la MAESTRA del área (2026-11-23):**
+- **Regional:** la columna «Regional» se quita y se agregan al final seis columnas de descuento:
+  `Descuento ANTIOQUIA`, `BOGOTA`, `PEREIRA`, `BUCARAMANGA`, `CARTAGENA` y `BARRANQUILLA`.
+  Así el ítem nunca se repite. Una regional vacía toma el «Descuento Regular».
+- **ICUI:** sale del producto en SIESA, no de un BUSCARV contra `Motivos`.
+- **Productos:** la plantilla trae los activos del proveedor que tienen cotización vigente,
+  como la del área. Con ASCENDER (código 50), las 115 referencias del archivo del área
+  coinciden con SIESA en SKU proveedor, EAN, grupo impositivo y costo anterior.
+- **SKU proveedor:** conserva los ceros a la izquierda (`01080347`). El Excel del área los
+  perdía.
+
+**Al cargarla:**
+- Las columnas se leen por nombre: el proveedor puede reordenarlas u ocultarlas. Solo son
+  obligatorias «Referencia» y «Costo Nuevo sin Impuesto Saludable».
+- Cuenta solo una fila con costo nuevo, y debe traer la fecha de incremento.
+- Las fórmulas no se usan: la API recalcula los costos con impuesto, la variación y el estado.
+- El ICUI y el IBUA que escriba el proveedor ganan sobre los de SIESA.
+- Los porcentajes valen como fracción (0,05) o en puntos (5).
+- «Estado» = NO deja la línea por fuera.
+- **Problemas por fila:** referencia que no es un producto activo del proveedor, repetida,
+  números ilegibles o porcentajes fuera de rango. Se reportan con su fila de la hoja, y uno
+  solo bloquea la carga.
+
+### Revisión y paso al acumulado
+
+- **Revisión:** mientras está `en_revision`, cada línea se corrige (costo nuevo, fecha,
+  descuentos, observación) o se deja por fuera (`accepted: false`).
+- **Aprobar:** cada línea aceptada se escribe en el acumulado (`product_price_increases`):
+  - `source = solicitud` y `request_line_id`, para saber de dónde vino;
+  - fecha de notificación = día en que se creó la solicitud;
+  - sin fecha de SIESA, así que el cotizador la toma como alza pendiente;
+  - margen = margen Lista 1 del maestro de márgenes;
+  - precio = costo nuevo con impuesto saludable / (1 − margen), redondeado al centavo;
+  - los descuentos regular y por regional quedan en las observaciones.
+- **Llave del acumulado:** la misma de la carga del libro (referencia + fecha de incremento +
+  fecha de notificación). Una solicitud aprobada el mismo día con la misma fecha de incremento
+  actualiza esa fila.
+- **Rechazar:** exige el motivo, y nada llega al acumulado.
+
+### API (`/api/v1/costs/increase-requests`, clave `alzas-proveedor`)
+
+`read` basta para consultar y descargar; todo lo que cambia algo exige `manage`.
+
+| Método y ruta | Uso |
+| --- | --- |
+| `GET /items?supplier_code=&q=` | Productos activos del proveedor con su costo anterior, para el formulario |
+| `GET /template?supplier_code=` | La MAESTRA del proveedor (`Content-Disposition` con el nombre del área) |
+| `POST /upload?supplier_code=&apply=` | Multipart `file` (y `note` opcional). Sin `apply`, simula. Devuelve `{applied, blocked, supplier_code, rows_read, lines, issues[{row_number, sku, problem}], request_id}` |
+| `POST /` | Formulario manual: `{supplier_code, note?, lines: [{sku, new_cost, increased_on, supplier_sku?, ean?, icui_pct?, ibua?, regular_discount_pct?, regional_discounts?: {REGIONAL: fracción}, observation?}]}`. 201 con la solicitud |
+| `GET /?status=&supplier=&page=&size=` | Solicitudes, la más reciente primero, con `counts` por estado |
+| `GET /{id}` | Solicitud con `lines` |
+| `GET /{id}/file` | El libro que devolvió el proveedor |
+| `PATCH /{id}/lines/{line_id}` | `{accepted?, new_cost?, increased_on?, regular_discount_pct?, regional_discounts?, observation?}` |
+| `POST /{id}/approve` | `{note?}` |
+| `POST /{id}/reject` | `{note}` (obligatorio) |
+
+**Cada línea trae:**
+- **Ítem:** `sku`, `supplier_sku`, `ean`, `description`, `pack_factor`, `category`,
+  `tax_group`, `icui_pct`, `ibua`.
+- **Costos:** `old_cost`, `old_cost_with_tax`, `new_cost`, `new_cost_with_tax`,
+  `variation_amount`, `variation_pct` (fracción), `change` (`subio`, `bajo`, `estable`) y
+  `change_label`.
+- **Lo que envió el proveedor:** `increased_on`, `regular_discount_pct`, `regional_discounts`,
+  `observation`.
+- **Revisión:** `accepted`, y `ledger_id` una vez aprobada.
+
+El acumulado (`GET /commercial/price-increases`) ahora trae `source` y `request_line_id`.

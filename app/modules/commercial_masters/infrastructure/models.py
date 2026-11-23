@@ -309,6 +309,10 @@ class PriceIncreaseModel(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     notified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     siesa_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # ``libro`` (the area's workbook) or ``solicitud`` (a supplier's request approved in
+    # Costos, with the request line it came from; no foreign key: the modules keep apart).
+    source: Mapped[str] = mapped_column(String(12), nullable=False, server_default="libro")
+    request_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
