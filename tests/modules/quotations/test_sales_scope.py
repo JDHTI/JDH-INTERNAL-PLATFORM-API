@@ -138,6 +138,32 @@ async def test_a_coordinator_sees_the_quotations_of_their_sellers_but_edits_none
     assert permissions.can_see_team and permissions.team_scope == "assigned"
 
 
+class ReadOnly:
+    """The role «Coordinador» (2026-11-23): ``read`` on the quoter, no ``manage``."""
+
+    async def is_manager(self, principal) -> bool:
+        return False
+
+    async def can_read(self, principal) -> bool:
+        return True
+
+
+async def test_a_read_only_coordinator_lists_and_opens_the_team_quotations(
+    service, sales, repository, advisor, approver
+) -> None:
+    team, _ = await _two_quotations(service, sales, repository, advisor, approver)
+    sales.scopes[advisor.email] = SalesScope("team", (), ("S01",), ("0051",))
+    service.managers = ReadOnly()
+
+    page = await service.list(
+        advisor, mine=False, status=None, customer_nit=None, q=None, page=1, size=20
+    )
+    assert [q.id for q in page.items] == [team.id]
+    assert (await service.get(advisor, team.id)).quotation.id == team.id
+    permissions = await service.permissions(advisor)
+    assert not permissions.can_manage and permissions.team_scope == "assigned"
+
+
 class Directors:
     def __init__(self, *emails: str) -> None:
         self.emails = set(emails)
