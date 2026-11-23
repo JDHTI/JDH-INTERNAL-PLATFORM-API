@@ -171,8 +171,104 @@ class CostNoveltyEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CostIncreaseRequestModel(Base):
+    """What one supplier sent at once: the «MAESTRA» workbook or the manual form."""
+
+    __tablename__ = "cost_increase_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('en_revision','aprobada','rechazada')",
+            name="ck_cost_increase_requests_status",
+        ),
+        CheckConstraint(
+            "source IN ('plantilla','manual')", name="ck_cost_increase_requests_source"
+        ),
+        Index("ix_cost_increase_requests_status", "status", "created_at"),
+        Index("ix_cost_increase_requests_supplier_code", "supplier_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    supplier_code: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier_name: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(12), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    # The workbook as the supplier returned it (``plantilla`` only).
+    file_name: Mapped[str | None] = mapped_column(Text)
+    storage_key: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(String(320))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CostIncreaseLineModel(Base):
+    """One reference of a request: the item as it was and the increase the supplier sent."""
+
+    __tablename__ = "cost_increase_request_lines"
+    __table_args__ = (
+        UniqueConstraint("request_id", "sku", name="uq_cost_increase_request_lines_sku"),
+        CheckConstraint("new_cost > 0", name="ck_cost_increase_request_lines_new_cost"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cost_increase_requests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    row_number: Mapped[int | None] = mapped_column(Integer)
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier_sku: Mapped[str | None] = mapped_column(Text)
+    ean: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    pack_factor: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    category: Mapped[str | None] = mapped_column(Text)
+    tax_group: Mapped[str | None] = mapped_column(Text)
+    icui_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    ibua: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    old_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    old_cost_with_tax: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    new_cost: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    new_cost_with_tax: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    variation_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    variation_pct: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    change: Mapped[str | None] = mapped_column(String(10))
+    increased_on: Mapped[date | None] = mapped_column(Date)
+    regular_discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    observation: Mapped[str | None] = mapped_column(Text)
+    # The reviewer may leave a line out (the workbook's «Estado» SI/NO).
+    accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # The row it became in the history of increases, once approved.
+    ledger_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
+
+class CostIncreaseDiscountModel(Base):
+    """The discount of one regional for a line, when it differs from the regular one."""
+
+    __tablename__ = "cost_increase_line_discounts"
+    __table_args__ = (
+        CheckConstraint(
+            "discount_pct >= 0 AND discount_pct <= 1", name="ck_cost_increase_line_discounts_pct"
+        ),
+    )
+
+    line_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cost_increase_request_lines.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    regional: Mapped[str] = mapped_column(String(20), primary_key=True)
+    discount_pct: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
+
+
 __all__ = [
     "CostCreditNoteModel",
+    "CostIncreaseDiscountModel",
+    "CostIncreaseLineModel",
+    "CostIncreaseRequestModel",
     "CostNoveltyCreditNoteModel",
     "CostNoveltyEventModel",
     "CostNoveltyModel",
