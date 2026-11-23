@@ -408,6 +408,33 @@ class FakeSupportRepository:
             if item.data.status != "anulado" and _matches(spec.group, item.data)
         ][:limit]
 
+    async def with_group_copies(self, ids: Sequence[UUID]) -> list[UUID]:
+        def family(data):
+            return (
+                data.status == "anulado",
+                data.commercial_supplier_id,
+                data.kind,
+                data.calc_method,
+                data.supplier_value,
+                data.product_sku,
+                data.supplier_sku,
+                data.valid_from,
+                data.valid_to,
+                " ".join((data.customer_group or "").upper().split()),
+            )
+
+        wanted = {
+            family(self.items[i].data)
+            for i in ids
+            if i in self.items and self.items[i].data.group_wide
+        }
+        copies = [
+            item.id
+            for item in self.items.values()
+            if item.data.group_wide and family(item.data) in wanted
+        ]
+        return list(dict.fromkeys([*ids, *copies]))
+
     async def get_by_source_key(self, source_key: str) -> Support | None:
         return next(
             (item for item in self.items.values() if item.data.source_key == source_key), None

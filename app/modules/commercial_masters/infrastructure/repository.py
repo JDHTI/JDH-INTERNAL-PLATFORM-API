@@ -35,6 +35,7 @@ from app.modules.commercial_masters.domain.margins import (
     branches_margin_field,
     margin_for,
 )
+from app.modules.commercial_masters.infrastructure.groups import group_key, group_label
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
     CommercialSupplierNitModel,
@@ -766,25 +767,29 @@ class SqlAlchemyCommercialMasterRepository:
         names = sorted({group.strip() for group in groups if group and group.strip()})
         if not names:
             return {}
+        # Compared as the supports match a group (upper case, single spaces), and one entry
+        # per NIT: a customer whose branches write the group differently ("Newrest" and
+        # "NEWREST ") used to come twice, and got two copies of the group's support.
+        key = group_key(CustomerModel.business_group)
         async with self.database.session_factory() as session:
             rows = await session.execute(
-                select(
-                    CustomerModel.business_group,
-                    CustomerModel.nit,
-                    func.max(CustomerModel.legal_name),
-                )
+                select(key, CustomerModel.nit, func.max(CustomerModel.legal_name))
                 .where(
-                    func.upper(CustomerModel.business_group).in_([n.upper() for n in names]),
+                    key.in_([group_label(name) for name in names]),
                     CustomerModel.is_active.is_(True),
                 )
-                .group_by(CustomerModel.business_group, CustomerModel.nit)
+                .group_by(key, CustomerModel.nit)
                 .order_by(CustomerModel.nit)
             )
-        by_upper = {name.upper(): name for name in names}
-        members: dict[str, list[tuple]] = {}
-        for group, nit, name in rows.all():
-            members.setdefault(by_upper[group.upper()], []).append((nit, name))
-        return members
+        by_label: dict[str, list[tuple]] = {}
+        for label, nit, name in rows.all():
+            by_label.setdefault(label, []).append((nit, name))
+        # Every spelling asked gets its group's customers.
+        return {
+            name: list(by_label[group_label(name)])
+            for name in names
+            if group_label(name) in by_label
+        }
 
     async def business_groups(self, query: str, limit: int) -> list[tuple[str, int]]:
         """Business groups whose name contains the text, with their active NITs."""

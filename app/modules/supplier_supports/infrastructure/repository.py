@@ -34,6 +34,7 @@ from app.modules.commercial_masters.domain.margins import (
 )
 from app.modules.commercial_masters.infrastructure.groups import (
     group_key,
+    group_label,
     groups_of_nits,
     groups_of_salespeople,
 )
@@ -374,11 +375,88 @@ def _in_customers(codes: Sequence[str]) -> ColumnElement[bool]:
     )
 
 
-def _of_customers(nits: Sequence[str]) -> ColumnElement[bool]:
-    """The base search by customer: the supports of these NITs and those of their business
-    groups (2026-11-20)."""
+def _same_family(peer: Any, support: Any) -> list[ColumnElement[bool]]:
+    """``peer`` is another copy of the same business group's support as ``support``: both
+    ``group_wide``, voided or not alike, with the same supplier, class, method, value,
+    reference, dates and group."""
 
-    return or_(S.customer_nit.in_(list(nits)), _by_group(groups_of_nits(nits)))
+    return [
+        peer.group_wide.is_(True),
+        support.group_wide.is_(True),
+        (peer.status == "anulado") == (support.status == "anulado"),
+        peer.commercial_supplier_id.is_not_distinct_from(support.commercial_supplier_id),
+        peer.kind == support.kind,
+        peer.calc_method == support.calc_method,
+        peer.supplier_value.is_not_distinct_from(support.supplier_value),
+        peer.product_sku.is_not_distinct_from(support.product_sku),
+        peer.supplier_sku.is_not_distinct_from(support.supplier_sku),
+        peer.valid_from.is_not_distinct_from(support.valid_from),
+        peer.valid_to.is_not_distinct_from(support.valid_to),
+        group_key(peer.customer_group) == group_key(support.customer_group),
+    ]
+
+
+def _peer_copy(nits: Sequence[str] | None = None, below: bool = False) -> ColumnElement[bool]:
+    """Whether another copy of the same business group's support exists (2026-11-23).
+
+    A group's support is stored once per customer of the group (``group_wide``): the copies
+    share supplier, class, method, value, reference, dates and group. ``nits`` asks for a copy
+    of one of those customers; ``below``, for a copy of a lower NIT.
+    """
+
+    P = aliased(SupplierSupportModel)
+    conditions = [P.id != S.id, *_same_family(P, S)]
+    if nits is not None:
+        conditions.append(P.customer_nit.in_(list(nits)))
+    if below:
+        conditions.append(P.customer_nit < S.customer_nit)
+    return select(literal(1)).where(*conditions).exists()
+
+
+def _one_copy(nits: Sequence[str] = (), enabled: bool = True) -> ColumnElement[bool]:
+    """One row per business group's support (2026-11-23): its copies used to come once per
+    customer of the group, which looked like duplicates. The copy of a customer in ``nits``
+    stands for the group when there is one; otherwise the copy of the lowest NIT. Disabled,
+    every copy comes."""
+
+    if not enabled:
+        return true()
+    first = not_(_peer_copy(below=True))
+    if not nits:
+        return or_(S.group_wide.is_(False), first)
+    return or_(
+        S.group_wide.is_(False),
+        S.customer_nit.in_(list(nits)),
+        and_(not_(_peer_copy(nits)), first),
+    )
+
+
+def _of_customers(
+    nits: Sequence[str], only_nit: bool = False, *, one_copy: bool = True
+) -> ColumnElement[bool]:
+    """The base search by customer: the supports of these NITs and those of their business
+    groups (2026-11-20), each group's support once. ``only_nit`` (2026-11-23) keeps only the
+    supports of those NITs alone, never a group's copy."""
+
+    if only_nit:
+        return and_(S.customer_nit.in_(list(nits)), S.group_wide.is_(False))
+    return and_(
+        or_(S.customer_nit.in_(list(nits)), _by_group(groups_of_nits(nits))),
+        _one_copy(nits, one_copy),
+    )
+
+
+def _of_groups(names: Sequence[str], *, one_copy: bool = True) -> ColumnElement[bool]:
+    """The base search by business group (2026-11-23): the supports loaded for the whole
+    group, each once, by the group's name as people write it."""
+
+    labels = [group_label(name) for name in names]
+    return and_(
+        S.customer_group.is_not(None),
+        or_(S.customer_nit.is_(None), S.group_wide.is_(True)),
+        group_key(S.customer_group).in_(labels),
+        _one_copy(enabled=one_copy),
+    )
 
 
 def _free_text(term: str) -> ColumnElement[bool]:
@@ -932,8 +1010,12 @@ class SqlAlchemySupportRepository:
         return model
 
     @staticmethod
-    def _conditions(spec: SearchSpec) -> list[ColumnElement[bool]]:
-        """The WHERE conditions of a search, shared by the page and the id listing."""
+    def _conditions(spec: SearchSpec, one_copy: bool = True) -> list[ColumnElement[bool]]:
+        """The WHERE conditions of a search, shared by the page and the id listing.
+
+        ``one_copy`` shows each business group's support once (the page and its counts); the
+        id listing that acts on a search (void, expire, delete, attach) takes every copy, so
+        the whole group changes."""
 
         conditions: list[ColumnElement[bool]] = [_compile(spec.group)]
         if not spec.include_voided and spec.state != "anulado":
@@ -992,7 +1074,14 @@ class SqlAlchemySupportRepository:
         if spec.salesperson_codes is not None:
             conditions.append(_in_customers(spec.salesperson_codes))
         if spec.customer_nits:
-            conditions.append(_of_customers(spec.customer_nits))
+            conditions.append(
+                _of_customers(spec.customer_nits, spec.customer_nit_only, one_copy=one_copy)
+            )
+        if spec.business_groups:
+            conditions.append(_of_groups(spec.business_groups, one_copy=one_copy))
+        if one_copy and not spec.customer_nits and not spec.business_groups:
+            # Without a customer filter too, each business group's support shows once.
+            conditions.append(_one_copy())
         return conditions
 
     async def state_counts(self, spec: SearchSpec) -> dict[str, int]:
@@ -1066,11 +1155,29 @@ class SqlAlchemySupportRepository:
                     CommercialSupplierModel, CommercialSupplierModel.id == S.commercial_supplier_id
                 )
                 .outerjoin(ProductModel, ProductModel.id == S.product_id)
-                .where(*self._conditions(spec))
+                .where(*self._conditions(spec, one_copy=False))
                 .order_by(*_order(spec.sort))
                 .limit(limit)
             )
             return [support_id for (support_id,) in rows.all()]
+
+    async def with_group_copies(self, ids: Sequence[UUID]) -> list[UUID]:
+        """``ids`` plus the other copies of the business group's supports among them
+        (2026-11-23): a group's support is stored once per customer, and the table shows one
+        row for all of them, so acting on that row acts on the whole group."""
+
+        if not ids:
+            return []
+        P = aliased(SupplierSupportModel)
+        async with self.database.session_factory() as session:
+            rows = await session.execute(
+                select(P.id)
+                .select_from(S)
+                .join(P, and_(*_same_family(P, S)))
+                .where(S.id.in_(list(ids)))
+            )
+            copies = [support_id for (support_id,) in rows.all()]
+        return list(dict.fromkeys([*ids, *copies]))
 
     async def search(self, spec: SearchSpec) -> tuple[list[SupportRow], int]:
         """Filter, sort and page supports; also returns the total of matches."""

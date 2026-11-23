@@ -92,6 +92,7 @@ _FIELD_LIST = (
     _text("customer_nit", "NIT cliente"),
     _text("customer_name", "Cliente"),
     _text("customer_group", "Grupo empresarial"),
+    FieldDef("group_wide", "bool", "Aplica a todo el grupo", sortable=False),
     _text("product_sku", "Referencia JDH"),
     _text("supplier_sku", "Referencia proveedor"),
     _text("brand", "Marca"),
@@ -365,3 +366,9 @@ class SearchSpec:
     # The base search by customer (2026-11-20): the supports of these NITs and those of their
     # business groups (``group_wide``), so a customer that joined a group later finds them.
     customer_nits: tuple[str, ...] = ()
+    # With ``customer_nits`` (2026-11-23): only the supports of those NITs alone, never a
+    # business group's copy.
+    customer_nit_only: bool = False
+    # The base search by business group (2026-11-23): the supports loaded for the whole group
+    # (``group_wide``), by its name as people write it (case and spaces do not matter).
+    business_groups: tuple[str, ...] = ()

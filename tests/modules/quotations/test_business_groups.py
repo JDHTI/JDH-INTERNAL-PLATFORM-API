@@ -89,13 +89,18 @@ async def test_a_group_out_of_the_portfolio(service, warehouse, masters, group) 
 def test_only_the_general_and_the_group_supports_apply() -> None:
     general = agreement(supplier_value=Decimal("0.05"))
     one_nit = agreement(customer_nit=NIT, supplier_value=Decimal("0.10"))
+    # The group's copies (group_wide) come from the source as one support with no NIT
+    # (whole_groups); two equal ones collapse.
     copies = [
-        agreement(customer_nit=nit, customer_group="QBANO", supplier_value=Decimal("0.08"))
-        for nit in (NIT, OTHER)
+        agreement(customer_group="QBANO", supplier_value=Decimal("0.08")),
+        agreement(customer_group="QBANO", supplier_value=Decimal("0.08")),
     ]
-    other_group = agreement(customer_nit=NIT, customer_group="OTRO", supplier_value=Decimal("1"))
+    # One NIT's own support carries its group too (the master fills it): it stays that
+    # customer's and never covers the whole group (2026-11-23).
+    nit_of_group = agreement(customer_nit=OTHER, customer_group="QBANO", supplier_value="0.3")
+    other_group = agreement(customer_group="OTRO", supplier_value=Decimal("1"))
 
-    kept = _group_agreements([general, one_nit, *copies, other_group], "qbano")
+    kept = _group_agreements([general, one_nit, *copies, nit_of_group, other_group], "qbano")
 
     assert len(kept) == 2 and kept[0] == general
     whole = kept[1]

@@ -348,8 +348,13 @@ def _group_agreements(agreements: Sequence[Agreement], group: str) -> list[Agree
     and the group's (``customer_group``). A support of one NIT of the group never covers the
     whole group.
 
-    The group's supports are loaded one per NIT (``bulk/groups``): they are taken as one,
-    for the whole quotation (no NIT, no branch), and the copies collapse.
+    The group's supports are loaded one per NIT (``bulk/groups``, ``group_wide``): the source
+    already gives them as one, with no NIT (:func:`~app.modules.order_validation.domain.rules.
+    whole_groups`), and they are taken for the whole quotation.
+
+    A support of one NIT keeps its NIT and stays that customer's, even though it carries the
+    customer's group (the master fills ``customer_group`` of every customer support): before
+    2026-11-23 it covered the whole group's quotation by mistake.
     """
 
     kept: dict[Agreement, Agreement] = {}
@@ -357,7 +362,7 @@ def _group_agreements(agreements: Sequence[Agreement], group: str) -> list[Agree
         if item.customer_nit is None and not item.customer_group:
             kept.setdefault(item, item)
             continue
-        if not _same_group(item.customer_group, group):
+        if item.customer_nit is not None or not _same_group(item.customer_group, group):
             continue
         whole = replace(item, customer_nit=None, customer_branch_id=None)
         kept.setdefault(replace(whole, id=_NO_ID, dwh_unit_cost=None), whole)

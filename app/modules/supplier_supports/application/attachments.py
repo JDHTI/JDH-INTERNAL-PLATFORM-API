@@ -34,6 +34,7 @@ MAX_SUPPLIER_TAGS = 10
 _CRITERIA = (
     "conditions",
     "customer_nits",
+    "business_groups",
     "supplier_codes",
     "product_skus",
     "q",
@@ -92,6 +93,8 @@ class SupportAttachmentService:
                     f"{len(missing)} de los apoyos elegidos no existen o están anulados"
                 )
             found.update(dict.fromkeys(unique))
+            # A business group's support is one row for all its copies: they all get it.
+            found.update(dict.fromkeys(await self.supports.with_group_copies(unique)))
         if search is not None:
             if not any(search.get(name) not in (None, [], "") for name in _CRITERIA):
                 raise InvalidInputError(
