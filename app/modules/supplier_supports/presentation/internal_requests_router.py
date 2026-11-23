@@ -20,6 +20,7 @@ from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.commercial_masters.domain.margins import MARGIN_LABELS
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.deletions import SupportDeletionService
 from app.modules.supplier_supports.application.internal_requests import (
     MAX_PAGE_SIZE,
     InternalRequestService,
@@ -40,6 +41,7 @@ router = APIRouter(
     ]
 )
 _service = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
+_deletions = Depends(Provide[ApplicationContainer.v1_container.supplier_support_deletion_service])
 _principal = Depends(get_current_principal)
 
 Status = Literal["pendiente", "aprobada", "rechazada"]
@@ -392,6 +394,34 @@ async def approve_request(
             note=body.note,
             items=[(item.sku, item.approved_margin_pct) for item in body.items],
         )
+    )
+
+
+class DeleteInternalBody(BaseModel):
+    ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class DeletedInternalResponse(BaseModel):
+    deleted: int
+
+
+@router.post(
+    "/internal-support-requests/delete",
+    response_model=DeletedInternalResponse,
+    summary="Delete internal support requests for good",
+)
+@inject
+async def delete_internal_requests(
+    body: DeleteInternalBody,
+    principal: Principal = _principal,
+    deletions: SupportDeletionService = _deletions,
+) -> DeletedInternalResponse:
+    """Delete internal support requests (pending or decided) with their items; a support an
+    approval created stays, without the link. All or none; 404 when one does not exist. Only
+    the leader of the supports' area (BI) and the platform administrators (2026-11-23)."""
+
+    return DeletedInternalResponse(
+        deleted=await deletions.delete_internal_requests(principal, body.ids)
     )
 
 

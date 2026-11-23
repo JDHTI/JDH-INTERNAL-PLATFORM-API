@@ -43,12 +43,16 @@ _NO_DOCUMENT = "(sin documento"
 _DIGITS = re.compile(r"(\d+)")
 
 
-def document_key(document: str) -> tuple[tuple[int, str], ...]:
-    """Natural order of a document number (the sales consecutive): its digits compare as
-    numbers, so ``PV-9`` goes before ``PV-10`` (2026-11-23). Case is ignored."""
+def document_key(document: str) -> tuple[int, tuple[tuple[int, str], ...]]:
+    """The sales consecutive of a document, to sort by (2026-11-23): the number of the PV
+    (``PV-02592133`` is 2592133), whatever its prefix or leading zeros; then its natural
+    order (digits as numbers, case ignored) to break a tie."""
 
-    parts = _DIGITS.split(document.strip().casefold())
-    return tuple((1, part.zfill(30)) if part.isdigit() else (0, part) for part in parts if part)
+    text = document.strip().casefold()
+    numbers = _DIGITS.findall(text)
+    parts = _DIGITS.split(text)
+    natural = tuple((1, part.zfill(30)) if part.isdigit() else (0, part) for part in parts if part)
+    return (int(numbers[-1]) if numbers else -1, natural)
 
 
 def _by_document(orders: list[OrderView], descending: bool) -> list[OrderView]:
@@ -62,9 +66,19 @@ def _by_document(orders: list[OrderView], descending: bool) -> list[OrderView]:
     return ordered + unnumbered
 
 
-def _matches(order: OrderView, term: str) -> bool:
-    """Free text over the document, the client and the supplier and SKU of any line."""
+def _same_number(document: str, term: str) -> bool:
+    """A search written as the bare consecutive (``2592133``) finds ``PV-02592133``."""
 
+    numbers = _DIGITS.findall(document)
+    return bool(term.isdigit() and numbers and int(numbers[-1]) == int(term))
+
+
+def _matches(order: OrderView, term: str) -> bool:
+    """Free text over the document, the client and the supplier and SKU of any line. The
+    bare consecutive finds its document too."""
+
+    if _same_number(order.document, term):
+        return True
     for item in order.lines:
         line = item.line
         for value in (

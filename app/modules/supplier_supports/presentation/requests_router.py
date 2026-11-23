@@ -13,6 +13,7 @@ from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.supplier_supports.application.deletions import SupportDeletionService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.presentation.router import SupportResponse, _response
@@ -21,6 +22,7 @@ router = APIRouter(dependencies=[Depends(require_permission("solicitudes-apoyos"
 _principal = Depends(get_current_principal)
 _service = Depends(Provide[ApplicationContainer.v1_container.supplier_support_request_service])
 _supports = Depends(Provide[ApplicationContainer.v1_container.supplier_support_service])
+_deletions = Depends(Provide[ApplicationContainer.v1_container.supplier_support_deletion_service])
 
 
 class VersionBody(BaseModel):
@@ -175,6 +177,29 @@ async def reject_request(
     service: SupportRequestService = _service,
 ):
     return await service.decide(principal, request_id, body.version, None, False, body.reason)
+
+
+class DeleteRequestsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class DeletedRequestsResponse(BaseModel):
+    deleted: int
+
+
+@router.post("/supplier-support-requests/delete", response_model=DeletedRequestsResponse)
+@inject
+async def delete_requests(
+    body: DeleteRequestsBody,
+    principal: Principal = _principal,
+    deletions: SupportDeletionService = _deletions,
+) -> DeletedRequestsResponse:
+    """Delete JDH support requests for good (pending or decided), with their history; a
+    decision already applied stays on its support. All or none; 404 when one does not exist.
+    Only the leader of the supports' area (BI) and the platform administrators (2026-11-23)."""
+
+    return DeletedRequestsResponse(deleted=await deletions.delete_requests(principal, body.ids))
 
 
 @router.delete("/supplier-supports/{support_id}/jdh-support", response_model=SupportResponse)

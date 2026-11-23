@@ -412,6 +412,8 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_read": True,
         "can_review_internal": False,
         "can_request_internal": False,
+        # Deleting for good is only for BI's leader and platform admins (2026-11-23).
+        "can_delete": False,
         "customer_scope": "all",
     }
 
@@ -424,5 +426,6 @@ def test_permissions_tell_the_ui_whether_to_offer_write_actions(client) -> None:
         "can_read": False,
         "can_review_internal": False,
         "can_request_internal": False,
+        "can_delete": False,
         "customer_scope": "all",
     }

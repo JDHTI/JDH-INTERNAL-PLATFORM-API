@@ -12,6 +12,7 @@ from sqlalchemy import and_, bindparam, case, func, or_, select, update
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.board import (
     MAX_KEYS,
+    MIN_INCREASE,
     TARGET_TOLERANCE,
     BoardFilter,
     BoardKey,
@@ -28,14 +29,26 @@ L = QuotationLineModel
 _MARGIN = L.current_margin_with_support_pct
 _TARGET = L.target_margin_pct
 _JUDGED = and_(L.last_price.is_not(None), _MARGIN.is_not(None), _TARGET.is_not(None))
+_BELOW = _MARGIN < _TARGET - TARGET_TOLERANCE
+# The increase the price needs (2026-11-23): the new price chosen, else the optimal one,
+# against the current price. Under :data:`MIN_INCREASE` it is not an increase.
+_RISE = and_(
+    L.last_price > 0,
+    func.coalesce(L.new_price, L.optimal_price) >= L.last_price * (1 + MIN_INCREASE),
+)
 _CHIP_CONDITIONS = {
     "sin_marcar": and_(L.review_status == UNMARKED, L.load_id.is_(None)),
     "por_validar": and_(L.review_status == TO_VALIDATE, L.load_id.is_(None)),
     "validada": and_(L.review_status == VALIDATED, L.load_id.is_(None)),
     "cargada": L.load_id.is_not(None),
-    "alza": and_(_JUDGED, _MARGIN < _TARGET - TARGET_TOLERANCE),
+    "alza": and_(_JUDGED, _BELOW, _RISE),
+    # Under the target but needing less than 1 % more is on target (2026-11-23).
     "objetivo": and_(
-        _JUDGED, _MARGIN.between(_TARGET - TARGET_TOLERANCE, _TARGET + TARGET_TOLERANCE)
+        _JUDGED,
+        or_(
+            _MARGIN.between(_TARGET - TARGET_TOLERANCE, _TARGET + TARGET_TOLERANCE),
+            and_(_BELOW, ~_RISE),
+        ),
     ),
     "encima": and_(_JUDGED, _MARGIN > _TARGET + TARGET_TOLERANCE),
     "alerta": and_(
@@ -84,7 +97,12 @@ class SqlAlchemyBoardRepository:
         return [_quotation(row) for row in rows]
 
     def _base(self, quotation_ids: Sequence[UUID], board: BoardFilter) -> list:
-        conditions = [L.quotation_id.in_(list(quotation_ids))]
+        conditions = [
+            L.quotation_id.in_(list(quotation_ids)),
+            # Only what is in stock (2026-11-23): a SKU the sync read at 0 is left out; one
+            # whose stock was not read (``None``) stays, so a DWH outage hides nothing.
+            or_(L.stock_on_hand.is_(None), L.stock_on_hand > 0),
+        ]
         if board.lists:
             conditions.append(Q.price_list_id.in_(list(board.lists)))
         if board.q:

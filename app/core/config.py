@@ -233,6 +233,9 @@ class Settings(BaseSettings):
     # Members of this area (plus admins) validate a confirmed price list; then its files are
     # released. BI keeps the price lists and the margin master, and quotes too.
     QUOTATIONS_APPROVER_AREA_SLUG: str = "bi"
+    # The call center (2026-11-23): its members quote any customer (the whole master) and see
+    # only their own quotations; its leader sees those of every member of the area.
+    QUOTATIONS_CALL_CENTER_AREA_SLUG: str = "call-center"
     QUOTATIONS_MAX_POINTS_BELOW_TARGET: Decimal = Decimal("1")
     QUOTATIONS_MAX_LINES: int = 3000
     # Seconds per warehouse query of the quoter (the pool default is DWH_COMMAND_TIMEOUT).
@@ -696,6 +699,7 @@ class Settings(BaseSettings):
             "quotations": {
                 "manager_area_slug": self.QUOTATIONS_MANAGER_AREA_SLUG,
                 "approver_area_slug": self.QUOTATIONS_APPROVER_AREA_SLUG,
+                "call_center_area_slug": self.QUOTATIONS_CALL_CENTER_AREA_SLUG,
                 "max_points_below_target": self.QUOTATIONS_MAX_POINTS_BELOW_TARGET / 100,
                 "max_lines": self.QUOTATIONS_MAX_LINES,
                 "dwh_timeout": self.QUOTATIONS_DWH_TIMEOUT_SECONDS,

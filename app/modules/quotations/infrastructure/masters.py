@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Integer, cast, func, or_, select, update
@@ -117,6 +117,37 @@ class SqlAlchemyQuotationMasterSource:
                     cost = pending_cost(values)
                     if cost is not None:
                         result[values.sku] = cost
+        return result
+
+    async def increase_dates(self, skus: Sequence[str]) -> dict[str, date]:
+        """The date of each SKU's latest price increase (when it takes effect, else when it
+        was notified), to show on its line (2026-11-23). SKUs without one are left out."""
+
+        result: dict[str, date] = {}
+        unique = list(dict.fromkeys(skus))
+        async with self.database.session_factory() as session:
+            for start in range(0, len(unique), _CHUNK):
+                rows = (
+                    await session.execute(
+                        select(
+                            PriceIncreaseModel.sku,
+                            PriceIncreaseModel.increased_on,
+                            PriceIncreaseModel.notified_on,
+                        )
+                        .where(PriceIncreaseModel.sku.in_(unique[start : start + _CHUNK]))
+                        .distinct(PriceIncreaseModel.sku)
+                        .order_by(
+                            PriceIncreaseModel.sku,
+                            PriceIncreaseModel.increased_on.desc().nulls_last(),
+                            PriceIncreaseModel.notified_on.desc().nulls_last(),
+                            PriceIncreaseModel.updated_at.desc(),
+                        )
+                    )
+                ).all()
+                for sku, increased_on, notified_on in rows:
+                    when = increased_on or notified_on
+                    if when is not None:
+                        result[sku] = when
         return result
 
     async def set_liquor_taxes(

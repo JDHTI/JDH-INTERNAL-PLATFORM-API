@@ -64,6 +64,19 @@ def _rollover(build: Callable[[], Rollover]) -> JobHandler:
     return handler
 
 
+class StaleDrafts(Protocol):
+    """The quoter's cleanup of drafts never sent to validation."""
+
+    async def purge_stale_drafts(self) -> Mapping[str, Any]: ...
+
+
+def _stale_drafts(build: Callable[[], StaleDrafts]) -> JobHandler:
+    async def handler() -> Mapping[str, Any]:
+        return await build().purge_stale_drafts()
+
+    return handler
+
+
 def _main_lists(build: Callable[[], MainListsSync]) -> JobHandler:
     async def handler() -> Mapping[str, Any]:
         return await build().sync_all()
@@ -77,6 +90,7 @@ def build_job_handlers(
     support_costs: Callable[[], SupportCostService],
     main_lists: Callable[[], MainListsSync] | None = None,
     support_rollover: Callable[[], Rollover] | None = None,
+    stale_drafts: Callable[[], StaleDrafts] | None = None,
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
@@ -93,6 +107,8 @@ def build_job_handlers(
     extra = {"main-lists-sync": _main_lists(main_lists)} if main_lists is not None else {}
     if support_rollover is not None:
         extra["supplier-supports-rollover"] = _rollover(support_rollover)
+    if stale_drafts is not None:
+        extra["quotations-stale-drafts"] = _stale_drafts(stale_drafts)
     return {
         **extra,
         "masters-warm-identity": _warm(masters, "identidad"),

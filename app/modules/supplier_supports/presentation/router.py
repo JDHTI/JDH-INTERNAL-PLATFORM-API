@@ -18,6 +18,7 @@ from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.costs import SupportCostService
+from app.modules.supplier_supports.application.deletions import SupportDeletionService
 from app.modules.supplier_supports.application.internal_requests import InternalRequestService
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.rollover import SupportRolloverService
@@ -42,6 +43,7 @@ _requests = Depends(Provide[ApplicationContainer.v1_container.supplier_support_r
 _internal = Depends(Provide[ApplicationContainer.v1_container.internal_support_request_service])
 _costs = Depends(Provide[ApplicationContainer.v1_container.supplier_support_cost_service])
 _rollover = Depends(Provide[ApplicationContainer.v1_container.supplier_support_rollover_service])
+_deletions = Depends(Provide[ApplicationContainer.v1_container.supplier_support_deletion_service])
 
 Kind = Literal[
     "tactico_cliente",
@@ -210,6 +212,18 @@ class SupportRetire(BaseModel):
     )
     items: list[RetireItem] = Field(default_factory=list, max_length=2000)
     filter: RetireFilter | None = None
+
+
+class SupportDelete(BaseModel):
+    """Delete supports for good (the area leader and platform administrators only)."""
+
+    reason: str = Field(min_length=3, max_length=500)
+    items: list[RetireItem] = Field(default_factory=list, max_length=2000)
+    filter: RetireFilter | None = None
+
+
+class DeletedResponse(BaseModel):
+    deleted: int
 
 
 class RetireResponse(BaseModel):
@@ -594,16 +608,20 @@ async def permissions(
     service: SupportRequestService = _requests,
     internal: InternalRequestService = _internal,
     supports: SupplierSupportService = _service,
+    deletions: SupportDeletionService = _deletions,
 ) -> dict[str, bool | str]:
     """Tell the UI whether to offer write actions (create, edit, switch, void), and the
     internal support requests: ``can_review_internal`` (BI or a designated reviewer) and
     ``can_request_internal`` (whoever quotes or asks JDH supports: "my requests").
+    ``can_delete``: deletes supports in bulk and support requests for good (the leader of
+    the supports' area and the platform administrators only, 2026-11-23).
     ``customer_scope`` says which supports the search shows: ``all``, ``team``, ``mine``
     (their customers and the general ones) or ``none`` (no customers: no supports)."""
 
     return {
         **await service.permissions(principal),
         **await internal.permissions(principal),
+        "can_delete": await deletions.can_delete(principal),
         "customer_scope": await supports.customer_scope(principal),
     }
 
@@ -858,6 +876,36 @@ async def retire_supports(
         action=body.action,
         voided=[item.id for item in changed if item.data.status == "anulado"],
         expired=[item.id for item in changed if item.data.status != "anulado"],
+    )
+
+
+@router.post(
+    "/delete",
+    dependencies=[_READ_GATE],
+    response_model=DeletedResponse,
+    summary="Delete supports for good, in bulk",
+)
+@inject
+async def delete_supports(
+    body: SupportDelete,
+    principal: Principal = _principal,
+    deletions: SupportDeletionService = _deletions,
+) -> DeletedResponse:
+    """Delete the supports chosen (``items``) or every one a search matches (``filter``,
+    voided ones included), up to 2,000, with their requests, JDH history, costs, tiers and
+    links to documents. All or none; a stale ``version`` is a 409. The warehouse cannot
+    delete: each one not voided yet is published as voided first. Only the leader of the
+    supports' area (BI) and the platform administrators (403 otherwise)."""
+
+    if not body.items and body.filter is None:
+        raise InvalidInputError("Elige los apoyos o un filtro")
+    return DeletedResponse(
+        deleted=await deletions.delete_supports(
+            principal,
+            {item.id: item.version for item in body.items},
+            body.filter.model_dump() if body.filter is not None else None,
+            body.reason,
+        )
     )
 
 

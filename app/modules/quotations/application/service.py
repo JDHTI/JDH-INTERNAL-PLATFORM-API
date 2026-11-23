@@ -74,6 +74,7 @@ from app.modules.quotations.domain.ports import (
     SalesScopeResolver,
     SupportRequestLinks,
     SupportSource,
+    TeamLookup,
     WarehouseSource,
 )
 
@@ -394,6 +395,7 @@ class QuotationService:
         main_approvers: ManagerPolicy | None = None,
         support_requests: SupportRequestLinks | None = None,
         sales_backfill: SalesBackfill | None = None,
+        team: TeamLookup | None = None,
     ) -> None:
         """Create the service.
 
@@ -428,8 +430,11 @@ class QuotationService:
                 one of each SKU. Without it nobody asks from the quoter.
             sales_backfill (SalesBackfill | None): Reads again, in the background, the last
                 sales of a list update built without them. Without it only a refresh does.
+            team (TeamLookup | None): The call center (2026-11-23): its leader sees the
+                customer quotations of every member of the area.
         """
 
+        self.team = team
         self.sales_backfill = sales_backfill
         self.support_requests = support_requests
         self.list_managers = list_managers
@@ -670,13 +675,25 @@ class QuotationService:
     def _restricted(scope: SalesScope | None) -> bool:
         return scope is not None and not scope.is_all
 
+    async def _led_members(self, principal: Principal) -> frozenset[UUID] | None:
+        """The members of the call center when the caller leads it; ``None`` otherwise."""
+
+        if self.team is None:
+            return None
+        return await self.team.led_members(principal)
+
     async def _check_visible(self, principal: Principal, quotation: Quotation) -> None:
-        """Outside validation, each person reaches only the quotations they created."""
+        """Outside validation, each person reaches only the quotations they created; the call
+        center's leader, also those of its members (2026-11-23)."""
 
         if quotation.created_by_id == principal.user_id or await self._sees_all(
             principal, quotation.kind
         ):
             return
+        if quotation.kind == vocabulary.QUOTATION:
+            members = await self._led_members(principal)
+            if members is not None and quotation.created_by_id in members:
+                return
         # The main lists are one shared board: whoever reads the module sees every list.
         if quotation.kind == vocabulary.MAIN_LIST and await self.can_read(
             principal, quotation.kind
@@ -874,6 +891,7 @@ class QuotationService:
             scopes,
             names,
             increases,
+            increase_dates,
             stock_rows,
         ) = await asyncio.gather(
             costs_by_center(),
@@ -883,6 +901,7 @@ class QuotationService:
             self.supports.customers(nits),
             self.masters.supplier_names(codes),
             self.masters.pending_increases(skus),
+            self.masters.increase_dates(skus),
             self.warehouse.stock(skus, stock_scope.warehouses, stock_scope.centers),
         )
         stock = stock_totals(stock_rows)
@@ -968,6 +987,8 @@ class QuotationService:
                 line,
                 stock_on_hand=stock[line.sku].on_hand if line.sku in stock else Decimal(0),
                 stock_available=stock[line.sku].available if line.sku in stock else Decimal(0),
+                # The latest supplier price increase of the SKU, when it has one (2026-11-23).
+                increase_on=increase_dates.get(line.sku),
             )
             for line in lines
         ]
@@ -1783,8 +1804,15 @@ class QuotationService:
         if status is not None and status not in vocabulary.STATUSES:
             raise InvalidInputError("Estado desconocido")
         own_only = mine or not await self._sees_all(principal, kind)
+        team: frozenset[UUID] | None = None
+        if own_only and not mine and kind == vocabulary.QUOTATION:
+            # The call center's leader lists the quotations of every member (and its own).
+            members = await self._led_members(principal)
+            if members is not None:
+                team = members | {principal.user_id}
         return await self.repository.list(
-            created_by_id=principal.user_id if own_only else None,
+            created_by_id=principal.user_id if own_only and team is None else None,
+            created_by_ids=team,
             status=status,
             customer_nit=normalize_nit(customer_nit) if customer_nit else None,
             q=q.strip() if q and q.strip() else None,
@@ -2827,6 +2855,18 @@ class QuotationService:
         detail = await self.get(principal, quotation_id)
         await self._require_owner_or_validator(principal, detail.quotation, "borrarla")
         await self.repository.delete(quotation_id)
+
+    async def purge_stale_drafts(self) -> dict[str, Any]:
+        """Delete for good the customer quotations still in draft that were never sent to
+        validation, :data:`vocabulary.STALE_DRAFT_DAYS` days after they were created (job
+        ``quotations-stale-drafts``, 2026-11-23). One sent and returned to draft stays.
+        """
+
+        before = datetime.now(UTC) - timedelta(days=vocabulary.STALE_DRAFT_DAYS)
+        deleted = await self.repository.delete_stale_drafts(before)
+        if deleted:
+            logger.info("quotations: %s stale drafts deleted", len(deleted))
+        return {"deleted": len(deleted), "created_before": before.isoformat(), "errors": []}
 
     # ------------------------------------------------------------ export
 

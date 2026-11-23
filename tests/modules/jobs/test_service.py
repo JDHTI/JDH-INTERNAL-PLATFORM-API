@@ -148,9 +148,16 @@ async def test_the_rollover_runs_after_midnight_whatever_the_dwh(make_service, r
     await runs.mark_running(queued[0], on_time)
     await runs.finish(queued[0], RunStatus.SUCCESS, {}, on_time)
     # Once a day: a later start-up the same day does not run it again; the next day does.
-    assert await make_service(clock=lambda: on_time + timedelta(hours=9)).timed() == []
+    later = await make_service(clock=lambda: on_time + timedelta(hours=9)).timed()
+    # (by then the 00:15 cleanup of stale quotation drafts is due too)
+    assert [runs.items[i].job for i in later] == ["quotations-stale-drafts"]
+    for run_id in later:
+        await runs.mark_running(run_id, on_time)
+        await runs.finish(run_id, RunStatus.SUCCESS, {}, on_time + timedelta(hours=9))
     tomorrow = on_time + timedelta(days=1)
-    assert len(await make_service(clock=lambda: tomorrow).timed()) == 1
+    assert [runs.items[i].job for i in await make_service(clock=lambda: tomorrow).timed()] == [
+        "supplier-supports-rollover"
+    ]
     # It no longer waits for the identity load, nor runs in the fallback.
     assert "supplier-supports-rollover" not in {
         runs.items[i].job for i in await make_service(clock=lambda: tomorrow).fallback()

@@ -17,7 +17,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.config import Environment, Settings
-from app.core.errors import ConflictError, InvalidInputError
+from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.infrastructure.database import Database
 from app.main import create_app
 from app.modules.commercial_masters.infrastructure.models import (
@@ -27,10 +27,14 @@ from app.modules.commercial_masters.infrastructure.models import (
 from app.modules.commercial_masters.infrastructure.repository import (
     SqlAlchemyCommercialMasterRepository,
 )
+from app.modules.dwh_publish.infrastructure.models import DwhOutboxModel
 from app.modules.identity.presentation.principal import get_current_principal
 from app.modules.supplier_supports.application.requests import SupportRequestService
 from app.modules.supplier_supports.application.service import SupplierSupportService
 from app.modules.supplier_supports.domain.entities import SupportData
+from app.modules.supplier_supports.infrastructure.deletions_repository import (
+    SqlAlchemySupportDeletionRepository,
+)
 from app.modules.supplier_supports.infrastructure.models import (
     SupportJdhEventModel,
     SupportRequestModel,
@@ -214,6 +218,62 @@ async def test_approval_cancellation_and_immutable_history(storage):
     assert (await requests.get(pending["id"], None))["value"] == D("0.12")
     new = await propose(requests, cancelled, "0.10")
     assert new["status"] == "pendiente"
+
+
+async def test_the_leaders_deletion_removes_supports_and_requests_for_good(storage):
+    """2026-11-23: only inside the deletion's own transaction do the append-only guards let a
+    request or its history go; the support is published voided first."""
+
+    database, master, requests, support = storage
+    deletions = SqlAlchemySupportDeletionRepository(database)
+    pending = await propose(requests, support)
+    await requests.decide(pending["id"], 1, 1, "bi", True, None, FixedCalendar().today())
+    other = await master.create(
+        uuid4(), replace(support.data, product_sku="OTHER-DEL"), "bi", datetime.now(UTC)
+    )
+    lone = await propose(requests, other, "0.10")
+
+    # A JDH request alone, with its history.
+    assert await deletions.delete_requests([lone["id"]]) == 1
+    with pytest.raises(NotFoundError):
+        await deletions.delete_requests([lone["id"]])
+    # The plain statements are still refused outside a deletion.
+    async with database.session_factory() as session:
+        with pytest.raises(DBAPIError):
+            await session.execute(
+                text("DELETE FROM supplier_support_requests WHERE support_id=:id"),
+                {"id": support.id},
+            )
+
+    current = await master.get(support.id)
+    with pytest.raises(ConflictError):  # a stale version
+        await deletions.delete_supports({support.id: current.version - 1}, "x", "lider", now())
+    deleted = await deletions.delete_supports(
+        {support.id: current.version, other.id: None}, "Cargado por error", "lider", now()
+    )
+
+    assert deleted == 2
+    assert await master.get(support.id) is None and await master.get(other.id) is None
+    async with database.session_factory() as session:
+        left = await session.execute(
+            select(SupportRequestModel.id).where(SupportRequestModel.support_id == support.id)
+        )
+        assert list(left.scalars()) == []
+        history = await session.execute(
+            select(SupportJdhEventModel.id).where(SupportJdhEventModel.support_id == support.id)
+        )
+        assert list(history.scalars()) == []
+        # The warehouse gets it voided: it cannot delete.
+        payloads = (
+            await session.execute(
+                select(DwhOutboxModel.payload).where(DwhOutboxModel.entity_id == support.id)
+            )
+        ).scalars()
+        assert any(item.get("estado") == "anulado" for item in payloads)
+
+
+def now():
+    return datetime.now(UTC)
 
 
 async def test_a_request_pending_from_before_rules_v2_can_still_be_decided(storage):

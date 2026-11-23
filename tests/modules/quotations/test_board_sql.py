@@ -75,6 +75,21 @@ async def test_the_board_sorts_by_the_stored_stock_with_unread_rows_last() -> No
     assert "ORDER BY quotation_lines.stock_on_hand DESC NULLS LAST" in page
 
 
+async def test_the_board_hides_rows_without_stock_and_small_rises_are_no_alza() -> None:
+    """2026-11-23: a row the sync read at 0 is left out (unread stays); an «alza» needs at
+    least 1 % more than the current price."""
+
+    database = _Database()
+
+    await SqlAlchemyBoardRepository(database).rows([uuid4()], BoardFilter(chip="alza"), 1, 100)
+
+    counts, page = _sql(database.statements[0][0]), _sql(database.statements[-1][0])
+    stock = "quotation_lines.stock_on_hand IS NULL OR quotation_lines.stock_on_hand >"
+    assert stock in counts and stock in page
+    rise = "coalesce(quotation_lines.new_price, quotation_lines.optimal_price) >="
+    assert rise in page
+
+
 async def test_the_stock_of_a_list_is_stored_in_two_statements() -> None:
     database = _Database()
     quotation_id = uuid4()

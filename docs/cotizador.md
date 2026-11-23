@@ -386,6 +386,27 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
 
 `list_action` / `list_action_label` siguen diciendo si es actualización o creación.
 
+**Borradores sin enviar** (2026-11-23):
+- **Qué se borra:** una cotización de cliente que sigue en borrador y nunca se envió a
+  validación (sin `/confirm`, `confirmed_at` vacío) se borra por completo a los 30 días de
+  creada, con la tarea diaria `quotations-stale-drafts` (00:15).
+- **Qué no se borra:** una que se envió y volvió a borrador. Tampoco las actualizaciones de
+  lista.
+- **Aviso:** el resumen y el detalle traen `deleted_on`, el día en que se borrará, para el
+  tooltip de la UI; vale `null` en cualquier otra.
+
+**Call center** (2026-11-23):
+- **El área:** se llama `call-center` (`QUOTATIONS_CALL_CENTER_AREA_SLUG`) y la crea la
+  migración `0079` con el rol «Operador call center», que gestiona el cotizador. Sus miembros
+  cotizan a cualquier cliente: ven el maestro completo, como BI.
+- **Qué ve cada uno:** cada operador ve solo las cotizaciones que creó. El líder del área (o su
+  responsable) ve las de todos los miembros del área en la lista (`mine=false`) y en el detalle.
+  Con `mine=true` ve solo las suyas.
+- **Validar:** el call center no valida. La validación sigue en BI.
+
+**Fecha del alza:** cada línea trae `increase_on`, la fecha de la última alza de precio del
+proveedor para ese SKU, si tiene una.
+
 **Fecha de activación vencida** (2026-11-20): SIESA no acepta cargar una fecha pasada.
 - Al validar, si `activation_date` ya pasó (hora de Bogotá), se guarda la fecha del día de la validación. Una fecha de hoy o futura no cambia. La respuesta de `/validate` trae la fecha ya corregida.
 - Vale para cotizaciones de cliente (actualización o creación) y para actualizaciones de lista.

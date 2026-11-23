@@ -19,7 +19,12 @@ from app.modules.app_monitoring.application.service import AppMonitoringService
 from app.modules.app_monitoring.infrastructure.prober import HttpProber
 from app.modules.app_monitoring.infrastructure.repository import SqlAlchemyApplicationRepository
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.infrastructure.policies import PermissionPolicy, UnrestrictedAreaAccess
+from app.modules.areas.infrastructure.policies import (
+    AreaLeaderPolicy,
+    AreaTeam,
+    PermissionPolicy,
+    UnrestrictedAreaAccess,
+)
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
 from app.modules.commercial_masters.application.employee_prices import EmployeePriceService
 from app.modules.commercial_masters.application.price_increases import (
@@ -180,6 +185,7 @@ from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
 from app.modules.supplier_supports.application.bulk import QuietHours, SupportBulkService
 from app.modules.supplier_supports.application.costs import SupportCostService
+from app.modules.supplier_supports.application.deletions import SupportDeletionService
 from app.modules.supplier_supports.application.internal_requests import (
     InternalRequestLinks,
     InternalRequestService,
@@ -195,6 +201,9 @@ from app.modules.supplier_supports.infrastructure.bulk_file import SpreadsheetSu
 from app.modules.supplier_supports.infrastructure.costs import (
     SqlAlchemyCostRepository,
     WarehouseCostSource,
+)
+from app.modules.supplier_supports.infrastructure.deletions_repository import (
+    SqlAlchemySupportDeletionRepository,
 )
 from app.modules.supplier_supports.infrastructure.document_store import (
     DocumentManagerSupportStore,
@@ -516,8 +525,11 @@ class V1Container(containers.DeclarativeContainer):
         users=user_directory,
         access=area_service,
         audit=area_service,
-        # BI sees every customer; in Comercial only its leader or responsible does.
-        all_area_slugs=providers.List(config.quotations.approver_area_slug),
+        # BI and the call center see every customer; in Comercial only its leader or
+        # responsible does.
+        all_area_slugs=providers.List(
+            config.quotations.approver_area_slug, config.quotations.call_center_area_slug
+        ),
         leader_area_slugs=providers.List(config.quotations.manager_area_slug),
     )
     # --- Commercial masters (DWH mirror) and supplier supports ---
@@ -864,6 +876,25 @@ class V1Container(containers.DeclarativeContainer):
         main_lists=config.quotations.main_lists,
         main_managers=main_list_manager_policy,
         main_approvers=main_list_approver_policy,
+        # The call center's leader sees the quotations of every member of the area.
+        team=providers.Factory(
+            AreaTeam,
+            areas=area_service,
+            repository=area_repository,
+            area_slug=config.quotations.call_center_area_slug,
+        ),
+    )
+    # Deleting supports and requests for good (2026-11-23): only the leader of the supports'
+    # area (BI) and the platform administrators.
+    supplier_support_deletion_service = providers.Factory(
+        SupportDeletionService,
+        repository=providers.Factory(SqlAlchemySupportDeletionRepository, database=database),
+        deleters=providers.Factory(
+            AreaLeaderPolicy,
+            areas=area_service,
+            area_slug=config.supplier_supports.manager_area_slug,
+        ),
+        supports=supplier_support_service,
     )
     internal_support_request_service = providers.Factory(
         InternalRequestService,
@@ -988,6 +1019,7 @@ class V1Container(containers.DeclarativeContainer):
         support_costs=supplier_support_cost_service.provider,
         main_lists=main_board_service.provider,
         support_rollover=supplier_support_rollover_service.provider,
+        stale_drafts=quotation_service.provider,
     )
     job_service = providers.Factory(
         JobService,

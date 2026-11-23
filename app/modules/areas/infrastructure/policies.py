@@ -134,3 +134,65 @@ class PermissionPolicy:
 
 # Former name: every feature manager is now a module permission.
 AreaManagerPolicy = PermissionPolicy
+
+
+class AreaLeaderPolicy:
+    """Only the leader of one area (its leader role or its responsible) and the platform
+    administrators (owner, admin): for what no module grant gives, like deleting records for
+    good (2026-11-23). A moderator never passes."""
+
+    def __init__(self, areas: AreaService, area_slug: str | None) -> None:
+        """Create the policy.
+
+        Args:
+            areas (AreaService): Area access use cases.
+            area_slug (str | None): The area whose leader may; blank leaves only the platform
+                administrators.
+        """
+
+        self.areas = areas
+        self.area_slug = (area_slug or "").strip() or None
+
+    async def is_manager(self, principal: Principal) -> bool:
+        """Whether the caller leads the area or administers the platform."""
+
+        if principal.is_platform_admin:
+            return True
+        if self.area_slug is None or principal.is_moderator:
+            return False
+        grants = (await self.areas.profile(principal)).areas.get(self.area_slug)
+        return grants is not None and (grants.is_leader or grants.is_responsible)
+
+
+class AreaTeam:
+    """The people of one area as its leader sees them (2026-11-23): the call center's leader
+    sees the quotations of every member of the area; each member, only its own."""
+
+    def __init__(
+        self, areas: AreaService, repository: AreaRepository, area_slug: str | None
+    ) -> None:
+        """Create it.
+
+        Args:
+            areas (AreaService): Area access use cases (the caller's profile).
+            repository (AreaRepository): Where areas and members are read.
+            area_slug (str | None): The area; blank means no team.
+        """
+
+        self.areas = areas
+        self.repository = repository
+        self.area_slug = (area_slug or "").strip() or None
+
+    async def led_members(self, principal: Principal) -> frozenset[UUID] | None:
+        """The users of the area when the caller leads it (its leader role or its
+        responsible); ``None`` otherwise."""
+
+        if self.area_slug is None:
+            return None
+        grants = (await self.areas.profile(principal)).areas.get(self.area_slug)
+        if grants is None or not (grants.is_leader or grants.is_responsible):
+            return None
+        area = await self.repository.get_by_slug(self.area_slug)
+        if area is None:
+            return None
+        return frozenset(member.user_id for member in await self.repository.list_members(area.id))

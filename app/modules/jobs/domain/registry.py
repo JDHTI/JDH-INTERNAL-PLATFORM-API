@@ -122,6 +122,17 @@ JOBS: tuple[JobDefinition, ...] = (
         EVERY_DAY,
         at=time(0, 5),
     ),
+    # A customer quotation left as a draft and never sent to validation for over 30 days is
+    # deleted (2026-11-23). It reads no DWH data.
+    JobDefinition(
+        "quotations-stale-drafts",
+        "Cotizador: borrar borradores sin enviar",
+        "Borra por completo las cotizaciones de cliente en borrador que nunca se enviaron a "
+        "validación y tienen más de 30 días de creadas. Corre a las 00:15",
+        None,
+        EVERY_DAY,
+        at=time(0, 15),
+    ),
     # After the supply load: the price lists and the inventory are the day's.
     JobDefinition(
         "main-lists-sync",

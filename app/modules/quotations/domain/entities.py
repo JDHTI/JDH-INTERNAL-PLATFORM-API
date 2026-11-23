@@ -561,6 +561,8 @@ class QuotationLine:
     # Units on hand and available in the warehouses that cost the line (as the cost read it).
     stock_on_hand: Decimal | None = None
     stock_available: Decimal | None = None
+    # The date of the SKU's latest supplier price increase, when it has one (2026-11-23).
+    increase_on: date | None = None
 
     @property
     def is_staged(self) -> bool:

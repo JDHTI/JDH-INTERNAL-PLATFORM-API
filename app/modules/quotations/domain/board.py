@@ -21,6 +21,9 @@ MARGIN_CHIPS = ("alza", "objetivo", "encima", "alerta")
 CHIPS = REVIEW_CHIPS + MARGIN_CHIPS
 # Half a point of room either way around the target (decided 2026-11-12).
 TARGET_TOLERANCE = Decimal("0.005")
+# Least increase that makes a row an «alza»: under 1 % of the current price it is on target
+# (2026-11-23). The board only shows rows in stock.
+MIN_INCREASE = Decimal("0.01")
 SORTS = (
     "lista",
     "sku",
@@ -101,6 +104,7 @@ __all__ = [
     "MARGIN_CHIPS",
     "MAX_KEYS",
     "MAX_PAGE_SIZE",
+    "MIN_INCREASE",
     "REVIEW_CHIPS",
     "SORTS",
     "TARGET_TOLERANCE",
