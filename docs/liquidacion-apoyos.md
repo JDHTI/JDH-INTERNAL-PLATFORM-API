@@ -39,6 +39,8 @@ Los montos se guardan en centavos. El % liquidado se guarda con 6 decimales.
 
 - **Recalcular:** lee las ventas del mes del DWH en una sola consulta (minutos en frío, segundos
   en caliente) y reemplaza el borrador del mes en una transacción.
+  - Si el cliente o el proxy cortan la petición, el cálculo sigue hasta guardarse.
+  - Volver a pedir el mes muestra el resultado. Lo mismo vale para cerrar.
 - **Tarea diaria:** `support-settlements-refresh`, después de la carga de ventas
   (`reporte_ventas`), recalcula el mes en curso y el vencido si no está cerrado.
 - **Cerrar:** recalcula por última vez y congela la foto. Las líneas guardan el apoyo como era en
@@ -67,6 +69,7 @@ Los montos se guardan en centavos. El % liquidado se guarda con 6 decimales.
 | `GET /{periodo}/breakdown?by=regional\|business_unit\|salesperson\|customer&supplier_code=` | Dónde vuelve el dinero del proveedor |
 | `GET /{periodo}/export?supplier_code=` | Excel: Resumen (por referencia), Detalle ventas y No liquidados |
 | `POST /{periodo}/recalculate` | Borrador nuevo. 409 si está cerrado |
+| `supplier_code=__none__` | En `references`, `lines`, `breakdown` y `export`: las filas sin código de proveedor |
 | `POST /{periodo}/close` | Solo un mes terminado |
 | `POST /{periodo}/reopen` | Líder de BI o administrador |
 

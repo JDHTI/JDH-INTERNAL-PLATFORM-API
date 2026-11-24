@@ -17,6 +17,7 @@ from app.infrastructure.database import Database
 from app.modules.support_settlements.domain.entities import (
     CLOSED,
     DRAFT,
+    NO_SUPPLIER,
     SETTLED,
     Settlement,
     SettlementResult,
@@ -41,6 +42,12 @@ _DIMENSIONS = {
     "salesperson": L.salesperson,
     "customer": L.nit,
 }
+
+
+def _supplier(column: Any, code: str) -> Any:
+    """The supplier filter; :data:`NO_SUPPLIER` asks for the rows with no supplier code."""
+
+    return column.is_(None) if code == NO_SUPPLIER else column == code
 
 
 def _header(model: SupportSettlementModel) -> Settlement:
@@ -276,7 +283,7 @@ class SqlAlchemySettlementRepository:
 
         query = select(R).where(R.settlement_id == settlement_id)
         if supplier_code:
-            query = query.where(R.supplier_code == supplier_code)
+            query = query.where(_supplier(R.supplier_code, supplier_code))
         query = query.order_by(R.amount.desc(), R.sku)
         async with self.database.session_factory() as session:
             models = (await session.execute(query)).scalars().all()
@@ -336,7 +343,7 @@ class SqlAlchemySettlementRepository:
     def _filtered(self, settlement_id, supplier_code, sku, nit, status):
         query = select(L).where(L.settlement_id == settlement_id)
         if supplier_code:
-            query = query.where(L.supplier_code == supplier_code)
+            query = query.where(_supplier(L.supplier_code, supplier_code))
         if sku:
             query = query.where(L.sku == sku)
         if nit:
@@ -401,7 +408,7 @@ class SqlAlchemySettlementRepository:
             .order_by(func.sum(L.amount).desc())
         )
         if supplier_code:
-            query = query.where(L.supplier_code == supplier_code)
+            query = query.where(_supplier(L.supplier_code, supplier_code))
         async with self.database.session_factory() as session:
             return [dict(row._mapping) for row in (await session.execute(query)).all()]
 

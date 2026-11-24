@@ -14,6 +14,7 @@ from sqlalchemy import delete
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
+from app.modules.support_settlements.domain.entities import NO_SUPPLIER
 from app.modules.support_settlements.domain.rules import build_settlement
 from app.modules.support_settlements.infrastructure.models import SupportSettlementModel
 from app.modules.support_settlements.infrastructure.repository import (
@@ -102,3 +103,35 @@ async def test_replace_close_reopen_and_aggregates(repository) -> None:
     reopened = await repository.reopen(PERIOD, "lider", NOW)
     assert reopened.status == "borrador" and reopened.reopened_by == "lider"
     assert [item.period for item in await repository.list() if item.period == PERIOD] == [PERIOD]
+
+
+async def test_lines_and_references_without_a_supplier_code(repository) -> None:
+    day = date(2001, 3, 10)
+    orphan = support(
+        product_sku="999",
+        supplier_code=None,
+        valid_from=date(2001, 1, 1),
+        valid_to=None,
+        calc_method="valor_unidad",
+        supplier_value=Decimal("10"),
+        value_unit="unidad",
+    )
+    known = support(valid_from=date(2001, 1, 1), valid_to=None)
+    computed = build_settlement(
+        sales=[sale(sale_date=day), sale(sale_date=day, sku="999", document="FEV-999")],
+        supports=[known, orphan],
+        products={"18369": product()},
+        customers={"900973779-001": customer()},
+        quotes={"18369": [quote("9142.67", since=date(2001, 1, 1))]},
+    )
+    stored = await repository.replace(PERIOD, computed, "bi", NOW)
+
+    without = await repository.references(stored.id, NO_SUPPLIER)
+    lines, total = await repository.lines(
+        stored.id, supplier_code=NO_SUPPLIER, sku=None, nit=None, status=None, page=1, size=10
+    )
+    familia = await repository.references(stored.id, "233")
+
+    assert [row["sku"] for row in without] == ["999"]
+    assert total == 1 and lines[0]["sku"] == "999" and lines[0]["supplier_code"] is None
+    assert [row["sku"] for row in familia] == ["18369"]

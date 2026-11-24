@@ -49,6 +49,8 @@ QUOTE = "cotizacion"
 INVOICE = "factura"
 
 BREAKDOWNS = ("regional", "business_unit", "salesperson", "customer")
+# The ``supplier_code`` filter that asks for the lines and references with no supplier code.
+NO_SUPPLIER = "__none__"
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,7 @@ __all__ = [
     "ITEM_STATUSES",
     "ITEM_STATUS_LABELS",
     "MINIMUM_NOT_MET",
+    "NO_SUPPLIER",
     "NO_VALUE",
     "PARTIAL_DISCOUNT",
     "QUOTE",

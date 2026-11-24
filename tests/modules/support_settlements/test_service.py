@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 
 import pytest
@@ -139,6 +140,46 @@ async def test_summary_lines_and_workbook(service) -> None:
     assert total == 2 and lines[0]["items"][0]["status"] == "liquidado"
     assert workbook.filename == "liquidacion-apoyos-2026-10-proveedor-233.xlsx"
     assert workbook.content[:2] == b"PK"
+
+
+class SlowSales(FakeSales):
+    """A DWH read that waits until the test lets it go."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.release = asyncio.Event()
+        self.started = asyncio.Event()
+
+    async def sales(self, start, following, product_keys):
+        self.started.set()
+        await self.release.wait()
+        return await super().sales(start, following, product_keys)
+
+
+async def test_a_recalculation_finishes_when_the_request_is_cancelled(repository) -> None:
+    slow = SlowSales([october()], {"18369": [quote("9142.67")]})
+    service = SettlementService(
+        repository,
+        FakeMasters([support()], [product()], [customer()]),
+        slow,
+        Policy(managers={ANALYST.email}),
+        Policy(),
+        start_period="2026-10",
+        today=lambda: TODAY,
+    )
+    request = asyncio.create_task(service.recalculate(ANALYST, "2026-10"))
+    await slow.started.wait()
+
+    request.cancel()  # the proxy hung up
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    slow.release.set()
+    for _ in range(20):
+        if "2026-10" in repository.items:
+            break
+        await asyncio.sleep(0)
+
+    assert repository.items["2026-10"].supported_lines == 1
 
 
 async def test_the_job_refreshes_open_months_and_leaves_closed_ones(service, repository) -> None:

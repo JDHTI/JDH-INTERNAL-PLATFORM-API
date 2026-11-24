@@ -10,8 +10,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -24,6 +25,7 @@ from app.modules.support_settlements.domain.entities import (
     BREAKDOWNS,
     CLOSED,
     ITEM_STATUSES,
+    NO_SUPPLIER,
     Settlement,
     SettlementResult,
 )
@@ -176,8 +178,11 @@ class SettlementService:
             raise ConflictError(
                 f"La liquidación de {period} está cerrada; reábrela para recalcular"
             )
+        return await _detached(self._store(period, principal.email))
+
+    async def _store(self, period: str, actor: str, close: bool = False) -> Settlement:
         result = await self.calculate(period)
-        return await self.repository.replace(period, result, principal.email, datetime.now(UTC))
+        return await self.repository.replace(period, result, actor, datetime.now(UTC), close=close)
 
     async def close(self, principal: Principal, period: str) -> Settlement:
         """Calculate the finished month one last time and freeze it.
@@ -191,10 +196,7 @@ class SettlementService:
         period = self._check_period(period)
         if not periods.is_finished(period, self._today()):
             raise InvalidInputError("Solo se cierra un mes terminado (mes vencido)")
-        result = await self.calculate(period)
-        return await self.repository.replace(
-            period, result, principal.email, datetime.now(UTC), close=True
-        )
+        return await _detached(self._store(period, principal.email, close=True))
 
     async def reopen(self, principal: Principal, period: str) -> Settlement:
         """Put a closed month back to draft (the area's leader only)."""
@@ -317,8 +319,22 @@ class SettlementService:
         )
         name = f"liquidacion-apoyos-{settlement.period}"
         if code:
-            name += f"-proveedor-{code}"
+            name += "-sin-proveedor" if code == NO_SUPPLIER else f"-proveedor-{code}"
         return ExportFile(content, f"{name}.xlsx")
+
+
+_RUNNING: set[asyncio.Task] = set()
+
+
+async def _detached(work: Coroutine[Any, Any, Settlement]) -> Settlement:
+    """Run a calculation to the end even if the request is cancelled (the client or a proxy
+    hung up after minutes reading the DWH): the month is stored all the same, and asking again
+    shows it."""
+
+    task = asyncio.ensure_future(work)
+    _RUNNING.add(task)
+    task.add_done_callback(_RUNNING.discard)
+    return await asyncio.shield(task)
 
 
 def _clean(value: str | None) -> str | None:
