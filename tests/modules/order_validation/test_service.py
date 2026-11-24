@@ -84,6 +84,37 @@ async def test_orders_filter_by_operation_center(service, source, manager) -> No
     assert (await service.orders(batch.id, operation_center="999")).total == 0
 
 
+async def test_orders_filter_by_salesperson(service, manager) -> None:
+    def row(seller: str, document: str) -> list:
+        values = list(ROW)
+        values[6], values[2] = seller, document
+        return values
+
+    content = workbook(
+        HEADER,
+        row("FLOREZ MERCADO SUSAN PAOLA", "PV-1"),
+        row("ARDILA  HERNANDEZ YENITH", "PV-2"),
+        row("FLOREZ MERCADO SUSAN PAOLA", "PV-3"),
+    )
+    batch = await service.upload(manager, "p.xlsx", content)
+
+    page = await service.orders(batch.id, sort="file")
+    # Every salesperson of the file, by name, spaces collapsed, with their orders.
+    assert page.salespeople == (
+        ("ARDILA HERNANDEZ YENITH", 1),
+        ("FLOREZ MERCADO SUSAN PAOLA", 2),
+    )
+
+    only = await service.orders(batch.id, salesperson="florez mercado susan paola", sort="file")
+    assert [order.document for order in only.items] == ["PV-1", "PV-3"]
+    assert sum(only.counts.values()) == 2
+    # The list does not shrink with the filter.
+    assert only.salespeople == page.salespeople
+    by_name = await service.orders(batch.id, salesperson="ARDILA HERNANDEZ YENITH")
+    assert [order.document for order in by_name.items] == ["PV-2"]
+    assert (await service.orders(batch.id, salesperson="NADIE")).total == 0
+
+
 async def test_revalidate_uses_the_supports_as_they_are_now(service, source, manager) -> None:
     batch = await service.upload(manager, "p.xlsx", report())
     assert batch.ready_order_count == 0

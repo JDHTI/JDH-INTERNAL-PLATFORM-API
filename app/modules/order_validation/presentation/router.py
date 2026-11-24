@@ -219,6 +219,14 @@ class OperationCenterCount(BaseModel):
     order_count: int
 
 
+class SalespersonCount(BaseModel):
+    """A salesperson of the file (the order header's «Nombre vendedor cliente") and how many
+    orders they have."""
+
+    name: str
+    order_count: int
+
+
 class OrderPageResponse(BaseModel):
     """A page of orders and the order count per status (before the status filter)."""
 
@@ -230,6 +238,8 @@ class OrderPageResponse(BaseModel):
     threshold_released_count: int
     # Every operation center of the whole file, whatever the filters, to offer them all.
     operation_centers: list[OperationCenterCount]
+    # Every salesperson of the whole file, whatever the filters, by name.
+    salespeople: list[SalespersonCount] = []
 
 
 class CatalogItem(BaseModel):
@@ -526,6 +536,7 @@ async def list_orders(
     reason: Reason | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
     operation_center: str | None = Query(default=None, max_length=20),
+    salesperson: str | None = Query(default=None, max_length=150),
     margin_threshold_points: Decimal | None = _TRY_THRESHOLD,
     sort: Literal[
         "attention", "file", "document_asc", "document_desc", "margin_asc", "margin_desc"
@@ -546,6 +557,8 @@ async def list_orders(
     `margin_threshold_points` the statuses and counts come out as if the file had that
     threshold, without saving it; `PUT /{id}/margin-threshold` saves it. `operation_center`
     keeps the orders of one C.O. factura; `operation_centers` lists every one in the file.
+    `salesperson` keeps the orders of one salesperson (a `name` of `salespeople`, which lists
+    every salesperson in the file).
     """
 
     result = await service.orders(
@@ -554,6 +567,7 @@ async def list_orders(
         reason=reason,
         q=q,
         operation_center=operation_center,
+        salesperson=salesperson,
         margin_threshold_points=margin_threshold_points,
         sort=sort,
         page=page,
@@ -569,6 +583,9 @@ async def list_orders(
         operation_centers=[
             OperationCenterCount(code=code, order_count=count)
             for code, count in result.operation_centers
+        ],
+        salespeople=[
+            SalespersonCount(name=name, order_count=count) for name, count in result.salespeople
         ],
     )
 

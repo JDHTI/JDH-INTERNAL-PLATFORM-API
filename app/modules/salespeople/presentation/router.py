@@ -64,8 +64,11 @@ class RosterItemResponse(BaseModel):
     code: str
     name: str | None
     email: str | None
+    # A salesperson's coordinator in the commercial master (consumo.supervisores).
     supervisor_code: str | None
     is_active: bool
+    # The team (consumo.equipos): a salesperson's, or the one a coordinator leads.
+    team: str | None = None
     # Who holds the code (by hand or by e-mail); null when nobody.
     holder_email: str | None
     holder_name: str | None
@@ -130,7 +133,8 @@ async def roster(
     principal: Principal = _principal,
     service: SalesScopeService = _service,
 ) -> RosterPageResponse:
-    """Vendedores o supervisores de SIESA con quién tiene cada código (admin o moderador)."""
+    """Vendedores, o coordinadores del maestro comercial, con quién tiene cada código (admin o
+    moderador)."""
 
     result = await service.roster_page(
         principal, kind=kind, q=q, linked=linked, active_only=active_only, page=page, size=size
@@ -144,6 +148,7 @@ async def roster(
                 email=row.entry.email,
                 supervisor_code=row.entry.supervisor_code,
                 is_active=row.entry.is_active,
+                team=row.entry.team,
                 holder_email=row.holder_email,
                 holder_name=row.holder_name,
                 link=_link(row.link) if row.link else None,

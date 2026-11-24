@@ -59,6 +59,10 @@ class SalesRoster(Protocol):
         """Active salespeople with this e-mail."""
         ...
 
+    async def supervisors_by_email(self, email: str) -> list[str]:
+        """Supervisor codes whose e-mail (the coordinators' master) is this one."""
+        ...
+
     async def team(self, supervisor_codes: Sequence[str]) -> list[str]:
         """Codes of the active salespeople of these supervisors."""
         ...

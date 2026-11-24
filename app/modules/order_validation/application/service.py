@@ -115,6 +115,12 @@ def _matches(order: OrderView, term: str) -> bool:
     return False
 
 
+def _seller(order: OrderView) -> str | None:
+    """The order's salesperson as the file names it (its header line), spaces collapsed."""
+
+    return " ".join((order.first.salesperson or "").split()) or None
+
+
 def _order_key(order: OrderView) -> tuple[int, int, Decimal, int]:
     """Orders with a line that has no support first, then margin from lowest to highest."""
 
@@ -480,6 +486,7 @@ class OrderValidationService:
         reason: str | None = None,
         q: str | None = None,
         operation_center: str | None = None,
+        salesperson: str | None = None,
         margin_threshold_points: Decimal | None = None,
         sort: str = "attention",
         page: int = 1,
@@ -494,6 +501,9 @@ class OrderValidationService:
             q (str | None): Free text over document, client, supplier and SKU.
             operation_center (str | None): Only the orders of this operation center
                 (C.O. factura, the order header's).
+            salesperson (str | None): Only the orders of this salesperson (the order header's
+                «Nombre vendedor cliente», exactly as ``salespeople`` lists it; case and spaces
+                are ignored).
             margin_threshold_points (Decimal | None): Try another margin threshold, in points,
                 without saving it: statuses, counts and margins come out as if the file had it.
                 The saved threshold is used when omitted.
@@ -524,12 +534,18 @@ class OrderValidationService:
         threshold_released = sum(1 for order in orders if order.released_by_threshold)
         # The centers of the whole file, so the filter always offers all of them.
         centers = Counter(center for order in orders if (center := order.first.operation_center))
+        sellers = Counter(name for order in orders if (name := _seller(order)))
         term = " ".join((q or "").lower().split())
         if term:
             orders = [order for order in orders if _matches(order, term)]
         center_filter = (operation_center or "").strip()
         if center_filter:
             orders = [order for order in orders if order.first.operation_center == center_filter]
+        seller_filter = " ".join((salesperson or "").split()).casefold()
+        if seller_filter:
+            orders = [
+                order for order in orders if (_seller(order) or "").casefold() == seller_filter
+            ]
         if reason:
             orders = [
                 order
@@ -556,6 +572,7 @@ class OrderValidationService:
             counts=counts,
             threshold_released_count=threshold_released,
             operation_centers=tuple(sorted(centers.items())),
+            salespeople=tuple(sorted(sellers.items(), key=lambda item: item[0].casefold())),
         )
 
     def rule_catalog(self) -> tuple[Section, ...]:

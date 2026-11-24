@@ -406,9 +406,13 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
 - **Validar:** el call center no valida. La validación sigue en BI.
 
 **Coordinadores y directores de Comercial** (2026-11-23):
-- **Coordinador:** una persona vinculada a uno o más códigos de supervisor de SIESA
-  (`cod_supervisor`) en `/ti/administracion/vendedores`. No necesita un permiso aparte: el vínculo
-  le da el alcance `team`. Sus vendedores son los que tienen ese supervisor en SIESA.
+- **Coordinador:** un coordinador del maestro comercial (`consumo.supervisores`, rol
+  `Coordinador` o `Coordinador y Director`). No necesita un permiso aparte: el maestro le da el
+  alcance `team`.
+  - Sus vendedores son los activos de su equipo (`consumo.equipos`). Nada se toma del
+    `cod_supervisor` de SIESA (2026-11-24).
+  - Entra solo por su correo del maestro. Un administrador lo puede vincular o quitar en
+    `/ti/administracion/vendedores`. Ver `docs/salespeople.md`.
   - Con `mine=false` ve sus cotizaciones y las de los clientes de sus vendedores
     (`quotations.salesperson_code` dentro del equipo). También abre su detalle.
   - No las edita: solo cambia las que creó.

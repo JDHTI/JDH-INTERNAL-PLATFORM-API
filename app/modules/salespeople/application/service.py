@@ -6,13 +6,16 @@ Rules:
 - ``all``: platform administrators and moderators, anyone in BI or the call center, the
   leader or responsible of Comercial and Comercial's directors (``manage`` on
   ``comercial-director``, 2026-11-23).
-- ``team``: a person linked to supervisor codes (a coordinator) sees their sellers'
-  customers, plus their own seller codes.
+- ``team``: a coordinator of the commercial master (``consumo.supervisores``, never SIESA's
+  ``cod_supervisor``, 2026-11-24) sees the customers of the active salespeople of their team
+  (``consumo.equipos``), plus their own seller codes.
 - ``mine``: a person linked to seller codes sees those customers.
 - ``none``: everyone else, until an administrator links them.
 - A link comes from the corporate e-mail (``auto``) or from an administrator (``manual``).
   While a person has no seller link stored, their e-mail still links them live, except to
-  codes someone holds or an administrator unlinked.
+  codes someone holds or an administrator unlinked. The same goes for supervisor codes, whose
+  e-mail is the coordinators' master (``consumo.supervisores``, 2026-11-24): a coordinator
+  sees their team without an administrator linking them.
 - Unlinking keeps the code as ``excluded``: the e-mail never links it again by itself.
 """
 
@@ -163,6 +166,23 @@ class SalesScopeService:
                 codes.append(entry.code)
         return codes
 
+    async def _email_supervisor_codes(self, email: str | None) -> list[str]:
+        """Supervisor codes the e-mail gives (coordinators' master), minus codes someone holds
+        or that were unlinked."""
+
+        if not email or "@" not in email:
+            return []
+        try:
+            found = await self.roster.supervisors_by_email(email)
+        except Exception:  # noqa: BLE001 - a warehouse outage only loses the e-mail match
+            logger.warning("salespeople: supervisor e-mail match skipped, warehouse unavailable")
+            return []
+        codes = []
+        for code in found:
+            if await self.links.get_by_code(SUPERVISOR, code) is None:
+                codes.append(code)
+        return codes
+
     # --- Scope ---
 
     async def scope_for(self, principal: Principal) -> SalesScope:
@@ -185,6 +205,8 @@ class SalesScopeService:
         supervisors = [link.code for link in stored if link.kind == SUPERVISOR]
         if not sellers:
             sellers = await self._email_codes(principal.email)
+        if not supervisors:
+            supervisors = await self._email_supervisor_codes(principal.email)
         if supervisors:
             team = await self.roster.team(supervisors)
             codes = tuple(sorted({*team, *sellers}))
@@ -227,7 +249,7 @@ class SalesScopeService:
             raise InvalidInputError("Página o tamaño inválido")
         entries = await (self.roster.sellers() if kind == SELLER else self.roster.supervisors())
         stored = {link.code: link for link in await self.links.list_all() if link.kind == kind}
-        emails = await self.users.active_emails() if kind == SELLER else {}
+        emails = await self.users.active_emails()
         holders = await self.users.get_users(
             {link.user_id for link in stored.values() if link.user_id}
             | {emails[e.email] for e in entries if e.email in emails}
@@ -301,8 +323,12 @@ class SalesScopeService:
             raise ConflictError("No se puede vincular un usuario inactivo")
         entries = await (self.roster.sellers() if kind == SELLER else self.roster.supervisors())
         if not any(entry.code == code for entry in entries):
-            label = "vendedor" if kind == SELLER else "supervisor"
-            raise NotFoundError(f"No hay un {label} con el código {code} en SIESA")
+            where = (
+                "un vendedor con el código {code} en SIESA"
+                if kind == SELLER
+                else "un coordinador con el código {code} en el maestro comercial"
+            )
+            raise NotFoundError(f"No hay {where.format(code=code)}")
         current = await self.links.get_by_code(kind, code)
         if current and current.user_id == user.id and current.source == MANUAL:
             return current
@@ -340,7 +366,8 @@ class SalesScopeService:
         )
 
     async def sync_by_email(self, principal: Principal | None) -> SyncResult:
-        """Store a link for every active salesperson whose e-mail is an active user's.
+        """Store a link for every active salesperson, and every active supervisor of the
+        coordinators' master, whose e-mail is an active user's.
 
         Codes already linked or unlinked are left alone.
 
@@ -356,14 +383,15 @@ class SalesScopeService:
         emails = await self.users.active_emails()
         matched: list[tuple[str, str, UUID]] = []
         without_user = 0
-        for entry in await self.roster.sellers():
+        entries = [*await self.roster.sellers(), *await self.roster.supervisors()]
+        for entry in entries:
             if not entry.is_active or not entry.email:
                 continue
             user_id = emails.get(entry.email)
             if user_id is None:
                 without_user += 1
                 continue
-            matched.append((SELLER, entry.code, user_id))
+            matched.append((entry.kind, entry.code, user_id))
         created = await self.links.create_missing(matched, AUTO)
         if created:
             await self._event("salespeople_synced", principal, None, {"created": created})
