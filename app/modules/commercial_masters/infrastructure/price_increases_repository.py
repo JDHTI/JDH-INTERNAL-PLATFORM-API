@@ -9,8 +9,20 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, case, func, literal_column, or_, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import (
+    Text,
+    and_,
+    any_,
+    case,
+    false,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 
 from app.core.errors import NotFoundError
 from app.infrastructure.database import Database
@@ -24,6 +36,7 @@ from app.modules.commercial_masters.domain.price_increases import (
     PriceIncreaseFilters,
     PriceIncreasePage,
     PriceIncreaseValues,
+    Scope,
     SupplierOption,
 )
 from app.modules.commercial_masters.infrastructure.models import (
@@ -39,6 +52,26 @@ _FIELDS = ("sku", *VALUE_FIELDS)
 
 def _values(row: Any) -> PriceIncreaseValues:
     return PriceIncreaseValues(**{name: getattr(row, name) for name in _FIELDS})
+
+
+# The regional as ``regional_key`` reads it: trimmed, single spaces, upper case.
+_REGIONAL = func.upper(
+    func.regexp_replace(func.btrim(func.coalesce(P.regional, "")), r"\s+", " ", "g")
+)
+
+
+def _in_scope(scope: Scope):
+    """The rows :meth:`Scope.holds`: its references, national or of its regionals."""
+
+    if not scope.skus:
+        return false()
+    return and_(
+        P.sku == any_(literal(sorted(scope.skus), ARRAY(Text))),
+        or_(
+            _REGIONAL.in_(("", "NACIONAL")),
+            _REGIONAL.in_(sorted(scope.regionals)) if scope.regionals else false(),
+        ),
+    )
 
 
 class SqlAlchemyPriceIncreaseRepository:
@@ -137,6 +170,8 @@ class SqlAlchemyPriceIncreaseRepository:
             conditions.append(P.system_updated_on.is_not(None))
         if filters.supplier:
             conditions.append(ProductModel.commercial_supplier_code == filters.supplier)
+        if filters.scope is not None:
+            conditions.append(_in_scope(filters.scope))
         if filters.q and filters.q.strip():
             term = filters.q.strip()
             conditions.append(
@@ -175,6 +210,7 @@ class SqlAlchemyPriceIncreaseRepository:
             listing.order_by(
                 P.increased_on.desc().nulls_last(),
                 P.notified_on.desc().nulls_last(),
+                P.occurrence.desc(),
                 P.sku,
                 P.id,
             )
@@ -230,6 +266,8 @@ class SqlAlchemyPriceIncreaseRepository:
                 CommercialSupplierModel.name,
                 ProductModel.category,
                 ProductModel.commercial_supplier_code,
+                P.regional,
+                P.occurrence,
             )
             .select_from(
                 P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(

@@ -79,6 +79,9 @@ class AnalysisRow:
     supplier_name: str | None = None
     category: str | None = None
     supplier_code: str | None = None
+    regional: str | None = None
+    # The order of rows with the same dates, as the workbook has them.
+    occurrence: int = 1
 
     @property
     def cost_before(self) -> Decimal | None:
@@ -189,7 +192,9 @@ def _ordered(rows: Iterable[AnalysisRow]) -> dict[str, list[AnalysisRow]]:
     for row in rows:
         by_sku[row.sku].append(row)
     for items in by_sku.values():
-        items.sort(key=lambda item: (item.increased_on, item.notified_on or date.min))
+        items.sort(
+            key=lambda item: (item.increased_on, item.notified_on or date.min, item.occurrence)
+        )
     return by_sku
 
 

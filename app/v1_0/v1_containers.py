@@ -40,6 +40,7 @@ from app.modules.commercial_masters.application.service import (
 from app.modules.commercial_masters.application.sync import MasterSyncService
 from app.modules.commercial_masters.infrastructure.dwh_source import WarehouseMasterSource
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
+from app.modules.commercial_masters.infrastructure.placements import WarehousePlacementSource
 from app.modules.commercial_masters.infrastructure.price_increases_file import (
     PriceIncreaseFileReader,
 )
@@ -608,6 +609,12 @@ class V1Container(containers.DeclarativeContainer):
         reader=price_increase_reader,
         max_upload_bytes=config.product_margins.max_upload_bytes,
         cache=price_increase_analysis_cache,
+        # The operation center and installation filters (2026-11-24).
+        placements=providers.Factory(
+            WarehousePlacementSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+        ),
     )
     master_lookup = providers.Factory(MasterLookup, repository=commercial_master_repository)
     pqrsf_product_catalog = providers.Factory(MasterProductCatalog, masters=master_lookup)
@@ -1079,6 +1086,26 @@ class V1Container(containers.DeclarativeContainer):
         namer=providers.Object(workbook_name),
         reasons=cost_novelty_repository.provided.reasons,
         max_upload_bytes=config.costs.increases_max_upload_bytes,
+        # The supplier's support of the increase (2026-11-24): PDF, picture, sheet or Word.
+        support_guard=providers.Factory(
+            AttachmentGuard,
+            image_processor=providers.Singleton(
+                PillowImageProcessor,
+                max_bytes=config.costs.support_max_bytes,
+                max_pixels=config.pqrsf.max_image_pixels,
+            ),
+            malware_scanner=providers.Singleton(
+                ClamAVScanner,
+                host=config.pqrsf.clamav_host,
+                port=config.pqrsf.clamav_port,
+                timeout=config.pqrsf.clamav_timeout,
+            ),
+            allowed_extensions=config.costs.support_extensions,
+            max_attachments=1,
+            max_attachment_bytes=config.costs.support_max_bytes,
+            max_total_attachment_bytes=config.costs.support_max_bytes,
+        ),
+        area_slug=config.costs.area_slug,
     )
     # --- Liquidación de apoyos (BI): what each supplier owes for a month of sales ---
     support_settlement_service = providers.Factory(

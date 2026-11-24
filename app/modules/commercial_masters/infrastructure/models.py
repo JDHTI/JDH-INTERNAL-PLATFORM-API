@@ -313,6 +313,8 @@ class PriceIncreaseModel(Base):
     # Costos, with the request line it came from; no foreign key: the modules keep apart).
     source: Mapped[str] = mapped_column(String(12), nullable=False, server_default="libro")
     request_line_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # The n-th workbook row with the same reference, dates and regional (``#n`` in the key).
+    occurrence: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
     updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

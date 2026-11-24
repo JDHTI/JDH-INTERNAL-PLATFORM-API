@@ -47,8 +47,16 @@ salvo `apply=true`, como el actualizador de márgenes.
   `Referencia` y un costo nuevo (con o sin impuesto saludable).
 - **Llave:** referencia + fecha de incremento + fecha de notificación, más la regional cuando
   no es NACIONAL ni está vacía (2026-11-24, migración `0084`). Así dos regionales de una
-  referencia con las mismas fechas son dos filas. Una fila con una llave nueva se inserta; con una existente se actualiza si cambió algo; si no, queda igual. Si el
-  archivo repite una llave, queda la última fila (se reportan como repetidas).
+  referencia con las mismas fechas son dos filas. Una fila con una llave nueva se inserta; con
+  una existente se actualiza si cambió algo; si no, queda igual.
+- **Alzas encadenadas el mismo día** (2026-11-24, migración `0088`): el libro repite 99 llaves
+  en 101 filas que son alzas seguidas con las mismas fechas (sku 15143 el 2021-09-24: 15.519 →
+  15.984,36 → 16.463,89). Antes se quedaba solo la última y el resto se perdía: esa era el «alza
+  que se comió» una referencia, no un filtro. Ahora cada fila es la n-ésima de su llave
+  (`occurrence`, en el orden del archivo) y desde la segunda la llave lleva `#2`, `#3`. Solo una
+  fila idéntica, valor por valor, a una anterior de su llave se cuenta una vez («repetidas»).
+  Para recuperarlas hay que **volver a cargar el libro** después del despliegue. En el análisis,
+  el histórico y el cotizador, entre alzas del mismo día manda la última del libro.
 - **El libro tal como lo lleva el área:** todo carga, sin errores (decisión del 2026-11-11).
   - Montos como texto en dos formatos (`$ 81.960,00` y `$ 95.484`) y guiones: se leen.
   - Errores de fórmula de Excel (`#N/D`, `#¡REF!`, `#¡VALOR!`): son celdas sin valor; quedan
@@ -121,6 +129,23 @@ movió el costo).
 busca como texto: se elige de la lista de `GET /price-increases/options` y viaja como código
 (`supplier`). El histórico usa el mismo filtro.
 
+**C.O. e instalación** (2026-11-24). Dos filtros generales que cambian el análisis, el histórico
+y el detalle de cada referencia (`co` e `installation`, códigos de `GET /price-increases/options`):
+
+- **Qué referencias:** las que están activas en una bodega activa de ese C.O. o esa instalación
+  (la «instalación» de SIESA, donde se lleva el costo promedio). Sale del inventario del DWH
+  (`consumo.inventario_fecha` con `consumo.bodegas`), unas 25.000 combinaciones referencia, C.O.
+  e instalación que la API lee en 0,2 s y guarda una hora.
+- **Qué filas de cada referencia:** las nacionales (regional vacía o NACIONAL) y las de la
+  regional del C.O.: ANTIOQUIA 001, BOGOTA 003, PEREIRA 002, BUCARAMANGA 005, CARTAGENA 004,
+  BARRANQUILLA 009 (las regionales de la MAESTRA de Costos). En Bogotá no cuenta el costo que
+  se le aprobó solo a Antioquia, así que el costo con el que empieza y termina una referencia
+  es el de ese C.O. Un C.O. sin regional en la MAESTRA (Urabá, Valledupar…) ve solo las
+  nacionales. Una instalación toma las regionales de los C.O. donde tiene bodegas.
+- **Los dos a la vez** se cruzan: las referencias de esa instalación en ese C.O.
+- Si el DWH no responde, el análisis con C.O. o instalación responde 503 (no se muestra un
+  filtro a medias) y las opciones llegan sin C.O. ni instalaciones.
+
 El acumulado está digitado a mano: las filas de una referencia no forman una cadena limpia (el
 costo anterior de una fila no siempre es el costo nuevo de la anterior) y `Variacion %` a veces
 trae puntos (16,5) en lugar de fracción. Por eso las cifras comparan **costos**, en una misma
@@ -152,8 +177,9 @@ acumulado real, analizar todo el histórico toma unos 0,2 s y el último año 0,
 tiene índice por fecha de incremento (`0056_price_increase_dates`), que también ordena el
 histórico.
 
-**Detalle de una referencia.** Al abrir una fila se ve todo su histórico: una gráfica
-escalonada del costo en el tiempo y la tabla de sus alzas (`GET /price-increases?sku=`).
+**Detalle de una referencia.** Al abrir una fila se ve todo su histórico: una gráfica del
+costo en el tiempo y la tabla de sus alzas (`GET /price-increases?sku=`, con `co` e
+`installation` cuando el análisis los tiene).
 
 ## Permisos
 
@@ -177,11 +203,12 @@ Cada fila dice de dónde vino (`source`, migración `0082`):
 
 | Método y ruta | Uso |
 | --- | --- |
-| `GET /price-increases/options` | Los proveedores comerciales con referencias en el histórico (`code`, `name`, `references`, por nombre) y los meses con alzas desde el año 2000 (`month` «AAAA-MM», `changes`, `references`, el más reciente primero): los dropdowns de proveedor y de mes |
-| `GET /price-increases` | `q` (prefijo de referencia o descripción), `supplier` (código del proveedor comercial), `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
-| `GET /price-increases/analysis` | `period` (`12m` por defecto, `1m`, `24m`, `all`), o `since` y `until` (AAAA-MM-DD, ambos incluidos; reemplazan a `period`), `supplier`, `movement` (`subio`, `bajo`, `estable`), `q`, `sort` (`accumulated` por defecto, `increases`, `frequency`, `last_change`, `sku`), `order` (`desc` por defecto), `page`, `size` (≤ 100). Devuelve `items` (por referencia: `start_cost`, `end_cost`, `accumulated_pct`, `movement`, `increases`, `decreases`, `changes`, `frequency_days`, `last_increased_on`, `last_status`, `last_change_pct`, `is_pending` y los datos del maestro, con `supplier_code`), `total`, `since`, `until` (null: abierto) y `summary: {references, increases, typical_increase_pct, pending, movements}` de la búsqueda, antes del filtro de movimiento |
+| `GET /price-increases/options` | Los proveedores comerciales con referencias en el histórico (`code`, `name`, `references`, por nombre) y los meses con alzas desde el año 2000 (`month` «AAAA-MM», `changes`, `references`, el más reciente primero), los C.O. (`cos`: `code`, `name`) y las instalaciones (`installations`: `code`, `name`, `cos` donde tiene bodegas, por nombre) con referencias activas: los dropdowns |
+| `GET /price-increases` | `q` (prefijo de referencia o descripción), `supplier` (código del proveedor comercial), `co`, `installation`, `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
+| `GET /price-increases/analysis` | `period` (`12m` por defecto, `1m`, `24m`, `all`), o `since` y `until` (AAAA-MM-DD, ambos incluidos; reemplazan a `period`), `supplier`, `co`, `installation` (503 si el DWH no responde), `movement` (`subio`, `bajo`, `estable`), `q`, `sort` (`accumulated` por defecto, `increases`, `frequency`, `last_change`, `sku`), `order` (`desc` por defecto), `page`, `size` (≤ 100). Devuelve `items` (por referencia: `start_cost`, `end_cost`, `accumulated_pct`, `movement`, `increases`, `decreases`, `changes`, `frequency_days`, `last_increased_on`, `last_status`, `last_change_pct`, `is_pending` y los datos del maestro, con `supplier_code`), `total`, `since`, `until` (null: abierto) y `summary: {references, increases, typical_increase_pct, pending, movements}` de la búsqueda, antes del filtro de movimiento |
 | `POST /price-increases/upload` | Multipart `file`; `apply` (por defecto simulación). Devuelve `{applied, rows_read, inserted, updated, unchanged, duplicated, unknown_skus, pending, issues, issues_truncated}`. 403 sin permiso de gestión; 422 si el archivo no sirve |
 | `PATCH /price-increases/{id}` | `{system_updated_on: "AAAA-MM-DD" \| null}`. `null` la deja pendiente otra vez. 403 sin permiso de gestión; 422 antes del año 2000 (a mano es un error de digitación; el libro sí guarda fechas viejas) |
 
-Cada fila trae los campos guardados más `description`, `supplier_name`, `category` e
-`is_known_product` del maestro, `status_label` e `is_pending`.
+Cada fila trae los campos guardados (con `occurrence`: 1, o 2, 3… para alzas encadenadas el
+mismo día) más `description`, `supplier_name`, `category` e `is_known_product` del maestro,
+`status_label` e `is_pending`.

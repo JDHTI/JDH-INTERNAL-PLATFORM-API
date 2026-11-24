@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.costs.application.increases import MAX_PAGE_SIZE, IncreaseService, LineChanges
+from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.increases import (
     CHANGE_LABELS,
     MAX_LINES,
@@ -34,6 +35,7 @@ _service = Depends(Provide[ApplicationContainer.v1_container.cost_increase_servi
 _principal = Depends(get_current_principal)
 _FILE = File(...)
 _NOTE = Form(default=None, max_length=500)
+_SUPPORT = File(default=None)
 _STATUS = Query(default=None, alias="status")
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -99,6 +101,16 @@ class LineResponse(BaseModel):
     ledger_id: UUID | None
 
 
+class SupportResponse(BaseModel):
+    """The supplier's support of the increase; download it from ``…/support``."""
+
+    file_name: str
+    content_type: str
+    size_bytes: int
+    uploaded_by: str
+    uploaded_at: datetime
+
+
 class RequestResponse(BaseModel):
     id: UUID
     supplier_code: str
@@ -108,6 +120,8 @@ class RequestResponse(BaseModel):
     status_label: str
     file_name: str | None
     has_file: bool
+    # null without one.
+    support: SupportResponse | None
     note: str | None
     created_by: str
     created_at: datetime
@@ -242,6 +256,15 @@ def _summary(request: IncreaseRequest) -> dict:
         "status_label": REQUEST_STATUS_LABELS[request.status],
         "file_name": request.file_name,
         "has_file": request.storage_key is not None,
+        "support": None
+        if request.support is None
+        else SupportResponse(
+            file_name=request.support.file_name,
+            content_type=request.support.content_type,
+            size_bytes=request.support.size_bytes,
+            uploaded_by=request.support.uploaded_by,
+            uploaded_at=request.support.uploaded_at,
+        ),
         "note": request.note,
         "created_by": request.created_by,
         "created_at": request.created_at,
@@ -270,6 +293,17 @@ def _report(report: UploadReport) -> UploadResponse:
         ],
         request_id=report.request_id,
     )
+
+
+async def _uploaded(file: UploadFile | None, service: IncreaseService) -> UploadedFile | None:
+    """The file's name and bytes, read up to one byte past the largest support (the guard then
+    turns it away); ``None`` without a file."""
+
+    if file is None or not file.filename:
+        return None
+    guard = service.support_guard
+    content = await file.read((guard.max_attachment_bytes if guard else 0) + 1)
+    return UploadedFile(file.filename, content)
 
 
 def _download(name: str, content: bytes) -> Response:
@@ -323,15 +357,25 @@ async def upload(
     apply: bool = Query(default=False, description="Store it; a simulation otherwise"),
     file: UploadFile = _FILE,
     note: str | None = _NOTE,
+    support: UploadFile | None = _SUPPORT,
     principal: Principal = _principal,
     service: IncreaseService = _service,
 ) -> UploadResponse:
     """The rows with a new cost become a request in review (``alzas-proveedor: manage``).
-    Any problem blocks it; the report lists each one by sheet row."""
+    Any problem blocks it; the report lists each one by sheet row.
+
+    ``support`` (optional) is the supplier's support of the increase: PDF, picture, Excel or
+    Word, up to 10 MB. It is kept under the area in the bucket with the request."""
 
     content = await file.read(service.max_upload_bytes + 1)
     report = await service.upload(
-        principal, supplier_code, file.filename, content, apply=apply, note=note
+        principal,
+        supplier_code,
+        file.filename,
+        content,
+        apply=apply,
+        note=note,
+        support=await _uploaded(support, service),
     )
     return _report(report)
 
@@ -409,6 +453,65 @@ async def request_file(request_id: UUID, service: IncreaseService = _service) ->
 
     name, content = await service.file(request_id)
     return _download(name, content)
+
+
+@router.put(
+    "/increase-requests/{request_id}/support",
+    response_model=RequestDetailResponse,
+    summary="Attach the supplier's support",
+)
+@inject
+async def attach_support(
+    request_id: UUID,
+    file: UploadFile = _FILE,
+    principal: Principal = _principal,
+    service: IncreaseService = _service,
+) -> RequestDetailResponse:
+    """Attach or replace the support of a request in review (``alzas-proveedor: manage``):
+    PDF, picture, Excel or Word, up to 10 MB. A request typed by hand gets it this way."""
+
+    upload = await _uploaded(file, service)
+    return _detail(
+        await service.attach_support(principal, request_id, upload or UploadedFile("", b""))
+    )
+
+
+@router.delete(
+    "/increase-requests/{request_id}/support",
+    response_model=RequestDetailResponse,
+    summary="Remove the supplier's support",
+)
+@inject
+async def remove_support(
+    request_id: UUID,
+    principal: Principal = _principal,
+    service: IncreaseService = _service,
+) -> RequestDetailResponse:
+    """Only while the request is in review (``alzas-proveedor: manage``)."""
+
+    return _detail(await service.remove_support(principal, request_id))
+
+
+@router.get("/increase-requests/{request_id}/support", summary="Download the supplier's support")
+@inject
+async def download_support(
+    request_id: UUID,
+    inline: bool = Query(default=False, description="Open it in the browser"),
+    service: IncreaseService = _service,
+) -> Response:
+    """The support as it was kept (whoever reads the increases)."""
+
+    support, content = await service.support(request_id)
+    disposition = "inline" if inline else "attachment"
+    return Response(
+        content=content,
+        media_type=support.content_type,
+        headers={
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(support.file_name)}",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.patch(

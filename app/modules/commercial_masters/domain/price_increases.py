@@ -23,6 +23,7 @@ notes typed where a cost goes (``DESCODIFICADO``), dates of 1900 or with a misty
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -210,12 +211,19 @@ class PriceIncreaseValues:
     # ``libro``: the area's workbook; ``solicitud``: a supplier's request approved in Costos.
     source: str = SOURCE_BOOK
     request_line_id: UUID | None = None
+    # Which row of the workbook this is among those with the same reference and dates (1, 2…).
+    occurrence: int = 1
 
     @property
     def key(self) -> str:
         """What identifies a row for the upsert: the reference, when the increase takes
         effect, when it was notified and, for a cost of one regional, the regional (a blank or
-        «NACIONAL» one adds nothing, so national rows keep their key; 2026-11-24)."""
+        «NACIONAL» one adds nothing, so national rows keep their key; 2026-11-24).
+
+        The workbook chains two increases with the same dates (sku 15143 on 2021-09-24: 15,519
+        to 15,984.36, then to 16,463.89), so the second such row gets ``#2`` (2026-11-24); the
+        first keeps its key.
+        """
 
         parts = [
             self.sku,
@@ -225,7 +233,8 @@ class PriceIncreaseValues:
         regional = regional_key(self.regional)
         if regional:
             parts.append(regional)
-        return "|".join(parts)
+        key = "|".join(parts)
+        return key if self.occurrence <= 1 else f"{key}#{self.occurrence}"
 
     @property
     def effective_new_cost(self) -> Decimal | None:
@@ -281,6 +290,119 @@ class PriceIncreaseFilters:
     sku: str | None = None
     # A commercial supplier code.
     supplier: str | None = None
+    # Where the references are handled (see :class:`Scope`); the service resolves it.
+    scope: Scope | None = None
+
+
+# The regionals a supplier's MAESTRA names (Costos) and the operation center each stands for.
+REGIONAL_CENTERS: dict[str, str] = {
+    "ANTIOQUIA": "001",
+    "BOGOTA": "003",
+    "PEREIRA": "002",
+    "BUCARAMANGA": "005",
+    "CARTAGENA": "004",
+    "BARRANQUILLA": "009",
+}
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A reference set up in a warehouse of an operation center and an installation
+    (SIESA's «instalación», where the average cost is kept), from the warehouse's inventory."""
+
+    sku: str
+    co: str
+    installation: str | None
+    co_name: str | None = None
+    installation_name: str | None = None
+
+
+@dataclass(frozen=True)
+class Scope:
+    """The rows of the history that hold for an operation center or an installation.
+
+    - **References:** those set up (active) in a warehouse of it.
+    - **Rows:** the national ones (a blank or «NACIONAL» regional) and those of the regional
+      that stands for one of its operation centers (:data:`REGIONAL_CENTERS`). A row of
+      another regional does not hold there.
+    """
+
+    skus: frozenset[str]
+    centers: frozenset[str]
+
+    @property
+    def regionals(self) -> frozenset[str]:
+        return frozenset(name for name, co in REGIONAL_CENTERS.items() if co in self.centers)
+
+    def holds(self, sku: str, regional: str | None) -> bool:
+        if sku not in self.skus:
+            return False
+        key = regional_key(regional)
+        return key is None or key in self.regionals
+
+
+def scope_of(placements: Iterable[Placement], co: str | None, installation: str | None) -> Scope:
+    """The scope of an operation center, an installation or both (where they meet)."""
+
+    co = (co or "").strip() or None
+    installation = (installation or "").strip() or None
+    chosen = [
+        place
+        for place in placements
+        if (co is None or place.co == co)
+        and (installation is None or place.installation == installation)
+    ]
+    return Scope(
+        skus=frozenset(place.sku for place in chosen),
+        centers=frozenset(place.co for place in chosen) | ({co} if co else set()),
+    )
+
+
+@dataclass(frozen=True)
+class CenterOption:
+    """An operation center to filter by («003», «CENTRO»)."""
+
+    code: str
+    name: str | None
+
+
+@dataclass(frozen=True)
+class InstallationOption:
+    """An installation to filter by («8», «BOGOTA») and the operation centers it has
+    warehouses in."""
+
+    code: str
+    name: str | None
+    cos: tuple[str, ...]
+
+
+def place_options(
+    placements: Iterable[Placement],
+) -> tuple[tuple[CenterOption, ...], tuple[InstallationOption, ...]]:
+    """The operation centers (by code) and installations (by name) the placements have."""
+
+    centers: dict[str, str | None] = {}
+    installations: dict[str, tuple[str | None, set[str]]] = {}
+    for place in placements:
+        if centers.get(place.co) is None:
+            centers[place.co] = place.co_name
+        if place.installation:
+            name, cos = installations.setdefault(place.installation, (None, set()))
+            cos.add(place.co)
+            if name is None and place.installation_name:
+                installations[place.installation] = (place.installation_name, cos)
+    return (
+        tuple(CenterOption(code, centers[code]) for code in sorted(centers)),
+        tuple(
+            sorted(
+                (
+                    InstallationOption(code, name, tuple(sorted(cos)))
+                    for code, (name, cos) in installations.items()
+                ),
+                key=lambda item: ((item.name or "").upper(), item.code),
+            )
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -306,6 +428,8 @@ class FilterOptions:
     suppliers: tuple[SupplierOption, ...]
     # The latest month first; only from the year 2000 (older dates are typing slips).
     months: tuple[MonthOption, ...]
+    cos: tuple[CenterOption, ...] = ()
+    installations: tuple[InstallationOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -354,6 +478,7 @@ def pending_cost(values: PriceIncreaseValues) -> Decimal | None:
 __all__ = [
     "DOWN",
     "FLAT",
+    "REGIONAL_CENTERS",
     "SOURCES",
     "SOURCE_BOOK",
     "SOURCE_REQUEST",
@@ -362,17 +487,23 @@ __all__ = [
     "UP",
     "CellError",
     "CellNote",
+    "CenterOption",
     "FileRow",
     "FilterOptions",
+    "InstallationOption",
     "MonthOption",
+    "Placement",
     "PriceIncrease",
     "PriceIncreaseFilters",
     "PriceIncreasePage",
     "PriceIncreaseValues",
+    "Scope",
     "SupplierOption",
     "UploadIssue",
     "UploadReport",
     "clean_text",
+    "place_options",
+    "scope_of",
     "parse_date",
     "parse_flag",
     "parse_money",
