@@ -76,6 +76,10 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 `maestros` solo se ve en Comercial si un administrador lo enciende allí. A mano queda asignar las
 personas a cada rol.
 
+Los directores del maestro comercial, nacionales y «Coordinador y Director», llevan el rol
+**Líder de área** de Comercial (decisión de Daniel, 2026-11-24). Ven todo por ese rol, no por su
+fila en `consumo.supervisores`: el maestro no dice qué cubre cada director.
+
 Cada coordinador entra por su correo en `consumo.supervisores` (2026-11-24). Hay que vincularlo a
 mano en dos casos:
 
