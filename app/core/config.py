@@ -234,7 +234,7 @@ class Settings(BaseSettings):
     # kept in the bucket under the area: ``areas/<COSTS_AREA_SLUG>/costos/…``.
     COSTS_AREA_SLUG: str = "abastecimiento"
     COSTS_INCREASE_SUPPORT_MAX_MB: int = 10
-    COSTS_INCREASE_SUPPORT_EXTENSIONS: str = "pdf,png,jpg,jpeg,xlsx,xls,docx,doc"
+    COSTS_INCREASE_SUPPORT_EXTENSIONS: str = "pdf,png,jpg,jpeg,webp,xlsx,xls,docx,doc"
 
     # Liquidación de apoyos. A month of sales reads in seconds warm but minutes cold, so the
     # warehouse query waits long; months before the start were not loaded in the platform.

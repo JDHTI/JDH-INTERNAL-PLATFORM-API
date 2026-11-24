@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0087_increases_chain_support"
-down_revision: str | Sequence[str] | None = "0086_settlement_cost_basis"
+revision: str = "0088_increases_chain_support"
+down_revision: str | Sequence[str] | None = "0087_quotation_branch"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

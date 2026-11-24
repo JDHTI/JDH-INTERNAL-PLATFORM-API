@@ -331,14 +331,14 @@ La solicitud guarda el soporte del proveedor: la carta o el correo del alza.
 - **Cuándo:** al cargar la MAESTRA (campo opcional `support` del mismo formulario) o después,
   mientras está en revisión (`PUT /{id}/support`). Así lo recibe también una solicitud digitada a
   mano. Uno por solicitud: otro lo reemplaza y el anterior se borra del bucket.
-- **Qué archivos:** PDF, PNG, JPG, Excel (xlsx, xls) o Word (docx, doc), hasta 10 MB
+- **Qué archivos:** PDF, PNG, JPG, WEBP, Excel (xlsx, xls) o Word (docx, doc), hasta 10 MB
   (`COSTS_INCREASE_SUPPORT_EXTENSIONS`, `COSTS_INCREASE_SUPPORT_MAX_MB`). Pasan por el mismo
   filtro que las notas crédito: el contenido debe corresponder a la extensión, las imágenes se
   recodifican y todo pasa por el antivirus. Una simulación solo revisa tipo y tamaño.
 - **Dónde:** en el bucket, bajo la carpeta del área:
   `areas/<COSTS_AREA_SLUG>/costos/alzas/<solicitud>/soporte-<id>.<ext>` (`abastecimiento` por
   defecto), con nombre, tipo, tamaño, quién y cuándo en `cost_increase_requests.support_*`
-  (migración `0087`).
+  (migración `0088`).
 - **Quién:** lo adjunta o lo quita quien gestiona `alzas-proveedor`, solo en revisión; una
   solicitud decidida conserva el suyo. Lo descarga cualquiera que lea `alzas-proveedor`.
 

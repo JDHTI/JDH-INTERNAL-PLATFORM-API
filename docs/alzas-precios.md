@@ -49,7 +49,7 @@ salvo `apply=true`, como el actualizador de márgenes.
   no es NACIONAL ni está vacía (2026-11-24, migración `0084`). Así dos regionales de una
   referencia con las mismas fechas son dos filas. Una fila con una llave nueva se inserta; con
   una existente se actualiza si cambió algo; si no, queda igual.
-- **Alzas encadenadas el mismo día** (2026-11-24, migración `0087`): el libro repite 99 llaves
+- **Alzas encadenadas el mismo día** (2026-11-24, migración `0088`): el libro repite 99 llaves
   en 101 filas que son alzas seguidas con las mismas fechas (sku 15143 el 2021-09-24: 15.519 →
   15.984,36 → 16.463,89). Antes se quedaba solo la última y el resto se perdía: esa era el «alza
   que se comió» una referencia, no un filtro. Ahora cada fila es la n-ésima de su llave

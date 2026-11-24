@@ -260,6 +260,7 @@ def test_the_real_service_builds_from_the_container() -> None:
         "png",
         "jpg",
         "jpeg",
+        "webp",
         "xlsx",
         "xls",
         "docx",
