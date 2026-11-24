@@ -331,6 +331,8 @@ class OrderPage:
     threshold_released_count: int = 0
     # Every operation center (C.O. factura) in the file and how many orders it has, by code.
     operation_centers: tuple[tuple[str, int], ...] = ()
+    # Every salesperson of the file (the order header's) and how many orders they have, by name.
+    salespeople: tuple[tuple[str, int], ...] = ()
 
 
 def _text(value: Decimal | None) -> str | None:

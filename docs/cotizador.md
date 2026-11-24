@@ -407,8 +407,11 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
 
 **Coordinadores y directores de Comercial** (2026-11-23):
 - **Coordinador:** una persona vinculada a uno o más códigos de supervisor de SIESA
-  (`cod_supervisor`) en `/ti/administracion/vendedores`. No necesita un permiso aparte: el vínculo
-  le da el alcance `team`. Sus vendedores son los que tienen ese supervisor en SIESA.
+  (`cod_supervisor`). No necesita un permiso aparte: el vínculo le da el alcance `team`. Sus
+  vendedores son los que tienen ese supervisor en SIESA.
+  - Desde el 2026-11-24 el vínculo sale solo del correo del maestro de coordinadores
+    (`consumo.supervisores`).
+  - Un administrador lo puede vincular o quitar en `/ti/administracion/vendedores`.
   - Con `mine=false` ve sus cotizaciones y las de los clientes de sus vendedores
     (`quotations.salesperson_code` dentro del equipo). También abre su detalle.
   - No las edita: solo cambia las que creó.

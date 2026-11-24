@@ -11,7 +11,16 @@ lo elige. Módulo: `app/modules/salespeople`.
 - `codigo`: el vendedor.
 - `correo`: su correo corporativo. Solo lo tiene una minoría (111 de 587 activos, noviembre 2026).
 - `cod_supervisor` y `supervisor`: su supervisor. Es un catálogo aparte: ningún código de
-  supervisor es código de vendedor y ninguno tiene correo.
+  supervisor es código de vendedor y en esta vista ninguno tiene correo.
+
+`consumo.supervisores` del DWH es el maestro de coordinadores y directores comerciales (24 filas,
+noviembre 2026). Se lleva a mano:
+
+- `nit` es el `cod_supervisor` de `vendedores`. Cruzan 20 de 24; los otros no tienen vendedores
+  en SIESA.
+- `correo` es el correo corporativo del supervisor (23 de 24 lo tienen, en mayúsculas).
+- El equipo de un coordinador sale de `cod_supervisor` de SIESA, no de `supervisores.equipo`.
+  Los dos maestros no siempre coinciden.
 
 ## Vínculos (`salesperson_links`)
 
@@ -20,13 +29,17 @@ máximo; una persona puede tener varios.
 
 | `source` | Qué es |
 | --- | --- |
-| `auto` | Por correo: `POST /salespeople/sync` guarda un vínculo por cada vendedor activo cuyo correo es de un usuario activo |
+| `auto` | Por correo: `POST /salespeople/sync` guarda un vínculo por cada vendedor activo, y por cada supervisor activo de `supervisores`, cuyo correo es de un usuario activo |
 | `manual` | Lo hizo un administrador en el panel. Gana sobre el correo |
 | `excluded` | Un administrador lo desvinculó. Sin usuario: el correo no lo vuelve a vincular solo |
 
 Mientras una persona no tenga vínculos de vendedor guardados, su correo la vincula en vivo, salvo
-a códigos que ya tiene otra persona o que fueron desvinculados. Los supervisores solo se vinculan
-a mano.
+a códigos que ya tiene otra persona o que fueron desvinculados. Con los supervisores pasa lo mismo
+desde el 2026-11-24: el correo de `supervisores` le da su código de supervisor, y con él su equipo,
+sin que un administrador lo vincule.
+
+Caso que lo motivó: Juan Rojas, coordinador. En SIESA es el supervisor 8104570, con 10
+vendedores. Su correo solo está en `supervisores`, así que no veía ni su equipo ni sus clientes.
 
 ## Alcance
 

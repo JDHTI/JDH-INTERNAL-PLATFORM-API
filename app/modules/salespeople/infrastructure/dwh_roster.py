@@ -1,8 +1,12 @@
 """The SIESA sales force from the data warehouse (``consumo.vendedores``).
 
 ``codigo`` is the salesperson; ``cod_supervisor`` and ``supervisor`` name their supervisor,
-a separate catalog (no supervisor code is a salesperson code, and none has an e-mail).
-``correo`` is the corporate e-mail, filled for a minority of salespeople.
+a separate catalog (no supervisor code is a salesperson code). ``correo`` is the corporate
+e-mail, filled for a minority of salespeople.
+
+The supervisors' e-mail is in ``consumo.supervisores`` (the commercial coordinators and
+directors, kept by hand): ``nit`` is the ``cod_supervisor`` of ``vendedores`` and ``correo`` the
+corporate e-mail (2026-11-24, Juan Rojas: supervisor 8104570 only there).
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ class WarehouseSalesRoster:
             raise ValueError("Invalid data provider schema")
         self.connection = connection
         self.view = f'"{schema}"."vendedores"'
+        self.coordinators = f'"{schema}"."supervisores"'
         self.timeout = timeout
 
     async def _fetch(self, query: str, *args: object):
@@ -77,17 +82,54 @@ class WarehouseSalesRoster:
         return [self._seller(row) for row in rows]
 
     async def supervisors(self) -> list[RosterEntry]:
-        """Each supervisor code once, with the name the warehouse gives it."""
+        """Each supervisor code once, with the name the warehouse gives it and the e-mail of
+        ``supervisores`` when it has one (none when that master cannot be read)."""
 
         rows = await self._fetch(
             f'SELECT trim("cod_supervisor") AS code, max("supervisor") AS name,'
             f" bool_or(\"estado\" = 'A') AS active FROM {self.view}"
             " WHERE coalesce(trim(\"cod_supervisor\"), '') <> '' GROUP BY 1 ORDER BY 1"
         )
+        emails = await self._coordinator_emails()
         return [
-            RosterEntry(SUPERVISOR, row["code"], _text(row["name"]), is_active=bool(row["active"]))
+            RosterEntry(
+                SUPERVISOR,
+                row["code"],
+                _text(row["name"]),
+                email=emails.get(row["code"]),
+                is_active=bool(row["active"]),
+            )
             for row in rows
         ]
+
+    async def _coordinator_emails(self) -> dict[str, str]:
+        """Supervisor code -> lowercase e-mail, from ``supervisores``. A code with two e-mails
+        keeps none: it cannot tell who holds it."""
+
+        try:
+            rows = await self._fetch(
+                f'SELECT trim("nit"::text) AS code, lower(trim("correo")) AS email'
+                f" FROM {self.coordinators}"
+                " WHERE coalesce(trim(\"nit\"::text), '') <> ''"
+                " AND coalesce(trim(\"correo\"), '') <> ''"
+            )
+        except DependencyUnavailableError:
+            return {}
+        found: dict[str, set[str]] = {}
+        for row in rows:
+            found.setdefault(row["code"], set()).add(row["email"])
+        return {code: next(iter(emails)) for code, emails in found.items() if len(emails) == 1}
+
+    async def supervisors_by_email(self, email: str) -> list[str]:
+        """Supervisor codes whose ``supervisores`` e-mail is this one."""
+
+        rows = await self._fetch(
+            f'SELECT DISTINCT trim("nit"::text) AS code FROM {self.coordinators}'
+            ' WHERE lower(trim("correo")) = $1'
+            " AND coalesce(trim(\"nit\"::text), '') <> '' ORDER BY 1",
+            email.strip().lower(),
+        )
+        return [row["code"] for row in rows]
 
     async def sellers_by_email(self, email: str) -> list[RosterEntry]:
         """Active salespeople with this e-mail (stored upper case in SIESA)."""

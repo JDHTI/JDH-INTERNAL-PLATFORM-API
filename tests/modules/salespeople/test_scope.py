@@ -77,18 +77,28 @@ class FakeRoster:
             RosterEntry(SUPERVISOR, "S01", "SUPERVISOR UNO"),
             RosterEntry(SUPERVISOR, "S02", "SUPERVISOR DOS"),
         ]
+        # The coordinators' master (``consumo.supervisores``): supervisor code -> e-mail.
+        self.coordinators: dict[str, str] = {}
         self.down = False
 
     async def sellers(self):
         return list(self.seller_rows)
 
     async def supervisors(self):
-        return list(self.supervisor_rows)
+        return [
+            RosterEntry(SUPERVISOR, e.code, e.name, self.coordinators.get(e.code))
+            for e in self.supervisor_rows
+        ]
 
     async def sellers_by_email(self, email):
         if self.down:
             raise RuntimeError("warehouse down")
         return [e for e in self.seller_rows if e.email == email.lower() and e.is_active]
+
+    async def supervisors_by_email(self, email):
+        if self.down:
+            raise RuntimeError("warehouse down")
+        return sorted(code for code, mail in self.coordinators.items() if mail == email.lower())
 
     async def team(self, supervisor_codes):
         return [
@@ -208,6 +218,33 @@ async def test_a_supervisor_sees_their_team(world, people) -> None:
     assert scope.scope == "team"
     assert scope.codes == ("0051", "0052")  # the inactive 0010 is left out
     assert scope.supervisor_codes == ("S01",)
+
+
+async def test_a_coordinator_sees_their_team_by_the_coordinators_master(world, people) -> None:
+    # Juan Rojas (2026-11-24): supervisor in SIESA, e-mail only in consumo.supervisores.
+    service, links, roster, *_ = world
+    roster.coordinators["S01"] = LUIS
+
+    scope = await service.scope_for(people["luis"])
+
+    assert scope.scope == "team" and scope.codes == ("0051", "0052")
+    assert scope.supervisor_codes == ("S01",)
+    # Unlinking the code stops the e-mail from giving it back.
+    await service.sync_by_email(None)
+    assert links.rows[(SUPERVISOR, "S01")].source == "auto"
+    await service.unlink(people["admin"], links.rows[(SUPERVISOR, "S01")].id)
+    assert (await service.scope_for(people["luis"])).scope == "none"
+
+
+async def test_a_supervisor_held_by_someone_else_is_not_given_by_email(world, people) -> None:
+    service, _, roster, *_ = world
+    roster.coordinators["S01"] = LUIS
+    await service.link(people["admin"], PAULA, "supervisor", "S01")
+
+    assert (await service.scope_for(people["luis"])).scope == "none"
+    assert (await service.scope_for(people["paula"])).codes == ("0051", "0052")
+    page = await service.roster_page(people["admin"], kind="supervisor")
+    assert {row.entry.code: row.holder_email for row in page.items}["S01"] == PAULA
 
 
 async def test_a_manual_link_wins_and_unlinking_stops_the_email(world, people) -> None:

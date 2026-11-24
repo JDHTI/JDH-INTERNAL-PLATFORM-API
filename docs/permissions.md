@@ -63,7 +63,7 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | comercial | `cotizador` | cotizaciones, clientes, reglas, exportar | cotizar |
 | bi | `cotizador` | igual | validar, devolver y marcar como cargada |
 | call-center | `cotizador` | sus cotizaciones (el líder, las de todo el área); cualquier cliente | cotizar a cualquier cliente (rol «Operador call center», 2026-11-23) |
-| comercial (bloqueado) | `comercial-director` | — (no tiene pantalla) | director (2026-11-23): ve todas las cotizaciones de cliente, clientes y apoyos, y edita solo las suyas. Solo cuenta concedido **por nombre**; `*` no lo da. El líder y el responsable de Comercial lo tienen sin hacer nada. Un coordinador no necesita clave: su vínculo de supervisor SIESA en `/ti/administracion/vendedores` le da su equipo |
+| comercial (bloqueado) | `comercial-director` | — (no tiene pantalla) | director (2026-11-23): ve todas las cotizaciones de cliente, clientes y apoyos, y edita solo las suyas. Solo cuenta concedido **por nombre**; `*` no lo da. El líder y el responsable de Comercial lo tienen sin hacer nada. Un coordinador no necesita clave: su código de supervisor SIESA le da su equipo. El código sale de su correo en `consumo.supervisores` o se vincula en `/ti/administracion/vendedores` |
 
 **Roles de Comercial** (migración `0083_commercial_roles`, 2026-11-23):
 
@@ -73,8 +73,12 @@ desactiva en cualquier área desde el panel (ver "Módulos por área").
 | Director | `comercial-director` manage; `read` en `cotizador`, `apoyos`, `solicitudes-apoyos`, `validador-pedidos`, `mapa-comercial`, `maestros`, `documentos` | ve todas las cotizaciones de cliente, clientes y apoyos; no edita |
 | Coordinador | `read` en los mismos módulos | por ahora solo coordina: ve las cotizaciones y el trabajo de su equipo (su código de supervisor SIESA); no cotiza, no valida ni edita |
 
-`maestros` solo se ve en Comercial si un administrador lo enciende allí. A mano queda: asignar
-las personas a cada rol y vincular el código de supervisor de cada coordinador.
+`maestros` solo se ve en Comercial si un administrador lo enciende allí. A mano queda asignar las
+personas a cada rol.
+
+El código de supervisor de cada coordinador sale de su correo en `consumo.supervisores`
+(2026-11-24). Solo hay que vincularlo a mano si su correo en la plataforma es otro: en ese maestro
+también hay correos genéricos, como `COORDINADOR.COMERCIAL@`.
 
 **Eliminar para siempre** (2026-11-23):
 - **Qué incluye:** borrado masivo de apoyos y borrado de solicitudes de apoyo (JDH e internas).

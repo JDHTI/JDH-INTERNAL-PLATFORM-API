@@ -85,6 +85,11 @@ def test_upload_then_read_orders_with_their_lines(client) -> None:
     assert orders["operation_centers"] == [{"code": "004", "order_count": 2}]
     by_center = client.get(f"{BASE}/{batch['id']}/orders", params={"operation_center": "004"})
     assert by_center.json()["total"] == 2
+    assert orders["salespeople"] == [{"name": "FLOREZ MERCADO SUSAN PAOLA", "order_count": 2}]
+    by_seller = client.get(
+        f"{BASE}/{batch['id']}/orders", params={"salesperson": "FLOREZ MERCADO SUSAN PAOLA"}
+    )
+    assert by_seller.json()["total"] == 2
 
 
 def test_list_get_and_revalidate(client) -> None:
