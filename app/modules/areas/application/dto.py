@@ -39,6 +39,8 @@ class AreaView:
     updated_at: datetime
     # Module key -> ``read`` | ``manage`` the caller holds in this area (wildcard expanded).
     my_modules: dict[str, str] = field(default_factory=dict)
+    # The general masters its ``maestros`` lists, in menu order; empty when the module is off.
+    masters: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

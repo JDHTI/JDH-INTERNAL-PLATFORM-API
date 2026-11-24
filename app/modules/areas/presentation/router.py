@@ -64,6 +64,9 @@ class AreaResponse(BaseModel):
     updated_at: datetime
     # Module key -> read | manage the caller holds in this area (the menu hides the rest).
     my_modules: dict[str, str] = {}
+    # The general masters its Maestros module lists, in menu order (``GET
+    # /areas/general-masters``); empty when the module is off in the area.
+    masters: list[str] = []
 
 
 class GrantRequest(BaseModel):

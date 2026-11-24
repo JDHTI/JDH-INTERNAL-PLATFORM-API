@@ -106,6 +106,17 @@ def test_modules_are_switched_per_area(client, world) -> None:
     bi = next(area for area in body["areas"] if area["slug"] == "bi")
     assert "maestros" in keys and bi["modules"]["maestros"]["enabled"] is True
     assert bi["modules"]["pqrsf"] == {"enabled": False, "config": {}, "is_default": True}
+    assert [m["slug"] for m in body["general_masters"]] == [
+        "proveedores-comerciales",
+        "proveedores-legales",
+        "clientes",
+        "productos",
+    ]
+    old = client.put(
+        f"{BASE}/areas/comercial/modules/maestros",
+        json={"enabled": True, "config": {"masters": ["equipos"]}},
+    )
+    assert old.status_code == 422
 
     response = client.put(
         f"{BASE}/areas/comercial/modules/maestros",
@@ -128,7 +139,14 @@ def test_modules_are_switched_per_area(client, world) -> None:
     )
     assert bad.status_code == 422
 
+    world.caller = world.member("comercial", "comprador@jdh.com.co", [("maestros", "read")])
+    (comercial_me,) = client.get(f"{BASE}/permissions/me").json()["areas"]
+    assert comercial_me["masters"] == ["clientes"]
+
     world.caller = world.member("bi", "lector@jdh.com.co", [("maestros", "read")])
+    (bi_me,) = client.get(f"{BASE}/permissions/me").json()["areas"]
+    assert bi_me["masters"] == [m["slug"] for m in body["general_masters"]]
+    assert client.get(f"{BASE}/areas/bi").json()["masters"] == bi_me["masters"]
     assert client.get(f"{BASE}/permissions/modules").status_code == 403
     denied = client.put(f"{BASE}/areas/bi/modules/maestros", json={"enabled": False})
     assert denied.status_code == 403
@@ -179,6 +197,7 @@ def test_my_permissions_and_the_catalog(client, world) -> None:
 
     assert mine["role"] == "user" and mine["is_platform_admin"] is False
     assert [(a["slug"], a["modules"]) for a in mine["areas"]] == [("calidad", {"pqrsf": "manage"})]
+    assert mine["areas"][0]["masters"] == []
     calidad = next(a for a in catalog["areas"] if a["slug"] == "calidad")
     assert [m["key"] for m in calidad["modules"]] == ["documentos", "pqrsf", "planes-accion"]
     assert catalog["actions"] == ["read", "manage"] and catalog["wildcard"] == "*"

@@ -1,8 +1,36 @@
 # Maestros
 
-Los maestros son un módulo centralizado: la plataforma lee cada maestro declarado **en vivo** de su
-vista en el DWH y lo publica a las áreas donde TI lo active. No copia los registros. Módulo:
-`app/modules/masters`.
+## Estándar de maestros generales (2026-11-24)
+
+El módulo `maestros` muestra en cada área los **maestros generales**: los cuatro que BI ve en su
+desplegable, cada uno con su página. Es la lista centralizada; un maestro nuevo se agrega aquí y
+no se ofrecen otras vistas del DWH.
+
+| Maestro | Página | Datos |
+| --- | --- | --- |
+| `proveedores-comerciales` | Proveedores comerciales | `/commercial/suppliers` |
+| `proveedores-legales` | Proveedores legales | `/commercial/legal-suppliers` |
+| `clientes` | Clientes | `/commercial/customers` |
+| `productos` | Productos (maestro, alzas y análisis) | `/commercial/products` |
+
+- **Dónde está.** `GENERAL_MASTERS` en `app/modules/areas/domain/catalog.py`.
+- **Qué ve cada área:**
+  - Un administrador lo decide en el panel de módulos: todos o una lista
+    (`PUT /areas/{slug}/modules/maestros` con `{"masters": [...]}`).
+  - Un slug fuera del estándar da 422.
+  - Un slug viejo guardado antes del estándar no da nada.
+- **Qué lee la UI:**
+  - El menú: `masters` de cada área en `GET /permissions/me` y en `GET /areas`, en el orden del
+    menú; vacío sin el módulo.
+  - El panel: el estándar en `general_masters` de `GET /permissions/modules`.
+- **Producción al publicar:** BI y Abastecimiento tienen «todos», así que Abastecimiento pasa a ver
+  los cuatro (antes la UI le mostraba solo Productos). Comercial tiene `["productos"]`.
+
+## Vistas del DWH (`/masters`, administración de TI)
+
+La plataforma lee cada vista declarada **en vivo** del DWH. No copia los registros. Módulo:
+`app/modules/masters`. Desde el estándar estas vistas solo se consultan en Administración y ya no
+se ofrecen a las áreas.
 
 ## Qué maestros hay
 
@@ -60,8 +88,8 @@ sobre ellos (márgenes, apoyos).
 ## Quién ve qué
 
 - **Activación por área.** `maestros` se activa por área en el panel de TI
-  (`PUT /areas/{slug}/modules/maestros`). Con `{"masters": ["clientes", "proveedores"]}` el área solo ve
-  esos; sin lista, todos. Por defecto solo BI lo tiene, con todos los maestros.
+  (`PUT /areas/{slug}/modules/maestros`). La lista elige entre los maestros generales (arriba);
+  sin lista, todos. Por defecto solo BI lo tiene, con todos.
 - **Permiso.** Hace falta `maestros` read en un rol de un área donde esté activo. Una persona ve la
   unión de los maestros de sus áreas.
 - **Datos personales.** Los campos `is_pii` (teléfono, correo, dirección) solo los ve quien tiene

@@ -35,6 +35,7 @@ from app.modules.areas.domain.catalog import (
     READ,
     WILDCARD,
     Module,
+    area_masters,
     clean_module_config,
     get_module,
     is_enabled,
@@ -159,6 +160,7 @@ class AreaService:
                 created_at=area.created_at,
                 updated_at=area.updated_at,
                 my_modules=profile.modules(area.slug),
+                masters=area_masters(area.slug, profile.overrides),
             )
             for area, role in rows
         ]

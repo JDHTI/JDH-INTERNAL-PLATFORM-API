@@ -104,7 +104,7 @@ Un coordinador sin equipo en el maestro no ve a nadie, hasta que se le complete 
 | comercial, bi | `solicitudes-apoyos` | solicitudes (en comercial, solo las propias) | comercial solicita; bi aprueba y rechaza |
 | bi (se enciende en otras áreas para designar) | `aprobacion-apoyos-internos` | — (no tiene pantalla) | aprobar o rechazar los apoyos internos pedidos desde la cotización (persistente o única vez). También deciden los gestores de `apoyos` en BI. Quien cotiza los pide (también un aprobador, que no aprueba los propios) |
 | comercial | `mapa-comercial` | mapa de prospectos, ficha, zonas, rutas | cargar el archivo mensual, corregir ubicación, marcar visitas, crear y editar zonas y rutas. El responsable de una ruta marca sus visitas sin `manage` |
-| bi | `maestros` | los maestros activos en el área (`/masters`) y los comerciales (`/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
+| bi (se enciende en otras áreas) | `maestros` | los maestros generales activos en el área (proveedores comerciales y legales, clientes, productos; `/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 | abastecimiento | `analisis-entradas` | entradas de compra contra la cotización vigente (`/costs/entries`), motivos | asignar el motivo de una línea |
 | abastecimiento | `novedades-compras` | bandeja de novedades (`/costs/novelties`), su historial y la nota crédito | asignar motivo, registrar o quitar la nota crédito, editar el catálogo de motivos |
 | abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla | cargar, crear, editar, aprobar y rechazar alzas |
@@ -150,8 +150,11 @@ módulos) solo depende del rol global. Un rol de área nunca debe conceder admin
   reactivarlo.
 - **Qué cambia al activar.** El área puede conceder el módulo a sus roles (antes daba 422). El
   líder y el responsable lo tienen de una vez.
-- **Configuración.** Solo `maestros` la lleva: `{"masters": ["clientes", "proveedores"]}` limita el
-  área a esos maestros; sin lista, todos. Los demás módulos no aceptan configuración (422).
+- **Configuración.** Solo `maestros` la lleva:
+  - `{"masters": ["clientes", "productos"]}` limita el área a esos maestros; sin lista, todos.
+  - Los maestros salen del estándar de maestros generales (ver [masters.md](masters.md)); un
+    maestro fuera del estándar da 422.
+  - Los demás módulos no aceptan configuración (422).
 - **Bitácora.** Cada cambio queda como `module_toggled` con antes y después; el restablecimiento lleva
   además `reset: true`.
 - **Proyectos.** Ya no usa `PROJECTS_AREA_SLUGS`: se habilita por área como cualquier módulo.
