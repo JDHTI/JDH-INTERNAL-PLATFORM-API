@@ -36,6 +36,8 @@ OPTIONAL_COLUMNS = ("unidad_medida_id", "precio_anterior", "precio_hace_2")
 # How long the columns the view has are trusted before asking again (a deploy adds them).
 COLUMNS_TTL_SECONDS = 3600.0
 _columns_cache: dict[str, tuple[float, frozenset[str]]] = {}
+# The operation centers' names, kept as long (SIESA seldom adds one).
+_centers_cache: dict[str, tuple[float, dict[str, str]]] = {}
 
 _PURCHASES = (
     "e.documento like 'EA-%' and e.desc_motivo = 'ENTRADA POR COMPRAS' and e.precio_unit_local > 0"
@@ -163,6 +165,29 @@ class WarehouseEntrySource:
         found = frozenset(row["column_name"] for row in rows)
         _columns_cache[self.schema] = (now, found)
         return found
+
+    async def centers(self) -> dict[str, str]:
+        """Operation center code («003») → its SIESA name («CENTRO»), kept an hour per process.
+
+        Raises:
+            DependencyUnavailableError: The warehouse did not answer.
+        """
+
+        cached = _centers_cache.get(self.schema)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < COLUMNS_TTL_SECONDS:
+            return cached[1]
+        rows = await self._fetch(
+            f"select codigo, descripcion from {self.schema}.centros_operacion "
+            "where codigo is not null"
+        )
+        names = {
+            code: name
+            for code, name in ((_text(row["codigo"]), _text(row["descripcion"])) for row in rows)
+            if code and name
+        }
+        _centers_cache[self.schema] = (now, names)
+        return names
 
     async def _query(self, where: str) -> tuple[str, bool]:
         found = await self.columns()

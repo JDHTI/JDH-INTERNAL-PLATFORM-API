@@ -470,3 +470,59 @@ async def test_the_novelties_page_validates_and_filters() -> None:
     assert page.counts["pendiente"] == 1 and page.counts["total"] == 1
     with pytest.raises(InvalidInputError):
         await novelties.page(NoveltyFilters(status="cerrada"), "date", True, 1, 50)
+
+
+# --- Filter options ---
+
+
+def _placed_source() -> FakeSource:
+    return FakeSource(
+        line("a", co="003", warehouse="bta9"),
+        line("b", co="003", warehouse="BTA23", quotation="1"),
+        line("c", co="001", warehouse="MDE1"),
+        line("d", co="009", warehouse="BAQ1", quotation="1"),  # no SIESA name in the fake
+        line("old", day=date(2026, 10, 1), co="005", warehouse="BGA1"),
+    )
+
+
+async def test_the_entry_options_are_the_centers_and_warehouses_of_the_period() -> None:
+    service = entry_service(_placed_source(), FakeNoveltyRepository())
+
+    options = await service.options(None, None)
+
+    assert [(item.code, item.name) for item in options.cos] == [
+        ("001", "ANTIOQUIA"),
+        ("003", "CENTRO"),
+        ("009", "CENTRO"),  # the regional's name of the fake line, without a SIESA name
+    ]
+    assert [(item.code, item.co) for item in options.warehouses] == [
+        ("BAQ1", "009"),
+        ("BTA23", "003"),
+        ("BTA9", "003"),
+        ("MDE1", "001"),
+    ]
+    with pytest.raises(InvalidInputError):
+        await service.options(date(2026, 11, 2), date(2026, 11, 1))
+
+
+async def test_the_options_survive_the_center_names_being_unavailable() -> None:
+    source = _placed_source()
+    source.centers_down = True
+
+    options = await entry_service(source, FakeNoveltyRepository()).options(None, None)
+
+    assert {item.name for item in options.cos} == {"CENTRO"}
+
+
+async def test_the_novelty_options_come_from_the_tray_and_filter_by_warehouse() -> None:
+    repository = FakeNoveltyRepository(REASONS)
+    novelties = novelty_service(_placed_source(), repository)
+    await novelties.sync()  # keeps the two lines with a difference: BTA23 and BAQ1
+
+    options = await novelties.options(None, None)
+    page = await novelties.page(NoveltyFilters(warehouse="baq1"), "date", True, 1, 50)
+
+    assert [item.code for item in options.cos] == ["003", "009"]
+    assert [item.code for item in options.warehouses] == ["BAQ1", "BTA23"]
+    assert [item.line.line_key for item in page.items] == ["d"]
+    assert (await novelties.options(date(2026, 12, 1), None)).cos == ()

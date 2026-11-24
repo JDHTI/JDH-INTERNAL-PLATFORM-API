@@ -14,10 +14,13 @@ from zoneinfo import ZoneInfo
 
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.costs.application.access import CostAccess
+from app.modules.costs.application.entries import center_names
 from app.modules.costs.domain.entries import (
     EntryLine,
+    FilterOptions,
     entry_status,
     fill_previous_prices,
+    filter_options,
     with_status,
 )
 from app.modules.costs.domain.modules import ENTRIES, NOVELTIES
@@ -222,6 +225,19 @@ class NoveltyService:
         if filters.since and filters.until and filters.since > filters.until:
             raise InvalidInputError("La fecha inicial es posterior a la final")
         return await self.repository.page(filters, sort, descending, page, size)
+
+    async def options(self, since: date | None, until: date | None) -> FilterOptions:
+        """The operation centers and warehouses of the novelties of the period (the tray's
+        dropdowns); without dates, of every novelty.
+
+        Raises:
+            InvalidInputError: The period ends before it starts.
+        """
+
+        if since and until and since > until:
+            raise InvalidInputError("La fecha inicial es posterior a la final")
+        places = await self.repository.placements(since, until)
+        return filter_options(places, await center_names(self.source))
 
     async def get(self, novelty_id: UUID) -> Novelty:
         """A novelty with its history.

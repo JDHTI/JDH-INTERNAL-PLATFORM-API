@@ -8,13 +8,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from app.core.errors import InvalidInputError, NotFoundError
+from app.core.errors import DependencyUnavailableError, InvalidInputError, NotFoundError
 from app.modules.costs.domain.entries import (
     NO_QUOTATION,
     NOVELTY,
     OK,
     EntryLine,
     NoveltyBrief,
+    Placement,
 )
 from app.modules.costs.domain.novelties import (
     DIFFERENCE,
@@ -95,6 +96,14 @@ class FakeSource:
 
     async def line(self, line_key: str) -> EntryLine | None:
         return next((item for item in self.items if item.line_key == line_key), None)
+
+    async def centers(self) -> dict[str, str]:
+        if self.centers_down:
+            raise DependencyUnavailableError("down")
+        return dict(self.center_names)
+
+    center_names: Mapping[str, str] = {"003": "CENTRO", "001": "ANTIOQUIA"}
+    centers_down = False
 
 
 class FakePolicy:
@@ -239,6 +248,17 @@ class FakeNoveltyRepository:
                 )
         return briefs
 
+    async def placements(self, since: date | None, until: date | None) -> list[Placement]:
+        found = {}
+        for row in self.rows.values():
+            item = row["line"]
+            if (since and item.entry_date < since) or (until and item.entry_date > until):
+                continue
+            found[(item.co, item.warehouse)] = Placement(
+                item.co, item.warehouse, item.regional_name
+            )
+        return list(found.values())
+
     async def get(self, novelty_id: UUID, with_events: bool = False) -> Novelty | None:
         return self._novelty(novelty_id, with_events) if novelty_id in self.rows else None
 
@@ -255,6 +275,8 @@ class FakeNoveltyRepository:
             if with_status and filters.status and novelty.status != filters.status:
                 return False
             if filters.supplier and novelty.line.supplier_code != filters.supplier:
+                return False
+            if filters.warehouse and novelty.line.warehouse != filters.warehouse.upper():
                 return False
             if filters.reason_id and (not novelty.reason or novelty.reason.id != filters.reason_id):
                 return False

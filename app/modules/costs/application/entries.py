@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from app.core.errors import InvalidInputError
+from app.core.errors import DependencyUnavailableError, InvalidInputError
 from app.modules.costs.domain.entries import (
     ENTRY_SORTS,
     ENTRY_STATUSES,
@@ -19,11 +20,16 @@ from app.modules.costs.domain.entries import (
     EntryLine,
     EntryPage,
     EntryRow,
+    FilterOptions,
     NoveltyBrief,
+    Placement,
     fill_previous_prices,
+    filter_options,
     with_status,
 )
 from app.modules.costs.domain.ports import EntrySource, EntryWindow, NoveltyRepository
+
+logger = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 200
 DEFAULT_DAYS = 30
@@ -60,6 +66,17 @@ def _same_center(left: str | None, right: str) -> bool:
     """``"003"`` and ``"3"`` are the same operation center."""
 
     return (left or "").strip().lstrip("0") == right.strip().lstrip("0")
+
+
+async def center_names(source: EntrySource) -> dict[str, str]:
+    """The operation centers' SIESA names; empty when the warehouse does not answer (the
+    options then fall back to the regional's name)."""
+
+    try:
+        return await source.centers()
+    except DependencyUnavailableError:
+        logger.warning("Costs: operation center names unavailable; using the regionals'")
+        return {}
 
 
 def matches(row: EntryRow, filters: EntryFilters) -> bool:
@@ -195,6 +212,19 @@ class EntryAnalysisService:
             self.cache.windows[window] = cached
             return cached
 
+    async def options(self, since: date | None, until: date | None) -> FilterOptions:
+        """The operation centers and warehouses with entries in the period (the analysis'
+        dropdowns), read from the period's copy.
+
+        Raises:
+            InvalidInputError: Bad period.
+            DependencyUnavailableError: The warehouse did not answer.
+        """
+
+        cached = await self._lines(self.period(since, until))
+        places = (Placement(line.co, line.warehouse, line.regional_name) for line in cached.lines)
+        return filter_options(places, await center_names(self.source))
+
     async def page(
         self,
         *,
@@ -263,4 +293,11 @@ class EntryAnalysisService:
         )
 
 
-__all__ = ["MAX_PAGE_SIZE", "EntryAnalysisService", "EntryCache", "matches", "ordered"]
+__all__ = [
+    "MAX_PAGE_SIZE",
+    "EntryAnalysisService",
+    "EntryCache",
+    "center_names",
+    "matches",
+    "ordered",
+]

@@ -18,7 +18,7 @@ and flagged some 8,000 lines a semester that were right on their day (2026-11-23
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -236,6 +236,60 @@ class EntryRow:
 
 
 @dataclass(frozen=True)
+class CenterOption:
+    """An operation center to filter by: its code («003») and its name in SIESA («CENTRO»)."""
+
+    code: str
+    name: str | None
+
+
+@dataclass(frozen=True)
+class WarehouseOption:
+    """A warehouse to filter by, with the operation center it belongs to."""
+
+    code: str
+    co: str | None
+
+
+@dataclass(frozen=True)
+class FilterOptions:
+    """The operation centers and warehouses a period has lines in, by code."""
+
+    cos: tuple[CenterOption, ...]
+    warehouses: tuple[WarehouseOption, ...]
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where a line was received: what the filter options are built from."""
+
+    co: str | None
+    warehouse: str | None
+    regional_name: str | None = None
+
+
+def filter_options(places: Iterable[Placement], names: Mapping[str, str]) -> FilterOptions:
+    """The distinct centers and warehouses of the lines, by code.
+
+    A center takes its SIESA name from ``names``; without it, its regional's.
+    """
+
+    centers: dict[str, str | None] = {}
+    warehouses: dict[str, str | None] = {}
+    for place in places:
+        co = (place.co or "").strip()
+        if co and centers.get(co) is None:
+            centers[co] = names.get(co) or place.regional_name
+        warehouse = (place.warehouse or "").strip().upper()
+        if warehouse and warehouse not in warehouses:
+            warehouses[warehouse] = co or None
+    return FilterOptions(
+        cos=tuple(CenterOption(code, centers[code]) for code in sorted(centers)),
+        warehouses=tuple(WarehouseOption(code, warehouses[code]) for code in sorted(warehouses)),
+    )
+
+
+@dataclass(frozen=True)
 class EntryPage:
     items: tuple[EntryRow, ...]
     total: int
@@ -261,7 +315,12 @@ __all__ = [
     "NOVELTY_STATUSES",
     "NO_QUOTATION",
     "OK",
+    "CenterOption",
     "EntryFilters",
+    "FilterOptions",
+    "Placement",
+    "WarehouseOption",
+    "filter_options",
     "EntryLine",
     "EntryPage",
     "EntryRow",

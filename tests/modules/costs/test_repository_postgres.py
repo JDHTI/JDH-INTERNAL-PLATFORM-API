@@ -156,3 +156,32 @@ async def test_numbers_are_stored_as_written(world) -> None:
         )
     assert stored.number == "NC 1708008745" and stored.original_filename == "a.pdf"
     assert (await service.get(novelty.id)).credit_note.amount == Decimal("12000.50")
+
+
+async def test_the_tray_options_and_the_warehouse_filter(world) -> None:
+    service, repository, source, storage, tag = world
+    source.items[1] = line(
+        f"{tag}-up2",
+        day=DAY,
+        price="1030",
+        quotation="1000",
+        sku="7053",
+        co="001",
+        warehouse="MDE1",
+    )
+    await service.sync()
+
+    options = await service.options(DAY, DAY)
+    page = await service.page(
+        NoveltyFilters(since=DAY, until=DAY, warehouse=" mde1 "), "date", True, 1, 50
+    )
+
+    assert [(item.code, item.name) for item in options.cos] == [
+        ("001", "ANTIOQUIA"),
+        ("003", "CENTRO"),
+    ]
+    assert [(item.code, item.co) for item in options.warehouses] == [
+        ("BTA9", "003"),
+        ("MDE1", "001"),
+    ]
+    assert [item.line.line_key for item in page.items] == [f"{tag}-up2"]
