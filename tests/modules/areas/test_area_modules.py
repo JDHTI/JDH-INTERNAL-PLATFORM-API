@@ -6,7 +6,13 @@ import pytest
 
 from app.core.errors import ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.areas.application.dto import CreateAreaCommand
-from app.modules.areas.domain.catalog import AreaModule, clean_module_config, is_enabled
+from app.modules.areas.domain.catalog import (
+    GENERAL_MASTER_SLUGS,
+    AreaModule,
+    area_masters,
+    clean_module_config,
+    is_enabled,
+)
 from app.modules.masters.infrastructure.access import AreaMasterAccess
 from tests.modules.fakes import principal
 
@@ -40,7 +46,8 @@ async def test_a_locked_module_cannot_be_switched_on_elsewhere(areas, admin) -> 
 
 
 def test_only_maestros_takes_settings() -> None:
-    assert clean_module_config("maestros", {"masters": [" Clientes", "clientes", "productos"]}) == {
+    # Kept in menu order, whatever order they come in.
+    assert clean_module_config("maestros", {"masters": ["productos", " Clientes", "clientes"]}) == {
         "masters": ["clientes", "productos"]
     }
     assert clean_module_config("maestros", {"masters": None}) == {}
@@ -51,6 +58,33 @@ def test_only_maestros_takes_settings() -> None:
         clean_module_config("maestros", {"otra": 1})
     with pytest.raises(InvalidInputError):
         clean_module_config("maestros", {"masters": "clientes"})
+
+
+def test_the_masters_settings_choose_among_the_general_masters() -> None:
+    """The standard (2026-11-24): the four masters BI sees, never the old DWH views."""
+
+    assert GENERAL_MASTER_SLUGS == (
+        "proveedores-comerciales",
+        "proveedores-legales",
+        "clientes",
+        "productos",
+    )
+    with pytest.raises(InvalidInputError, match="Maestro desconocido: centros-costo, equipos"):
+        clean_module_config("maestros", {"masters": ["clientes", "equipos", "centros-costo"]})
+
+
+def test_an_area_lists_the_general_masters_its_settings_choose() -> None:
+    assert area_masters("bi") == GENERAL_MASTER_SLUGS
+    assert area_masters("cartera") == ()
+    overrides = {
+        "abastecimiento": {"maestros": AreaModule(True)},
+        # An old slug stored before the standard gives nothing.
+        "comercial": {"maestros": AreaModule(True, {"masters": ["productos", "equipos"]})},
+        "bi": {"maestros": AreaModule(False, {"masters": ["clientes"]})},
+    }
+    assert area_masters("abastecimiento", overrides) == GENERAL_MASTER_SLUGS
+    assert area_masters("comercial", overrides) == ("productos",)
+    assert area_masters("bi", overrides) == ()
 
 
 async def _area_with_member(areas, admin, login, slug, email, grants):
@@ -70,16 +104,18 @@ async def test_switching_a_module_on_lets_the_area_grant_it(areas, area_repo, ad
         await areas.set_role_permissions("cartera", role.id, [("maestros", "read")], admin)
 
     state = await areas.set_area_module(
-        "cartera", "maestros", True, {"masters": ["clientes", "proveedores"]}, admin
+        "cartera", "maestros", True, {"masters": ["productos", "proveedores-legales"]}, admin
     )
     await areas.set_role_permissions("cartera", role.id, [("maestros", "read")], admin)
     ana = await login("ana@jdh.com.co")
     await areas.add_member("cartera", ana.email, role.id, admin)
 
-    assert state.is_enabled and state.config == {"masters": ["clientes", "proveedores"]}
-    assert (await areas.get_area("cartera", ana)).my_modules["maestros"] == "read"
+    assert state.is_enabled and state.config == {"masters": ["proveedores-legales", "productos"]}
+    area = await areas.get_area("cartera", ana)
+    assert area.my_modules["maestros"] == "read"
+    assert area.masters == ("proveedores-legales", "productos")
     assert await areas.module_configs(ana, "maestros") == {
-        "cartera": {"masters": ["clientes", "proveedores"]}
+        "cartera": {"masters": ["proveedores-legales", "productos"]}
     }
     event = area_repo.events[-1]
     assert event.action == "member_added"

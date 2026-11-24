@@ -69,6 +69,43 @@ class AreaModule:
 ModuleOverrides = Mapping[str, Mapping[str, AreaModule]]
 MASTERS_MODULE = "maestros"
 
+
+@dataclass(frozen=True)
+class GeneralMaster:
+    """A master the ``maestros`` module lists in an area's menu, each with its own page."""
+
+    slug: str
+    label: str
+    description: str
+
+
+# The standard of general masters (2026-11-24): the four BI sees in its dropdown, in menu
+# order. An area's ``maestros`` settings choose among these, and a new master is added here.
+# The DWH views of ``/masters`` (centros de costo, equipos, ...) are no longer offered to areas.
+GENERAL_MASTERS: tuple[GeneralMaster, ...] = (
+    GeneralMaster(
+        "proveedores-comerciales",
+        "Proveedores comerciales",
+        "Proveedores con los que se negocia, con sus productos y los NIT que los respaldan",
+    ),
+    GeneralMaster(
+        "proveedores-legales",
+        "Proveedores legales",
+        "Terceros proveedores a quienes se les factura y paga, una fila por sucursal",
+    ),
+    GeneralMaster(
+        "clientes",
+        "Clientes",
+        "Clientes con su canal, unidad de negocio y vendedor, una fila por sucursal",
+    ),
+    GeneralMaster(
+        "productos",
+        "Productos",
+        "Catálogo de productos con su proveedor comercial, marca, clasificación y márgenes",
+    ),
+)
+GENERAL_MASTER_SLUGS = tuple(master.slug for master in GENERAL_MASTERS)
+
 MODULES: tuple[Module, ...] = (
     Module("documentos", "Gestor documental", (EVERY_AREA,), "Carpetas y documentos del área"),
     Module("proyectos", "Proyectos", ("ti",), "Proyectos, épicas y tareas"),
@@ -190,7 +227,7 @@ MODULES: tuple[Module, ...] = (
         MASTERS_MODULE,
         "Maestros",
         ("bi",),
-        "Clientes, productos, proveedores y demás maestros del DWH",
+        "Proveedores comerciales y legales, clientes y productos",
         configurable=True,
     ),
 )
@@ -245,11 +282,26 @@ def modules_for(area_slug: str, overrides: ModuleOverrides | None = None) -> lis
     return [module for module in MODULES if is_enabled(area_slug, module.key, overrides)]
 
 
+def area_masters(area_slug: str, overrides: ModuleOverrides | None = None) -> tuple[str, ...]:
+    """The general masters an area's ``maestros`` lists, in menu order; none when it is off.
+
+    Settings without a list open every general master. A stored slug that is no longer in
+    :data:`GENERAL_MASTERS` gives nothing.
+    """
+
+    if not is_enabled(area_slug, MASTERS_MODULE, overrides):
+        return ()
+    chosen = module_config(area_slug, MASTERS_MODULE, overrides).get("masters")
+    if chosen is None:
+        return GENERAL_MASTER_SLUGS
+    return tuple(slug for slug in GENERAL_MASTER_SLUGS if slug in chosen)
+
+
 def clean_module_config(module_key: str, config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Check the settings of a module in an area.
 
-    ``maestros`` takes ``{"masters": [slug, ...]}`` (``null`` or absent: every master);
-    the other modules take none.
+    ``maestros`` takes ``{"masters": [slug, ...]}`` among :data:`GENERAL_MASTERS`
+    (``null`` or absent: every one); the other modules take none.
 
     Raises:
         InvalidInputError: When the module is unknown or the settings do not fit it.
@@ -271,10 +323,12 @@ def clean_module_config(module_key: str, config: Mapping[str, Any] | None) -> di
         return {}
     if not isinstance(masters, list) or not all(isinstance(slug, str) for slug in masters):
         raise InvalidInputError("masters debe ser una lista de identificadores de maestro")
-    cleaned = sorted({slug.strip().lower() for slug in masters if slug.strip()})
-    if any(len(slug) > 80 for slug in cleaned):
-        raise InvalidInputError("Identificador de maestro demasiado largo")
-    return {"masters": cleaned}
+    cleaned = {slug.strip().lower() for slug in masters if slug.strip()}
+    unknown = sorted(cleaned - set(GENERAL_MASTER_SLUGS))
+    if unknown:
+        valid = ", ".join(GENERAL_MASTER_SLUGS)
+        raise InvalidInputError(f"Maestro desconocido: {', '.join(unknown)} (válidos: {valid})")
+    return {"masters": [slug for slug in GENERAL_MASTER_SLUGS if slug in cleaned]}
 
 
 def implies(granted: str | None, wanted: str) -> bool:

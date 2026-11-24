@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.application.service import AreaService
-from app.modules.areas.domain.catalog import ACTIONS, MODULES
+from app.modules.areas.domain.catalog import ACTIONS, GENERAL_MASTERS, MODULES
 from app.modules.areas.domain.entities import RolePermission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -56,6 +56,9 @@ class MyAreaResponse(BaseModel):
     # The caller holds the area's leader role.
     is_leader: bool = False
     modules: dict[str, str]
+    # The general masters the area's Maestros lists to the caller, in menu order; empty
+    # without ``maestros``.
+    masters: list[str] = []
 
 
 class MyPermissionsResponse(BaseModel):
@@ -147,7 +150,7 @@ class ModuleInfoResponse(BaseModel):
 
 class ModuleStateResponse(BaseModel):
     enabled: bool
-    # ``maestros``: ``{"masters": [slug, ...]}``; empty means every master.
+    # ``maestros``: ``{"masters": [slug, ...]}`` among ``general_masters``; empty means every one.
     config: dict[str, Any]
     # No stored choice: the catalog default applies.
     is_default: bool
@@ -160,11 +163,19 @@ class AreaModulesResponse(BaseModel):
     modules: dict[str, ModuleStateResponse]
 
 
+class GeneralMasterResponse(BaseModel):
+    slug: str
+    label: str
+    description: str
+
+
 class ModulesResponse(BaseModel):
     """Every module of the catalog and, per area, whether it is on."""
 
     modules: list[ModuleInfoResponse]
     areas: list[AreaModulesResponse]
+    # What ``maestros`` settings choose from (2026-11-24), in menu order.
+    general_masters: list[GeneralMasterResponse] = []
 
 
 @router.get("/modules", response_model=ModulesResponse, summary="Modules switched on per area")
@@ -199,6 +210,10 @@ async def area_modules(
             }
             for area in areas
         ],
+        "general_masters": [
+            {"slug": m.slug, "label": m.label, "description": m.description}
+            for m in GENERAL_MASTERS
+        ],
     }
 
 
@@ -224,6 +239,7 @@ async def my_permissions(
                 "role_id": profile.areas[view.slug].role_id if view.slug in profile.areas else None,
                 "is_leader": view.slug in profile.areas and profile.areas[view.slug].is_leader,
                 "modules": view.my_modules,
+                "masters": list(view.masters) if "maestros" in view.my_modules else [],
             }
             for view in views
             if view.my_modules
