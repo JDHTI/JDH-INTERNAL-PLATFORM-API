@@ -396,39 +396,63 @@ def _same_family(peer: Any, support: Any) -> list[ColumnElement[bool]]:
     ]
 
 
-def _peer_copy(nits: Sequence[str] | None = None, below: bool = False) -> ColumnElement[bool]:
-    """Whether another copy of the same business group's support exists (2026-11-23).
+def _family_key(model: Any) -> ColumnElement[str]:
+    """The fields of :func:`_same_family` as one short text (an md5), so the copies of a
+    group's support are grouped by one narrow key: a sort over ten wide columns went to disk
+    with tens of thousands of copies. Each value is written out, an empty one as ``∅``, so two
+    families never share a key."""
+
+    parts = [
+        func.cast(model.status == "anulado", Text),
+        func.cast(model.commercial_supplier_id, Text),
+        model.kind,
+        model.calc_method,
+        func.cast(model.supplier_value, Text),
+        model.product_sku,
+        model.supplier_sku,
+        func.cast(model.valid_from, Text),
+        func.cast(model.valid_to, Text),
+        group_key(model.customer_group),
+    ]
+    return func.md5(func.concat_ws("|", *(func.coalesce(part, "∅") for part in parts)))
+
+
+def _representatives(nits: Sequence[str] = ()) -> Select[Any]:
+    """The id of one copy per business group's support (2026-11-24).
 
     A group's support is stored once per customer of the group (``group_wide``): the copies
-    share supplier, class, method, value, reference, dates and group. ``nits`` asks for a copy
-    of one of those customers; ``below``, for a copy of a lower NIT.
+    share supplier, class, method, value, reference, dates and group (:func:`_same_family`).
+    The copy of a customer in ``nits`` stands for the group when there is one; otherwise the
+    copy of the lowest NIT.
+
+    One pass with a window over the group copies only. The first version asked, row by row,
+    whether a lower copy existed (a correlated ``NOT EXISTS``): with thousands of copies of
+    one supplier it grew with the square of the copies and the master stopped loading.
     """
 
-    P = aliased(SupplierSupportModel)
-    conditions = [P.id != S.id, *_same_family(P, S)]
-    if nits is not None:
-        conditions.append(P.customer_nit.in_(list(nits)))
-    if below:
-        conditions.append(P.customer_nit < S.customer_nit)
-    return select(literal(1)).where(*conditions).exists()
+    G = aliased(SupplierSupportModel)
+    order = [G.customer_nit.asc().nulls_last(), G.id]
+    if nits:
+        order.insert(0, G.customer_nit.in_(list(nits)).desc())
+    ranked = (
+        select(
+            G.id,
+            func.row_number().over(partition_by=_family_key(G), order_by=order).label("rank"),
+        )
+        .where(G.group_wide.is_(True))
+        .subquery()
+    )
+    return select(ranked.c.id).where(ranked.c.rank == 1)
 
 
 def _one_copy(nits: Sequence[str] = (), enabled: bool = True) -> ColumnElement[bool]:
     """One row per business group's support (2026-11-23): its copies used to come once per
-    customer of the group, which looked like duplicates. The copy of a customer in ``nits``
-    stands for the group when there is one; otherwise the copy of the lowest NIT. Disabled,
+    customer of the group, which looked like duplicates (:func:`_representatives`). Disabled,
     every copy comes."""
 
     if not enabled:
         return true()
-    first = not_(_peer_copy(below=True))
-    if not nits:
-        return or_(S.group_wide.is_(False), first)
-    return or_(
-        S.group_wide.is_(False),
-        S.customer_nit.in_(list(nits)),
-        and_(not_(_peer_copy(nits)), first),
-    )
+    return or_(S.group_wide.is_(False), S.id.in_(_representatives(nits)))
 
 
 def _of_customers(
