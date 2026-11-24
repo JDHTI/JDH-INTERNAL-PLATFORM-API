@@ -39,6 +39,8 @@ class AgreementSource(Protocol):
 
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerScope]: ...
 
+    async def branch_scope(self, nit: str, branch_id: str) -> CustomerScope | None: ...
+
 
 class BatchRepository(Protocol):
     """Uploaded files, their lines and the latest result of each line."""

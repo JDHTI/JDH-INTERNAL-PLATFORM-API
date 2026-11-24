@@ -23,6 +23,7 @@ from app.modules.commercial_masters.infrastructure.models import (
     ProductModel,
 )
 from app.modules.quotations.domain.entities import (
+    CustomerBranchOption,
     CustomerOption,
     CustomerPage,
     GroupInfo,
@@ -330,6 +331,40 @@ class SqlAlchemyQuotationMasterSource:
             page,
             size,
         )
+
+    async def customer_branches(self, nit: str) -> list[CustomerBranchOption]:
+        """The branches of a customer, active first, by branch id (2026-11-24)."""
+
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        CustomerModel.branch_id,
+                        CustomerModel.branch_name,
+                        CustomerModel.establishment_name,
+                        CustomerModel.city,
+                        CustomerModel.channel,
+                        CustomerModel.salesperson_name,
+                        CustomerModel.salesperson_code,
+                        CustomerModel.is_active,
+                    )
+                    .where(CustomerModel.nit == nit, CustomerModel.branch_id.is_not(None))
+                    .order_by(CustomerModel.is_active.desc(), CustomerModel.branch_id)
+                )
+            ).all()
+        return [
+            CustomerBranchOption(
+                branch_id=row.branch_id,
+                branch_name=row.branch_name,
+                establishment_name=row.establishment_name,
+                city=row.city,
+                channel=row.channel,
+                salesperson_name=row.salesperson_name,
+                is_active=bool(row.is_active),
+                salesperson_code=row.salesperson_code,
+            )
+            for row in rows
+        ]
 
     async def group_nits(self, group: str) -> list[str]:
         """The NITs of a business group with an active branch."""

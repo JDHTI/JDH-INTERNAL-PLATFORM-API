@@ -30,6 +30,9 @@ from app.modules.order_validation.domain.rules import (
     AMOUNT_METHODS,
     APPLIES,
     BASIS,
+    GENERAL_LEVEL,
+    LEVEL_LABELS,
+    agreement_level,
     pct,
     required_margin,
     scope_of,
@@ -435,6 +438,18 @@ def pick_support(
     exceptions: list[tuple[Decimal, Agreement]] = []
     candidates: list[SupportCandidate] = []
     problems: list[str] = []
+    # The hierarchy (2026-11-24): among the supports that would price the line, the most
+    # specific customer level (NIT-sucursal > NIT > group) leaves out the less specific ones.
+    top = max(
+        (
+            agreement_level(agreement)
+            for agreement in agreements
+            if not agreement.warehouse
+            and agreement.status != "pendiente_revision"
+            and scope_of(agreement, probe, scope, day) == APPLIES
+        ),
+        default=GENERAL_LEVEL,
+    )
     for agreement in agreements:
         if agreement.warehouse:
             if scope_of(replace(agreement, warehouse=None), probe, scope, day) == APPLIES:
@@ -444,6 +459,12 @@ def pick_support(
                 problems.append("apoyo_fuera_bodega")
             continue
         if scope_of(agreement, probe, scope, day) != APPLIES:
+            continue
+        level = agreement_level(agreement)
+        if level not in (GENERAL_LEVEL, top):
+            candidates.append(
+                _candidate(agreement, f"Hay un apoyo más específico ({LEVEL_LABELS[top]})")
+            )
             continue
         if agreement.status == "pendiente_revision":
             candidates.append(_candidate(agreement, "Apoyo en revisión"))

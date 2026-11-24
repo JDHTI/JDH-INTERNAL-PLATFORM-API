@@ -183,11 +183,53 @@ def test_copies_of_one_support_count_once_and_different_ones_add_up() -> None:
     assert once.sales[0].items[0].support_id == customer_copy.id
     assert SEVERAL_SUPPORTS not in once.sales[0].flags
 
-    other = support(calc_method="valor_unidad", supplier_value=D("100"), value_unit="unidad")
+    # Another support of the same level (the group's) adds up.
+    other = support(
+        customer_group="SANCELA",
+        group_wide=True,
+        calc_method="valor_unidad",
+        supplier_value=D("100"),
+        value_unit="unidad",
+    )
     twice = settle([sale()], [customer_copy, other], customers=[branch])
 
     assert len(twice.sales[0].items) == 2 and SEVERAL_SUPPORTS in twice.sales[0].flags
     assert round(twice.sales[0].amount, 2) == round(D("15085.55") + D("4500"), 2)
+
+
+def test_the_most_specific_customer_level_replaces_the_others() -> None:
+    """NIT-sucursal > NIT > grupo empresarial (2026-11-24), checked with the sale's branch."""
+
+    group = support(customer_group="SANCELA", group_wide=True)
+    nit = support(calc_method="valor_unidad", supplier_value=D("100"), value_unit="unidad")
+    other_branch = support(
+        customer_branch_id="002",
+        calc_method="valor_unidad",
+        supplier_value=D("300"),
+        value_unit="unidad",
+    )
+    own_branch = support(
+        customer_branch_id="001",
+        calc_method="valor_unidad",
+        supplier_value=D("200"),
+        value_unit="unidad",
+    )
+    general = support(
+        customer_nit=None, calc_method="valor_unidad", supplier_value=D("10"), value_unit="unidad"
+    )
+    branch = customer(business_group="SANCELA")
+
+    def paid(supports):
+        result = settle([sale()], supports, customers=[branch])
+        return sorted(item.support_id for item in result.sales[0].items)
+
+    assert paid([group, nit]) == [nit.id]
+    # Another branch's support never covers this sale, so the NIT's applies.
+    assert paid([group, nit, other_branch]) == [nit.id]
+    assert paid([group, nit, own_branch]) == [own_branch.id]
+    assert paid([group]) == [group.id]
+    # A support for no customer is outside the hierarchy and adds up.
+    assert paid([nit, own_branch, general]) == sorted([own_branch.id, general.id])
 
 
 def test_a_supplier_margin_request_copy_replaces_its_base() -> None:

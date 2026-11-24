@@ -282,19 +282,42 @@ def test_a_promotional_warehouse_needs_a_support_that_says_so() -> None:
 
 
 def test_group_and_branch_supports_need_the_customer_in_them() -> None:
-    goddard = CustomerScope(
-        "900315138", business_group="GRUPO GODDARD", branches=frozenset({"001", "002"})
+    # ``branches`` is the branch quoted or sold to (2026-11-24).
+    branch_002 = CustomerScope(
+        "900315138", business_group="GRUPO GODDARD", branches=frozenset({"002"})
     )
+    whole_nit = CustomerScope("900315138", business_group="GRUPO GODDARD")
     other = CustomerScope("900315138", business_group="OTRO")
     day = date(2026, 11, 3)
 
     group = agreement(customer_group="Grupo Goddard")
     branch = agreement(customer_nit="900315138", customer_branch_id="002")
-    assert rules.scope_of(group, line(), goddard, day) == rules.APPLIES
+    assert rules.scope_of(group, line(), branch_002, day) == rules.APPLIES
     assert rules.scope_of(group, line(), other, day) == rules.OUT_OF_SCOPE
     assert rules.scope_of(group, line(), None, day) == rules.OUT_OF_SCOPE
-    assert rules.scope_of(branch, line(), goddard, day) == rules.APPLIES
+    assert rules.scope_of(branch, line(), branch_002, day) == rules.APPLIES
+    # A branch's support never covers the NIT as a whole (a NIT quotation, an order file).
+    assert rules.scope_of(branch, line(), whole_nit, day) == rules.OUT_OF_SCOPE
     assert rules.scope_of(branch, line(), other, day) == rules.OUT_OF_SCOPE
+
+
+def test_the_hierarchy_keeps_the_most_specific_customer_level() -> None:
+    group = agreement(customer_group="Grupo Goddard")
+    nit = agreement(customer_nit="900315138", customer_group="GRUPO GODDARD")
+    branch = agreement(customer_nit="900315138", customer_branch_id="002")
+    general = agreement(channels=("HOTELES",))
+
+    assert [rules.agreement_level(item) for item in (general, group, nit, branch)] == [
+        rules.GENERAL_LEVEL,
+        rules.GROUP_LEVEL,
+        rules.NIT_LEVEL,
+        rules.BRANCH_LEVEL,
+    ]
+    keep = rules.most_specific
+    assert keep([group, nit, branch, general], rules.agreement_level) == [branch, general]
+    assert keep([group, nit, general], rules.agreement_level) == [nit, general]
+    assert keep([group, general], rules.agreement_level) == [group, general]
+    assert keep([], rules.agreement_level) == []
 
 
 def test_a_group_support_covers_a_customer_that_joined_the_group_later() -> None:

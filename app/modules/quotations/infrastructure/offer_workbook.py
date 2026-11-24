@@ -76,6 +76,11 @@ class CustomerOfferWorkbook:
             else (
                 ("Cliente", document.customer_name or document.customer_nit),
                 ("NIT", document.customer_nit),
+                *(
+                    (("Sucursal", document.customer_branch_id),)
+                    if document.customer_branch_id
+                    else ()
+                ),
             )
         )
         for label, value in (

@@ -108,7 +108,8 @@ class CustomerScope:
     # The product margin list of the customer (see ``customer_margin_field``); ``None`` when
     # it is not known and the channel of the order decides.
     margin_field: str | None = None
-    # Branch ids and business group, for supports restricted to them.
+    # The branch quoted or sold to, for NIT-sucursal supports (2026-11-24); empty for the
+    # customer as a whole (a NIT quotation, an order file), where they do not apply.
     branches: frozenset[str] = frozenset()
     business_group: str | None = None
 

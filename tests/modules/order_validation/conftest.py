@@ -50,6 +50,8 @@ class FakeAgreementSource:
         self.items: list[Agreement] = []
         self.catalog: dict[str, ProductInfo] = {}
         self.clients: dict[str, CustomerScope] = {}
+        # The branch ids of each client, for a quotation by branch.
+        self.branch_ids: dict[str, tuple[str, ...]] = {}
 
     async def agreements(self, supplier_codes, skus, nits) -> list[Agreement]:
         return [
@@ -65,6 +67,12 @@ class FakeAgreementSource:
 
     async def customers(self, nits) -> dict[str, CustomerScope]:
         return {nit: self.clients[nit] for nit in nits if nit in self.clients}
+
+    async def branch_scope(self, nit, branch_id) -> CustomerScope | None:
+        client = self.clients.get(nit)
+        if client is None or branch_id not in self.branch_ids.get(nit, ()):
+            return None
+        return replace(client, branches=frozenset({branch_id}))
 
 
 class FakeBatchRepository:

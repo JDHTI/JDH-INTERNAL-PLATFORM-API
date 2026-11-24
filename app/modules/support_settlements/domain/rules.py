@@ -24,6 +24,10 @@ Foods):
 - **Discount passed to the customer** (% types only): when the customer was billed above the
   negotiated price, the supplier's % drops by the discount points not given:
   ``% real = % − max(0, negotiated discount − granted discount)``, both over the list price.
+- **Hierarchy** (2026-11-24): among the supports that cover a sale, the most specific customer
+  level replaces the others. A NIT-sucursal support of the sale's branch leaves out the NIT's
+  and the group's; without one, a NIT support leaves out the group's. Supports for no customer
+  are not in the hierarchy.
 - **Several supports**: copies of the same support (same class, type, value, unit and
   reference: a business group's copies, a group and a NIT copy) count once; really different
   supports add up and the line is marked. A supplier-margin request's copy replaces its base.
@@ -43,7 +47,12 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.modules.commercial_masters.domain.margins import margin_for
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, OrderLine
-from app.modules.order_validation.domain.rules import APPLIES, scope_of
+from app.modules.order_validation.domain.rules import (
+    APPLIES,
+    customer_level,
+    most_specific,
+    scope_of,
+)
 from app.modules.supplier_supports.domain import pricing
 from app.modules.support_settlements.domain.entities import (
     ALREADY_DISCOUNTED,
@@ -178,6 +187,14 @@ def applies(
         by_name = replace(probe, warehouse=line.warehouse_name)
         return scope_of(agreement, by_name, scope, line.sale_date) == APPLIES
     return False
+
+
+def support_level(support: SettlementSupport) -> int:
+    """Where a stored support sits in the customer hierarchy (NIT-sucursal > NIT > group)."""
+
+    return customer_level(
+        support.customer_nit, support.customer_branch_id, support.customer_group, support.group_wide
+    )
 
 
 def _family(support: SettlementSupport) -> tuple:
@@ -422,7 +439,7 @@ def build_settlement(
         ]
         if not candidates:
             continue
-        chosen = distinct_supports(candidates, line.nit)
+        chosen = distinct_supports(most_specific(candidates, support_level), line.nit)
         flags: list[str] = []
         base_cost, source = _base_cost(line, product, quotes, cost_basis)
         if cost_basis == COST_QUOTE and source == INVOICE:

@@ -366,6 +366,31 @@ BI, 2026-11-19: además de un cliente, se cotiza un **grupo empresarial completo
 - **La oferta** sale a nombre del grupo: el Excel dice «Grupo empresarial» y cuántos NIT tiene,
   sin NIT.
 
+## Cotizar por sucursal
+
+Daniel, 2026-11-24: un cliente con varias sucursales se cotiza completo o por una de ellas.
+
+- **Elegir:**
+  - `GET /quotations/customers/{nit}/branches` →
+    `[{branch_id, branch_name, establishment_name, city, channel, salesperson_name, is_active}]`,
+    activas primero, con la misma regla de cartera.
+  - La UI ofrece «Cotización por sucursal» solo cuando el cliente tiene más de una
+    (`active_branch_count` de `/customers`).
+- **Crear:** `POST /quotations {customer_nit, customer_branch_id, ...}`. Sin NIT es 422, y una
+  sucursal que no es del NIT también.
+- **Cómo se cotiza:**
+  - Solo esa sucursal decide la lista, el canal, el C.O., el vendedor y la lista de margen.
+  - Las referencias salen de sus ventas.
+  - Aplican sus apoyos NIT-sucursal.
+  - El refresh conserva la sucursal.
+- **Jerarquía de apoyos** (ver `docs/apoyos-proveedores.md`):
+  - En cada línea, el apoyo de nivel más específico reemplaza a los otros: NIT-sucursal > NIT >
+    grupo.
+  - En una cotización general (sin sucursal) los apoyos de sucursal no aplican.
+  - El que queda fuera sale como candidato: «Hay un apoyo más específico (…)».
+- **La cotización** trae `customer_branch_id` (migración `0087`).
+- **La oferta** agrega la fila «Sucursal».
+
 ## Estados
 
 **Flujo sin bloqueos hasta el cliente** (BI, 2026-11-18 y 2026-11-19):

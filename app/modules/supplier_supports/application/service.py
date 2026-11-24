@@ -208,6 +208,30 @@ def _base_nits(customer_nits: Sequence[str] | None) -> tuple[str, ...]:
     return nits
 
 
+def _base_branches(
+    pairs: Sequence[tuple[str, str] | Mapping[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    """The ``(nit, branch_id)`` pairs of the base search by NIT-sucursal, cleaned. Each pair
+    may come as a tuple or as ``{"nit", "branch_id"}`` (the HTTP body)."""
+
+    raw = [
+        (item.get("nit"), item.get("branch_id")) if isinstance(item, Mapping) else tuple(item)
+        for item in pairs or ()
+    ]
+    found = tuple(
+        dict.fromkeys(
+            (nit, branch.strip())
+            for value, branch in raw
+            if (nit := clean_nit(value or "")) and branch and branch.strip()
+        )
+    )
+    if len(found) > filters.MAX_LIST_VALUES:
+        raise InvalidInputError(f"Máximo {filters.MAX_LIST_VALUES} valores por filtro base")
+    if pairs and not found:
+        raise InvalidInputError("Para buscar por NIT-sucursal elige el NIT y la sucursal")
+    return found
+
+
 def _with_base_filters(
     group: filters.Group,
     supplier_codes: Sequence[str] | None,
@@ -606,6 +630,18 @@ class SupplierSupportService:
         else:
             product_id = None
 
+        if data.customer_branch_id and (not data.customer_nit or data.group_wide):
+            # NIT-sucursal is the most specific support (2026-11-24): a branch needs its NIT,
+            # and a business group's support covers every branch.
+            if strict:
+                raise FieldError(
+                    "La sucursal va con el NIT del cliente, no con un grupo empresarial",
+                    "customer_branch_id",
+                )
+            # A loaded row stays in review until someone says whose branch it is.
+            issues.append(
+                Issue("cliente_por_definir", "sucursal sin NIT del cliente", "customer_branch_id")
+            )
         if data.customer_nit and (
             previous is None
             or (previous.customer_nit, previous.customer_branch_id)
@@ -850,8 +886,8 @@ class SupplierSupportService:
         sort: Sequence[str] | None = None,
         page: int = 1,
         size: int = 50,
-        customer_nit_only: bool = False,
         business_groups: Sequence[str] | None = None,
+        customer_branches: Sequence[tuple[str, str]] | None = None,
     ) -> SupportPage:
         """Filter supports with the dynamic filter language.
 
@@ -861,12 +897,13 @@ class SupplierSupportService:
             match (str): ``all`` (AND) or ``any`` (OR) for the top-level conditions.
             conditions (Sequence[Mapping[str, Any]] | None): Conditions or nested groups;
                 see :mod:`app.modules.supplier_supports.domain.filters`.
-            customer_nits (Sequence[str] | None): Base search by client NIT(s): their supports
-                and their business groups' ones.
-            customer_nit_only (bool): With ``customer_nits``, only the supports of those NITs
-                alone, never a business group's (2026-11-23).
+            customer_nits (Sequence[str] | None): Base search by client NIT(s): their supports,
+                for the whole NIT or one of its branches, never a business group's
+                (2026-11-24).
             business_groups (Sequence[str] | None): Base search by business group: the
                 supports loaded for the whole group (2026-11-23).
+            customer_branches (Sequence[tuple[str, str]] | None): Base search by NIT-sucursal:
+                the supports of those ``(nit, branch_id)`` pairs (2026-11-24).
             supplier_codes (Sequence[str] | None): Base search by commercial supplier code(s).
             product_skus (Sequence[str] | None): Base search by JDH reference(s). The three base
                 filters are independent and optional (any one, two or all); the ones sent are
@@ -914,8 +951,8 @@ class SupplierSupportService:
             sort=sort,
             page=page,
             size=size,
-            customer_nit_only=customer_nit_only,
             business_groups=business_groups,
+            customer_branches=customer_branches,
         )
         if principal is not None:
             spec = replace(spec, salesperson_codes=(await self._scope(principal))[1])
@@ -988,8 +1025,8 @@ class SupplierSupportService:
         sort: Sequence[str] | None = None,
         page: int = 1,
         size: int = 50,
-        customer_nit_only: bool = False,
         business_groups: Sequence[str] | None = None,
+        customer_branches: Sequence[tuple[str, str]] | None = None,
     ) -> filters.SearchSpec:
         if page < 1:
             raise InvalidInputError("La página debe ser mayor o igual a 1")
@@ -1002,8 +1039,7 @@ class SupplierSupportService:
         if state is not None and state not in vocabulary.STATE_FILTERS:
             raise InvalidInputError(f"state debe ser uno de: {', '.join(vocabulary.STATE_FILTERS)}")
         nits = _base_nits(customer_nits)
-        if customer_nit_only and not nits:
-            raise InvalidInputError("Para buscar solo por NIT escribe el NIT")
+        branches = _base_branches(customer_branches)
         groups = tuple(
             dict.fromkeys(name for value in business_groups or () if (name := _clean(value)))
         )
@@ -1016,7 +1052,7 @@ class SupplierSupportService:
                 product_skus,
             ),
             customer_nits=nits,
-            customer_nit_only=customer_nit_only,
+            customer_branches=branches,
             business_groups=groups,
             q=_clean(q),
             active_on=active_on or self.calendar.today(),
@@ -1280,6 +1316,8 @@ class SupplierSupportService:
                     customer_group=group,
                     customer_nit=nit,
                     customer_name=name,
+                    # A group's support covers every branch of its customers.
+                    customer_branch_id=None,
                     group_wide=True,
                 ),
                 supplier_code,

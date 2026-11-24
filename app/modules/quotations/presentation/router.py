@@ -189,6 +189,26 @@ class CreateRequest(BaseModel):
         default=True,
         description="False starts a SIESA customer's quotation empty, without its sales",
     )
+    customer_branch_id: str | None = Field(
+        default=None,
+        max_length=20,
+        description=(
+            "With customer_nit: quote that branch alone (/quotations/customers/{nit}/branches); "
+            "its list, channel, center, sales and NIT-sucursal supports"
+        ),
+    )
+
+
+class CustomerBranchResponse(BaseModel):
+    """A branch of a customer, to quote it alone."""
+
+    branch_id: str
+    branch_name: str | None
+    establishment_name: str | None
+    city: str | None
+    channel: str | None
+    salesperson_name: str | None
+    is_active: bool
 
 
 class LineChangeRequest(BaseModel):
@@ -607,6 +627,8 @@ class SummaryResponse(BaseModel):
     # Quoted to a business group: its name (also ``customer_name``) and its NITs.
     business_group: str | None = None
     group_customers: int | None = None
+    # Quoted to one branch of the customer (2026-11-24); ``null`` is the NIT as a whole.
+    customer_branch_id: str | None = None
     # When SIESA activates the prices (set at /confirm). In «Por cargar», one already past
     # means the files come out with today's date (SIESA does not load a past one).
     activation_date: date | None = None
@@ -876,6 +898,7 @@ def _summary_values(quotation: Quotation) -> dict[str, object]:
         else None,
         "business_group": quotation.business_group,
         "group_customers": quotation.group_customers,
+        "customer_branch_id": quotation.customer_branch_id,
         "kind": quotation.kind,
         "source": quotation.source,
         "price_list_name": quotation.price_list_name,
@@ -1114,6 +1137,35 @@ async def customers(
 
 
 @router.get(
+    "/customers/{customer_nit}/branches",
+    dependencies=[_READ_GATE],
+    response_model=list[CustomerBranchResponse],
+    summary="Branches of a customer, to quote one",
+)
+@inject
+async def customer_branches(
+    customer_nit: str,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> list[CustomerBranchResponse]:
+    """Las sucursales del cliente, activas primero. La UI ofrece «Cotización por sucursal»
+    solo cuando el cliente tiene más de una."""
+
+    return [
+        CustomerBranchResponse(
+            branch_id=item.branch_id,
+            branch_name=item.branch_name,
+            establishment_name=item.establishment_name,
+            city=item.city,
+            channel=item.channel,
+            salesperson_name=item.salesperson_name,
+            is_active=item.is_active,
+        )
+        for item in await service.customer_branches(principal, customer_nit)
+    ]
+
+
+@router.get(
     "/business-groups",
     dependencies=[_READ_GATE],
     response_model=GroupPageResponse,
@@ -1182,6 +1234,7 @@ async def create_quotation(
             billing_center_code=body.billing_center_code,
             with_history=body.with_history,
             business_group=body.business_group,
+            customer_branch_id=body.customer_branch_id,
         ),
     )
 

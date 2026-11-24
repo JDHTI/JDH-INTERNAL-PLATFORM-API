@@ -35,6 +35,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CenterWarehouse,
     CostInfo,
+    CustomerBranchOption,
     CustomerContext,
     CustomerPage,
     GroupPage,
@@ -840,9 +841,34 @@ class QuotationService:
             return await self.masters.business_groups(codes, q, page, size), bool(codes)
         return await self.masters.business_groups(None, q, page, size), False
 
+    async def customer_branches(
+        self, principal: Principal, customer_nit: str
+    ) -> list[CustomerBranchOption]:
+        """The branches of a customer, to quote one alone (2026-11-24). The selector only
+        shows up when the customer has more than one; the same portfolio rule as quoting it.
+        """
+
+        await self._require_manager(principal)
+        nit = normalize_nit(customer_nit)
+        branches = await self.masters.customer_branches(nit)
+        if not branches:
+            raise NotFoundError(f"No se encontró el cliente con NIT {nit}")
+        scope = await self._scope(principal)
+        if self._restricted(scope) and not any(
+            scope.allows(branch.salesperson_code)  # type: ignore[union-attr]
+            for branch in branches
+        ):
+            raise ForbiddenError(f"El cliente {nit} no está en tu cartera")
+        return branches
+
     # ------------------------------------------------------------ build
 
-    async def _context(self, nit: str, scope: SalesScope | None = None) -> CustomerContext:
+    async def _context(
+        self, nit: str, scope: SalesScope | None = None, branch_id: str | None = None
+    ) -> CustomerContext:
+        """The customer as one (its branches merged), or one branch of it (``branch_id``,
+        2026-11-24): then only that branch decides the list, channel, center and seller."""
+
         branches = await self.warehouse.branches(nit)
         if not branches:
             raise NotFoundError(f"No se encontró el cliente con NIT {nit}")
@@ -851,9 +877,19 @@ class QuotationService:
             for branch in branches
         ):
             raise ForbiddenError(f"El cliente {nit} no está en tu cartera")
+        if branch_id is not None:
+            chosen = [item for item in branches if item.branch_id == branch_id]
+            if not chosen:
+                known = ", ".join(sorted({item.branch_id or "" for item in branches} - {""}))
+                raise InvalidInputError(
+                    f"La sucursal {branch_id} no existe para el NIT {nit} (sucursales: {known})"
+                )
+            branches = chosen
         draft = rules.customer_context(nit, branches)
         shared = await self.warehouse.price_list_customers(draft.price_list_id)
         context = rules.customer_context(nit, branches, shared)
+        if branch_id is not None:
+            context = replace(context, customer_branch_id=branch_id)
         if context.price_list_id == vocabulary.GENERAL_PRICE_LIST:
             context = replace(context, warnings=(*context.warnings, "lista_general"))
         return context
@@ -978,6 +1014,13 @@ class QuotationService:
         # A group has no one customer: its margin list comes from the majority channel, and its
         # supports are checked against the whole group (_group_scope).
         scope = _group_scope(context.nit, group, scopes) if group else scopes.get(context.nit)
+        branch = context.customer_branch_id if audience is None and not group else None
+        if branch:
+            # A quotation by branch (2026-11-24): that branch's scope and margin list, and its
+            # NIT-sucursal supports, which never cover the NIT as a whole.
+            scope = await self.supports.branch_scope(context.nit, branch) or (
+                replace(scope, branches=frozenset({branch})) if scope else None
+            )
         margin_scope = None if group else scope
         today = self.calendar.today()
         lines: list[QuotationLine] = []
@@ -1086,6 +1129,8 @@ class QuotationService:
         if history and context.business_group:
             nits = list(context.group_nits) or await self.masters.group_nits(context.business_group)
             sales = await self.warehouse.group_last_sales(nits, months)
+        elif history and context.customer_branch_id:
+            sales = await self.warehouse.last_sales(context.nit, months, context.customer_branch_id)
         elif history:
             sales = await self.warehouse.last_sales(context.nit, months)
         sold = {sale.sku for sale in sales}
@@ -1127,6 +1172,7 @@ class QuotationService:
             promo_warehouses=quotation.promo_warehouses,
             # The group's NITs are read again when it is priced.
             business_group=quotation.business_group,
+            customer_branch_id=quotation.customer_branch_id,
         )
 
     @staticmethod
@@ -1156,6 +1202,7 @@ class QuotationService:
             "list_action": vocabulary.CREATE_LIST if general else vocabulary.UPDATE_LIST,
             "business_group": context.business_group,
             "group_customers": len(context.group_nits) if context.business_group else None,
+            "customer_branch_id": context.customer_branch_id,
         }
 
     async def _seller_contact(self, context: CustomerContext) -> SellerContact | None:
@@ -1234,10 +1281,12 @@ class QuotationService:
         billing_center_code: str | None = None,
         with_history: bool = True,
         business_group: str | None = None,
+        customer_branch_id: str | None = None,
     ) -> QuotationDetail:
         """Build a quotation of a customer from its last sales in the window, or an empty one
         for a temporary customer. With ``business_group`` (instead of the NIT) it quotes the
-        whole group (2026-11-19, :meth:`_group_context`); the offer goes to the group.
+        whole group (2026-11-19, :meth:`_group_context`); the offer goes to the group. With
+        ``customer_branch_id`` (and the NIT) it quotes that branch alone (2026-11-24).
 
         A temporary customer (not in SIESA) needs ``billing_center_code``: it has no sales and
         no list, and its lines are priced from that center. For a SIESA customer the center
@@ -1275,6 +1324,9 @@ class QuotationService:
             )
         if temporary_customer is not None and not (billing_center_code or "").strip():
             raise InvalidInputError("Elige el centro de operación del cliente temporal")
+        branch = (customer_branch_id or "").strip() or None
+        if branch is not None and not has_nit:
+            raise InvalidInputError("La cotización por sucursal necesita el NIT del cliente")
         temporary = _temporary(temporary_customer) if temporary_customer else None
         center = await self._center(billing_center_code)
         if temporary is not None:
@@ -1299,7 +1351,7 @@ class QuotationService:
                 nit = context.nit
             else:
                 nit = normalize_nit(customer_nit or "")
-                context = await self._context(nit, await self._scope(principal))
+                context = await self._context(nit, await self._scope(principal), branch)
             if center is not None:
                 context = replace(
                     context, billing_center_code=center.code, cost_centers=(center.code,)
@@ -2163,7 +2215,9 @@ class QuotationService:
         context = (
             await self._group_context(detail.quotation.business_group)
             if detail.quotation.business_group
-            else await self._context(detail.quotation.customer_nit)
+            else await self._context(
+                detail.quotation.customer_nit, branch_id=detail.quotation.customer_branch_id
+            )
         )
         manual = detail.quotation.billing_center_source == vocabulary.CENTER_MANUAL
         if manual:

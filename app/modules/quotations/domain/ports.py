@@ -15,6 +15,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CenterWarehouse,
     CostInfo,
+    CustomerBranchOption,
     CustomerPage,
     GroupPage,
     ItemInfo,
@@ -48,7 +49,11 @@ class WarehouseSource(Protocol):
 
     async def price_list_customers(self, price_list_id: str) -> int | None: ...
 
-    async def last_sales(self, nit: str, months: int) -> list[LastSale]: ...
+    async def last_sales(
+        self, nit: str, months: int, branch_id: str | None = None
+    ) -> list[LastSale]:
+        """The customer's last sales; with ``branch_id``, that branch's only."""
+        ...
 
     async def group_branches(self, nits: Sequence[str]) -> list[Branch]:
         """Every branch of these NITs, each with its ``nit`` (a business group)."""
@@ -130,6 +135,10 @@ class MasterSource(Protocol):
         """The NITs of a business group (its active customers)."""
         ...
 
+    async def customer_branches(self, nit: str) -> list[CustomerBranchOption]:
+        """The branches of a customer, active first (a quotation by branch, 2026-11-24)."""
+        ...
+
 
 class SupportSource(Protocol):
     """The supports master and the customers' scope (shared with the order validator)."""
@@ -139,6 +148,10 @@ class SupportSource(Protocol):
     ) -> list[Agreement]: ...
 
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerScope]: ...
+
+    async def branch_scope(self, nit: str, branch_id: str) -> CustomerScope | None:
+        """One branch of the customer, for a quotation by branch (2026-11-24)."""
+        ...
 
 
 class QuotationRepository(Protocol):

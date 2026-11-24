@@ -35,7 +35,6 @@ from app.modules.commercial_masters.domain.margins import (
 from app.modules.commercial_masters.infrastructure.groups import (
     group_key,
     group_label,
-    groups_of_nits,
     groups_of_salespeople,
 )
 from app.modules.commercial_masters.infrastructure.models import (
@@ -455,18 +454,22 @@ def _one_copy(nits: Sequence[str] = (), enabled: bool = True) -> ColumnElement[b
     return or_(S.group_wide.is_(False), S.id.in_(_representatives(nits)))
 
 
-def _of_customers(
-    nits: Sequence[str], only_nit: bool = False, *, one_copy: bool = True
-) -> ColumnElement[bool]:
-    """The base search by customer: the supports of these NITs and those of their business
-    groups (2026-11-20), each group's support once. ``only_nit`` (2026-11-23) keeps only the
-    supports of those NITs alone, never a group's copy."""
+def _of_customers(nits: Sequence[str]) -> ColumnElement[bool]:
+    """The base search by customer (2026-11-24): the supports of these NITs, for the whole
+    NIT or one of its branches, never a business group's copy (the group has its own
+    filter)."""
 
-    if only_nit:
-        return and_(S.customer_nit.in_(list(nits)), S.group_wide.is_(False))
+    return and_(S.customer_nit.in_(list(nits)), S.group_wide.is_(False))
+
+
+def _of_branches(pairs: Sequence[tuple[str, str]]) -> ColumnElement[bool]:
+    """The base search by NIT-sucursal (2026-11-24): the supports of those branches."""
+
     return and_(
-        or_(S.customer_nit.in_(list(nits)), _by_group(groups_of_nits(nits))),
-        _one_copy(nits, one_copy),
+        or_(
+            *(and_(S.customer_nit == nit, S.customer_branch_id == branch) for nit, branch in pairs)
+        ),
+        S.group_wide.is_(False),
     )
 
 
@@ -1098,12 +1101,12 @@ class SqlAlchemySupportRepository:
         if spec.salesperson_codes is not None:
             conditions.append(_in_customers(spec.salesperson_codes))
         if spec.customer_nits:
-            conditions.append(
-                _of_customers(spec.customer_nits, spec.customer_nit_only, one_copy=one_copy)
-            )
+            conditions.append(_of_customers(spec.customer_nits))
+        if spec.customer_branches:
+            conditions.append(_of_branches(spec.customer_branches))
         if spec.business_groups:
             conditions.append(_of_groups(spec.business_groups, one_copy=one_copy))
-        if one_copy and not spec.customer_nits and not spec.business_groups:
+        if one_copy and not spec.business_groups:
             # Without a customer filter too, each business group's support shows once.
             conditions.append(_one_copy())
         return conditions

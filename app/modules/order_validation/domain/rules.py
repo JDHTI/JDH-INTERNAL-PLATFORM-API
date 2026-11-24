@@ -13,7 +13,7 @@ taken inside the support itself are used. Then ``amount / price = share x (1 - m
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -107,6 +107,53 @@ def whole_groups(
     return list(kept.values())
 
 
+# How specific a support is about the customer (2026-11-24): NIT-sucursal > NIT > business
+# group. A support for no customer (by channel, regional, ...) is not in the hierarchy.
+GENERAL_LEVEL = 0
+GROUP_LEVEL = 1
+NIT_LEVEL = 2
+BRANCH_LEVEL = 3
+LEVEL_LABELS = {BRANCH_LEVEL: "NIT-sucursal", NIT_LEVEL: "NIT", GROUP_LEVEL: "grupo empresarial"}
+
+
+def customer_level(
+    nit: str | None, branch_id: str | None, group: str | None, group_wide: bool = False
+) -> int:
+    """The level of a support in the customer hierarchy.
+
+    A NIT support also carries its customer's group (the master fills it); only a group's
+    support (``group_wide``, or a group with no NIT) is at the group level.
+    """
+
+    if nit and branch_id and not group_wide:
+        return BRANCH_LEVEL
+    if nit and not group_wide:
+        return NIT_LEVEL
+    if group:
+        return GROUP_LEVEL
+    return GENERAL_LEVEL
+
+
+def agreement_level(agreement: Agreement) -> int:
+    """:func:`customer_level` of an agreement (a group's copies have no NIT here)."""
+
+    return customer_level(
+        agreement.customer_nit, agreement.customer_branch_id, agreement.customer_group
+    )
+
+
+def most_specific[T](items: Iterable[T], level: Callable[[T], int]) -> list[T]:
+    """The hierarchy of supports for one line (2026-11-24): the most specific customer level
+    among the supports that apply replaces the others. A NIT-sucursal support leaves out the
+    NIT's and the group's; without one, a NIT support leaves out the group's. Supports for no
+    customer are kept.
+    """
+
+    found = list(items)
+    top = max((level(item) for item in found), default=GENERAL_LEVEL)
+    return [item for item in found if level(item) in (GENERAL_LEVEL, top)]
+
+
 def _label(value: str) -> str:
     return " ".join(value.upper().split())
 
@@ -151,7 +198,8 @@ def scope_of(
     if agreement.customer_branch_id and not (
         customer and agreement.customer_branch_id in customer.branches
     ):
-        # The order file carries no branch: the customer must have it.
+        # A NIT-sucursal support covers that branch only (2026-11-24): ``branches`` is the
+        # branch quoted or sold to, empty for the NIT as a whole (the order file has none).
         return OUT_OF_SCOPE
     if agreement.product_sku and agreement.product_sku != line.sku:
         return OUT_OF_SCOPE
@@ -580,7 +628,9 @@ def _decide(
 
     day = line.order_date or today
     scopes = [(item, scope_of(item, line, customer, day)) for item in agreements]
-    applicable = [item for item, scope in scopes if scope == APPLIES]
+    applicable = most_specific(
+        (item for item, scope in scopes if scope == APPLIES), agreement_level
+    )
     out_of_date = [item for item, scope in scopes if scope == OUT_OF_DATE]
     checks = tuple(check(item, line, reference) for item in applicable)
     label = _BASIS_LABEL.get(basis or "", "margen del producto")
