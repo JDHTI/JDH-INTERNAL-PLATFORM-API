@@ -18,6 +18,7 @@ from app.modules.costs.domain.entries import (
     OK,
     EntryLine,
     NoveltyBrief,
+    Placement,
     difference_pct,
 )
 from app.modules.costs.domain.novelties import (
@@ -313,6 +314,19 @@ class SqlAlchemyNoveltyRepository:
             for key, novelty_id, status, reason_id, reason_name, number, amount in rows
         }
 
+    async def placements(self, since: date | None, until: date | None) -> list[Placement]:
+        """The distinct operation centers and warehouses of the novelties of some days (any
+        status), for the tray's filters."""
+
+        statement = select(N.co, N.warehouse, func.max(N.regional_name)).group_by(N.co, N.warehouse)
+        if since:
+            statement = statement.where(N.entry_date >= since)
+        if until:
+            statement = statement.where(N.entry_date <= until)
+        async with self.database.session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [Placement(co, warehouse, regional) for co, warehouse, regional in rows]
+
     async def _events(self, session, novelty_id: UUID) -> tuple[NoveltyEvent, ...]:
         rows = await session.scalars(
             select(E).where(E.novelty_id == novelty_id).order_by(E.created_at, E.id)
@@ -356,6 +370,10 @@ class SqlAlchemyNoveltyRepository:
             conditions.append(N.supplier_code == filters.supplier.strip())
         if filters.co:
             conditions.append(func.ltrim(N.co, "0") == filters.co.strip().lstrip("0"))
+        if filters.warehouse:
+            conditions.append(
+                func.upper(func.trim(N.warehouse)) == filters.warehouse.strip().upper()
+            )
         if filters.reason_id:
             conditions.append(N.reason_id == filters.reason_id)
         if filters.kind:

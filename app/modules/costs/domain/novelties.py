@@ -175,6 +175,7 @@ class NoveltyFilters:
     until: date | None = None
     supplier: str | None = None
     co: str | None = None
+    warehouse: str | None = None
     reason_id: UUID | None = None
     kind: str | None = None
     # Reference prefix, description, document or credit note number.

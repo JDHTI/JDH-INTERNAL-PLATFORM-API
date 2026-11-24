@@ -20,7 +20,13 @@ from app.modules.costs.application.entries import MAX_PAGE_SIZE as ENTRIES_MAX_P
 from app.modules.costs.application.entries import EntryAnalysisService
 from app.modules.costs.application.novelties import MAX_PAGE_SIZE as NOVELTIES_MAX_PAGE
 from app.modules.costs.application.novelties import NoveltyService, UploadedFile
-from app.modules.costs.domain.entries import ENTRY_STATUS_LABELS, EntryFilters, EntryLine, EntryRow
+from app.modules.costs.domain.entries import (
+    ENTRY_STATUS_LABELS,
+    EntryFilters,
+    EntryLine,
+    EntryRow,
+    FilterOptions,
+)
 from app.modules.costs.domain.modules import ENTRIES, MODULE_KEYS, NOVELTIES
 from app.modules.costs.domain.novelties import (
     KIND_LABELS,
@@ -153,6 +159,33 @@ class EntryPageResponse(BaseModel):
     fetched_at: datetime | None
     previous_from_warehouse: bool
     threshold: Decimal
+
+
+class CenterOptionResponse(BaseModel):
+    code: str
+    # The center's SIESA name («CENTRO»), or its regional's when the warehouse has none.
+    name: str | None
+
+
+class WarehouseOptionResponse(BaseModel):
+    code: str
+    co: str | None
+
+
+class FilterOptionsResponse(BaseModel):
+    """The operation centers and warehouses of a period, by code (the dropdowns)."""
+
+    cos: list[CenterOptionResponse]
+    warehouses: list[WarehouseOptionResponse]
+
+
+def _options(options: FilterOptions) -> FilterOptionsResponse:
+    return FilterOptionsResponse(
+        cos=[CenterOptionResponse(code=item.code, name=item.name) for item in options.cos],
+        warehouses=[
+            WarehouseOptionResponse(code=item.code, co=item.co) for item in options.warehouses
+        ],
+    )
 
 
 class CreditNoteResponse(BaseModel):
@@ -449,6 +482,24 @@ async def entries(
     )
 
 
+@router.get(
+    "/entries/options",
+    dependencies=[_ENTRIES_GATE],
+    response_model=FilterOptionsResponse,
+    summary="Operation centers and warehouses of the entries",
+)
+@inject
+async def entry_options(
+    since: date | None = _SINCE,
+    until: date | None = _UNTIL,
+    service: EntryAnalysisService = _entries,
+) -> FilterOptionsResponse:
+    """The operation centers and warehouses with entries in the period (the last 30 days by
+    default), by code, for the analysis' dropdowns."""
+
+    return _options(await service.options(since, until))
+
+
 @router.put(
     "/entries/{line_key}/reason",
     dependencies=[_EITHER_GATE],
@@ -486,6 +537,7 @@ async def novelties(
     until: date | None = _UNTIL,
     supplier: str | None = Query(default=None, max_length=20),
     co: str | None = Query(default=None, max_length=10),
+    warehouse: str | None = Query(default=None, max_length=20),
     reason_id: UUID | None = _OPTIONAL,
     kind: NoveltyKind | None = _OPTIONAL,
     q: str | None = Query(default=None, max_length=120),
@@ -504,6 +556,7 @@ async def novelties(
             until=until,
             supplier=supplier,
             co=co,
+            warehouse=warehouse,
             reason_id=reason_id,
             kind=kind,
             q=q,
@@ -520,6 +573,25 @@ async def novelties(
         size=result.size,
         counts=result.counts,
     )
+
+
+# Before ``/novelties/{novelty_id}``: «options» is not an identifier.
+@router.get(
+    "/novelties/options",
+    dependencies=[_NOVELTIES_GATE],
+    response_model=FilterOptionsResponse,
+    summary="Operation centers and warehouses of the novelties",
+)
+@inject
+async def novelty_options(
+    since: date | None = _SINCE,
+    until: date | None = _UNTIL,
+    service: NoveltyService = _novelties,
+) -> FilterOptionsResponse:
+    """The operation centers and warehouses of the novelties of the period (every novelty
+    without dates), by code, for the tray's dropdowns."""
+
+    return _options(await service.options(since, until))
 
 
 @router.get(

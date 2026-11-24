@@ -149,8 +149,10 @@ antivirus.
 | `GET /reasons` | `analisis-entradas` o `novedades-compras` | catálogo de motivos (`include_inactive`) para el desplegable filtrable |
 | `PATCH /reasons/{id}` | `novedades-compras: manage` | `{name?, requires_credit_note?, is_active?}` |
 | `GET /entries` | `analisis-entradas` | ver abajo |
+| `GET /entries/options` | `analisis-entradas` | C.O. y bodegas con entradas en el periodo (`since`, `until`; mismos valores por defecto y tope que `/entries`), para los desplegables. Ver abajo |
 | `PUT /entries/{line_key}/reason` | manage de `analisis-entradas` o `novedades-compras` | `{reason_id \| null}`; crea la novedad si no existía; devuelve la novedad |
 | `GET /novelties` | `novedades-compras` | ver abajo |
+| `GET /novelties/options` | `novedades-compras` | C.O. y bodegas de las novedades del periodo (`since`, `until`; sin fechas, de todas), para los desplegables de la bandeja |
 | `GET /novelties/{id}` | `analisis-entradas` o `novedades-compras` | novedad con `events` |
 | `PUT /novelties/{id}/reason` | manage de cualquiera de las dos | `{reason_id \| null}` |
 | `POST /novelties/{id}/credit-note` | `novedades-compras: manage` | multipart `number`, `amount` (pesos, punto o coma decimal), `file`. 201 con la novedad; 409 si ya tiene nota o la entrada se anuló |
@@ -185,8 +187,19 @@ antivirus.
   - `difference` (pesos, contra `quotation`), `difference_pct` (fracción: 0,05 es 5 %),
     `amount` (cantidad × diferencia), `status` y `status_label`.
 
+**Opciones de los desplegables (`GET /entries/options` y `GET /novelties/options`).**
+- **Respuesta:** `{cos: [{code, name}], warehouses: [{code, co}]}`, ordenados por código.
+  - `name` es la descripción del C.O. en SIESA (`consumo.centros_operacion.descripcion`, por
+    ejemplo «CENTRO» o «BARRANQUILLA»). La API la guarda una hora. Si el DWH no responde, usa
+    el nombre de la regional de las líneas.
+  - Las bodegas van en mayúsculas, con el C.O. al que pertenecen.
+- **Entradas:** se leen de la copia en memoria del periodo, así que no vuelven a consultar el
+  DWH si la tabla ya cargó ese periodo.
+- **Novedades:** se leen de la tabla de novedades, de cualquier estado.
+- **Valores:** los `code` sirven tal cual en los filtros `co` y `warehouse`.
+
 **`GET /novelties`.**
-- **Filtros:** `status`, `since` y `until` (fecha de la entrada), `supplier`, `co`,
+- **Filtros:** `status`, `since` y `until` (fecha de la entrada), `supplier`, `co`, `warehouse`,
   `reason_id`, `kind` (`diferencia`, `sin_cotizacion`, `sin_novedad`) y `q` (referencia,
   descripción, documento o número de nota crédito).
 - **Orden y página:** `sort` (`date`, `difference`, `difference_pct`, `sku`, `supplier`),

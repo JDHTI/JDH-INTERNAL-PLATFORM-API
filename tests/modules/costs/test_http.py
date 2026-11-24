@@ -170,6 +170,26 @@ def test_an_analyst_gives_a_reason_and_registers_the_credit_note(client, world) 
     assert [event["event_type"] for event in events] == ["detectada", "motivo", "nota_credito"]
 
 
+def test_the_dropdown_options_follow_each_view_gate(client, world) -> None:
+    world.caller = world.member("lector@jdh.com.co", [("analisis-entradas", "read")])
+    period = {"since": "2026-11-01", "until": "2026-11-23"}
+
+    entries = client.get(f"{BASE}/entries/options", params=period)
+    tray = client.get(f"{BASE}/novelties/options")
+
+    assert entries.status_code == 200, entries.text
+    assert entries.json()["cos"] == [{"code": "003", "name": "CENTRO"}]
+    assert entries.json()["warehouses"] == [{"code": "BTA9", "co": "003"}]
+    assert tray.status_code == 403
+
+    world.caller = world.member("comprador@jdh.com.co", [("novedades-compras", "read")])
+    tray = client.get(f"{BASE}/novelties/options", params=period)
+    # Not taken for a novelty id.
+    assert tray.status_code == 200, tray.text
+    assert set(tray.json()) == {"cos", "warehouses"}
+    assert client.get(f"{BASE}/entries/options").status_code == 403
+
+
 def test_a_period_too_long_is_a_422(client, world) -> None:
     response = client.get(f"{BASE}/entries", params={"since": "2025-01-01", "until": "2026-11-23"})
 

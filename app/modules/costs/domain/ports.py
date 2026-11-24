@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.costs.domain.entries import EntryLine, NoveltyBrief
+from app.modules.costs.domain.entries import EntryLine, NoveltyBrief, Placement
 from app.modules.costs.domain.increases import (
     IncreaseRequest,
     IncreaseRequestPage,
@@ -46,6 +46,8 @@ class EntrySource(Protocol):
     async def lines(self, since: date, until: date) -> EntryWindow: ...
 
     async def line(self, line_key: str) -> EntryLine | None: ...
+
+    async def centers(self) -> dict[str, str]: ...
 
 
 class ModulePolicy(Protocol):
@@ -104,6 +106,8 @@ class NoveltyRepository(Protocol):
     ) -> Reason: ...
 
     async def briefs_between(self, since: date, until: date) -> dict[str, NoveltyBrief]: ...
+
+    async def placements(self, since: date | None, until: date | None) -> list[Placement]: ...
 
     async def get(self, novelty_id: UUID, with_events: bool = False) -> Novelty | None: ...
 

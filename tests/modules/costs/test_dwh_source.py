@@ -142,6 +142,22 @@ async def test_a_missing_line_is_none_and_an_outage_is_a_dependency_error() -> N
         )
 
 
+async def test_center_names_are_read_once_per_hour(monkeypatch) -> None:
+    monkeypatch.setattr(dwh_source, "_centers_cache", {})
+    connection = FakeConnection(
+        rows=[
+            {"codigo": "003", "descripcion": "CENTRO"},
+            {"codigo": "009 ", "descripcion": "BARRANQUILLA"},
+            {"codigo": "777", "descripcion": None},
+        ]
+    )
+    source = WarehouseEntrySource(connection)
+
+    assert await source.centers() == {"003": "CENTRO", "009": "BARRANQUILLA"}
+    await source.centers()
+    assert sum("centros_operacion" in query for query, _ in connection.queries) == 1
+
+
 def test_the_schema_must_be_an_identifier() -> None:
     with pytest.raises(ValueError):
         WarehouseEntrySource(FakeConnection(), schema="consumo; drop")
