@@ -45,8 +45,9 @@ salvo `apply=true`, como el actualizador de márgenes.
 
 - El encabezado se busca por nombre en las primeras 10 filas, en cualquier orden. Se necesita
   `Referencia` y un costo nuevo (con o sin impuesto saludable).
-- **Llave:** referencia + fecha de incremento + fecha de notificación. Una fila con una llave
-  nueva se inserta; con una existente se actualiza si cambió algo; si no, queda igual. Si el
+- **Llave:** referencia + fecha de incremento + fecha de notificación, más la regional cuando
+  no es NACIONAL ni está vacía (2026-11-24, migración `0084`). Así dos regionales de una
+  referencia con las mismas fechas son dos filas. Una fila con una llave nueva se inserta; con una existente se actualiza si cambió algo; si no, queda igual. Si el
   archivo repite una llave, queda la última fila (se reportan como repetidas).
 - **El libro tal como lo lleva el área:** todo carga, sin errores (decisión del 2026-11-11).
   - Montos como texto en dos formatos (`$ 81.960,00` y `$ 95.484`) y guiones: se leen.

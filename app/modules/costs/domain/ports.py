@@ -197,6 +197,8 @@ class LedgerEntry:
     observations: str | None
     margin_pct: Decimal | None
     price: Decimal | None
+    # ``NACIONAL`` or one regional: a ``RESTO`` line becomes one entry per regional it covers.
+    regional: str = "NACIONAL"
 
 
 class IncreaseLedger(Protocol):

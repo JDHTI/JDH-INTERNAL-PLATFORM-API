@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import case, delete, func, insert, select, update
+from sqlalchemy import case, func, insert, select, update
 
 from app.core.errors import NotFoundError
 from app.infrastructure.database import Database
@@ -15,16 +15,15 @@ from app.modules.costs.domain.increases import (
     IncreaseRequest,
     IncreaseRequestPage,
     RequestLine,
+    with_coverage,
 )
 from app.modules.costs.infrastructure.models import (
-    CostIncreaseDiscountModel,
     CostIncreaseLineModel,
     CostIncreaseRequestModel,
 )
 
 Q = CostIncreaseRequestModel
 L = CostIncreaseLineModel
-D = CostIncreaseDiscountModel
 _CHUNK = 1000
 _LINE_FIELDS = (
     "row_number",
@@ -46,6 +45,8 @@ _LINE_FIELDS = (
     "change",
     "increased_on",
     "regular_discount_pct",
+    "regional",
+    "public_price",
     "observation",
     "accepted",
 )
@@ -59,17 +60,9 @@ def _line_row(request_id: UUID, line: RequestLine) -> dict:
     }
 
 
-def _discounts(line: RequestLine) -> list[dict]:
-    return [
-        {"line_id": line.id, "regional": name, "discount_pct": value}
-        for name, value in line.regional_discounts.items()
-    ]
-
-
-def _line(model: CostIncreaseLineModel, discounts: dict) -> RequestLine:
+def _line(model: CostIncreaseLineModel) -> RequestLine:
     return RequestLine(
         id=model.id,
-        regional_discounts=discounts,
         ledger_id=model.ledger_id,
         **{name: getattr(model, name) for name in _LINE_FIELDS},
     )
@@ -97,7 +90,7 @@ def _request(model: CostIncreaseRequestModel, counts: tuple[int, int], lines=())
 
 
 class SqlAlchemyIncreaseRepository:
-    """Requests with their lines and regional discounts."""
+    """Requests with their lines."""
 
     def __init__(self, database: Database) -> None:
         """Create the repository.
@@ -109,10 +102,9 @@ class SqlAlchemyIncreaseRepository:
         self.database = database
 
     async def create(self, request: IncreaseRequest) -> None:
-        """Store a request, its lines and their regional discounts in one transaction."""
+        """Store a request and its lines in one transaction."""
 
         lines = [_line_row(request.id, line) for line in request.lines]
-        discounts = [row for line in request.lines for row in _discounts(line)]
         async with self.database.session_factory() as session, session.begin():
             await session.execute(
                 insert(Q).values(
@@ -131,8 +123,6 @@ class SqlAlchemyIncreaseRepository:
             )
             for start in range(0, len(lines), _CHUNK):
                 await session.execute(insert(L), lines[start : start + _CHUNK])
-            for start in range(0, len(discounts), _CHUNK):
-                await session.execute(insert(D), discounts[start : start + _CHUNK])
 
     def _counts(self):
         return (
@@ -192,7 +182,8 @@ class SqlAlchemyIncreaseRepository:
         )
 
     async def get(self, request_id: UUID, with_lines: bool = True) -> IncreaseRequest | None:
-        """A request, with its lines (by sheet row, then reference) when asked."""
+        """A request, with its lines (by sheet row, then reference) and the regionals each one
+        covers, when asked."""
 
         async with self.database.session_factory() as session:
             model = await session.get(Q, request_id)
@@ -202,24 +193,15 @@ class SqlAlchemyIncreaseRepository:
                 await session.scalars(
                     select(L)
                     .where(L.request_id == request_id)
-                    .order_by(L.row_number.nulls_last(), L.sku)
+                    .order_by(L.row_number.nulls_last(), L.sku, L.regional)
                 )
             )
-            discounts: dict[UUID, dict] = {}
-            if with_lines and line_models:
-                rows = await session.scalars(
-                    select(D).where(D.line_id.in_([line.id for line in line_models]))
-                )
-                for row in rows:
-                    discounts.setdefault(row.line_id, {})[row.regional] = row.discount_pct
         counts = (len(line_models), sum(1 for line in line_models if line.accepted))
-        lines = (
-            [_line(line, discounts.get(line.id, {})) for line in line_models] if with_lines else []
-        )
+        lines = with_coverage([_line(line) for line in line_models]) if with_lines else []
         return _request(model, counts, lines)
 
     async def update_line(self, request_id: UUID, line: RequestLine, now: datetime) -> None:
-        """Store a corrected line and its regional discounts.
+        """Store a corrected line.
 
         Raises:
             NotFoundError: No such line in the request.
@@ -232,10 +214,6 @@ class SqlAlchemyIncreaseRepository:
             )
             if result.rowcount == 0:
                 raise NotFoundError("Línea no encontrada")
-            await session.execute(delete(D).where(D.line_id == line.id))
-            rows = _discounts(line)
-            if rows:
-                await session.execute(insert(D), rows)
             await session.execute(update(Q).where(Q.id == request_id).values(updated_at=now))
 
     async def decide(

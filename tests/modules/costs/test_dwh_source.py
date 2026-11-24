@@ -93,6 +93,34 @@ async def test_with_dwh_pr_160_it_reads_the_line_unit_and_previous_prices() -> N
     assert "upper(trim(e.unidad_medida_id))" in query and "e.precio_anterior" in query
     assert window.previous_from_warehouse
     assert window.lines[0].previous_price == Decimal("49385")
+    assert window.lines[0].antepenultimate_price == Decimal("49384.67")
+
+
+async def test_the_quotation_is_net_of_its_tasa_1_in_points() -> None:
+    # UN SOLO PROVEEDOR S.A., EA-205060 (2026-11-23): quoted 8,246 with a Tasa 1 of 20.0000,
+    # received at 6,596.80. Another line of the same day came at 8,246: a real novelty.
+    rows = [
+        row(compra_linea_key="ok", precio_unit_local=Decimal("6596.80")),
+        row(compra_linea_key="full", precio_unit_local=Decimal("8246")),
+    ]
+    connection = FakeConnection(
+        rows=[item | {"cotizacion": Decimal("8246"), "tasa_1": Decimal("20.0000")} for item in rows]
+    )
+
+    window = await WarehouseEntrySource(connection).lines(date(2026, 11, 1), date(2026, 11, 30))
+
+    ok, full = window.lines
+    assert (ok.discount_pct, ok.quotation_list_price, ok.quotation) == (
+        Decimal("0.2"),
+        Decimal("8246"),
+        Decimal("6596.8000"),
+    )
+    assert ok.difference == 0 and full.difference_pct == Decimal("0.25")
+    negative = await WarehouseEntrySource(
+        FakeConnection(rows=[row(tasa_1=Decimal("-5"), cotizacion=Decimal("100"))])
+    ).lines(date(2026, 11, 1), date(2026, 11, 30))
+    assert negative.lines[0].discount_pct == Decimal("0.05")
+    assert negative.lines[0].quotation == Decimal("95.0000")
 
 
 async def test_the_columns_are_asked_once_per_hour() -> None:

@@ -105,9 +105,9 @@ def test_previous_prices_inside_the_window_by_reference_and_unit() -> None:
     filled = {item.line_key: item for item in fill_previous_prices(lines)}
 
     assert [item.line_key for item in fill_previous_prices(lines)] == ["c", "a", "b", "k", "d"]
-    assert (filled["a"].previous_price, filled["a"].previous_price_2) == (None, None)
-    assert (filled["b"].previous_price, filled["b"].previous_price_2) == (D("10"), None)
-    assert (filled["c"].previous_price, filled["c"].previous_price_2) == (D("11"), D("10"))
+    assert (filled["a"].previous_price, filled["a"].antepenultimate_price) == (None, None)
+    assert (filled["b"].previous_price, filled["b"].antepenultimate_price) == (D("10"), None)
+    assert (filled["c"].previous_price, filled["c"].antepenultimate_price) == (D("11"), D("10"))
     assert filled["k"].previous_price is None and filled["d"].previous_price is None
 
 

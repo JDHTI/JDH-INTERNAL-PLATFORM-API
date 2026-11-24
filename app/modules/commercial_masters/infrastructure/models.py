@@ -267,7 +267,8 @@ class SupplierProductCodeModel(Base):
 class PriceIncreaseModel(Base):
     """One cost change a supplier notified for a reference (``Acumulado Alza Precios``).
 
-    ``row_key`` (reference, increase date, notification date) is what an upload upserts on.
+    ``row_key`` (reference, increase date, notification date and a regional other than
+    «NACIONAL») is what an upload upserts on.
     No foreign key to ``products``: the history keeps references SIESA no longer has. The
     product's own data is read from ``products`` and never stored here.
     """

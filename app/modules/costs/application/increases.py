@@ -23,9 +23,11 @@ from app.modules.costs.domain.increases import (
     IN_REVIEW,
     MAX_LINES,
     MAX_NOTE,
-    REGIONAL_NAMES,
+    NATIONAL,
     REJECTED,
     REQUEST_STATUSES,
+    REST,
+    SCOPES,
     IncreaseRequest,
     IncreaseRequestPage,
     LineInput,
@@ -35,6 +37,8 @@ from app.modules.costs.domain.increases import (
     UploadReport,
     build_line,
     list_price,
+    scope_problems,
+    with_coverage,
 )
 from app.modules.costs.domain.modules import INCREASES
 from app.modules.costs.domain.ports import (
@@ -63,7 +67,7 @@ class LineChanges:
     new_cost: Decimal | None = None
     increased_on: date | None = None
     regular_discount_pct: Decimal | None = None
-    regional_discounts: dict[str, Decimal] | None = None
+    public_price: Decimal | None = None
     observation: str | None = None
 
 
@@ -88,11 +92,10 @@ def _check_values(line: LineInput) -> list[str]:
             problems.append(f"{label} debe estar entre 0 % y 100 %")
     if line.ibua is not None and line.ibua < 0:
         problems.append("El IBUA no puede ser negativo")
-    for name, value in line.regional_discounts.items():
-        if name not in REGIONAL_NAMES:
-            problems.append(f"Regional desconocida: {name}")
-        elif not 0 <= value <= 1:
-            problems.append(f"El descuento de {name} debe estar entre 0 % y 100 %")
+    if line.public_price is not None and line.public_price <= 0:
+        problems.append("El PVP sin IVA debe ser mayor que cero")
+    if line.regional not in SCOPES:
+        problems.append(f"Regional desconocida: {line.regional}; usa {', '.join(SCOPES)}")
     return problems
 
 
@@ -201,21 +204,18 @@ class IncreaseService:
         by_sku = {item.sku: item for item in items}
         lines: list[RequestLine] = []
         issues: list[RowIssue] = []
-        seen: set[str] = set()
-        for position, values in enumerate(inputs, start=1):
-            row = values.row_number or position
-            problems = _check_values(values)
+        scoped = scope_problems(inputs)
+        for position, values in enumerate(inputs):
+            row = values.row_number or position + 1
+            problems = [*_check_values(values), *scoped.get(position, [])]
             item = by_sku.get(values.sku)
             if item is None:
                 problems.append("La referencia no es un producto activo del proveedor")
-            if values.sku in seen:
-                problems.append("La referencia está repetida")
-            seen.add(values.sku)
             if problems:
                 issues.extend(RowIssue(row, values.sku, problem) for problem in problems)
                 continue
             lines.append(build_line(uuid4(), item, values))
-        return lines, issues
+        return with_coverage(lines), issues
 
     def _request(
         self,
@@ -434,10 +434,9 @@ class IncreaseService:
                 if changes.regular_discount_pct is not None
                 else line.regular_discount_pct
             ),
-            regional_discounts=(
-                changes.regional_discounts
-                if changes.regional_discounts is not None
-                else line.regional_discounts
+            regional=line.regional,
+            public_price=(
+                changes.public_price if changes.public_price is not None else line.public_price
             ),
             observation=observation,
             accepted=changes.accepted if changes.accepted is not None else line.accepted,
@@ -494,28 +493,32 @@ class IncreaseService:
         entries = []
         for line in accepted:
             margin = margins.get(line.sku)
-            entries.append(
-                LedgerEntry(
-                    line_id=line.id,
-                    sku=line.sku,
-                    notified_on=notified,
-                    increased_on=line.increased_on,
-                    supplier_sku=line.supplier_sku,
-                    ean=line.ean,
-                    icui_pct=line.icui_pct,
-                    ibua=line.ibua,
-                    old_cost=line.old_cost,
-                    old_cost_with_tax=line.old_cost_with_tax,
-                    new_cost=line.new_cost,
-                    new_cost_with_tax=line.new_cost_with_tax,
-                    variation_amount=line.variation_amount,
-                    variation_pct=line.variation_pct,
-                    status=line.change,
-                    observations=self._observations(line),
-                    margin_pct=margin,
-                    price=list_price(line.new_cost_with_tax, margin),
+            # NACIONAL is one row; a regional, its own; RESTO, one per regional it covers.
+            regionals = (NATIONAL,) if line.regional == NATIONAL else line.regionals
+            for regional in regionals:
+                entries.append(
+                    LedgerEntry(
+                        line_id=line.id,
+                        sku=line.sku,
+                        notified_on=notified,
+                        increased_on=line.increased_on,
+                        supplier_sku=line.supplier_sku,
+                        ean=line.ean,
+                        icui_pct=line.icui_pct,
+                        ibua=line.ibua,
+                        old_cost=line.old_cost,
+                        old_cost_with_tax=line.old_cost_with_tax,
+                        new_cost=line.new_cost,
+                        new_cost_with_tax=line.new_cost_with_tax,
+                        variation_amount=line.variation_amount,
+                        variation_pct=line.variation_pct,
+                        status=line.change,
+                        observations=self._observations(line),
+                        margin_pct=margin,
+                        price=list_price(line.new_cost_with_tax, margin),
+                        regional=regional,
+                    )
                 )
-            )
         now = self.clock()
         ids = await self.ledger.record(entries, principal.email, now)
         await self.repository.decide(request.id, APPROVED, principal.email, now, note, ids)
@@ -528,8 +531,10 @@ class IncreaseService:
             parts.append(line.observation)
         if line.regular_discount_pct is not None:
             parts.append(f"Descuento regular {line.regular_discount_pct * 100:.2f} %")
-        for name, value in sorted(line.regional_discounts.items()):
-            parts.append(f"Descuento {name} {value * 100:.2f} %")
+        if line.public_price is not None:
+            parts.append(f"PVP sin IVA {line.public_price:.2f}")
+        if line.regional == REST:
+            parts.append(f"{REST} ({', '.join(line.regionals)})")
         return " · ".join(parts) or None
 
     async def reject(
