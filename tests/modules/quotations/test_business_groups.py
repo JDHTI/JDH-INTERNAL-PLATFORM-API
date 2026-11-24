@@ -62,6 +62,37 @@ async def test_a_group_is_quoted_as_one_customer(service, advisor, warehouse, gr
     assert labels["Grupo empresarial"] == "QBANO" and "NIT" not in labels
 
 
+async def test_a_group_quotation_applies_the_group_support(
+    service, advisor, supports, group
+) -> None:
+    """2026-11-24 (Newrest, SKU 12043): the group's quotation has no one customer, and its
+    group's support (no NIT, the group's name) never applied."""
+
+    supports.items = [
+        agreement(
+            supplier_code=None,
+            product_sku="2537",
+            customer_group="QBANO",
+            calc_method="pct_costo",
+            supplier_value=Decimal("0.05"),
+        ),
+        # One NIT's own support stays that customer's: not for the whole group.
+        agreement(
+            supplier_code=None,
+            product_sku="2537",
+            customer_nit=OTHER,
+            customer_group="QBANO",
+            calc_method="pct_costo",
+            supplier_value=Decimal("0.30"),
+        ),
+    ]
+
+    detail = await service.create(advisor, None, 12, business_group="QBANO")
+
+    line = detail.lines[0]
+    assert line.support is not None and line.support.support_id == supports.items[0].id
+
+
 async def test_one_of_nit_group_or_temporary(service, advisor, group) -> None:
     with pytest.raises(InvalidInputError, match="uno solo"):
         await service.create(advisor, NIT, 12, business_group="QBANO")
