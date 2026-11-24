@@ -41,12 +41,23 @@ PARTIAL_DISCOUNT = "descuento_parcial"
 SALE_FLAGS = (SEVERAL_SUPPORTS, INVOICE_COST, PARTIAL_DISCOUNT)
 SALE_FLAG_LABELS = {
     SEVERAL_SUPPORTS: "Varios apoyos distintos sumados",
+    # Only in the quotation basis: the inventory basis always uses the invoice's cost.
     INVOICE_COST: "Sin cotización del proveedor: costo de la factura",
     PARTIAL_DISCOUNT: "El cliente recibió menos descuento del negociado",
 }
 
 QUOTE = "cotizacion"
 INVOICE = "factura"
+
+# The cost a month is settled with (2026-11-24): every month is calculated with both and each
+# one is stored, read and closed on its own.
+COST_QUOTE = "cotizacion"  # the supplier's SIESA quotation in force on the sale's day
+COST_INVENTORY = "inventario"  # the inventory cost billed on the line (``consumo.ventas.costo``)
+COST_BASES = (COST_QUOTE, COST_INVENTORY)
+COST_BASIS_LABELS = {
+    COST_QUOTE: "Costo cotización proveedor",
+    COST_INVENTORY: "Costo inventario (facturado)",
+}
 
 BREAKDOWNS = ("regional", "business_unit", "salesperson", "customer")
 # The ``supplier_code`` filter that asks for the lines and references with no supplier code.
@@ -250,12 +261,17 @@ class Settlement:
     reopened_at: datetime | None = None
     reopened_by: str | None = None
     version: int = 1
+    cost_basis: str = COST_QUOTE
 
 
 __all__ = [
     "ALREADY_DISCOUNTED",
     "BREAKDOWNS",
     "CLOSED",
+    "COST_BASES",
+    "COST_BASIS_LABELS",
+    "COST_INVENTORY",
+    "COST_QUOTE",
     "DRAFT",
     "INVOICE",
     "INVOICE_COST",

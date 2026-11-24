@@ -1,4 +1,4 @@
-"""Opt-in: the settlement repository on PostgreSQL, migrated to head (0085).
+"""Opt-in: the settlement repository on PostgreSQL, migrated to head (0086).
 
 Runs with ``SUPPORT_SETTLEMENTS_TEST_DATABASE_URL`` (never the shared database).
 """
@@ -14,7 +14,11 @@ from sqlalchemy import delete
 
 from app.core.errors import ConflictError
 from app.infrastructure.database import Database
-from app.modules.support_settlements.domain.entities import NO_SUPPLIER
+from app.modules.support_settlements.domain.entities import (
+    COST_INVENTORY,
+    COST_QUOTE,
+    NO_SUPPLIER,
+)
 from app.modules.support_settlements.domain.rules import build_settlement
 from app.modules.support_settlements.infrastructure.models import SupportSettlementModel
 from app.modules.support_settlements.infrastructure.repository import (
@@ -29,6 +33,7 @@ pytestmark = pytest.mark.skipif(
 
 # A month no real settlement uses.
 PERIOD = "2001-03"
+QUOTED, BILLED = COST_QUOTE, COST_INVENTORY
 NOW = datetime(2001, 4, 2, tzinfo=UTC)
 
 
@@ -67,7 +72,7 @@ def result(*lines):
 async def test_replace_close_reopen_and_aggregates(repository) -> None:
     day = date(2001, 3, 10)
     first = result(sale(sale_date=day), sale(sale_date=day, document="FEV-2"))
-    stored = await repository.replace(PERIOD, first, "bi", NOW)
+    stored = await repository.replace(PERIOD, QUOTED, first, "bi", NOW)
 
     expected = sum(line.amount for line in first.sales)
     assert stored.status == "borrador" and stored.supported_lines == 2
@@ -75,7 +80,7 @@ async def test_replace_close_reopen_and_aggregates(repository) -> None:
     assert stored.flagged_amount == Decimal("9000.0000")
 
     # A recalculation replaces the lines.
-    again = await repository.replace(PERIOD, result(sale(sale_date=day)), "bi", NOW)
+    again = await repository.replace(PERIOD, QUOTED, result(sale(sale_date=day)), "bi", NOW)
     assert again.supported_lines == 1 and again.version > stored.version
     lines, total = await repository.lines(
         again.id, supplier_code="233", sku=None, nit=None, status=None, page=1, size=10
@@ -95,14 +100,22 @@ async def test_replace_close_reopen_and_aggregates(repository) -> None:
     sales, refs = await repository.export_rows(again.id, None)
     assert len(sales) == 1 and len(refs) == 1
 
-    closed = await repository.replace(PERIOD, result(sale(sale_date=day)), "bi", NOW, close=True)
+    closed = await repository.replace(
+        PERIOD, QUOTED, result(sale(sale_date=day)), "bi", NOW, close=True
+    )
     assert closed.status == "cerrado" and closed.closed_by == "bi"
     with pytest.raises(ConflictError):
-        await repository.replace(PERIOD, first, "bi", NOW)
+        await repository.replace(PERIOD, QUOTED, first, "bi", NOW)
 
-    reopened = await repository.reopen(PERIOD, "lider", NOW)
+    # The other cost basis is its own settlement of the same month.
+    billed = await repository.replace(PERIOD, BILLED, first, "bi", NOW)
+    assert billed.cost_basis == BILLED and billed.status == "borrador" and billed.id != closed.id
+    assert (await repository.get(PERIOD, QUOTED)).status == "cerrado"
+
+    reopened = await repository.reopen(PERIOD, QUOTED, "lider", NOW)
     assert reopened.status == "borrador" and reopened.reopened_by == "lider"
-    assert [item.period for item in await repository.list() if item.period == PERIOD] == [PERIOD]
+    stored_bases = [item.cost_basis for item in await repository.list() if item.period == PERIOD]
+    assert stored_bases == [QUOTED, BILLED]
 
 
 async def test_lines_and_references_without_a_supplier_code(repository) -> None:
@@ -124,7 +137,7 @@ async def test_lines_and_references_without_a_supplier_code(repository) -> None:
         customers={"900973779-001": customer()},
         quotes={"18369": [quote("9142.67", since=date(2001, 1, 1))]},
     )
-    stored = await repository.replace(PERIOD, computed, "bi", NOW)
+    stored = await repository.replace(PERIOD, QUOTED, computed, "bi", NOW)
 
     without = await repository.references(stored.id, NO_SUPPLIER)
     lines, total = await repository.lines(

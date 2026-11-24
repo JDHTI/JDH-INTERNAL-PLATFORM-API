@@ -51,8 +51,9 @@ def settlement_workbook(
     status: str,
     references: Sequence[Mapping[str, Any]],
     sales: Sequence[Mapping[str, Any]],
+    cost_basis: str = "",
 ) -> bytes:
-    """The workbook of a month (one supplier or all)."""
+    """The workbook of a month with one cost basis (one supplier or all)."""
 
     book = Workbook()
     summary = _sheet(
@@ -61,6 +62,7 @@ def settlement_workbook(
         [
             "Periodo",
             "Estado",
+            "Base de costo",
             "Proveedor",
             "Nombre proveedor",
             "Referencia",
@@ -89,6 +91,7 @@ def settlement_workbook(
             [
                 period,
                 status,
+                cost_basis,
                 ref["supplier_code"],
                 ref["supplier_name"],
                 ref["sku"],
@@ -112,6 +115,7 @@ def settlement_workbook(
             None,
             None,
             None,
+            None,
             _number(totals[0]),
             _number(totals[1]),
             _number(margin(totals[0], totals[1])),
@@ -122,7 +126,7 @@ def settlement_workbook(
         ]
     )
     summary[summary.max_row][0].font = Font(bold=True)
-    _formats(summary, {7: _QTY, 8: _MONEY, 9: _MONEY, 10: _PCT, 11: _MONEY, 12: _PCT, 13: _MONEY})
+    _formats(summary, {8: _QTY, 9: _MONEY, 10: _MONEY, 11: _PCT, 12: _MONEY, 13: _PCT, 14: _MONEY})
 
     detail = _sheet(
         book,
@@ -199,7 +203,7 @@ def settlement_workbook(
                 _number(net),
                 _number(cost),
                 _number(sale["base_unit_cost"]),
-                "Cotización" if sale["cost_source"] == "cotizacion" else "Factura",
+                "Cotización" if sale["cost_source"] == "cotizacion" else "Inventario (factura)",
                 _number(amount),
                 _number(margin(net, cost)),
                 _number(recomposed_margin(net, cost, amount)),

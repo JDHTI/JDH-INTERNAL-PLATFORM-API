@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 
 from app.modules.support_settlements.domain.entities import (
+    COST_INVENTORY,
+    COST_QUOTE,
     IN_REVIEW,
     INVOICE,
     INVOICE_COST,
@@ -31,14 +33,74 @@ from tests.modules.support_settlements.fakes import (
 )
 
 
-def settle(lines, supports, *, products=None, customers=None, quotes=None):
+def settle(lines, supports, *, products=None, customers=None, quotes=None, basis=COST_QUOTE):
     return build_settlement(
         sales=lines,
         supports=supports,
         products={item.sku: item for item in (products or [product()])},
         customers={item.customer_key: item for item in (customers or [customer()])},
         quotes=quotes if quotes is not None else {"18369": [quote("9142.67")]},
+        cost_basis=basis,
     )
+
+
+def test_the_inventory_basis_settles_on_the_cost_billed() -> None:
+    # The same line: 45 × (443.355 / 45 − 79.266,92 / 9), the invoice's cost, not marked.
+    result = settle([sale()], [support()], basis=COST_INVENTORY)
+
+    line = result.sales[0]
+    assert line.cost_source == INVOICE and INVOICE_COST not in line.flags
+    assert line.base_unit_cost == D("443355") / D("45")
+    assert round(line.amount, 2) == round(D("443355") - 45 * D("79266.92") / 9, 2)
+
+
+def test_a_return_subtracts_with_the_inventory_basis_too() -> None:
+    returned = sale(
+        quantity=D("-9"), gross=D("-94000"), net=D("-94000"), cost=D("-88671"), is_return=True
+    )
+
+    result = settle([returned], [support()], basis=COST_INVENTORY)
+
+    # 88.671 / 9 = 9.852,33 per unit; nine units back take the support back.
+    assert round(result.sales[0].amount, 2) == round(-9 * (D("9852.333333") - D("8807.435556")), 2)
+
+
+def test_the_list_price_is_the_food_service_margin_whatever_the_channel() -> None:
+    # 5 % on the list price: cost / (1 − Food Service 16 %), not the Mayoristas 10 %.
+    on_list = support(calc_method="pct_precio_lista", supplier_value=D("0.05"), value_unit=None)
+    item = product(margins={"margin_list": D("0.16"), "margin_wholesale": D("0.10")})
+    wholesaler = customer(channel="MAYORISTAS Y DISTRIBUIDORES")
+    price = D("9142.67") / D("0.84")
+    # Sold at the negotiated price: the list price minus the 5 %.
+    line = sale(net=price * D("0.95") * 45, gross=price * D("0.95") * 45)
+
+    quoted = settle([line], [on_list], products=[item], customers=[wholesaler])
+    billed = settle(
+        [line], [on_list], products=[item], customers=[wholesaler], basis=COST_INVENTORY
+    )
+
+    assert quoted.sales[0].amount == (price * D("0.05") * 45).quantize(D("0.01"))
+    assert quoted.sales[0].items[0].detail == "5.0000% sobre el precio lista 10,884.13"
+    # With the inventory cost the list price is 443.355 / 45 / 0,84 = 11.728,97.
+    assert "sobre el precio lista 11,728.97" in billed.sales[0].items[0].detail
+
+
+def test_a_guaranteed_margin_pays_the_cost_minus_the_supported_cost() -> None:
+    # 20 % guaranteed at the price sold 10.000: supported cost 8.000; cost 9.142,67 → 1.142,67.
+    guaranteed = support(
+        calc_method="precio_neto",
+        supplier_value=None,
+        value_unit=None,
+        target_margin_pct=D("0.20"),
+    )
+    line = sale(quantity=D("10"), net=D("100000"), gross=D("100000"), cost=D("95000"))
+
+    quoted = settle([line], [guaranteed])
+    billed = settle([line], [guaranteed], basis=COST_INVENTORY)
+
+    assert quoted.sales[0].amount == D("11426.70")
+    assert "costo 9,142.67 − costo apoyado 8,000.00" in quoted.sales[0].items[0].detail
+    assert billed.sales[0].amount == D("15000.00")
 
 
 def test_familia_supported_cost_settles_on_the_supplier_quotation() -> None:
