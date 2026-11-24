@@ -343,6 +343,25 @@ def _same_group(value: str | None, group: str) -> bool:
     return " ".join((value or "").split()).casefold() == " ".join(group.split()).casefold()
 
 
+def _group_scope(nit: str, group: str, scopes: Mapping[str, CustomerScope]) -> CustomerScope:
+    """The scope a business group's quotation checks its supports against (2026-11-24): the
+    group itself, with every channel, business unit, regional and branch of its customers.
+
+    Without it the quotation had no customer, and a group's support (no NIT, the group's name)
+    never applied, since it only covers a customer of that group.
+    """
+
+    every = list(scopes.values())
+    return CustomerScope(
+        nit=nit,
+        channels=frozenset().union(*(item.channels for item in every)),
+        business_units=frozenset().union(*(item.business_units for item in every)),
+        regionals=frozenset().union(*(item.regionals for item in every)),
+        branches=frozenset().union(*(item.branches for item in every)),
+        business_group=group,
+    )
+
+
 def _group_agreements(agreements: Sequence[Agreement], group: str) -> list[Agreement]:
     """The supports of a business group's quotation (2026-11-19): the general ones (no NIT)
     and the group's (``customer_group``). A support of one NIT of the group never covers the
@@ -956,8 +975,10 @@ class QuotationService:
         stock = stock_totals(stock_rows)
         if group:
             agreements = _group_agreements(agreements, group)
-        # A group has no one customer scope: its margin list comes from the majority channel.
-        scope = None if group else scopes.get(context.nit)
+        # A group has no one customer: its margin list comes from the majority channel, and its
+        # supports are checked against the whole group (_group_scope).
+        scope = _group_scope(context.nit, group, scopes) if group else scopes.get(context.nit)
+        margin_scope = None if group else scope
         today = self.calendar.today()
         lines: list[QuotationLine] = []
         for entry in entries:
@@ -1008,7 +1029,7 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
-                    margin_field=_margin_field(context, scope),
+                    margin_field=_margin_field(context, margin_scope),
                     scope=scope,
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),
