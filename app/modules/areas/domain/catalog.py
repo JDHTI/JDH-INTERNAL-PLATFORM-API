@@ -177,6 +177,15 @@ MODULES: tuple[Module, ...] = (
         ("abastecimiento",),
         "Histórico y análisis de las alzas de costo de los productos",
     ),
+    # The month's settlement of the supplier supports (2026-11-24): BI only. ``read`` sees and
+    # downloads it, ``manage`` recalculates and closes; the area's leader reopens.
+    Module(
+        "liquidacion-apoyos",
+        "Liquidación de apoyos",
+        ("bi",),
+        "Cuánto reconoce cada proveedor por las ventas apoyadas del mes y el margen recompuesto",
+        locked=True,
+    ),
     Module(
         MASTERS_MODULE,
         "Maestros",

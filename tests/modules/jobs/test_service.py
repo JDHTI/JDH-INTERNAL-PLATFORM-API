@@ -22,6 +22,7 @@ ALL_JOBS = IDENTITY_JOBS | {
     "supplier-supports-costs",
     "main-lists-sync",
     "costs-novelties-sync",
+    "support-settlements-refresh",
 }
 
 
@@ -39,6 +40,7 @@ async def test_the_first_poll_dispatches_every_mapped_job_once(make_service, run
         "commercial-sync-identity",
         "masters-warm-products",
         "commercial-sync-products",
+        "support-settlements-refresh",
         "commercial-sync-supply",
         "supplier-supports-costs",
         "main-lists-sync",
@@ -138,6 +140,7 @@ async def test_the_fallback_runs_today_what_the_dwh_did_not(make_service, runs):
         "commercial-sync-identity",
         "masters-warm-products",
         "commercial-sync-products",
+        "support-settlements-refresh",
     }
     assert all(runs.items[i].trigger is Trigger.SCHEDULED for i in queued)
 
@@ -223,7 +226,7 @@ async def test_recover_overview_and_history(make_service, runs):
     service = make_service()
     await service.poll_dwh()
 
-    assert await service.recover_stale_runs() == 8
+    assert await service.recover_stale_runs() == 9
     settings, status, items = await service.overview()
     history = await service.history("masters-warm-identity", 10)
 

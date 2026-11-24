@@ -456,6 +456,16 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `DELETE` | `/v1/supplier-supports/{support_id}/jdh-support` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/{support_id}/requests` | `relaxed` |  |
 | `POST` | `/v1/supplier-supports/{support_id}/void` | `relaxed` |  |
+| `GET` | `/v1/support-settlements/periods` | `read` |  |
+| `GET` | `/v1/support-settlements/permissions` | `read` |  |
+| `GET` | `/v1/support-settlements/{period}` | `read` |  |
+| `GET` | `/v1/support-settlements/{period}/breakdown` | `read` |  |
+| `POST` | `/v1/support-settlements/{period}/close` | `relaxed` |  |
+| `GET` | `/v1/support-settlements/{period}/export` | `read` |  |
+| `GET` | `/v1/support-settlements/{period}/lines` | `read` |  |
+| `POST` | `/v1/support-settlements/{period}/recalculate` | `relaxed` |  |
+| `GET` | `/v1/support-settlements/{period}/references` | `read` |  |
+| `POST` | `/v1/support-settlements/{period}/reopen` | `relaxed` |  |
 | `GET` | `/v1/territory/permissions` | `read` |  |
 | `GET` | `/v1/territory/prospects` | `read` |  |
 | `GET` | `/v1/territory/prospects/facets` | `read` |  |

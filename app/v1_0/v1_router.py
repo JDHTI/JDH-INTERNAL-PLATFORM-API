@@ -61,6 +61,9 @@ from app.modules.supplier_supports.presentation.requests_router import (
     router as support_requests_router,
 )
 from app.modules.supplier_supports.presentation.router import router as supports_router
+from app.modules.support_settlements.presentation.router import (
+    router as support_settlements_router,
+)
 from app.modules.territory.presentation.prospects_router import router as territory_router
 from app.modules.territory.presentation.routes_router import router as territory_routes_router
 from app.modules.territory.presentation.zones_router import router as territory_zones_router
@@ -93,6 +96,9 @@ v1_router.include_router(dwh_publish_router, tags=["dwh-publish"])
 v1_router.include_router(commercial_router, prefix="/commercial", tags=["commercial-masters"])
 v1_router.include_router(costs_router, prefix="/costs", tags=["costs"])
 v1_router.include_router(cost_increases_router, prefix="/costs", tags=["costs"])
+v1_router.include_router(
+    support_settlements_router, prefix="/support-settlements", tags=["support-settlements"]
+)
 # The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.
 v1_router.include_router(
     supports_bulk_router, prefix="/supplier-supports", tags=["supplier-supports"]
