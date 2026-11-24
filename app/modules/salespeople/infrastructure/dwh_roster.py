@@ -1,12 +1,12 @@
-"""The SIESA sales force from the data warehouse (``consumo.vendedores``).
+"""The sales force from the data warehouse.
 
-``codigo`` is the salesperson; ``cod_supervisor`` and ``supervisor`` name their supervisor,
-a separate catalog (no supervisor code is a salesperson code). ``correo`` is the corporate
-e-mail, filled for a minority of salespeople.
-
-The supervisors' e-mail is in ``consumo.supervisores`` (the commercial coordinators and
-directors, kept by hand): ``nit`` is the ``cod_supervisor`` of ``vendedores`` and ``correo`` the
-corporate e-mail (2026-11-24, Juan Rojas: supervisor 8104570 only there).
+- Salespeople: ``consumo.vendedores``. ``codigo`` is the salesperson, ``correo`` the corporate
+  e-mail (filled for a minority), ``equipo`` the name of their team.
+- Coordinators: the commercial master ``consumo.supervisores`` (kept by hand), never SIESA's
+  ``cod_supervisor`` (2026-11-24). A coordinator's code is their ``nit``, ``correo`` their
+  e-mail, and ``equipo_key`` their team in ``consumo.equipos``.
+- A coordinator's salespeople are the active ones whose ``vendedores.equipo`` is the name of
+  their team (``vendedores`` does not publish ``equipo_key``; team names are unique).
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from app.modules.salespeople.domain.entities import SELLER, SUPERVISOR, RosterEn
 
 logger = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A row of the master that coordinates a team ("Director" alone has none).
+_COORDINATOR = "lower(btrim(s.\"rol\")) IN ('coordinador', 'coordinador y director')"
 
 
 def _text(value: object) -> str | None:
@@ -50,6 +52,7 @@ class WarehouseSalesRoster:
         self.connection = connection
         self.view = f'"{schema}"."vendedores"'
         self.coordinators = f'"{schema}"."supervisores"'
+        self.teams = f'"{schema}"."equipos"'
         self.timeout = timeout
 
     async def _fetch(self, query: str, *args: object):
@@ -68,65 +71,59 @@ class WarehouseSalesRoster:
             code=str(row["codigo"]).strip(),
             name=_text(row["nombre"]),
             email=(_text(row["correo"]) or "").lower() or None,
-            supervisor_code=_text(row["cod_supervisor"]),
+            supervisor_code=_text(row["coordinator"]),
             is_active=row["estado"] == "A",
+            team=_text(row["equipo"]),
+        )
+
+    def _sellers_query(self, where: str = "") -> str:
+        """Salespeople with their team and the coordinator of that team in the commercial
+        master (the lowest code if a team ever had two)."""
+
+        return (
+            f'SELECT v."codigo", v."nombre", v."correo", v."estado", v."equipo",'
+            f' (SELECT min(btrim(s."nit")) FROM {self.coordinators} s'
+            f' JOIN {self.teams} e ON e."equipo_key" = s."equipo_key"'
+            f' WHERE e."nombre" = v."equipo" AND {_COORDINATOR}) AS coordinator'
+            f' FROM {self.view} v {where} ORDER BY v."codigo"'
         )
 
     async def sellers(self) -> list[RosterEntry]:
         """Every salesperson, active or not, by code."""
 
-        rows = await self._fetch(
-            f'SELECT "codigo", "nombre", "correo", "cod_supervisor", "estado" FROM {self.view}'
-            ' ORDER BY "codigo"'
-        )
-        return [self._seller(row) for row in rows]
+        return [self._seller(row) for row in await self._fetch(self._sellers_query())]
 
     async def supervisors(self) -> list[RosterEntry]:
-        """Each supervisor code once, with the name the warehouse gives it and the e-mail of
-        ``supervisores`` when it has one (none when that master cannot be read)."""
+        """The coordinators of the commercial master, by code (``nit``), with their e-mail and
+        team. One without a team is listed inactive: it gives no salespeople."""
 
         rows = await self._fetch(
-            f'SELECT trim("cod_supervisor") AS code, max("supervisor") AS name,'
-            f" bool_or(\"estado\" = 'A') AS active FROM {self.view}"
-            " WHERE coalesce(trim(\"cod_supervisor\"), '') <> '' GROUP BY 1 ORDER BY 1"
+            f'SELECT btrim(s."nit") AS code, max(s."nombre") AS name,'
+            f' lower(max(btrim(s."correo"))) AS email, max(e."nombre") AS team'
+            f" FROM {self.coordinators} s"
+            f' LEFT JOIN {self.teams} e ON e."equipo_key" = s."equipo_key"'
+            f" WHERE coalesce(btrim(s.\"nit\"), '') <> '' AND {_COORDINATOR}"
+            " GROUP BY 1 ORDER BY 1"
         )
-        emails = await self._coordinator_emails()
         return [
             RosterEntry(
                 SUPERVISOR,
                 row["code"],
                 _text(row["name"]),
-                email=emails.get(row["code"]),
-                is_active=bool(row["active"]),
+                email=_text(row["email"]),
+                team=_text(row["team"]),
+                is_active=row["team"] is not None,
             )
             for row in rows
         ]
 
-    async def _coordinator_emails(self) -> dict[str, str]:
-        """Supervisor code -> lowercase e-mail, from ``supervisores``. A code with two e-mails
-        keeps none: it cannot tell who holds it."""
-
-        try:
-            rows = await self._fetch(
-                f'SELECT trim("nit"::text) AS code, lower(trim("correo")) AS email'
-                f" FROM {self.coordinators}"
-                " WHERE coalesce(trim(\"nit\"::text), '') <> ''"
-                " AND coalesce(trim(\"correo\"), '') <> ''"
-            )
-        except DependencyUnavailableError:
-            return {}
-        found: dict[str, set[str]] = {}
-        for row in rows:
-            found.setdefault(row["code"], set()).add(row["email"])
-        return {code: next(iter(emails)) for code, emails in found.items() if len(emails) == 1}
-
     async def supervisors_by_email(self, email: str) -> list[str]:
-        """Supervisor codes whose ``supervisores`` e-mail is this one."""
+        """Codes of the coordinators of the commercial master with this e-mail."""
 
         rows = await self._fetch(
-            f'SELECT DISTINCT trim("nit"::text) AS code FROM {self.coordinators}'
-            ' WHERE lower(trim("correo")) = $1'
-            " AND coalesce(trim(\"nit\"::text), '') <> '' ORDER BY 1",
+            f'SELECT DISTINCT btrim(s."nit") AS code FROM {self.coordinators} s'
+            ' WHERE lower(btrim(s."correo")) = $1'
+            f" AND coalesce(btrim(s.\"nit\"), '') <> '' AND {_COORDINATOR} ORDER BY 1",
             email.strip().lower(),
         )
         return [row["code"] for row in rows]
@@ -135,21 +132,23 @@ class WarehouseSalesRoster:
         """Active salespeople with this e-mail (stored upper case in SIESA)."""
 
         rows = await self._fetch(
-            f'SELECT "codigo", "nombre", "correo", "cod_supervisor", "estado" FROM {self.view}'
-            ' WHERE lower("correo") = $1 AND "estado" = \'A\' ORDER BY "codigo"',
+            self._sellers_query('WHERE lower(v."correo") = $1 AND v."estado" = \'A\''),
             email.strip().lower(),
         )
         return [self._seller(row) for row in rows]
 
     async def team(self, supervisor_codes: Sequence[str]) -> list[str]:
-        """Codes of the active salespeople of these supervisors."""
+        """Codes of the active salespeople in the teams of these coordinators (master's
+        ``equipo_key`` -> ``equipos.nombre`` -> ``vendedores.equipo``)."""
 
         if not supervisor_codes:
             return []
         rows = await self._fetch(
-            f'SELECT "codigo" FROM {self.view}'
-            ' WHERE trim("cod_supervisor") = ANY($1::text[]) AND "estado" = \'A\''
-            ' ORDER BY "codigo"',
+            f'SELECT DISTINCT btrim(v."codigo") AS code FROM {self.coordinators} s'
+            f' JOIN {self.teams} e ON e."equipo_key" = s."equipo_key"'
+            f' JOIN {self.view} v ON v."equipo" = e."nombre"'
+            f' WHERE btrim(s."nit") = ANY($1::text[]) AND {_COORDINATOR}'
+            " AND v.\"estado\" = 'A' ORDER BY 1",
             list(supervisor_codes),
         )
-        return [str(row["codigo"]).strip() for row in rows]
+        return [row["code"] for row in rows]

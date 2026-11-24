@@ -221,7 +221,7 @@ async def test_a_supervisor_sees_their_team(world, people) -> None:
 
 
 async def test_a_coordinator_sees_their_team_by_the_coordinators_master(world, people) -> None:
-    # Juan Rojas (2026-11-24): supervisor in SIESA, e-mail only in consumo.supervisores.
+    # Juan Rojas (2026-11-24): a coordinator of consumo.supervisores; his team is the master's.
     service, links, roster, *_ = world
     roster.coordinators["S01"] = LUIS
 

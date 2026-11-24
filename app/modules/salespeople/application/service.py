@@ -6,8 +6,9 @@ Rules:
 - ``all``: platform administrators and moderators, anyone in BI or the call center, the
   leader or responsible of Comercial and Comercial's directors (``manage`` on
   ``comercial-director``, 2026-11-23).
-- ``team``: a person linked to supervisor codes (a coordinator) sees their sellers'
-  customers, plus their own seller codes.
+- ``team``: a coordinator of the commercial master (``consumo.supervisores``, never SIESA's
+  ``cod_supervisor``, 2026-11-24) sees the customers of the active salespeople of their team
+  (``consumo.equipos``), plus their own seller codes.
 - ``mine``: a person linked to seller codes sees those customers.
 - ``none``: everyone else, until an administrator links them.
 - A link comes from the corporate e-mail (``auto``) or from an administrator (``manual``).
@@ -322,8 +323,12 @@ class SalesScopeService:
             raise ConflictError("No se puede vincular un usuario inactivo")
         entries = await (self.roster.sellers() if kind == SELLER else self.roster.supervisors())
         if not any(entry.code == code for entry in entries):
-            label = "vendedor" if kind == SELLER else "supervisor"
-            raise NotFoundError(f"No hay un {label} con el código {code} en SIESA")
+            where = (
+                "un vendedor con el código {code} en SIESA"
+                if kind == SELLER
+                else "un coordinador con el código {code} en el maestro comercial"
+            )
+            raise NotFoundError(f"No hay {where.format(code=code)}")
         current = await self.links.get_by_code(kind, code)
         if current and current.user_id == user.id and current.source == MANUAL:
             return current

@@ -56,8 +56,11 @@ class RosterEntry:
     code: str
     name: str | None
     email: str | None = None
+    # A salesperson's coordinator: the code of the commercial master that holds their team.
     supervisor_code: str | None = None
     is_active: bool = True
+    # The team's name (``vendedores.equipo``, ``equipos.nombre``).
+    team: str | None = None
 
 
 @dataclass(frozen=True)
