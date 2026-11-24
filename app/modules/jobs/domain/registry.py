@@ -151,6 +151,16 @@ JOBS: tuple[JobDefinition, ...] = (
         "abastecimiento",
         MONDAY_TO_FRIDAY,
     ),
+    # After the sales load (2026-11-24): the open months of the settlement are recalculated;
+    # a closed month never changes.
+    JobDefinition(
+        "support-settlements-refresh",
+        "Apoyos: liquidación de los meses abiertos",
+        "Recalcula la liquidación de apoyos del mes en curso y del mes vencido si no está "
+        "cerrado, con las ventas y los apoyos del día",
+        "reporte_ventas",
+        MONDAY_TO_SATURDAY,
+    ),
 )
 JOBS_BY_KEY = {job.key: job for job in JOBS}
 

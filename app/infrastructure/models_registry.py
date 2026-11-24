@@ -25,6 +25,7 @@ from app.modules.quotations.infrastructure import models as quotations_models
 from app.modules.salespeople.infrastructure import models as salespeople_models
 from app.modules.sites.infrastructure import models as sites_models
 from app.modules.supplier_supports.infrastructure import models as supplier_supports_models
+from app.modules.support_settlements.infrastructure import models as support_settlements_models
 from app.modules.territory.infrastructure import models as territory_models
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "salespeople_models",
     "sites_models",
     "supplier_supports_models",
+    "support_settlements_models",
     "territory_models",
 ]

@@ -96,6 +96,7 @@ las personas a cada rol y vincular el código de supervisor de cada coordinador.
 | abastecimiento | `novedades-compras` | bandeja de novedades (`/costs/novelties`), su historial y la nota crédito | asignar motivo, registrar o quitar la nota crédito, editar el catálogo de motivos |
 | abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla | cargar, crear, editar, aprobar y rechazar alzas |
 | abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`) | poner o quitar la fecha de SIESA, cargar el libro (igual que `maestros` en BI) |
+| bi (bloqueado) | `liquidacion-apoyos` | liquidación de apoyos del mes por proveedor, referencia y venta; Excel (`/support-settlements`) | recalcular y cerrar el mes vencido. Reabrir un mes cerrado: solo el líder o responsable de BI y los administradores (`AreaLeaderPolicy`) |
 
 `/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,
 `validador-pedidos` y las cuatro claves de Costos, porque esas pantallas buscan proveedores y

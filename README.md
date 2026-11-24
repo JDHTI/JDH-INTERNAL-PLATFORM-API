@@ -74,6 +74,10 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   masiva y por grupo empresarial, y publicación al DWH; BI ve costos y Comercial no. Ver
   [`docs/apoyos-proveedores.md`](docs/apoyos-proveedores.md) (reglas v2) y
   [`docs/apoyos-dwh.md`](docs/apoyos-dwh.md).
+- La liquidación de apoyos (BI) vive en `/api/v1/support-settlements`: cuánto reconoce cada
+  proveedor por las ventas apoyadas del mes (cotización del proveedor, descuento real, copias
+  una vez), margen recompuesto, cierre del mes vencido y Excel por proveedor. Ver
+  [`docs/liquidacion-apoyos.md`](docs/liquidacion-apoyos.md).
 - El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
   archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
   calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).

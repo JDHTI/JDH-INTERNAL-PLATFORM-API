@@ -241,6 +241,13 @@ from app.modules.supplier_supports.infrastructure.repository import SqlAlchemySu
 from app.modules.supplier_supports.infrastructure.requests_repository import (
     SqlAlchemySupportRequestRepository,
 )
+from app.modules.support_settlements.application.service import SettlementService
+from app.modules.support_settlements.infrastructure.dwh_source import WarehouseSettlementSource
+from app.modules.support_settlements.infrastructure.export_file import settlement_workbook
+from app.modules.support_settlements.infrastructure.masters import SqlAlchemySettlementMasters
+from app.modules.support_settlements.infrastructure.repository import (
+    SqlAlchemySettlementRepository,
+)
 from app.modules.territory.application.prospects import ProspectService
 from app.modules.territory.application.routes import RouteService
 from app.modules.territory.application.zones import ZoneService
@@ -1073,6 +1080,32 @@ class V1Container(containers.DeclarativeContainer):
         reasons=cost_novelty_repository.provided.reasons,
         max_upload_bytes=config.costs.increases_max_upload_bytes,
     )
+    # --- Liquidación de apoyos (BI): what each supplier owes for a month of sales ---
+    support_settlement_service = providers.Factory(
+        SettlementService,
+        repository=providers.Factory(SqlAlchemySettlementRepository, database=database),
+        masters=providers.Factory(SqlAlchemySettlementMasters, database=database),
+        sales=providers.Factory(
+            WarehouseSettlementSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            timeout=config.support_settlements.dwh_timeout,
+        ),
+        policy=providers.Factory(
+            PermissionPolicy,
+            areas=area_service,
+            area_slug=config.supplier_supports.manager_area_slug,
+            module="liquidacion-apoyos",
+        ),
+        # Reopening a closed month: the leader of the supports' area and platform admins.
+        leaders=providers.Factory(
+            AreaLeaderPolicy,
+            areas=area_service,
+            area_slug=config.supplier_supports.manager_area_slug,
+        ),
+        start_period=config.support_settlements.start_period,
+        writer=providers.Object(settlement_workbook),
+    )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)
     job_watermarks = providers.Factory(SqlAlchemySequenceWatermarks, database=database)
@@ -1136,6 +1169,7 @@ class V1Container(containers.DeclarativeContainer):
         support_rollover=supplier_support_rollover_service.provider,
         stale_drafts=quotation_service.provider,
         cost_novelties=cost_novelty_service.provider,
+        support_settlements=support_settlement_service.provider,
     )
     job_service = providers.Factory(
         JobService,
