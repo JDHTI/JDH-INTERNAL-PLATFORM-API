@@ -142,7 +142,7 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
 
   Las copias cargadas antes las marcó la migración `0076` (mismas condiciones, misma
   transacción, dos o más clientes del mismo grupo). Volver a subir el grupo por `bulk/groups`
-  también las marca. Uno de sucursal vale solo para el cliente que la tiene. Cada apoyo muestra
+  también las marca. Uno de sucursal vale solo para esa sucursal (ver la jerarquía). Cada apoyo muestra
   `business_group`, `group_wide` y la lista de margen que usa (`margin_list`).
 
   Correcciones del 2026-11-23:
@@ -152,8 +152,8 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
     apoyo las que comparten proveedor, clase, método, valor, referencia, vigencia y grupo.
   - **Actuar sobre la fila actúa sobre todo el grupo.** Anular, vencer, eliminar o adjuntar por
     selección o por filtro toma todas las copias.
-  - **Filtros.** `customer_nits` + `customer_nit_only: true` trae solo los apoyos propios del NIT,
-    sin los del grupo. `business_groups: [nombre]` trae los apoyos del grupo completo
+  - **Filtros.** Ver «Apoyos por NIT-sucursal y jerarquía» más abajo; `customer_nit_only` se
+    retiró el 2026-11-24. `business_groups: [nombre]` trae los apoyos del grupo completo
     (mayúsculas y espacios no cuentan). El campo `group_wide` también se filtra en `conditions`.
   - **Cotización por grupo.** Ya no toma el apoyo de un solo NIT del grupo como si fuera del grupo
     entero. Solo toma los generales y los `group_wide`.
@@ -162,6 +162,46 @@ del cliente: Market Apartadó, Masivo food, Mayoristas o Food service; ver
     emparejar: mayúsculas y espacios no cuentan, y va un cliente por NIT.
 - **Bodegas promocionales** (grupo 23 de SIESA, 18 bodegas): un apoyo aplica allí solo con
   `promo_warehouses`; si no, el pedido de esa bodega va a su costo, sin apoyo.
+
+### Apoyos por NIT-sucursal y jerarquía (2026-11-24)
+
+Pedido de Daniel: hay clientes muy grandes con muchas sucursales, y un apoyo puede ser de una
+sola.
+
+- **Cómo se crea un apoyo de cliente:**
+  - a todo el NIT (`customer_nit`);
+  - a todo el grupo empresarial (`POST /by-group`, `group_wide`);
+  - a una sucursal del NIT (`customer_nit` + `customer_branch_id`).
+
+  La sucursal va siempre con su NIT y nunca con un grupo: si no, 422. En una carga, la fila
+  queda en revisión con `cliente_por_definir`. Las copias de un grupo no llevan sucursal.
+- **Jerarquía** (`most_specific` en `order_validation/domain/rules.py`): entre los apoyos que
+  cubren una línea, el nivel de cliente más específico reemplaza a los otros: NIT-sucursal >
+  NIT > grupo empresarial. Los apoyos sin cliente (por canal, regional…) no entran en la
+  jerarquía.
+- **Dónde aplica un apoyo de sucursal:**
+
+  | Dónde | Regla |
+  | --- | --- |
+  | Cotizador, cotización general (NIT) | No aplica: toma el del NIT y, si no hay, el del grupo |
+  | Cotizador, cotización por sucursal | Aplica solo a esa sucursal, y reemplaza al del NIT y al del grupo |
+  | Liquidación | Cada venta lleva su sucursal: aplica el de esa sucursal si existe; si no, el del NIT o el del grupo |
+  | Validador de pedidos | El archivo no trae sucursal, así que se trata como cotización general |
+
+  En el cotizador, el apoyo que queda fuera aparece como candidato con el motivo «Hay un apoyo
+  más específico (NIT-sucursal | NIT)».
+- **Filtros del maestro:**
+
+  | Filtro | Qué trae |
+  | --- | --- |
+  | `customer_nits` | Los apoyos del NIT, de todo el NIT y de sus sucursales, nunca los del grupo |
+  | `business_groups` | Los del grupo completo |
+  | `customer_branches: [{nit, branch_id}]` | Los de esa sucursal |
+
+  `customer_nit_only` (NIT sin grupo) se retiró, porque ahora es lo que hace `customer_nits`.
+- **Producción (2026-11-24):** 57 apoyos tienen sucursal, todos del NIT 800230447, sucursal 681.
+  Desde el despliegue solo aplican a una cotización de esa sucursal y a sus ventas en la
+  liquidación; el validador ya no los toma.
 
 ### Operación
 
@@ -427,11 +467,12 @@ POST /api/v1/supplier-supports/search
   `is_empty`, `not_empty`).
 - Grupos anidados (3 niveles) con `match: all | any`. Un campo u operador desconocido
   es 422; nada se interpola en el SQL.
-- **Búsqueda base**: `customer_nits`, `supplier_codes` y `product_skus` (listas) filtran
-  por cliente, proveedor y referencia. Son independientes y opcionales (puede enviarse
-  uno, dos o los tres) y se combinan con AND entre sí y con `conditions`. Por cliente
-  también trae los apoyos de su grupo empresarial (`group_wide`, 2026-11-20). Estado y tipo
-  se filtran libremente aparte.
+- **Búsqueda base**: `customer_nits`, `customer_branches`, `business_groups`,
+  `supplier_codes` y `product_skus` (listas) filtran por NIT, NIT-sucursal, grupo,
+  proveedor y referencia. Son independientes y opcionales y se combinan con AND entre sí y
+  con `conditions`. Desde el 2026-11-24 el NIT trae sus apoyos propios (de todo el NIT y de
+  sus sucursales), nunca los del grupo, que van por `business_groups`. Estado y tipo se
+  filtran libremente aparte.
 - `state` (`vigente`, `vencido`, `programado`, `inactivo`, `anulado`) y `needs_review`: los
   filtros rápidos (`inactivo` = desactivado a mano, reversible). `active_on` fija la fecha
   de la vigencia (`validity` sigue aceptándose).

@@ -17,6 +17,7 @@ from app.modules.quotations.domain.entities import (
     Branch,
     CenterWarehouse,
     CostInfo,
+    CustomerBranchOption,
     CustomerOption,
     CustomerPage,
     GroupInfo,
@@ -229,10 +230,13 @@ class FakeWarehouse:
         self._check()
         return self.list_customers
 
-    async def last_sales(self, nit, months):
+    async def last_sales(self, nit, months, branch_id=None):
         self._check()
-        self.calls.append(("last_sales", nit, months))
-        return list(self.sales.get(nit, []))
+        if branch_id is None:
+            self.calls.append(("last_sales", nit, months))
+            return list(self.sales.get(nit, []))
+        self.calls.append(("last_sales", nit, months, branch_id))
+        return list(self.sales.get(f"{nit}/{branch_id}", []))
 
     async def group_branches(self, nits):
         self._check()
@@ -357,6 +361,8 @@ class FakeMasters:
         # Business groups: name -> NITs, and each NIT's salesperson.
         self.groups: dict[str, list[str]] = {}
         self.sellers_of: dict[str, str] = {NIT: "0051", "800125313": "0099"}
+        # A customer's branches in the local master (a quotation by branch).
+        self.branches: dict[str, list[CustomerBranchOption]] = {}
 
     async def products(self, skus):
         return {sku: self.catalog[sku] for sku in skus if sku in self.catalog}
@@ -398,6 +404,9 @@ class FakeMasters:
 
     async def group_nits(self, group):
         return list(self.groups.get(group, []))
+
+    async def customer_branches(self, nit):
+        return list(self.branches.get(nit, []))
 
 
 class FakeRepository:

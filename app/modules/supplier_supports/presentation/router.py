@@ -177,6 +177,13 @@ class SupportBatch(BaseModel):
     overlap_reason: str | None = Field(default=None, max_length=500)
 
 
+class CustomerBranchFilter(BaseModel):
+    """A branch of a customer, for the base search by NIT-sucursal."""
+
+    nit: str = Field(min_length=1, max_length=30)
+    branch_id: str = Field(min_length=1, max_length=20)
+
+
 class RetireItem(BaseModel):
     """A support chosen in the table, at the version the person saw."""
 
@@ -190,7 +197,7 @@ class RetireFilter(BaseModel):
     match: Literal["all", "any"] = "all"
     conditions: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     customer_nits: list[str] = Field(default_factory=list, max_length=500)
-    customer_nit_only: bool = False
+    customer_branches: list[CustomerBranchFilter] = Field(default_factory=list, max_length=500)
     business_groups: list[str] = Field(default_factory=list, max_length=500)
     supplier_codes: list[str] = Field(default_factory=list, max_length=500)
     product_skus: list[str] = Field(default_factory=list, max_length=500)
@@ -386,14 +393,15 @@ class SearchRequest(BaseModel):
     customer_nits: list[str] = Field(
         default_factory=list,
         max_length=500,
-        description="Base search: client NIT(s), with their business groups' supports",
-    )
-    customer_nit_only: bool = Field(
-        default=False,
         description=(
-            "With customer_nits: only the supports of those NITs alone, never a business "
-            "group's (group_wide)"
+            "Base search: client NIT(s); their supports for the whole NIT or one of its "
+            "branches, never a business group's (that is business_groups)"
         ),
+    )
+    customer_branches: list[CustomerBranchFilter] = Field(
+        default_factory=list,
+        max_length=500,
+        description="Base search: NIT-sucursal; the supports of those branches",
     )
     business_groups: list[str] = Field(
         default_factory=list,

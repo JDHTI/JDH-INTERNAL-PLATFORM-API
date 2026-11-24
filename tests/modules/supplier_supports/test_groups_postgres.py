@@ -131,9 +131,12 @@ async def test_a_group_support_covers_a_customer_that_joined_later(world) -> Non
     outside, _ = await repo.search(spec(salesperson_codes=(f"V{run}other",)))
     assert not {copy.id for copy in copies} & {row.support.id for row in outside}
 
-    # The base search by that customer finds the group's support too, once.
+    # The base search by that customer is its own supports (2026-11-24); the group's support
+    # is found by the group, once.
     found, _ = await repo.search(spec(customer_nits=(nits["late"],)))
-    assert {row.support.id for row in found} == {copies[0].id}
+    assert found == []
+    by_group, _ = await repo.search(spec(business_groups=(group,)))
+    assert {row.support.id for row in by_group} == {copies[0].id}
 
     # The quoter takes the copies as one support for the whole group.
     agreements = await SqlAlchemyAgreementSource(database).agreements(
@@ -184,18 +187,35 @@ async def test_a_group_support_is_one_row_and_a_nit_support_stays_apart(world) -
         now,
     )
 
-    # By NIT: its own support and the group's, once, with the customer's own copy.
+    branch = await repo.create(
+        uuid4(),
+        support(
+            supplier_id,
+            sku,
+            customer_nit=nits["b"],
+            customer_branch_id="001",
+            customer_group=group,
+            supplier_value=Decimal("0.02"),
+        ),
+        "bi",
+        now,
+    )
+
+    # By NIT (2026-11-24): its own supports, for the whole NIT and its branches, never the
+    # group's copy.
     by_nit, total = await repo.search(spec(customer_nits=(nits["b"],)))
-    assert {row.support.id for row in by_nit} == {copies[1].id, own.id} and total == 2
-    # Only the NIT: never the group's copy.
-    alone, _ = await repo.search(spec(customer_nits=(nits["b"],), customer_nit_only=True))
-    assert [row.support.id for row in alone] == [own.id]
+    assert {row.support.id for row in by_nit} == {own.id, branch.id} and total == 2
+    # By NIT-sucursal: only that branch's.
+    by_branch, _ = await repo.search(spec(customer_branches=((nits["b"], "001"),)))
+    assert [row.support.id for row in by_branch] == [branch.id]
+    none, _ = await repo.search(spec(customer_branches=((nits["b"], "002"),)))
+    assert none == []
     # By group, however it is written: the group's support once, not the NIT's own.
     by_group, total = await repo.search(spec(business_groups=(f"  {group.upper()} ",)))
     assert [row.support.id for row in by_group] == [copies[0].id] and total == 1
     # Without a customer filter, still once.
     every, _ = await repo.search(spec(group=Group("all", (Condition("product_sku", "eq", sku),))))
-    assert {row.support.id for row in every} == {copies[0].id, own.id}
+    assert {row.support.id for row in every} == {copies[0].id, own.id, branch.id}
     # Acting on the row acts on every copy; a NIT's own support has none.
     assert set(await repo.with_group_copies([copies[0].id])) == {copy.id for copy in copies}
     assert await repo.with_group_copies([own.id]) == [own.id]

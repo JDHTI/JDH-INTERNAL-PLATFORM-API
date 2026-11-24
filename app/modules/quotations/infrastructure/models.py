@@ -181,6 +181,8 @@ class QuotationModel(Base):
     # Quoted to a business group (0074): its name and how many NITs it had.
     business_group: Mapped[str | None] = mapped_column(Text)
     group_customers: Mapped[int | None] = mapped_column(Integer)
+    # Quoted to one branch of the customer (0087).
+    customer_branch_id: Mapped[str | None] = mapped_column(String(20))
 
 
 class RequestedProductModel(Base):

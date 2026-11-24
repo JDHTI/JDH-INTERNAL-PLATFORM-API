@@ -97,6 +97,9 @@ class CustomerContext:
     # with the most active branches (``group_nits`` empty: read them again).
     business_group: str | None = None
     group_nits: tuple[str, ...] = ()
+    # A quotation by branch (2026-11-24): only that branch decides the list, channel, center
+    # and seller, its sales are the window, and its NIT-sucursal supports apply.
+    customer_branch_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -680,6 +683,8 @@ class Quotation:
     # ``customer_nit`` the NIT of the group with the most active branches.
     business_group: str | None = None
     group_customers: int | None = None
+    # Quoted to one branch of the customer (2026-11-24); ``None`` is the NIT as a whole.
+    customer_branch_id: str | None = None
 
     @property
     def is_temporary_customer(self) -> bool:
@@ -841,6 +846,21 @@ class CustomerOption:
     @property
     def is_active(self) -> bool:
         return self.active_branch_count > 0
+
+
+@dataclass(frozen=True)
+class CustomerBranchOption:
+    """A branch of a customer, to quote it alone (2026-11-24; local master copy)."""
+
+    branch_id: str
+    branch_name: str | None
+    establishment_name: str | None
+    city: str | None
+    channel: str | None
+    salesperson_name: str | None
+    is_active: bool
+    # For the sales scope: a restricted seller sees the branches of their customers.
+    salesperson_code: str | None = None
 
 
 @dataclass(frozen=True)

@@ -83,6 +83,12 @@ async def test_create_normalizes_scope_and_nit(service, manager) -> None:
         ),
         ({"reference_cost": D("0")}, "mayor que cero"),
         ({"tiers": (Tier("unidades", D("10"), D("5"), D("1")),)}, "escala"),
+        # NIT-sucursal (2026-11-24): a branch goes with its NIT, never with a group.
+        ({"customer_nit": None, "customer_branch_id": "002"}, "La sucursal va con el NIT"),
+        (
+            {"customer_branch_id": "002", "group_wide": True, "customer_group": "SANCELA"},
+            "La sucursal va con el NIT",
+        ),
     ],
 )
 async def test_create_rejects_invalid_data(service, manager, changes, message) -> None:
@@ -540,9 +546,17 @@ async def test_base_search_combines_client_supplier_and_reference_in_any_subset(
         ("supplier.code", "in"),
         ("product_sku", "in"),
     }
-    # The client goes apart: the repository adds its business groups' supports.
+    # The client goes apart: the repository matches its own supports and its branches'.
     assert repo.last_search.customer_nits == ("800116299",)
     assert group.match == "all" and free.items == ()
+
+    # NIT-sucursal (2026-11-24), as tuples or as the HTTP body sends them.
+    await service.search(
+        customer_branches=[("800.116.299", " 002 "), {"nit": "800116299", "branch_id": "002"}]
+    )
+    assert repo.last_search.customer_branches == (("800116299", "002"),)
+    with pytest.raises(InvalidInputError, match="NIT-sucursal"):
+        await service.search(customer_branches=[{"nit": "800116299", "branch_id": " "}])
 
     await service.search(
         supplier_codes=["233", " 399 "],

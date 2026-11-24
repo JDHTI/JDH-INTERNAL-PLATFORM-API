@@ -205,17 +205,9 @@ class SqlAlchemyAgreementSource:
             for start in range(0, len(unique), _CHUNK):
                 rows += (
                     await session.execute(
-                        select(
-                            CustomerModel.nit,
-                            CustomerModel.channel,
-                            CustomerModel.business_unit,
-                            CustomerModel.billing_center,
-                            CustomerModel.billing_center_code,
-                            CustomerModel.sales_team_class,
-                            CustomerModel.branch_id,
-                            CustomerModel.business_group,
-                            CustomerModel.is_active,
-                        ).where(CustomerModel.nit.in_(unique[start : start + _CHUNK]))
+                        select(*_SCOPE_COLUMNS).where(
+                            CustomerModel.nit.in_(unique[start : start + _CHUNK])
+                        )
                     )
                 ).all()
         by_nit: dict[str, list] = {}
@@ -223,10 +215,43 @@ class SqlAlchemyAgreementSource:
             by_nit.setdefault(row.nit, []).append(row)
         return {nit: customer_scope(nit, branches) for nit, branches in by_nit.items()}
 
+    async def branch_scope(self, nit: str, branch_id: str) -> CustomerScope | None:
+        """One branch of a client as the scope of its supports (a quotation by branch,
+        2026-11-24): its channel, unit, regional and margin list, and its NIT-sucursal
+        supports. ``None`` when the client has no such branch."""
 
-def customer_scope(nit: str, branches: Sequence) -> CustomerScope:
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(*_SCOPE_COLUMNS).where(
+                        CustomerModel.nit == nit, CustomerModel.branch_id == branch_id
+                    )
+                )
+            ).all()
+        if not rows:
+            return None
+        return customer_scope(nit, rows, branch_id=branch_id)
+
+
+_SCOPE_COLUMNS = (
+    CustomerModel.nit,
+    CustomerModel.channel,
+    CustomerModel.business_unit,
+    CustomerModel.billing_center,
+    CustomerModel.billing_center_code,
+    CustomerModel.sales_team_class,
+    CustomerModel.branch_id,
+    CustomerModel.business_group,
+    CustomerModel.is_active,
+)
+
+
+def customer_scope(nit: str, branches: Sequence, branch_id: str | None = None) -> CustomerScope:
     """Merge the branches of a client: every channel, unit and regional counts for the scope;
     the margin list follows the majority of the active branches (C.O., team, channel).
+
+    ``branch_id`` is the one branch quoted (2026-11-24): only then do its NIT-sucursal
+    supports apply. The client as a whole has none, so a branch's support never covers it.
     """
 
     return CustomerScope(
@@ -235,7 +260,7 @@ def customer_scope(nit: str, branches: Sequence) -> CustomerScope:
         business_units=frozenset(b.business_unit for b in branches if b.business_unit),
         regionals=frozenset(b.billing_center for b in branches if b.billing_center),
         margin_field=branches_margin_field(branches),
-        branches=frozenset(b.branch_id for b in branches if b.branch_id),
+        branches=frozenset({branch_id}) if branch_id else frozenset(),
         business_group=majority(branch.business_group for branch in branches),
     )
 

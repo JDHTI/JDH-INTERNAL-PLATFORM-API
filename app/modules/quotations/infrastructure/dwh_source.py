@@ -141,8 +141,11 @@ class WarehouseQuotationSource:
             return None
         return int(rows[0]["clientes_activos_asignados"])
 
-    async def last_sales(self, nit: str, months: int) -> list[LastSale]:
-        """The last price of every SKU sold to the customer (all branches) in the window.
+    async def last_sales(
+        self, nit: str, months: int, branch_id: str | None = None
+    ) -> list[LastSale]:
+        """The last price of every SKU sold to the customer (all branches, or only
+        ``branch_id`` for a quotation by branch) in the window.
 
         For each SKU, the last sale of **each** billing operation center (``ventas.co``) is
         taken, and among those the one with the highest net unit price wins: its date,
@@ -158,9 +161,11 @@ class WarehouseQuotationSource:
         30 s limit; by key it reads only the customer's lines through their index.
         """
 
-        return await self.group_last_sales([nit], months)
+        return await self.group_last_sales([nit], months, branch_id)
 
-    async def group_last_sales(self, nits: Sequence[str], months: int) -> list[LastSale]:
+    async def group_last_sales(
+        self, nits: Sequence[str], months: int, branch_id: str | None = None
+    ) -> list[LastSale]:
         """:meth:`last_sales` over every branch of these NITs (a business group)."""
 
         if not nits:
@@ -168,8 +173,10 @@ class WarehouseQuotationSource:
         keys = [
             row["cliente_key"]
             for row in await self._fetch(
-                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = ANY($1::text[])',
+                f'SELECT "cliente_key" FROM {self._view("clientes")} WHERE "nit" = ANY($1::text[])'
+                ' AND ($2::text IS NULL OR "id_sucursal" = $2::text)',
                 list(nits),
+                branch_id,
             )
         ]
         if not keys:

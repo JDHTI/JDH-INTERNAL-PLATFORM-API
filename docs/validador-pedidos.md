@@ -32,6 +32,16 @@ pendiente con `datos_incompletos`. Límites: `ORDER_VALIDATION_MAX_UPLOAD_MB` (1
 
 ## Cómo se decide una línea
 
+### Qué apoyos cuentan (jerarquía, 2026-11-24)
+
+El archivo no trae la sucursal, así que el pedido se trata como el NIT completo:
+
+- Un apoyo de NIT-sucursal no aplica.
+- Entre los que sí aplican, el del NIT deja fuera al del grupo empresarial.
+- Los apoyos sin cliente se evalúan todos.
+
+Ver [la jerarquía](apoyos-proveedores.md).
+
 ### Margen de referencia: el del producto para el canal
 
 Cada producto trae un margen por lista de unidad de negocio ([margen por producto](margenes-productos.md)).

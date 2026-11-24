@@ -65,7 +65,7 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert connection.timeout == 90
 
     keys_query, keys_args = connection.queries[0]
-    assert '"consumo"."clientes"' in keys_query and keys_args == (["900315138"],)
+    assert '"consumo"."clientes"' in keys_query and keys_args == (["900315138"], None)
     # The sales are bound by the customer's keys, so the planner uses their index.
     query, args = connection.queries[1]
     assert '"consumo"."ventas"' in query and 'v."cliente_key" = ANY($1::text[])' in query
@@ -79,6 +79,17 @@ async def test_last_sales_bound_by_customer_and_window() -> None:
     assert 'PARTITION BY v."sku", v."co"' in query
     assert 'PARTITION BY l."sku" ORDER BY l.precio_neto DESC' in query
     assert "l.rn_co = 1" in query and "l.rn = 1" in query
+
+
+async def test_a_branch_quotation_reads_that_branch_sales_only() -> None:
+    connection = FakeConnection(responses=[[{"cliente_key": "K2"}], []])
+    source = WarehouseQuotationSource(connection, "consumo", sales_timeout=90)
+
+    await source.last_sales("900315138", 6, "002")
+
+    keys_query, keys_args = connection.queries[0]
+    assert '"id_sucursal" = $2::text' in keys_query and keys_args == (["900315138"], "002")
+    assert connection.queries[1][1] == (["K2"], 6)
 
 
 async def test_a_list_last_sales_get_the_sales_limit_unless_given_one() -> None:
