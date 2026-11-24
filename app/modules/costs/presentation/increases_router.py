@@ -18,7 +18,6 @@ from app.modules.costs.application.increases import MAX_PAGE_SIZE, IncreaseServi
 from app.modules.costs.domain.increases import (
     CHANGE_LABELS,
     MAX_LINES,
-    REGIONAL_NAMES,
     REQUEST_STATUS_LABELS,
     IncreaseRequest,
     LineInput,
@@ -39,7 +38,16 @@ _STATUS = Query(default=None, alias="status")
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 RequestStatus = Literal["en_revision", "aprobada", "rechazada"]
-Regional = Literal["ANTIOQUIA", "BOGOTA", "PEREIRA", "BUCARAMANGA", "CARTAGENA", "BARRANQUILLA"]
+Regional = Literal[
+    "NACIONAL",
+    "ANTIOQUIA",
+    "BOGOTA",
+    "PEREIRA",
+    "BUCARAMANGA",
+    "CARTAGENA",
+    "BARRANQUILLA",
+    "RESTO DE REGIONALES",
+]
 
 
 class SupplierItemResponse(BaseModel):
@@ -81,7 +89,11 @@ class LineResponse(BaseModel):
     change_label: str | None
     increased_on: date | None
     regular_discount_pct: Decimal | None
-    regional_discounts: dict[str, Decimal]
+    # NACIONAL, a regional or RESTO DE REGIONALES, and the regionals it holds for.
+    regional: Regional
+    regionals: list[str]
+    # The public sale price without VAT the supplier suggests (PVP).
+    public_price: Decimal | None
     observation: str | None
     accepted: bool
     ledger_id: UUID | None
@@ -147,7 +159,8 @@ class LineBody(BaseModel):
     icui_pct: Decimal | None = Field(default=None, ge=0, le=1)
     ibua: Decimal | None = Field(default=None, ge=0)
     regular_discount_pct: Decimal | None = Field(default=None, ge=0, le=1)
-    regional_discounts: dict[Regional, Decimal] = Field(default_factory=dict)
+    regional: Regional = "NACIONAL"
+    public_price: Decimal | None = Field(default=None, gt=0)
     observation: str | None = Field(default=None, max_length=500)
 
 
@@ -162,7 +175,7 @@ class LinePatch(BaseModel):
     new_cost: Decimal | None = Field(default=None, gt=0)
     increased_on: date | None = None
     regular_discount_pct: Decimal | None = Field(default=None, ge=0, le=1)
-    regional_discounts: dict[Regional, Decimal] | None = None
+    public_price: Decimal | None = Field(default=None, gt=0)
     observation: str | None = Field(default=None, max_length=500)
 
 
@@ -210,7 +223,9 @@ def _line(line: RequestLine) -> LineResponse:
         change_label=CHANGE_LABELS.get(line.change or ""),
         increased_on=line.increased_on,
         regular_discount_pct=line.regular_discount_pct,
-        regional_discounts=line.regional_discounts,
+        regional=line.regional,
+        regionals=list(line.regionals),
+        public_price=line.public_price,
         observation=line.observation,
         accepted=line.accepted,
         ledger_id=line.ledger_id,
@@ -345,7 +360,8 @@ async def create(
             icui_pct=line.icui_pct,
             ibua=line.ibua,
             regular_discount_pct=line.regular_discount_pct,
-            regional_discounts=dict(line.regional_discounts),
+            regional=line.regional,
+            public_price=line.public_price,
             observation=(line.observation or "").strip().upper() or None,
         )
         for line in body.lines
@@ -381,7 +397,7 @@ async def requests(
 )
 @inject
 async def request(request_id: UUID, service: IncreaseService = _service) -> RequestDetailResponse:
-    """One request with its lines and regional discounts."""
+    """One request with its lines and the regionals each one covers."""
 
     return _detail(await service.get(request_id))
 
@@ -416,9 +432,7 @@ async def update_line(
         new_cost=body.new_cost,
         increased_on=body.increased_on,
         regular_discount_pct=body.regular_discount_pct,
-        regional_discounts=None
-        if body.regional_discounts is None
-        else dict(body.regional_discounts),
+        public_price=body.public_price,
         observation=body.observation,
     )
     return _detail(await service.update_line(principal, request_id, line_id, changes))
@@ -458,4 +472,4 @@ async def reject(
     return _detail(await service.reject(principal, request_id, body.note))
 
 
-__all__ = ["REGIONAL_NAMES", "router"]
+__all__ = ["router"]

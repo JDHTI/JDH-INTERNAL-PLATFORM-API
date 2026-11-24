@@ -8,6 +8,8 @@ Views of ``consumo`` (``docs/costos.md``):
 - ``cotizaciones_proveedores``: every activation of every quotation. The one in force on an
   entry's day is the latest activation on or before it, for the same NIT, reference and unit,
   the same supplier branch first. ``fecha_activacion`` is midnight in Bogotá stored in UTC.
+  ``descuento_escala_pct`` (the «Tasa 1») is in points (``20.0000`` is 20 %); the line is
+  compared with ``precio_unitario`` less that discount, as SIESA receives it.
 - ``productos`` (description, inventory unit) and ``centros_operacion`` (regional).
 
 The line's unit and the two previous prices (``unidad_medida_id``, ``precio_anterior``,
@@ -26,7 +28,7 @@ from decimal import Decimal
 
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderConnection, DataProviderUnavailable
-from app.modules.costs.domain.entries import EntryLine
+from app.modules.costs.domain.entries import EntryLine, discount_fraction, net_quotation
 from app.modules.costs.domain.ports import EntryWindow
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -85,6 +87,8 @@ def _decimal(value) -> Decimal | None:
 def line_from_row(row: Mapping) -> EntryLine:
     """An entry line from a row of the query."""
 
+    discount = discount_fraction(_decimal(row["tasa_1"]))
+    list_price = _decimal(row["cotizacion"])
     return EntryLine(
         line_key=row["compra_linea_key"],
         entry_date=row["fecha"],
@@ -102,11 +106,12 @@ def line_from_row(row: Mapping) -> EntryLine:
         quantity=_decimal(row["cantidad"]),
         unit=_text(row["unidad"]),
         unit_price=_decimal(row["precio_unit_local"]) or Decimal(0),
-        quotation=_decimal(row["cotizacion"]),
+        quotation=net_quotation(list_price, discount),
         quotation_since=row["cotizacion_desde"],
-        discount_pct=_decimal(row["tasa_1"]),
+        discount_pct=discount,
+        quotation_list_price=list_price,
         previous_price=_decimal(row["precio_anterior"]),
-        previous_price_2=_decimal(row["precio_hace_2"]),
+        antepenultimate_price=_decimal(row["precio_hace_2"]),
     )
 
 

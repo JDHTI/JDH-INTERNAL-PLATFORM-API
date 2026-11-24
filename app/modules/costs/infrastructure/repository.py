@@ -95,10 +95,11 @@ def line_values(line: EntryLine) -> dict[str, Any]:
         "quotation": line.quotation,
         "quotation_since": line.quotation_since,
         "discount_pct": line.discount_pct,
+        "quotation_list_price": line.quotation_list_price,
         "difference": difference,
         "difference_pct": None if pct is None else round(pct, 6),
         "previous_price": line.previous_price,
-        "previous_price_2": line.previous_price_2,
+        "antepenultimate_price": line.antepenultimate_price,
     }
 
 
@@ -123,8 +124,9 @@ def _line(model: CostNoveltyModel) -> EntryLine:
         quotation=model.quotation,
         quotation_since=model.quotation_since,
         discount_pct=model.discount_pct,
+        quotation_list_price=model.quotation_list_price,
         previous_price=model.previous_price,
-        previous_price_2=model.previous_price_2,
+        antepenultimate_price=model.antepenultimate_price,
         status=_ENTRY_STATUS.get(model.kind, OK),
     )
 

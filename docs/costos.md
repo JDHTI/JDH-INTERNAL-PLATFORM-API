@@ -42,9 +42,24 @@ mayor que 0). Se compara con la **cotización del proveedor vigente el día de l
     día, activada el 2026-02-02, era 49.384,67, así que la línea está bien.
   - El aplicativo la comparaba con la del 2026-07-01 (50.372,37) y la marcaba como
     diferencia.
-- **Precio y cotización en la misma base:** los dos van antes de descuentos e impuestos (IVA,
-  ICUI, IBUA). La «Tasa 1» (`discount_pct`) es el descuento por escala de la cotización; se
-  muestra, pero no se resta.
+- **Qué es cada precio:**
+  - **Precio** (`unit_price`): el precio unitario de *esta* entrada, antes de impuestos, como
+    lo recibió SIESA.
+  - **Cotización** (`quotation`): lo que *debió* costar la entrada, o sea el precio unitario de
+    la cotización vigente menos su Tasa 1. Contra ella se mide la novedad.
+  - **Tasa 1** (`discount_pct`): el descuento por escala de la cotización, como fracción (0,2
+    es 20 %). El DWH lo trae en puntos y a veces con signo (`20.0000`); la API lo divide por 100
+    y toma el valor absoluto.
+  - **Cotización lista** (`quotation_list_price`): el precio unitario de la cotización antes de
+    la Tasa 1.
+- **Por qué se resta la Tasa 1 (2026-11-24):** UN SOLO PROVEEDOR S.A. cotiza el sku 21119 a
+  8.246 con Tasa 1 de 20 %, y la EA-205060 lo recibió a 6.596,80 (8.246 × 0,8). Sin restarla,
+  esa línea correcta salía como novedad de −20 %. Con las entradas del 2026-05-04 al 2026-11-20,
+  2.560 líneas tienen Tasa 1. Al restarla, las novedades bajan de 13.362 a 12.762.
+- **Entradas a precio lleno:** algunas bodegas reciben sin la Tasa 1. Con UN SOLO PROVEEDOR
+  pasa en BTA9, CTG1, BAQ1 y MDE4, y con parte de Nestlé (5 %) también. La cotización del DWH no
+  distingue C.O. (`centro_operacion_id` vacío), así que esas líneas salen como novedad de +25 %
+  o +5,26 %. El motivo que les corresponde es «DESCUENTO NO APLICADO».
 
 **Estado de la línea**, con umbral `COSTS_NOVELTY_THRESHOLD` (0,001 = 0,1 %):
 
@@ -56,12 +71,17 @@ mayor que 0). Se compara con la **cotización del proveedor vigente el día de l
 
 «Solo novedades» (`novelty=true`) muestra `novedad` y `sin_cotizacion`.
 
-Con las entradas del 2026-05-04 al 2026-11-20 (las mismas 89.624 líneas de la hoja Entrada):
-74.053 `ok`, 13.358 `novedad` y 2.213 `sin_cotizacion`. La consulta tarda 9,4 s para el
+Con las entradas del 2026-05-04 al 2026-11-20 (89.622 líneas), con la Tasa 1 restada:
+74.647 `ok`, 12.762 `novedad` y 2.213 `sin_cotizacion`. La consulta tarda 9,4 s para el
 semestre y unos 3 s para un mes.
 
-**Precio anterior y hace 2.** Son los precios de las dos entradas de compra anteriores de la
-misma referencia y unidad, en cualquier bodega y C.O., en orden de fecha, C.O. y línea.
+**Precios de compra: actual, anterior y antepenúltimo.** La UI los muestra juntos.
+- **Actual** (`unit_price`): el de esta entrada.
+- **Anterior** (`previous_price`): el de la entrada de compra previa de la misma referencia y
+  unidad.
+- **Antepenúltimo** (`antepenultimate_price`): el de la entrada previa a la anterior. Antes se
+  llamaba `previous_price_2` («hace 2»).
+- Las entradas previas se buscan en cualquier bodega y C.O., en orden de fecha, C.O. y línea.
 - Los calcula el DWH sobre todo el historial (PR #160 de DWH-MIGRATION-PLATFORM), con las
   columnas `precio_anterior`, `precio_hace_2` y `unidad_medida_id` de
   `consumo.entradas_compras`.
@@ -158,10 +178,12 @@ antivirus.
   - `fetched_at`, `previous_from_warehouse` y `threshold`.
 - **Campos de la línea:** `line_key`, `entry_date`, `co`, `regional_code`, `regional_name`,
   `warehouse`, `document`, `purchase_order`, `invoice_ref`, `sku`, `description`,
-  `supplier_code`, `supplier_name`, `supplier_nit`, `quantity`, `unit`, `unit_price`,
-  `quotation`, `quotation_since`, `discount_pct` (Tasa 1), `difference` (pesos),
-  `difference_pct` (fracción: 0,05 es 5 %), `amount` (cantidad × diferencia),
-  `previous_price`, `previous_price_2`, `status` y `status_label`.
+  `supplier_code`, `supplier_name`, `supplier_nit`, `quantity`, `unit`;
+  - precios de compra: `unit_price`, `previous_price` y `antepenultimate_price`;
+  - cotización: `quotation` (neta de Tasa 1), `quotation_since`, `discount_pct` (Tasa 1, como
+    fracción) y `quotation_list_price` (antes de la Tasa 1);
+  - `difference` (pesos, contra `quotation`), `difference_pct` (fracción: 0,05 es 5 %),
+    `amount` (cantidad × diferencia), `status` y `status_label`.
 
 **`GET /novelties`.**
 - **Filtros:** `status`, `since` y `until` (fecha de la entrada), `supplier`, `co`,
@@ -196,7 +218,8 @@ aprueba o la rechaza.
 
 Código: `application/increases.py`, `infrastructure/increase_file.py` (plantilla y lector),
 `infrastructure/supplier_items.py` (DWH) y `infrastructure/ledger.py` (paso al acumulado).
-Tablas: migración `0082_costs_increase_requests`.
+Tablas: migraciones `0082_costs_increase_requests` y `0084_costs_regional_scope` (la regional
+por fila y el PVP).
 
 ### La plantilla MAESTRA
 
@@ -210,19 +233,41 @@ Sigue el archivo del área `MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx` (formula
   - Datos de JDH en gris: fecha, NIT, referencia, proveedor, descripción, unidad de empaque,
     estado, categoría, grupo impositivo y costo anterior.
   - SKU proveedor y EAN en verde: el proveedor los completa.
-  - Costo nuevo sin impuesto saludable en amarillo: lo que el proveedor diligencia.
-  - Al final, «Estado» (SI/NO) y una columna de descuento por cada regional.
+  - Costo nuevo sin impuesto saludable y PVP en amarillo: lo que el proveedor diligencia.
+  - «Regional» después del descuento regular, y al final «Estado» (SI/NO).
 - **Fórmulas:** costo anterior y nuevo con impuesto saludable (`costo × (1 + ICUI) + IBUA`),
   variación en pesos y en %, y estado del incremento (SUBIO, BAJO, ESTABLE), con los colores
   del área. Una fila sin costo nuevo queda en blanco; la plantilla anterior la marcaba «BAJO».
-- **Listas:** OBSERVACIONES (DESCONTINUADO, CAMBIO_DE_REFERENCIA, DUPLICADO) y Estado (SI/NO).
-  Validaciones de fecha, costo mayor que 0 y descuentos entre 0 % y 100 %.
+- **Listas:** Regional, OBSERVACIONES (DESCONTINUADO, CAMBIO_DE_REFERENCIA, DUPLICADO) y Estado
+  (SI/NO). Validaciones de fecha, costo y PVP mayores que 0 y descuento entre 0 % y 100 %.
 - **Hoja `Motivos`:** se conserva oculta, como en la plantilla del área.
 
-**Qué cambió frente a la MAESTRA del área (2026-11-23):**
-- **Regional:** la columna «Regional» se quita y se agregan al final seis columnas de descuento:
-  `Descuento ANTIOQUIA`, `BOGOTA`, `PEREIRA`, `BUCARAMANGA`, `CARTAGENA` y `BARRANQUILLA`.
-  Así el ítem nunca se repite. Una regional vacía toma el «Descuento Regular».
+**La Regional de cada fila (2026-11-24).** La lista tiene `NACIONAL`, las seis regionales
+(`ANTIOQUIA`, `BOGOTA`, `PEREIRA`, `BUCARAMANGA`, `CARTAGENA`, `BARRANQUILLA`) y
+`RESTO DE REGIONALES`. Cada fila de la plantilla empieza en `NACIONAL`. El costo, el descuento y
+el PVP de una fila valen donde dice su Regional:
+
+| La referencia trae | Qué significa | Filas |
+| --- | --- | --- |
+| `NACIONAL` | El mismo costo en todo el país | 1 |
+| Una o varias regionales | Solo esas cambian; las demás conservan su costo | 1 por regional que cambia |
+| Una o varias regionales + `RESTO DE REGIONALES` | Esas tienen su costo; todas las demás comparten el de la fila RESTO | 1 por regional distinta + 1 |
+
+Ejemplo: Antioquia sube a 23.000 y las otras cinco a 22.000. Bastan dos filas, ANTIOQUIA y
+RESTO DE REGIONALES, en lugar de seis.
+
+Reglas, revisadas por referencia al cargar:
+- `NACIONAL` va sola: con otra fila de la misma referencia es un error. Para una regional
+  distinta se usa la regional más RESTO.
+- Una regional no se repite en la misma referencia.
+- `RESTO DE REGIONALES` necesita al menos otra fila con una regional y debe dejar alguna por
+  cubrir. Se resuelve contra las demás filas: con ANTIOQUIA y CARTAGENA, cubre BOGOTA, PEREIRA,
+  BUCARAMANGA y BARRANQUILLA.
+- Una Regional vacía es `NACIONAL`. Acentos y mayúsculas no cuentan («Bogotá», «resto»).
+
+**Otros cambios frente a la MAESTRA del área:**
+- **PVP:** la columna «Precio Venta Público sin IVA (PVP)» va después de la Regional. Es
+  opcional y la diligencia el proveedor (2026-11-24).
 - **ICUI:** sale del producto en SIESA, no de un BUSCARV contra `Motivos`.
 - **Productos:** la plantilla trae los activos del proveedor que tienen cotización vigente,
   como la del área. Con ASCENDER (código 50), las 115 referencias del archivo del área
@@ -238,23 +283,31 @@ Sigue el archivo del área `MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx` (formula
 - El ICUI y el IBUA que escriba el proveedor ganan sobre los de SIESA.
 - Los porcentajes valen como fracción (0,05) o en puntos (5).
 - «Estado» = NO deja la línea por fuera.
-- **Problemas por fila:** referencia que no es un producto activo del proveedor, repetida,
-  números ilegibles o porcentajes fuera de rango. Se reportan con su fila de la hoja, y uno
-  solo bloquea la carga.
+- **Problemas por fila:** referencia que no es un producto activo del proveedor, Regional
+  desconocida o que rompe las reglas de arriba, números ilegibles o porcentajes fuera de rango.
+  Se reportan con su fila de la hoja, y uno solo bloquea la carga.
 
 ### Revisión y paso al acumulado
 
 - **Revisión:** mientras está `en_revision`, cada línea se corrige (costo nuevo, fecha,
-  descuentos, observación) o se deja por fuera (`accepted: false`).
-- **Aprobar:** cada línea aceptada se escribe en el acumulado (`product_price_increases`):
+  descuento, PVP, observación) o se deja por fuera (`accepted: false`). La Regional no se
+  edita: si está mal, se rechaza y se vuelve a cargar.
+- **Aprobar:** cada línea aceptada se escribe en el acumulado (`product_price_increases`), una
+  fila por regional, como en el libro del área:
+  - `NACIONAL` es una fila con regional NACIONAL;
+  - una regional es una fila con esa regional;
+  - `RESTO DE REGIONALES` es una fila por cada regional que cubre, con el mismo costo.
+- **Qué lleva cada fila:**
   - `source = solicitud` y `request_line_id`, para saber de dónde vino;
   - fecha de notificación = día en que se creó la solicitud;
   - sin fecha de SIESA, así que el cotizador la toma como alza pendiente;
   - margen = margen Lista 1 del maestro de márgenes;
   - precio = costo nuevo con impuesto saludable / (1 − margen), redondeado al centavo;
-  - los descuentos regular y por regional quedan en las observaciones.
-- **Llave del acumulado:** la misma de la carga del libro (referencia + fecha de incremento +
-  fecha de notificación). Una solicitud aprobada el mismo día con la misma fecha de incremento
+  - en las observaciones: el descuento regular, el PVP sin IVA y, para RESTO, las regionales
+    que cubrió.
+- **Llave del acumulado:** referencia + fecha de incremento + fecha de notificación + regional,
+  salvo cuando la regional es NACIONAL o está vacía. Así las filas nacionales conservan su llave
+  de antes (migración `0084`). Una solicitud aprobada el mismo día con la misma fecha y regional
   actualiza esa fila.
 - **Rechazar:** exige el motivo, y nada llega al acumulado.
 
@@ -267,11 +320,11 @@ Sigue el archivo del área `MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx` (formula
 | `GET /items?supplier_code=&q=` | Productos activos del proveedor con su costo anterior, para el formulario |
 | `GET /template?supplier_code=` | La MAESTRA del proveedor (`Content-Disposition` con el nombre del área) |
 | `POST /upload?supplier_code=&apply=` | Multipart `file` (y `note` opcional). Sin `apply`, simula. Devuelve `{applied, blocked, supplier_code, rows_read, lines, issues[{row_number, sku, problem}], request_id}` |
-| `POST /` | Formulario manual: `{supplier_code, note?, lines: [{sku, new_cost, increased_on, supplier_sku?, ean?, icui_pct?, ibua?, regular_discount_pct?, regional_discounts?: {REGIONAL: fracción}, observation?}]}`. 201 con la solicitud |
+| `POST /` | Formulario manual: `{supplier_code, note?, lines: [{sku, new_cost, increased_on, regional? (NACIONAL por defecto), public_price?, supplier_sku?, ean?, icui_pct?, ibua?, regular_discount_pct?, observation?}]}`. Una referencia puede ir en varias líneas con regionales distintas. 201 con la solicitud |
 | `GET /?status=&supplier=&page=&size=` | Solicitudes, la más reciente primero, con `counts` por estado |
 | `GET /{id}` | Solicitud con `lines` |
 | `GET /{id}/file` | El libro que devolvió el proveedor |
-| `PATCH /{id}/lines/{line_id}` | `{accepted?, new_cost?, increased_on?, regular_discount_pct?, regional_discounts?, observation?}` |
+| `PATCH /{id}/lines/{line_id}` | `{accepted?, new_cost?, increased_on?, regular_discount_pct?, public_price?, observation?}` |
 | `POST /{id}/approve` | `{note?}` |
 | `POST /{id}/reject` | `{note}` (obligatorio) |
 
@@ -281,8 +334,11 @@ Sigue el archivo del área `MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx` (formula
 - **Costos:** `old_cost`, `old_cost_with_tax`, `new_cost`, `new_cost_with_tax`,
   `variation_amount`, `variation_pct` (fracción), `change` (`subio`, `bajo`, `estable`) y
   `change_label`.
-- **Lo que envió el proveedor:** `increased_on`, `regular_discount_pct`, `regional_discounts`,
+- **Lo que envió el proveedor:** `increased_on`, `regular_discount_pct`, `regional`
+  (`NACIONAL`, una regional o `RESTO DE REGIONALES`), `public_price` (PVP sin IVA) y
   `observation`.
+- **Alcance:** `regionals`, las regionales que cubre la línea (las seis para NACIONAL; las que
+  no nombran las otras líneas de la referencia para RESTO).
 - **Revisión:** `accepted`, y `ledger_id` una vez aprobada.
 
 El acumulado (`GET /commercial/price-increases`) ahora trae `source` y `request_line_id`.

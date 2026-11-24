@@ -87,13 +87,16 @@ class CostNoveltyModel(Base):
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     unit: Mapped[str | None] = mapped_column(Text)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    # The quotation less its Tasa 1 (what the entry should have cost), the Tasa 1 as a
+    # fraction and the quotation's unit price before it.
     quotation: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     quotation_since: Mapped[date | None] = mapped_column(Date)
-    discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 4))
+    discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    quotation_list_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     difference: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     difference_pct: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     previous_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
-    previous_price_2: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    antepenultimate_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     # The warehouse no longer has the line (its document was voided).
@@ -205,12 +208,19 @@ class CostIncreaseRequestModel(Base):
 
 
 class CostIncreaseLineModel(Base):
-    """One reference of a request: the item as it was and the increase the supplier sent."""
+    """One row of a request: a reference in one regional scope, the item as it was and the
+    increase the supplier sent."""
 
     __tablename__ = "cost_increase_request_lines"
     __table_args__ = (
-        UniqueConstraint("request_id", "sku", name="uq_cost_increase_request_lines_sku"),
+        UniqueConstraint(
+            "request_id", "sku", "regional", name="uq_cost_increase_request_lines_sku_regional"
+        ),
         CheckConstraint("new_cost > 0", name="ck_cost_increase_request_lines_new_cost"),
+        CheckConstraint(
+            "public_price IS NULL OR public_price > 0",
+            name="ck_cost_increase_request_lines_public_price",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -238,35 +248,21 @@ class CostIncreaseLineModel(Base):
     change: Mapped[str | None] = mapped_column(String(10))
     increased_on: Mapped[date | None] = mapped_column(Date)
     regular_discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    # ``NACIONAL``, a regional or ``RESTO DE REGIONALES`` (the workbook's «Regional»).
+    regional: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="NACIONAL", server_default="NACIONAL"
+    )
+    # The public sale price without VAT the supplier suggests («PVP»).
+    public_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     observation: Mapped[str | None] = mapped_column(Text)
     # The reviewer may leave a line out (the workbook's «Estado» SI/NO).
     accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # The row it became in the history of increases, once approved.
+    # The first row it became in the history of increases, once approved.
     ledger_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-
-
-class CostIncreaseDiscountModel(Base):
-    """The discount of one regional for a line, when it differs from the regular one."""
-
-    __tablename__ = "cost_increase_line_discounts"
-    __table_args__ = (
-        CheckConstraint(
-            "discount_pct >= 0 AND discount_pct <= 1", name="ck_cost_increase_line_discounts_pct"
-        ),
-    )
-
-    line_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("cost_increase_request_lines.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    regional: Mapped[str] = mapped_column(String(20), primary_key=True)
-    discount_pct: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
 
 
 __all__ = [
     "CostCreditNoteModel",
-    "CostIncreaseDiscountModel",
     "CostIncreaseLineModel",
     "CostIncreaseRequestModel",
     "CostNoveltyCreditNoteModel",

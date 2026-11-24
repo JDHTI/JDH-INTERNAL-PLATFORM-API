@@ -127,7 +127,8 @@ def test_the_whole_flow_from_workbook_to_history(client, world) -> None:
     sheet = book[SHEET]
     sheet.cell(FIRST_ROW, COLUMN["Costo Nuevo sin Impuesto Saludable"], 23000)
     sheet.cell(FIRST_ROW, COLUMN["Fecha de Incremento"], datetime(2026, 12, 1))
-    sheet.cell(FIRST_ROW, COLUMN["Descuento CARTAGENA"], 0.05)
+    sheet.cell(FIRST_ROW, COLUMN["Regional"], "CARTAGENA")
+    sheet.cell(FIRST_ROW, COLUMN["Precio Venta Público sin IVA (PVP)"], 29990)
     buffer = io.BytesIO()
     book.save(buffer)
     files = {"file": ("maestra.xlsx", buffer.getvalue(), "application/octet-stream")}
@@ -144,11 +145,18 @@ def test_the_whole_flow_from_workbook_to_history(client, world) -> None:
     approved = client.post(f"{BASE}/{request_id}/approve", json={"note": None})
 
     assert simulated.status_code == 200 and simulated.json()["applied"] is False
-    assert simulated.json()["lines"][0]["regional_discounts"] == {"CARTAGENA": "0.05"}
+    line = simulated.json()["lines"][0]
+    assert (line["regional"], line["regionals"], line["public_price"]) == (
+        "CARTAGENA",
+        ["CARTAGENA"],
+        "29990.00",
+    )
     assert loaded.json()["applied"] is True and listing["total"] == 1
     assert listing["items"][0]["has_file"] is True and listing["items"][0]["note"] == "Carta"
     assert approved.status_code == 200 and approved.json()["status"] == "aprobada"
-    assert [entry.sku for entry in world.ledger.entries] == ["10042"]
+    assert [(entry.sku, entry.regional) for entry in world.ledger.entries] == [
+        ("10042", "CARTAGENA")
+    ]
     assert client.get(f"{BASE}/{request_id}/file").content == buffer.getvalue()
 
 
@@ -165,7 +173,7 @@ def test_a_manual_request_validates_its_body(client, world) -> None:
                     "sku": "10042",
                     "new_cost": "23000",
                     "increased_on": "2026-12-01",
-                    "regional_discounts": {"COSTA": "0.05"},
+                    "regional": "COSTA",
                 }
             ],
         },

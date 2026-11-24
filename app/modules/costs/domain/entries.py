@@ -1,8 +1,10 @@
 """Purchase entries against the supplier's quotation in force on the day of the entry.
 
 An entry line is one line of a purchase receipt (``EA``, «ENTRADA POR COMPRAS») read live from
-the warehouse. Its unit price comes before discounts and taxes, the same as the quotation's
-unit price, so the two compare directly:
+the warehouse. Its unit price comes before taxes and after the quotation's scale discount
+(«Tasa 1»): «UN SOLO PROVEEDOR S.A.» quotes 8,246 with a 20 % Tasa 1 and its receipts come in at
+6,596.80 (2026-11-24). So the quotation an entry is compared with is the quotation's unit price
+less its Tasa 1 (:func:`net_quotation`):
 
 - **ok** («Sin cambio»): the price is within the threshold of the quotation (0.1 % by default);
 - **novedad** («Con novedad»): it is farther away, up or down;
@@ -55,13 +57,19 @@ class EntryLine:
     supplier_nit: str | None
     quantity: Decimal | None
     unit: str | None
+    # The price of this entry (the latest of the three purchase prices shown).
     unit_price: Decimal
+    # What the entry should have cost: the quotation in force less its Tasa 1.
     quotation: Decimal | None = None
     quotation_since: date | None = None
-    # «Tasa 1»: the quotation's first scale discount, in percent.
+    # «Tasa 1»: the quotation's first scale discount, as a fraction (0.2 is 20 %).
     discount_pct: Decimal | None = None
+    # The quotation's unit price before the Tasa 1.
+    quotation_list_price: Decimal | None = None
+    # The two purchases before this one of the reference and unit: the previous and the one
+    # before it («antepenúltimo»).
     previous_price: Decimal | None = None
-    previous_price_2: Decimal | None = None
+    antepenultimate_price: Decimal | None = None
     status: str = OK
 
     @property
@@ -112,6 +120,24 @@ def supplier_name(label: str | None) -> str | None:
         return None
     _, separator, name = label.partition(" - ")
     return (name.strip() or None) if separator else label.strip() or None
+
+
+_QUOTATION_PLACES = Decimal("0.0001")
+
+
+def discount_fraction(points: Decimal | None) -> Decimal | None:
+    """The warehouse's Tasa 1 (``descuento_escala_pct``, in points: ``20.0000``) as a positive
+    fraction (``0.2``)."""
+
+    return None if points is None else abs(points) / 100
+
+
+def net_quotation(list_price: Decimal | None, discount: Decimal | None) -> Decimal | None:
+    """The quotation's unit price less its Tasa 1 (a fraction), to four places."""
+
+    if list_price is None:
+        return None
+    return (list_price * (1 - (discount or 0))).quantize(_QUOTATION_PLACES)
 
 
 def difference_pct(price: Decimal | None, quotation: Decimal | None) -> Decimal | None:
@@ -167,7 +193,7 @@ def fill_previous_prices(lines: Sequence[EntryLine]) -> list[EntryLine]:
         filled[line.line_key] = replace(
             line,
             previous_price=history[-1] if history else None,
-            previous_price_2=history[-2] if len(history) > 1 else None,
+            antepenultimate_price=history[-2] if len(history) > 1 else None,
         )
         history.append(line.unit_price)
     return [filled[line.line_key] for line in lines]
@@ -241,8 +267,10 @@ __all__ = [
     "EntryRow",
     "NoveltyBrief",
     "difference_pct",
+    "discount_fraction",
     "entry_status",
     "fill_previous_prices",
+    "net_quotation",
     "supplier_code",
     "supplier_name",
     "with_status",

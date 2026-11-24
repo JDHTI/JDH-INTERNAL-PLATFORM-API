@@ -162,6 +162,14 @@ def clean_text(value: Any) -> str | None:
     return text or None
 
 
+def regional_key(regional: str | None) -> str | None:
+    """The regional of a row as its key says it: upper case, single spaces; ``None`` for a
+    blank or national one. Migration ``0084`` writes the same in SQL."""
+
+    text = " ".join((regional or "").split()).upper()
+    return None if text in ("", "NACIONAL") else text
+
+
 def status_of(old: Decimal | None, new: Decimal | None) -> str | None:
     """Up, down or flat, comparing the new cost with the old one; ``None`` without both."""
 
@@ -206,15 +214,18 @@ class PriceIncreaseValues:
     @property
     def key(self) -> str:
         """What identifies a row for the upsert: the reference, when the increase takes
-        effect and when it was notified."""
+        effect, when it was notified and, for a cost of one regional, the regional (a blank or
+        «NACIONAL» one adds nothing, so national rows keep their key; 2026-11-24)."""
 
-        return "|".join(
-            (
-                self.sku,
-                self.increased_on.isoformat() if self.increased_on else "",
-                self.notified_on.isoformat() if self.notified_on else "",
-            )
-        )
+        parts = [
+            self.sku,
+            self.increased_on.isoformat() if self.increased_on else "",
+            self.notified_on.isoformat() if self.notified_on else "",
+        ]
+        regional = regional_key(self.regional)
+        if regional:
+            parts.append(regional)
+        return "|".join(parts)
 
     @property
     def effective_new_cost(self) -> Decimal | None:

@@ -31,6 +31,7 @@ def ledger_values(entry: LedgerEntry) -> PriceIncreaseValues:
         increased_on=entry.increased_on,
         supplier_sku=entry.supplier_sku,
         ean=entry.ean,
+        regional=entry.regional,
         icui_pct=entry.icui_pct,
         ibua=entry.ibua,
         old_cost_with_tax=entry.old_cost_with_tax,
@@ -70,16 +71,20 @@ class CommercialIncreaseLedger:
     async def record(
         self, entries: Sequence[LedgerEntry], actor: str, now: datetime
     ) -> dict[UUID, UUID]:
-        """Upsert the lines by reference, increase date and notification date.
+        """Upsert the lines by reference, regional, increase date and notification date.
 
         Returns:
-            dict[UUID, UUID]: Request line → the history row it became.
+            dict[UUID, UUID]: Request line → the first history row it became (a ``RESTO``
+            line becomes one per regional).
         """
 
         values = [ledger_values(entry) for entry in entries]
         await self.repository.upsert(values, actor, now)
         ids = await self.repository.ids_by_key([value.key for value in values])
-        return {entry.line_id: ids[value.key] for entry, value in zip(entries, values, strict=True)}
+        first: dict[UUID, UUID] = {}
+        for entry, value in zip(entries, values, strict=True):
+            first.setdefault(entry.line_id, ids[value.key])
+        return first
 
 
 __all__ = ["CommercialIncreaseLedger", "ledger_values"]

@@ -109,15 +109,19 @@ class LineResponse(BaseModel):
     supplier_nit: str | None
     quantity: Decimal | None
     unit: str | None
+    # Purchase prices: this entry's, the previous one and the one before it.
     unit_price: Decimal
+    previous_price: Decimal | None
+    antepenultimate_price: Decimal | None
+    # What the entry should have cost: the quotation in force less its Tasa 1.
     quotation: Decimal | None
     quotation_since: date | None
+    # Tasa 1 as a fraction (0.2 is 20 %) and the quotation's unit price before it.
     discount_pct: Decimal | None
+    quotation_list_price: Decimal | None
     difference: Decimal | None
     difference_pct: Decimal | None
     amount: Decimal | None
-    previous_price: Decimal | None
-    previous_price_2: Decimal | None
     status: EntryStatus
     status_label: str
 
@@ -232,14 +236,15 @@ def _line_fields(line: EntryLine) -> dict[str, Any]:
         "quantity": line.quantity,
         "unit": line.unit,
         "unit_price": line.unit_price,
+        "previous_price": line.previous_price,
+        "antepenultimate_price": line.antepenultimate_price,
         "quotation": line.quotation,
         "quotation_since": line.quotation_since,
         "discount_pct": line.discount_pct,
+        "quotation_list_price": line.quotation_list_price,
         "difference": line.difference,
         "difference_pct": None if line.difference_pct is None else round(line.difference_pct, 6),
         "amount": line.amount,
-        "previous_price": line.previous_price,
-        "previous_price_2": line.previous_price_2,
         "status": line.status,
         "status_label": ENTRY_STATUS_LABELS[line.status],
     }

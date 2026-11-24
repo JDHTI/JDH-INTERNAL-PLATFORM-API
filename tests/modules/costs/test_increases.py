@@ -15,11 +15,18 @@ from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.increases import IncreaseService, LineChanges
 from app.modules.costs.domain.increases import (
     APPROVED,
+    NATIONAL,
+    REGIONAL_NAMES,
     REJECTED,
+    REST,
+    SCOPES,
     LineInput,
     as_fraction,
     build_line,
+    clean_scope,
+    covered_regionals,
     list_price,
+    scope_problems,
     with_tax,
 )
 from app.modules.costs.infrastructure.increase_file import (
@@ -99,23 +106,55 @@ def test_costs_with_tax_and_variation_follow_the_workbook() -> None:
     assert (line.old_cost_with_tax, line.new_cost_with_tax) == (D("1200.0"), D("1320.0"))
     assert line.variation_amount == D("120.0") and line.variation_pct == D("0.1")
     assert line.change == "subio"
-    assert line.discount_for("COSTA") is None
+    assert line.regional == NATIONAL and line.public_price is None
 
 
-def test_the_supplier_icui_wins_and_regionals_fall_back_to_the_regular_discount() -> None:
-    values = LineInput(
-        "10042",
-        D("900"),
-        icui_pct=D("0"),
-        regular_discount_pct=D("0.03"),
-        regional_discounts={"CARTAGENA": D("0.05")},
-    )
+def test_the_supplier_icui_wins() -> None:
+    values = LineInput("10042", D("900"), icui_pct=D("0"), regular_discount_pct=D("0.03"))
 
     line = build_line(uuid4(), item("10042", "1000", icui="0.2"), values)
 
     assert line.icui_pct == D("0") and line.change == "bajo"
-    assert line.discount_for("CARTAGENA") == D("0.05")
-    assert line.discount_for("BOGOTA") == D("0.03")
+    assert line.regular_discount_pct == D("0.03")
+
+
+def test_the_regional_is_read_loosely() -> None:
+    assert clean_scope(None) == NATIONAL and clean_scope(" ") == NATIONAL
+    assert clean_scope("Bogotá") == "BOGOTA" and clean_scope("resto") == REST
+    assert clean_scope("resto de  regionales") == REST and clean_scope("COSTA") is None
+
+
+def test_rest_covers_the_regionals_the_other_rows_do_not_name() -> None:
+    assert covered_regionals(NATIONAL, []) == REGIONAL_NAMES
+    assert covered_regionals("ANTIOQUIA", [REST]) == ("ANTIOQUIA",)
+    assert covered_regionals(REST, ["ANTIOQUIA", "CARTAGENA"]) == (
+        "BOGOTA",
+        "PEREIRA",
+        "BUCARAMANGA",
+        "BARRANQUILLA",
+    )
+
+
+def test_regional_rows_of_a_reference_are_checked_together() -> None:
+    rows = [
+        LineInput("1", D("1"), regional="ANTIOQUIA"),
+        LineInput("1", D("1"), regional=REST),  # fine: Antioquia apart, the rest together
+        LineInput("2", D("1"), regional=NATIONAL),
+        LineInput("2", D("1"), regional="BOGOTA"),  # NACIONAL with another row
+        LineInput("3", D("1"), regional=REST),  # RESTO alone
+        LineInput("4", D("1"), regional="PEREIRA"),
+        LineInput("4", D("1"), regional="PEREIRA"),  # repeated
+        *(LineInput("5", D("1"), regional=name) for name in REGIONAL_NAMES),
+        LineInput("5", D("1"), regional=REST),  # nothing left to cover
+    ]
+
+    problems = scope_problems(rows)
+
+    assert sorted(problems) == [2, 4, 6, len(rows) - 1]
+    assert "NACIONAL no se combina" in problems[2][0]
+    assert "necesita otra fila" in problems[4][0]
+    assert problems[6] == ["La regional PEREIRA está repetida en la referencia"]
+    assert "ya están las seis" in problems[len(rows) - 1][0]
 
 
 def test_the_workbook_is_named_as_the_area_does() -> None:
@@ -144,7 +183,7 @@ def test_the_template_keeps_the_maestra_layout() -> None:
     assert sheet["T1"].value == "Código: P.17.F.04" and sheet["T3"].value == "Fecha: 23/11/2026"
     assert sheet.freeze_panes == "A9" and len(sheet._images) == 1
     headers = [sheet.cell(HEADER_ROW, column).value for column in range(1, len(COLUMNS) + 1)]
-    assert headers[:12] == [
+    assert headers[:15] == [
         "Fecha de Incremento",
         "SKU Proveedor",
         "Codigo de Barras EAN 13",
@@ -157,16 +196,18 @@ def test_the_template_keeps_the_maestra_layout() -> None:
         "Categoria",
         "Grupo Impositivo",
         "Descuento Regular",
+        "Regional",
+        "Precio Venta Público sin IVA (PVP)",
+        "ICUI (Indique el porcentaje)",
     ]
-    assert "Regional" not in headers and headers[-6:] == [
-        "Descuento ANTIOQUIA",
-        "Descuento BOGOTA",
-        "Descuento PEREIRA",
-        "Descuento BUCARAMANGA",
-        "Descuento CARTAGENA",
-        "Descuento BARRANQUILLA",
-    ]
+    assert headers[-1] == "Estado " and len(headers) == 25
+    lists = {
+        str(rule.sqref).split(":")[0]: rule.formula1
+        for rule in sheet.data_validations.dataValidation
+    }
+    assert lists[f"M{FIRST_ROW}"] == f'"{",".join(SCOPES)}"'
     second = FIRST_ROW + 1
+    assert sheet.cell(second, COLUMN["Regional"]).value == NATIONAL
     assert sheet.cell(second, COLUMN["Referencia"]).value == "9894"
     assert sheet.cell(second, COLUMN["ICUI (Indique el porcentaje)"]).value == 0.2
     assert sheet.cell(second, COLUMN["Costo anterior sin Impuesto Saludable"]).value == 56962.04
@@ -182,13 +223,15 @@ def test_a_returned_workbook_reads_only_the_rows_with_a_new_cost() -> None:
             "10042": {
                 "Costo Nuevo sin Impuesto Saludable": 1100,
                 "Fecha de Incremento": datetime(2026, 12, 1),
-                "Descuento Regular": 0.03,
-                "Descuento CARTAGENA": 5,  # typed as points
+                "Descuento Regular": 3,  # typed as points
+                "Regional": "Antioquia",
+                "Precio Venta Público sin IVA (PVP)": 1990.5,
                 "OBSERVACIONES": "duplicado",
             },
             "9894": {
                 "Costo Nuevo sin Impuesto Saludable": "$ 1.250,50",
                 "Fecha de Incremento": "01/12/2026",
+                "Regional": None,  # blank is NACIONAL
                 "Estado ": "NO",
             },
         },
@@ -204,9 +247,9 @@ def test_a_returned_workbook_reads_only_the_rows_with_a_new_cost() -> None:
         date(2026, 12, 1),
     )
     assert first.regular_discount_pct == D("0.03")
-    assert first.regional_discounts == {"CARTAGENA": D("0.05")}
+    assert (first.regional, first.public_price) == ("ANTIOQUIA", D("1990.50"))
     assert first.observation == "DUPLICADO" and first.accepted
-    assert (second.new_cost, second.accepted) == (D("1250.50"), False)
+    assert (second.new_cost, second.accepted, second.regional) == (D("1250.50"), False, NATIONAL)
 
 
 def test_row_problems_are_reported_by_sheet_row() -> None:
@@ -218,7 +261,8 @@ def test_row_problems_are_reported_by_sheet_row() -> None:
             "9894": {
                 "Costo Nuevo sin Impuesto Saludable": 1100,
                 "Fecha de Incremento": datetime(2026, 12, 1),
-                "Descuento BOGOTA": "mucho",
+                "Regional": "COSTA",
+                "Precio Venta Público sin IVA (PVP)": "mucho",
             },
         },
     )
@@ -227,7 +271,8 @@ def test_row_problems_are_reported_by_sheet_row() -> None:
 
     assert [(issue.row_number, issue.problem) for issue in rows.issues] == [
         (FIRST_ROW, "Falta la fecha de incremento"),
-        (FIRST_ROW + 1, "El descuento de BOGOTA no es un porcentaje"),
+        (FIRST_ROW + 1, "El PVP sin IVA no es un número"),
+        (FIRST_ROW + 1, "Regional desconocida: COSTA; elija una de la lista"),
     ]
     assert rows.lines == ()
 
@@ -309,10 +354,11 @@ async def test_unknown_or_repeated_references_block_the_upload() -> None:
     report = await increases.upload(PERSON, "50", "m.xlsx", buffer.getvalue(), apply=True)
 
     assert not report.applied and report.blocked
-    assert {(issue.sku, issue.problem) for issue in report.issues} == {
-        ("77777", "La referencia no es un producto activo del proveedor"),
-        ("10042", "La referencia está repetida"),
-    }
+    problems = {(issue.row_number, issue.problem) for issue in report.issues}
+    assert (20, "La referencia no es un producto activo del proveedor") in problems
+    assert (22, "La regional NACIONAL está repetida en la referencia") in problems
+    # Rows without a regional are NACIONAL: the first cannot go with another row either.
+    assert any(row == 21 and "NACIONAL no se combina" in text for row, text in problems)
 
 
 async def test_an_untouched_template_is_refused_and_readers_cannot_load() -> None:
@@ -336,35 +382,50 @@ async def test_a_manual_request_review_and_approval_write_the_history() -> None:
                 "10042",
                 D("23000"),
                 increased_on=date(2026, 12, 1),
-                regional_discounts={"BOGOTA": D("0.02")},
+                regional="ANTIOQUIA",
+                regular_discount_pct=D("0.02"),
+                public_price=D("31990"),
             ),
+            LineInput("10042", D("22000"), increased_on=date(2026, 12, 1), regional=REST),
             LineInput("9894", D("60000"), increased_on=date(2026, 12, 1)),
         ],
         note="Correo del proveedor",
     )
-    assert request.source == "manual" and request.line_count == 2
+    assert request.source == "manual" and request.line_count == 3
+    rest = next(line for line in request.lines if line.regional == REST)
+    assert rest.regionals == ("BOGOTA", "PEREIRA", "BUCARAMANGA", "CARTAGENA", "BARRANQUILLA")
 
     dropped = next(line for line in request.lines if line.sku == "9894")
     request = await increases.update_line(
         PERSON, request.id, dropped.id, LineChanges(accepted=False)
     )
-    kept = next(line for line in request.lines if line.sku == "10042")
+    antioquia = next(line for line in request.lines if line.regional == "ANTIOQUIA")
     request = await increases.update_line(
-        PERSON, request.id, kept.id, LineChanges(new_cost=D("22500"))
+        PERSON, request.id, antioquia.id, LineChanges(new_cost=D("22500"))
     )
-    assert request.accepted_count == 1
+    assert request.accepted_count == 2
 
     approved = await increases.approve(PERSON, request.id)
 
     assert approved.status == APPROVED and approved.decided_by == PERSON.email
-    (entry,) = ledger.entries
-    assert (entry.sku, entry.new_cost, entry.notified_on) == ("10042", D("22500"), NOW.date())
+    # Antioquia is one history row; the rest, one per regional it covers.
+    assert [(entry.regional, entry.new_cost) for entry in ledger.entries] == [
+        ("ANTIOQUIA", D("22500")),
+        *((name, D("22000")) for name in rest.regionals),
+    ]
+    entry = ledger.entries[0]
+    assert (entry.sku, entry.notified_on) == ("10042", NOW.date())
     assert entry.margin_pct == D("0.18") and entry.price == list_price(D("22500"), D("0.18"))
-    assert entry.observations == "Descuento BOGOTA 2.00 %"
+    assert entry.observations == "Descuento regular 2.00 % · PVP sin IVA 31990.00"
+    assert ledger.entries[1].observations == (
+        "RESTO DE REGIONALES (BOGOTA, PEREIRA, BUCARAMANGA, CARTAGENA, BARRANQUILLA)"
+    )
     values = ledger_values(entry)
     assert values.source == "solicitud" and values.system_updated_on is None and values.notified
-    assert values.request_line_id == entry.line_id
-    assert next(line for line in approved.lines if line.sku == "10042").ledger_id is not None
+    assert values.request_line_id == entry.line_id and values.regional == "ANTIOQUIA"
+    assert values.key == "10042|2026-12-01|2026-11-23|ANTIOQUIA"
+    assert ledger_values(ledger.entries[1]).key.endswith("|BOGOTA")
+    assert all(line.ledger_id is not None for line in approved.lines if line.sku == "10042")
     with pytest.raises(ConflictError):
         await increases.reject(PERSON, request.id, "tarde")
 

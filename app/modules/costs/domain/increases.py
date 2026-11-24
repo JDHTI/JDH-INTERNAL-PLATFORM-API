@@ -12,15 +12,28 @@ The costs follow the area's workbook:
 - the variation compares the new cost with tax against the old one with tax;
 - the increase is ``SUBIO``, ``BAJO`` or ``ESTABLE`` by its sign.
 
-A cost differing by regional does not repeat the item (decision of 2026-11-23): the item keeps
-its «Descuento Regular» and one discount column per regional; an empty one takes the regular.
+Each row carries a «Regional», as in the area's workbook (decision of 2026-11-24, replacing the
+discount column per regional): the row's cost, discount and PVP hold where it says.
+
+- ``NACIONAL``: every regional. It is the only row of its reference.
+- One regional (``ANTIOQUIA``): only that one. A regional without a row keeps its cost.
+- ``RESTO DE REGIONALES``: every regional the other rows of the reference do not name. It
+  saves repeating a cost five times when one regional differs. It needs at least one row with
+  a regional and must leave some regional to cover.
+
+On approval each row becomes one history row per regional it covers (``NACIONAL`` stays one
+row), so the history keeps the area's format of one regional per row.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import unicodedata
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Protocol
 from uuid import UUID
 
 UP = "subio"
@@ -48,6 +61,11 @@ REGIONALS: tuple[tuple[str, str], ...] = (
     ("BARRANQUILLA", "009"),
 )
 REGIONAL_NAMES = tuple(name for name, _ in REGIONALS)
+NATIONAL = "NACIONAL"
+REST = "RESTO DE REGIONALES"
+# What the «Regional» of a row may say, in the order of the workbook's list.
+SCOPES = (NATIONAL, *REGIONAL_NAMES, REST)
+_SCOPE_ALIASES = {"RESTO": REST, "RESTO REGIONALES": REST, "NACIONAL": NATIONAL}
 # What the supplier may write in «OBSERVACIONES» (the workbook's list).
 OBSERVATIONS = ("DESCONTINUADO", "CAMBIO_DE_REFERENCIA", "DUPLICADO")
 
@@ -92,6 +110,91 @@ def list_price(cost: Decimal | None, margin: Decimal | None) -> Decimal | None:
     return (cost / (1 - margin)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
+def clean_scope(text: str | None) -> str | None:
+    """The «Regional» of a row: blank is ``NACIONAL``; accents, case and spaces do not count
+    («Bogotá», «resto»). ``None`` when it is none of :data:`SCOPES`."""
+
+    plain = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
+    plain = " ".join(plain.upper().split())
+    if not plain:
+        return NATIONAL
+    plain = _SCOPE_ALIASES.get(plain, plain)
+    return plain if plain in SCOPES else None
+
+
+class _Scoped(Protocol):
+    @property
+    def sku(self) -> str: ...
+
+    @property
+    def regional(self) -> str: ...
+
+
+def covered_regionals(regional: str, siblings: Sequence[str]) -> tuple[str, ...]:
+    """The regionals a row holds for, given the «Regional» of the other rows of its reference."""
+
+    if regional == NATIONAL:
+        return REGIONAL_NAMES
+    if regional == REST:
+        named = set(siblings)
+        return tuple(name for name in REGIONAL_NAMES if name not in named)
+    return (regional,)
+
+
+def scope_problems(rows: Sequence[_Scoped]) -> dict[int, list[str]]:
+    """What is wrong with the «Regional» of the rows, by position, looking at each reference's
+    rows together.
+
+    - a regional (or ``NACIONAL``) repeated for the same reference;
+    - ``NACIONAL`` with other rows of the same reference;
+    - ``RESTO DE REGIONALES`` without a row with a regional, or with the six already named.
+    """
+
+    by_sku: dict[str, list[int]] = defaultdict(list)
+    for position, row in enumerate(rows):
+        by_sku[row.sku].append(position)
+    problems: dict[int, list[str]] = defaultdict(list)
+    for positions in by_sku.values():
+        scopes = [rows[position].regional for position in positions]
+        seen: set[str] = set()
+        named = [scope for scope in scopes if scope in REGIONAL_NAMES]
+        for position, scope in zip(positions, scopes, strict=True):
+            if scope in seen:
+                problems[position].append(f"La regional {scope} está repetida en la referencia")
+                continue
+            seen.add(scope)
+            if scope == NATIONAL and len(scopes) > 1:
+                problems[position].append(
+                    "NACIONAL no se combina con otras filas de la referencia; escriba la regional "
+                    f"que cambia y {REST} para las demás"
+                )
+            elif scope == REST and not named:
+                problems[position].append(
+                    f"{REST} necesita otra fila de la referencia con una regional; si el costo "
+                    "es el mismo en todas use NACIONAL"
+                )
+            elif scope == REST and len(set(named)) == len(REGIONAL_NAMES):
+                problems[position].append(f"{REST} no cubre ninguna regional: ya están las seis")
+    return dict(problems)
+
+
+def with_coverage(lines: Sequence[RequestLine]) -> list[RequestLine]:
+    """The lines with the regionals each one covers among the lines of its reference."""
+
+    by_sku: dict[str, list[str]] = defaultdict(list)
+    for line in lines:
+        by_sku[line.sku].append(line.regional)
+    return [
+        replace(
+            line,
+            regionals=covered_regionals(
+                line.regional, [scope for scope in by_sku[line.sku] if scope != line.regional]
+            ),
+        )
+        for line in lines
+    ]
+
+
 @dataclass(frozen=True)
 class SupplierItem:
     """An active product of a commercial supplier, as the workbook and the form offer it."""
@@ -126,7 +229,10 @@ class LineInput:
     icui_pct: Decimal | None = None
     ibua: Decimal | None = None
     regular_discount_pct: Decimal | None = None
-    regional_discounts: dict[str, Decimal] = field(default_factory=dict)
+    # ``NACIONAL``, a regional or ``RESTO DE REGIONALES`` (:data:`SCOPES`).
+    regional: str = NATIONAL
+    # The public sale price without VAT the supplier suggests («PVP»).
+    public_price: Decimal | None = None
     observation: str | None = None
     accepted: bool = True
     row_number: int | None = None
@@ -156,15 +262,14 @@ class RequestLine:
     change: str | None
     increased_on: date | None
     regular_discount_pct: Decimal | None
-    regional_discounts: dict[str, Decimal]
+    regional: str
+    public_price: Decimal | None
     observation: str | None
     accepted: bool
+    # The first history row it became, once approved (``RESTO`` becomes several).
     ledger_id: UUID | None = None
-
-    def discount_for(self, regional: str) -> Decimal | None:
-        """The discount of a regional: its own, else the regular one."""
-
-        return self.regional_discounts.get(regional, self.regular_discount_pct)
+    # The regionals the line holds for among the lines of its reference (:func:`with_coverage`).
+    regionals: tuple[str, ...] = ()
 
 
 def build_line(line_id: UUID, item: SupplierItem, values: LineInput) -> RequestLine:
@@ -199,7 +304,8 @@ def build_line(line_id: UUID, item: SupplierItem, values: LineInput) -> RequestL
         change=change_of(old_with_tax, new_with_tax),
         increased_on=values.increased_on,
         regular_discount_pct=values.regular_discount_pct,
-        regional_discounts=dict(values.regional_discounts),
+        regional=values.regional,
+        public_price=values.public_price,
         observation=values.observation,
         accepted=values.accepted,
     )
@@ -280,12 +386,15 @@ __all__ = [
     "IN_REVIEW",
     "MAX_LINES",
     "MAX_NOTE",
+    "NATIONAL",
     "OBSERVATIONS",
     "REGIONALS",
     "REGIONAL_NAMES",
     "REJECTED",
     "REQUEST_STATUSES",
     "REQUEST_STATUS_LABELS",
+    "REST",
+    "SCOPES",
     "SOURCES",
     "UP",
     "IncreaseRequest",
@@ -299,6 +408,10 @@ __all__ = [
     "as_fraction",
     "build_line",
     "change_of",
+    "clean_scope",
+    "covered_regionals",
     "list_price",
+    "scope_problems",
+    "with_coverage",
     "with_tax",
 ]

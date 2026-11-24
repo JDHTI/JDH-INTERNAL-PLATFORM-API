@@ -15,6 +15,7 @@ from app.modules.costs.domain.increases import (
     IncreaseRequestPage,
     RequestLine,
     SupplierItem,
+    with_coverage,
     with_tax,
 )
 from app.modules.costs.domain.ports import LedgerEntry
@@ -71,7 +72,10 @@ class FakeLedger:
 
     async def record(self, entries, actor: str, now: datetime) -> dict[UUID, UUID]:
         self.entries.extend(entries)
-        return {entry.line_id: uuid4() for entry in entries}
+        first: dict[UUID, UUID] = {}
+        for entry in entries:
+            first.setdefault(entry.line_id, uuid4())
+        return first
 
 
 class FakeIncreaseRepository:
@@ -95,7 +99,7 @@ class FakeIncreaseRepository:
         request = self.requests.get(request_id)
         if request is None:
             return None
-        lines = request.lines
+        lines = tuple(with_coverage(request.lines))
         return replace(
             request,
             line_count=len(lines),

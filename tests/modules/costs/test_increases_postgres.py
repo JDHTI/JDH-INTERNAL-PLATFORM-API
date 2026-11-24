@@ -18,7 +18,7 @@ from app.modules.commercial_masters.infrastructure.price_increases_repository im
 )
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.increases import IncreaseService, LineChanges
-from app.modules.costs.domain.increases import LineInput
+from app.modules.costs.domain.increases import REST, LineInput
 from app.modules.costs.infrastructure.increase_file import (
     IncreaseWorkbookReader,
     template_workbook,
@@ -89,40 +89,49 @@ async def test_an_approved_request_lands_in_the_history_as_pending(world) -> Non
                 Decimal("1100"),
                 increased_on=date(2026, 12, 1),
                 regular_discount_pct=Decimal("0.03"),
-                regional_discounts={"CARTAGENA": Decimal("0.05"), "BOGOTA": Decimal("0.02")},
+                regional="CARTAGENA",
+                public_price=Decimal("1990"),
             ),
+            LineInput(skus[0], Decimal("1050"), increased_on=date(2026, 12, 1), regional=REST),
             LineInput(skus[1], Decimal("450"), increased_on=date(2026, 12, 1)),
         ],
     )
-    first = next(line for line in request.lines if line.sku == skus[0])
-    assert first.regional_discounts == {"CARTAGENA": Decimal("0.05"), "BOGOTA": Decimal("0.02")}
+    first = next(line for line in request.lines if line.regional == "CARTAGENA")
+    assert first.public_price == Decimal("1990.00") and first.regionals == ("CARTAGENA",)
     assert first.new_cost_with_tax == Decimal("1320.0000")
+    rest = next(line for line in request.lines if line.regional == REST)
+    assert len(rest.regionals) == 5 and "CARTAGENA" not in rest.regionals
 
     second = next(line for line in request.lines if line.sku == skus[1])
     request = await increases.update_line(
-        PERSON, request.id, second.id, LineChanges(regional_discounts={"PEREIRA": Decimal("0.01")})
+        PERSON, request.id, second.id, LineChanges(public_price=Decimal("700"))
     )
     second = next(line for line in request.lines if line.sku == skus[1])
-    assert second.regional_discounts == {"PEREIRA": Decimal("0.01")}
+    assert second.public_price == Decimal("700.00") and second.regional == "NACIONAL"
 
     page = await increases.page("en_revision", code, 1, 10)
-    assert page.total == 1 and page.items[0].line_count == 2 and page.items[0].accepted_count == 2
+    assert page.total == 1 and page.items[0].line_count == 3 and page.items[0].accepted_count == 3
 
     approved = await increases.approve(PERSON, request.id, "Aprobada con la carta")
 
     assert approved.status == "aprobada" and all(line.ledger_id for line in approved.lines)
     async with database.session_factory() as session:
-        rows = {
-            row.sku: row
-            for row in await session.scalars(
+        rows = list(
+            await session.scalars(
                 select(PriceIncreaseModel).where(PriceIncreaseModel.sku.in_(skus))
             )
-        }
-    row = rows[skus[0]]
+        )
+    by_regional = {(row.sku, row.regional): row for row in rows}
+    # Cartagena, five rows for the rest and the national one of the second reference.
+    assert len(rows) == 7 and (skus[1], "NACIONAL") in by_regional
+    row = by_regional[(skus[0], "CARTAGENA")]
     assert row.source == "solicitud" and row.request_line_id == first.id
+    assert row.row_key == f"{skus[0]}|2026-12-01|{NOW.date().isoformat()}|CARTAGENA"
     assert row.system_updated_on is None and row.notified and row.status == "subio"
     assert row.notified_on == NOW.date() and row.increased_on == date(2026, 12, 1)
     assert row.new_cost_with_tax == Decimal("1320.0000")
-    assert "Descuento CARTAGENA 5.00 %" in row.observations
-    assert rows[skus[1]].status == "bajo"
-    assert {line.ledger_id for line in approved.lines} == {row.id for row in rows.values()}
+    assert "PVP sin IVA 1990.00" in row.observations
+    assert by_regional[(skus[0], "BOGOTA")].new_cost == Decimal("1050")
+    assert by_regional[(skus[0], "BOGOTA")].request_line_id == rest.id
+    assert by_regional[(skus[1], "NACIONAL")].status == "bajo"
+    assert by_regional[(skus[1], "NACIONAL")].row_key.count("|") == 2

@@ -8,10 +8,14 @@ The layout is the area's ``MAESTRA 50 - ASCENDER S.A. 23-11-2026.xlsx`` (form P.
   with the same colors for SUBIO, BAJO and ESTABLE;
 - a hidden ``Motivos`` sheet, as the area keeps it.
 
-Two changes, decided on 2026-11-23: the «Regional» column is replaced by one discount column
-per regional at the end (the item is never repeated), and the ICUI comes from SIESA instead of
-a lookup in ``Motivos``. The formulas leave a row blank until it has a new cost, instead of
-calling every untouched row «BAJO».
+Changes to the area's workbook:
+
+- the ICUI comes from SIESA instead of a lookup in ``Motivos`` (2026-11-23);
+- the formulas leave a row blank until it has a new cost, instead of calling every untouched
+  row «BAJO»;
+- the «Regional» list adds ``RESTO DE REGIONALES`` and every row starts at ``NACIONAL``, and a
+  «Precio Venta Público sin IVA (PVP)» column follows it (2026-11-24; the discount column per
+  regional of 2026-11-23 is gone).
 
 The reader matches the columns by name, so the supplier may reorder or hide them; only the
 reference and the new cost without tax are required. The workbook's formulas are never
@@ -48,13 +52,15 @@ from app.modules.commercial_masters.domain.price_increases import (
     parse_ratio,
 )
 from app.modules.costs.domain.increases import (
+    NATIONAL,
     OBSERVATIONS,
-    REGIONAL_NAMES,
+    SCOPES,
     LineInput,
     RowIssue,
     SupplierItem,
     WorkbookRows,
     as_fraction,
+    clean_scope,
 )
 
 SHEET = "Maestra_Costos"
@@ -71,7 +77,6 @@ _GREEN = "FF00B050"
 _RED = "FFFF0000"
 _YELLOW = "FFFFFF00"
 _LIGHT_GREEN = "FF92D050"
-_BLUE = "FF9BC2E6"
 
 
 @dataclass(frozen=True)
@@ -82,7 +87,10 @@ class Column:
     number_format: str = "General"
 
 
-# The MAESTRA columns, in order (A..W), then one discount per regional.
+REGIONAL = "Regional"
+PUBLIC_PRICE = "Precio Venta Público sin IVA (PVP)"
+
+# The MAESTRA columns, in order (A..Y): the area's, with the PVP after the regional.
 COLUMNS: tuple[Column, ...] = (
     Column("Fecha de Incremento", 9.8, _GREY, "dd/mm/yyyy"),
     Column("SKU Proveedor", 15.9, _GREEN, "@"),
@@ -96,6 +104,8 @@ COLUMNS: tuple[Column, ...] = (
     Column("Categoria", 22.0, _GREY),
     Column("Grupo Impositivo", 14.1, _GREY, "@"),
     Column("Descuento Regular", 13.2, _GREY, "0.00%"),
+    Column(REGIONAL, 14.1, _GREY),
+    Column(PUBLIC_PRICE, 12.6, _YELLOW, "$ #,##0"),
     Column("ICUI (Indique el porcentaje)", 15.0, _RED, "0%"),
     Column("IBUA (Indique el valor por unidad)", 11.5, _RED, "$ #,##0.00"),
     Column("Costo anterior con Impuesto Saludable", 13.2, _GREY, "$ #,##0"),
@@ -107,7 +117,6 @@ COLUMNS: tuple[Column, ...] = (
     Column("Estado Incremento", 11.5, _RED),
     Column("OBSERVACIONES", 14.1, _RED),
     Column("Estado ", 8.0, _LIGHT_GREEN),
-    *(Column(f"Descuento {name}", 12.6, _BLUE, "0.00%") for name in REGIONAL_NAMES),
 )
 _INDEX = {column.header: position for position, column in enumerate(COLUMNS, start=1)}
 LAST_COLUMN = get_column_letter(len(COLUMNS))
@@ -115,10 +124,12 @@ LAST_COLUMN = get_column_letter(len(COLUMNS))
 INSTRUCTIONS = (
     "* Diligencie la Fecha de Incremento y el Costo Nuevo sin Impuesto Saludable de cada "
     "referencia que cambia; las filas sin costo nuevo no se cargan\n"
-    "* Si maneja un descuento diferente por regional, escríbalo en la columna «Descuento» de esa "
-    "regional al final; una regional vacía toma el Descuento Regular. No repita el ítem\n"
-    "* Favor completar y organizar los codigos de barra y Sku Proveedor\n"
-    "* Los costos en caso de tener decimales indique maximo 2"
+    "* Si el costo es el mismo en todo el país, deje la Regional en NACIONAL. Si cambia solo en "
+    "una regional, cambie NACIONAL por esa regional: las demás conservan su costo\n"
+    "* Si una regional tiene un costo propio y las demás comparten otro, deje una fila con esa "
+    "regional y copie la fila con RESTO DE REGIONALES para las demás\n"
+    "* Favor completar y organizar los codigos de barra y Sku Proveedor. Los costos en caso de "
+    "tener decimales indique maximo 2"
 )
 
 
@@ -160,7 +171,7 @@ def _header(sheet, day: date) -> None:
     sheet["A4"] = INSTRUCTIONS
     sheet["A4"].font = Font(name="Calibri", size=11, bold=True)
     sheet["A4"].alignment = Alignment(vertical="top", wrap_text=True)
-    for row, height in ((1, 19.5), (2, 19.5), (3, 19.5), (4, 15), (5, 15), (6, 15), (7, 15)):
+    for row, height in ((1, 19.5), (2, 19.5), (3, 19.5), (4, 18), (5, 18), (6, 18), (7, 18)):
         sheet.row_dimensions[row].height = height
     if _LOGO.exists():
         logo = Image(str(_LOGO))
@@ -241,19 +252,39 @@ def _checks(sheet, last_row: int) -> None:
         ),
         "Costo Nuevo sin Impuesto Saludable",
     )
-    for header in ("Descuento Regular", *(f"Descuento {name}" for name in REGIONAL_NAMES)):
-        add(
-            DataValidation(
-                type="decimal",
-                operator="between",
-                formula1="0",
-                formula2="1",
-                allow_blank=True,
-                showErrorMessage=True,
-                error="El descuento es un porcentaje entre 0 % y 100 %",
-            ),
-            header,
-        )
+    add(
+        DataValidation(
+            type="decimal",
+            operator="greaterThan",
+            formula1="0",
+            allow_blank=True,
+            showErrorMessage=True,
+            error="El PVP sin IVA debe ser un número mayor que cero",
+        ),
+        PUBLIC_PRICE,
+    )
+    add(
+        DataValidation(
+            type="decimal",
+            operator="between",
+            formula1="0",
+            formula2="1",
+            allow_blank=True,
+            showErrorMessage=True,
+            error="El descuento es un porcentaje entre 0 % y 100 %",
+        ),
+        "Descuento Regular",
+    )
+    add(
+        DataValidation(
+            type="list",
+            formula1=f'"{",".join(SCOPES)}"',
+            allow_blank=True,
+            showErrorMessage=True,
+            error="Elija NACIONAL, una regional o RESTO DE REGIONALES",
+        ),
+        REGIONAL,
+    )
     add(
         DataValidation(type="list", formula1=f'"{",".join(OBSERVATIONS)}"', allow_blank=True),
         "OBSERVACIONES",
@@ -307,6 +338,7 @@ def template_workbook(items: Sequence[SupplierItem], reasons: Sequence[str], day
             "Estado el Item": item.state,
             "Categoria": item.category,
             "Grupo Impositivo": item.tax_group,
+            REGIONAL: NATIONAL,
             "ICUI (Indique el porcentaje)": _number(item.icui_pct) or 0,
             "IBUA (Indique el valor por unidad)": _number(item.ibua),
             "Costo anterior sin Impuesto Saludable": _number(item.old_cost),
@@ -351,9 +383,13 @@ _FIELDS = {
     _key("IBUA (Indique el valor por unidad)"): "ibua",
     _key("Costo Nuevo sin Impuesto Saludable"): "new_cost",
     _key("Descuento Regular"): "regular_discount_pct",
+    _key(REGIONAL): "regional",
+    _key(PUBLIC_PRICE): "public_price",
+    _key("Precio Venta Publico sin IVA"): "public_price",
+    _key("PVP"): "public_price",
+    _key("PVP sin IVA"): "public_price",
     _key("OBSERVACIONES"): "observation",
     _key("Estado"): "accepted",
-    **{_key(f"Descuento {name}"): f"regional:{name}" for name in REGIONAL_NAMES},
 }
 _REQUIRED = ("sku", "new_cost")
 _LABELS = {"sku": "Referencia", "new_cost": "Costo Nuevo sin Impuesto Saludable"}
@@ -422,7 +458,7 @@ class IncreaseWorkbookReader:
 
     def _row(self, cells: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         problems: list[str] = []
-        parsed: dict[str, Any] = {"regional_discounts": {}}
+        parsed: dict[str, Any] = {}
         sku = clean_text(cells.get("sku"))
         parsed["sku"] = sku
         try:
@@ -470,18 +506,20 @@ class IncreaseWorkbookReader:
         if ibua is not None and ibua < 0:
             problems.append("El IBUA no puede ser negativo")
         parsed["ibua"] = ibua
-        for name in REGIONAL_NAMES:
-            raw = cells.get(f"regional:{name}")
-            try:
-                value = as_fraction(parse_ratio(raw))
-            except CellError:
-                problems.append(f"El descuento de {name} no es un porcentaje")
-                continue
-            if value is None:
-                continue
-            if not 0 <= value <= 1:
-                problems.append(f"El descuento de {name} debe estar entre 0 % y 100 %")
-            parsed["regional_discounts"][name] = value
+        try:
+            public_price = parse_money(cells.get("public_price"))
+        except CellError:
+            public_price = None
+            problems.append("El PVP sin IVA no es un número")
+        if public_price is not None and public_price <= 0:
+            problems.append("El PVP sin IVA debe ser mayor que cero")
+        parsed["public_price"] = None if public_price is None else round(public_price, 2)
+        raw_regional = clean_text(cells.get("regional"))
+        regional = clean_scope(raw_regional)
+        if regional is None:
+            problems.append(f"Regional desconocida: {raw_regional}; elija una de la lista")
+        else:
+            parsed["regional"] = regional
         observation = clean_text(cells.get("observation"))
         parsed["observation"] = observation.upper()[:500] if observation else None
         state = clean_text(cells.get("accepted"))
