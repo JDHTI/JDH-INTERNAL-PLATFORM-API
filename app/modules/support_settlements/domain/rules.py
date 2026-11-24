@@ -10,14 +10,20 @@ Foods):
   warehouse and promotional warehouses are checked with the sale's own branch
   (:func:`~app.modules.order_validation.domain.rules.scope_of`), not the union of the
   customer's branches.
-- **Cost**: the supplier's SIESA quotation in force on the sale's day (the cost BI settles
-  with); without one, the invoice's average cost, and the line is marked.
-- **Amount per unit** (:func:`unit_amount`): % on cost, % on list price, $ per unit or box
-  (or kilo), $ supported cost (``cost − supported``, never below zero) and % guaranteed margin.
+- **Cost** (two bases, 2026-11-24; every month is settled with both):
+  - ``cotizacion``: the supplier's SIESA quotation in force on the sale's day; without one,
+    the invoice's cost, and the line is marked.
+  - ``inventario``: the inventory cost billed on the line (``consumo.ventas.costo`` ÷ quantity).
+- **List price** (:func:`list_price`): the chosen cost at the product's **Food Service**
+  margin (``margin_list`` of the margin master), ``cost / (1 − margin)``, whatever the
+  customer's channel (2026-11-24).
+- **Amount per unit** (:func:`unit_amount`), all with the chosen cost: % on cost, % on list
+  price, $ per unit or box (or kilo), $ supported cost (``cost − supported``, never below zero)
+  and % guaranteed margin (``cost − supported cost``, the supported cost being the price sold
+  at the guaranteed margin).
 - **Discount passed to the customer** (% types only): when the customer was billed above the
   negotiated price, the supplier's % drops by the discount points not given:
-  ``% real = % − max(0, negotiated discount − granted discount)``, both over the list price
-  ``cost / (1 − margin)`` of the customer's margin list.
+  ``% real = % − max(0, negotiated discount − granted discount)``, both over the list price.
 - **Several supports**: copies of the same support (same class, type, value, unit and
   reference: a business group's copies, a group and a NIT copy) count once; really different
   supports add up and the line is marked. A supplier-margin request's copy replaces its base.
@@ -35,12 +41,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.modules.commercial_masters.domain.margins import customer_margin_field, margin_for
+from app.modules.commercial_masters.domain.margins import margin_for
 from app.modules.order_validation.domain.entities import Agreement, CustomerScope, OrderLine
 from app.modules.order_validation.domain.rules import APPLIES, scope_of
 from app.modules.supplier_supports.domain import pricing
 from app.modules.support_settlements.domain.entities import (
     ALREADY_DISCOUNTED,
+    COST_BASES,
+    COST_INVENTORY,
+    COST_QUOTE,
     IN_REVIEW,
     INVOICE,
     INVOICE_COST,
@@ -74,6 +83,8 @@ SETTLED_KINDS = ("tactico_cliente", "actividad_temporal")
 DISCOUNTED_ON_INVOICE = ("pie_factura", "costo_neto_facturado")
 PERCENT_METHODS = ("pct_costo", "pct_precio_lista")
 KILO = "kg"
+# The margin the list price of a settlement is taken at: «Margen Food Service».
+FOOD_SERVICE = "margin_list"
 
 
 def _label(value: str | None) -> str:
@@ -204,19 +215,12 @@ def distinct_supports(
     return list(kept.values())
 
 
-def list_price(
-    base_cost: Decimal | None, product: Product | None, customer: CustomerBranch | None
-) -> Decimal | None:
-    """``cost / (1 − margin)`` with the product's margin on the customer's margin list."""
+def list_price(base_cost: Decimal | None, product: Product | None) -> Decimal | None:
+    """``cost / (1 − margin)`` with the product's Food Service margin (``margin_list``)."""
 
     if base_cost is None or product is None:
         return None
-    field = customer_margin_field(
-        customer.channel if customer else None,
-        customer.billing_center_code if customer else None,
-        customer.sales_team_class if customer else None,
-    )
-    return pricing.price_at_margin(base_cost, margin_for(product.margins, field))
+    return pricing.price_at_margin(base_cost, margin_for(product.margins, FOOD_SERVICE))
 
 
 def _per_unit_money(
@@ -267,10 +271,9 @@ def unit_amount(
     support: SettlementSupport,
     line: SaleLine,
     product: Product | None,
-    customer: CustomerBranch | None,
     base_cost: Decimal | None,
 ) -> tuple[Decimal | None, Decimal | None, Decimal | None, str]:
-    """The supplier's money per inventory unit of the line.
+    """The supplier's money per inventory unit of the line, with the chosen cost.
 
     Returns:
         tuple: ``(amount or None, negotiated %, settled %, how)``; the two percentages only
@@ -282,7 +285,7 @@ def unit_amount(
     if method in PERCENT_METHODS:
         if base_cost is None:
             return None, support.supplier_value, None, "sin costo"
-        price_list = list_price(base_cost, product, customer)
+        price_list = list_price(base_cost, product)
         settled, gap = settled_percent(support, base_cost, price_list, unit_price)
         if method == "pct_costo":
             how = f"{settled:.4%} sobre el costo {base_cost:,.2f}"
@@ -320,15 +323,45 @@ def unit_amount(
             method,
             None,
             cost=base_cost,
-            list_price=list_price(base_cost, product, customer),
+            list_price=list_price(base_cost, product),
             guaranteed_margin=support.target_margin_pct,
             sale_price=unit_price,
             supplier_min_margin=support.supplier_min_margin_pct,
         )
-        if amount is None:
+        if amount is None or base_cost is None:
             return None, None, None, "sin costo o margen garantizado"
-        return max(ZERO, amount), None, None, "margen garantizado"
+        amount = max(ZERO, amount)
+        return (
+            amount,
+            None,
+            None,
+            f"margen garantizado {support.target_margin_pct:.2%}: costo {base_cost:,.2f}"
+            f" − costo apoyado {base_cost - amount:,.2f}",
+        )
     return None, None, None, "tipo de apoyo sin dinero"
+
+
+def invoice_cost(line: SaleLine) -> Decimal | None:
+    """The inventory cost billed on the line, per unit (``costo`` ÷ quantity)."""
+
+    return abs(line.cost / line.quantity) if line.cost and line.quantity else None
+
+
+def _base_cost(
+    line: SaleLine,
+    product: Product | None,
+    quotes: Mapping[str, Sequence[Quote]],
+    cost_basis: str,
+) -> tuple[Decimal | None, str]:
+    """The unit cost the line is settled with, and where it came from."""
+
+    if cost_basis == COST_INVENTORY:
+        return invoice_cost(line), INVOICE
+    unit = "KL" if product and _label(product.inventory_unit) == "KL" else "UNID"
+    quote = quote_on(quotes.get(line.sku, ()), line.sale_date, line.co, unit)
+    if quote is not None:
+        return quote.cost, QUOTE
+    return invoice_cost(line), INVOICE
 
 
 def _status(support: SettlementSupport, amount: Decimal | None) -> str:
@@ -350,6 +383,7 @@ def build_settlement(
     products: Mapping[str, Product],
     customers: Mapping[str, CustomerBranch],
     quotes: Mapping[str, Sequence[Quote]],
+    cost_basis: str = COST_QUOTE,
 ) -> SettlementResult:
     """Settle the month's sales lines against the supports.
 
@@ -359,11 +393,15 @@ def build_settlement(
         products: Products by SKU (supplier, pack factor, margins).
         customers: Customer branches by ``cliente_key``.
         quotes: Supplier quotations by SKU.
+        cost_basis: ``cotizacion`` (the supplier's quotation) or ``inventario`` (the
+            inventory cost billed on the line).
 
     Returns:
         SettlementResult: The lines with supports, and the month's totals per reference.
     """
 
+    if cost_basis not in COST_BASES:
+        raise ValueError(f"Unknown cost basis: {cost_basis}")
     by_sku: dict[str, list[SettlementSupport]] = defaultdict(list)
     for support in supports:
         if support.kind in SETTLED_KINDS and support.funding != "jdh":
@@ -385,20 +423,13 @@ def build_settlement(
         if not candidates:
             continue
         chosen = distinct_supports(candidates, line.nit)
-        unit = "KL" if product and _label(product.inventory_unit) == "KL" else "UNID"
-        quote = quote_on(quotes.get(line.sku, ()), line.sale_date, line.co, unit)
         flags: list[str] = []
-        if quote is not None:
-            base_cost, source = quote.cost, QUOTE
-        else:
-            base_cost = abs(line.cost / line.quantity) if line.cost else None
-            source = INVOICE
+        base_cost, source = _base_cost(line, product, quotes, cost_basis)
+        if cost_basis == COST_QUOTE and source == INVOICE:
             flags.append(INVOICE_COST)
         items = []
         for support in chosen:
-            per_unit, negotiated, settled_pct, how = unit_amount(
-                support, line, product, customer, base_cost
-            )
+            per_unit, negotiated, settled_pct, how = unit_amount(support, line, product, base_cost)
             if negotiated is not None and settled_pct is not None and settled_pct < negotiated:
                 flags.append(PARTIAL_DISCOUNT)
             items.append(
@@ -538,6 +569,7 @@ __all__ = [
     "applies",
     "build_settlement",
     "distinct_supports",
+    "invoice_cost",
     "list_price",
     "margin",
     "quote_on",

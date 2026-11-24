@@ -119,6 +119,34 @@ def test_a_manager_calculates_reads_downloads_and_closes(client, world) -> None:
     assert client.post(f"{BASE}/2026-10/reopen").status_code == 403
 
 
+def test_both_cost_bases_are_stored_and_closed_on_their_own(client, world) -> None:
+    world.caller = world.member("analista@jdh.com.co", [("liquidacion-apoyos", "manage")])
+    inventory = {"cost_basis": "inventario"}
+
+    client.post(f"{BASE}/2026-10/recalculate")
+    by_quote = client.get(f"{BASE}/2026-10").json()["settlement"]
+    by_inventory = client.get(f"{BASE}/2026-10", params=inventory).json()["settlement"]
+    lines = client.get(f"{BASE}/2026-10/lines", params=inventory).json()
+    workbook = client.get(f"{BASE}/2026-10/export", params=inventory)
+    client.post(f"{BASE}/2026-10/close")
+    periods = client.get(f"{BASE}/periods", params=inventory).json()
+
+    assert (by_quote["cost_basis"], by_inventory["cost_basis"]) == ("cotizacion", "inventario")
+    assert by_inventory["cost_basis_label"] == "Costo inventario (facturado)"
+    # The same sale, settled with the invoice's cost (443355 / 45) instead of the quotation.
+    assert by_quote["amount"] != by_inventory["amount"]
+    assert lines["items"][0]["cost_source"] == "factura"
+    assert "2026-10-inventario" in workbook.headers["content-disposition"]
+    october = next(item for item in periods if item["period"] == "2026-10")
+    assert october["settlement"]["status"] == "borrador"
+    assert {item["cost_basis"]: item["status"] for item in october["settlements"]} == {
+        "cotizacion": "cerrado",
+        "inventario": "borrador",
+    }
+    assert client.post(f"{BASE}/2026-10/recalculate", params=inventory).status_code == 200
+    assert client.get(f"{BASE}/2026-10", params={"cost_basis": "otro"}).status_code == 422
+
+
 def test_a_bad_period_is_422(client, world) -> None:
     assert client.get(f"{BASE}/2026-13").status_code == 422
     assert client.get(f"{BASE}/2026-10/breakdown", params={"by": "otro"}).status_code == 422

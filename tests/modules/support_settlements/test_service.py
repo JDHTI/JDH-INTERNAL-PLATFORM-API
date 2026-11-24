@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -25,6 +26,9 @@ from tests.modules.support_settlements.fakes import (
 )
 
 TODAY = date(2026, 11, 24)
+D = Decimal
+OCTOBER_QUOTE = ("2026-10", "cotizacion")
+OCTOBER_INVENTORY = ("2026-10", "inventario")
 ANALYST = principal("analista.bi@jdh.com.co")
 READER = principal("lector@jdh.com.co")
 LEADER = principal("lider.bi@jdh.com.co")
@@ -138,7 +142,7 @@ async def test_summary_lines_and_workbook(service) -> None:
 
     assert suppliers[0]["supplier_code"] == "233" and suppliers[0]["amount"] == settlement.amount
     assert total == 2 and lines[0]["items"][0]["status"] == "liquidado"
-    assert workbook.filename == "liquidacion-apoyos-2026-10-proveedor-233.xlsx"
+    assert workbook.filename == "liquidacion-apoyos-2026-10-cotizacion-proveedor-233.xlsx"
     assert workbook.content[:2] == b"PK"
 
 
@@ -175,11 +179,12 @@ async def test_a_recalculation_finishes_when_the_request_is_cancelled(repository
         await request
     slow.release.set()
     for _ in range(20):
-        if "2026-10" in repository.items:
+        if (OCTOBER_INVENTORY) in repository.items:
             break
         await asyncio.sleep(0)
 
-    assert repository.items["2026-10"].supported_lines == 1
+    assert repository.items[OCTOBER_QUOTE].supported_lines == 1
+    assert repository.items[OCTOBER_INVENTORY].supported_lines == 1
 
 
 async def test_the_job_refreshes_open_months_and_leaves_closed_ones(service, repository) -> None:
@@ -187,6 +192,31 @@ async def test_the_job_refreshes_open_months_and_leaves_closed_ones(service, rep
 
     done = await service.refresh_open()
 
-    assert done["periodos"]["2026-10"] == "cerrado"
-    assert repository.items["2026-11"].status == DRAFT
-    assert repository.items["2026-10"].status == CLOSED
+    # Only the quotation basis was closed: the inventory one is still refreshed.
+    assert done["periodos"]["2026-10"]["cotizacion"] == "cerrado"
+    assert done["periodos"]["2026-10"]["inventario"]["lineas"] == 2
+    assert repository.items[("2026-11", "cotizacion")].status == DRAFT
+    assert repository.items[("2026-11", "inventario")].status == DRAFT
+    assert repository.items[OCTOBER_QUOTE].status == CLOSED
+    assert repository.items[OCTOBER_INVENTORY].status == DRAFT
+
+
+async def test_both_bases_come_from_one_read_and_close_on_their_own(
+    service, repository, sales
+) -> None:
+    quoted = await service.recalculate(ANALYST, "2026-10")
+
+    assert sales.calls == 1
+    inventory = repository.items[OCTOBER_INVENTORY]
+    assert quoted.cost_basis == "cotizacion" and inventory.cost_basis == "inventario"
+    # Two lines of 45: 9142.67 quoted, or 443355 / 45 = 9852.33 billed, minus the supported
+    # 79266.92 / 9 = 8807.44.
+    assert quoted.amount == D("30171.10") and inventory.amount == D("94040.80")
+
+    await service.close(ANALYST, "2026-10", "inventario")
+    with pytest.raises(ConflictError):
+        await service.recalculate(ANALYST, "2026-10", "inventario")
+    assert (await service.recalculate(ANALYST, "2026-10")).status == DRAFT
+    assert repository.items[OCTOBER_INVENTORY].status == CLOSED
+    with pytest.raises(InvalidInputError, match="Base de costo"):
+        await service.summary(READER, "2026-10", "otra")

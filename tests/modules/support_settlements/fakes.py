@@ -139,18 +139,21 @@ class FakeSales:
 
 
 class FakeRepository:
-    def __init__(self) -> None:
-        self.items: dict[str, Settlement] = {}
-        self.results: dict[str, SettlementResult] = {}
+    """Settlements by ``(period, cost_basis)``."""
 
-    async def get(self, period):
-        return self.items.get(period)
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, str], Settlement] = {}
+        self.results: dict[tuple[str, str], SettlementResult] = {}
+
+    async def get(self, period, cost_basis):
+        return self.items.get((period, cost_basis))
 
     async def list(self):
         return sorted(self.items.values(), key=lambda item: item.period, reverse=True)
 
-    async def replace(self, period, result, actor, now, *, close=False):
-        current = self.items.get(period)
+    async def replace(self, period, cost_basis, result, actor, now, *, close=False):
+        key = (period, cost_basis)
+        current = self.items.get(key)
         if current is not None and current.status == CLOSED:
             raise ConflictError("cerrada")
         amount = sum((sale.amount for sale in result.sales), D(0))
@@ -173,22 +176,24 @@ class FakeRepository:
             calculated_by=actor,
             closed_at=now if close else None,
             closed_by=actor if close else None,
+            cost_basis=cost_basis,
         )
-        self.items[period] = stored
-        self.results[period] = result
+        self.items[key] = stored
+        self.results[key] = result
         return stored
 
-    async def reopen(self, period, actor, now):
-        current = self.items.get(period)
+    async def reopen(self, period, cost_basis, actor, now):
+        key = (period, cost_basis)
+        current = self.items.get(key)
         if current is None:
             raise NotFoundError("no")
         if current.status != CLOSED:
             raise ConflictError("no cerrada")
-        self.items[period] = replace(current, status=DRAFT, reopened_at=now, reopened_by=actor)
-        return self.items[period]
+        self.items[key] = replace(current, status=DRAFT, reopened_at=now, reopened_by=actor)
+        return self.items[key]
 
-    def _settlement_period(self, settlement_id: UUID) -> str:
-        return next(period for period, item in self.items.items() if item.id == settlement_id)
+    def _settlement_period(self, settlement_id: UUID) -> tuple[str, str]:
+        return next(key for key, item in self.items.items() if item.id == settlement_id)
 
     async def suppliers(self, settlement_id):
         result = self.results[self._settlement_period(settlement_id)]

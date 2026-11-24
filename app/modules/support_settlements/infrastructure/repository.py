@@ -69,7 +69,12 @@ def _header(model: SupportSettlementModel) -> Settlement:
         reopened_at=model.reopened_at,
         reopened_by=model.reopened_by,
         version=model.version,
+        cost_basis=model.cost_basis,
     )
+
+
+def _month(period: str, cost_basis: str) -> Any:
+    return (H.period == period) & (H.cost_basis == cost_basis)
 
 
 def _rows(result: SettlementResult, settlement_id: UUID) -> tuple[list, list, list]:
@@ -160,31 +165,39 @@ class SqlAlchemySettlementRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    async def get(self, period: str) -> Settlement | None:
+    async def get(self, period: str, cost_basis: str) -> Settlement | None:
         async with self.database.session_factory() as session:
             model = (
-                await session.execute(select(H).where(H.period == period))
+                await session.execute(select(H).where(_month(period, cost_basis)))
             ).scalar_one_or_none()
         return None if model is None else _header(model)
 
     async def list(self) -> list[Settlement]:
+        """Every stored settlement, the newest month first (both cost bases)."""
+
         async with self.database.session_factory() as session:
-            models = (await session.execute(select(H).order_by(H.period.desc()))).scalars().all()
+            models = (
+                (await session.execute(select(H).order_by(H.period.desc(), H.cost_basis)))
+                .scalars()
+                .all()
+            )
         return [_header(model) for model in models]
 
     async def replace(
         self,
         period: str,
+        cost_basis: str,
         result: SettlementResult,
         actor: str,
         now: datetime,
         *,
         close: bool = False,
     ) -> Settlement:
-        """Store the month's calculation in place of the previous one, in one transaction.
+        """Store the month's calculation with one cost basis in place of the previous one, in
+        one transaction.
 
         Raises:
-            ConflictError: The month is closed.
+            ConflictError: The month is closed with that basis.
         """
 
         async with self.database.session_factory() as session, session.begin():
@@ -193,14 +206,15 @@ class SqlAlchemySettlementRepository:
                 .values(
                     id=uuid4(),
                     period=period,
+                    cost_basis=cost_basis,
                     status=DRAFT,
                     calculated_at=now,
                     calculated_by=actor,
                 )
-                .on_conflict_do_nothing(index_elements=[H.period])
+                .on_conflict_do_nothing(index_elements=[H.period, H.cost_basis])
             )
             model = (
-                await session.execute(select(H).where(H.period == period).with_for_update())
+                await session.execute(select(H).where(_month(period, cost_basis)).with_for_update())
             ).scalar_one()
             if model.status == CLOSED:
                 raise ConflictError(f"La liquidación de {period} está cerrada")
@@ -231,8 +245,8 @@ class SqlAlchemySettlementRepository:
             await session.flush()
             return _header(model)
 
-    async def reopen(self, period: str, actor: str, now: datetime) -> Settlement:
-        """Put a closed month back to draft.
+    async def reopen(self, period: str, cost_basis: str, actor: str, now: datetime) -> Settlement:
+        """Put a closed month (of one cost basis) back to draft.
 
         Raises:
             NotFoundError: No settlement for the month.
@@ -241,7 +255,7 @@ class SqlAlchemySettlementRepository:
 
         async with self.database.session_factory() as session, session.begin():
             model = (
-                await session.execute(select(H).where(H.period == period).with_for_update())
+                await session.execute(select(H).where(_month(period, cost_basis)).with_for_update())
             ).scalar_one_or_none()
             if model is None:
                 raise NotFoundError(f"No hay liquidación de {period}")

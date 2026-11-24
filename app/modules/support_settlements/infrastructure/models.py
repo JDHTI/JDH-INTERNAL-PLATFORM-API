@@ -1,6 +1,7 @@
 """Tables of the support settlement (migration ``0085_support_settlements``).
 
-- ``support_settlements``: one per month, draft or closed, with its totals.
+- ``support_settlements``: one per month and cost basis (``cotizacion`` or ``inventario``,
+  migration ``0086``), draft or closed, with its totals.
 - ``support_settlement_refs``: every supported reference of the month: all its sales (to
   recompose its margin) and what its supports pay.
 - ``support_settlement_sales``: the sale lines a support covered, with the customer's
@@ -50,10 +51,16 @@ class SupportSettlementModel(Base):
         CheckConstraint(
             "period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'", name="ck_support_settlements_period"
         ),
+        CheckConstraint(
+            "cost_basis IN ('cotizacion','inventario')", name="ck_support_settlements_cost_basis"
+        ),
+        UniqueConstraint("period", "cost_basis", name="uq_support_settlements_period_basis"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    period: Mapped[str] = mapped_column(String(7), nullable=False, unique=True)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)
+    # The cost the month is settled with (migration ``0086``): each basis is its own settlement.
+    cost_basis: Mapped[str] = mapped_column(String(12), nullable=False, server_default="cotizacion")
     status: Mapped[str] = mapped_column(String(12), nullable=False, server_default="borrador")
     amount: Mapped[Decimal] = mapped_column(_MONEY, nullable=False, server_default="0")
     flagged_amount: Mapped[Decimal] = mapped_column(_MONEY, nullable=False, server_default="0")

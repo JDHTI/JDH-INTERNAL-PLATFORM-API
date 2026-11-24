@@ -59,13 +59,14 @@ class SalesSource(Protocol):
 class SettlementRepository(Protocol):
     """Stored settlements: the header, its references, lines and supports applied."""
 
-    async def get(self, period: str) -> Settlement | None: ...
+    async def get(self, period: str, cost_basis: str) -> Settlement | None: ...
 
     async def list(self) -> list[Settlement]: ...
 
     async def replace(
         self,
         period: str,
+        cost_basis: str,
         result: SettlementResult,
         actor: str,
         now: datetime,
@@ -73,7 +74,9 @@ class SettlementRepository(Protocol):
         close: bool = False,
     ) -> Settlement: ...
 
-    async def reopen(self, period: str, actor: str, now: datetime) -> Settlement: ...
+    async def reopen(
+        self, period: str, cost_basis: str, actor: str, now: datetime
+    ) -> Settlement: ...
 
     async def suppliers(self, settlement_id: Any) -> list[Mapping[str, Any]]: ...
 

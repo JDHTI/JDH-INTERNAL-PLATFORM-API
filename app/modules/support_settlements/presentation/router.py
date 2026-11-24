@@ -22,6 +22,7 @@ from app.modules.support_settlements.application.service import (
     SettlementService,
 )
 from app.modules.support_settlements.domain.entities import (
+    COST_BASIS_LABELS,
     ITEM_STATUS_LABELS,
     SALE_FLAG_LABELS,
     STATUS_LABELS,
@@ -46,8 +47,14 @@ ItemStatus = Literal[
     "sin_valor",
 ]
 Breakdown = Literal["regional", "business_unit", "salesperson", "customer"]
+CostBasis = Literal["cotizacion", "inventario"]
 _STATUS = Query(default=None, description="Only lines with a support in this status")
 _BY = Query(description="Dimension of the breakdown")
+_BASIS = Query(
+    default="cotizacion",
+    description="The cost the month is settled with: the supplier's quotation (cotizacion) or "
+    "the inventory cost billed (inventario)",
+)
 
 
 class PermissionsResponse(BaseModel):
@@ -62,6 +69,8 @@ class SettlementResponse(BaseModel):
     calculated but not claimed (supports in review, with tiers, minimum not met...)."""
 
     period: str
+    cost_basis: CostBasis
+    cost_basis_label: str
     status: Literal["borrador", "cerrado"]
     status_label: str
     amount: Decimal
@@ -86,8 +95,10 @@ class PeriodResponse(BaseModel):
     period: str
     is_finished: bool
     is_current: bool
-    # ``null`` when the month has not been calculated yet.
+    # The settlement of the cost basis asked for; ``null`` when not calculated yet.
     settlement: SettlementResponse | None
+    # Every stored settlement of the month (one per cost basis).
+    settlements: list[SettlementResponse] = []
 
 
 class TotalsResponse(BaseModel):
@@ -179,7 +190,8 @@ class LineResponse(BaseModel):
     gross: Decimal
     net: Decimal
     cost: Decimal
-    # The supplier's quotation in force (``cotizacion``) or the invoice's cost (``factura``).
+    # The supplier's quotation in force (``cotizacion``) or the inventory cost billed
+    # (``factura``): always ``factura`` with the ``inventario`` basis.
     base_unit_cost: Decimal | None
     cost_source: Literal["cotizacion", "factura"]
     amount: Decimal
@@ -210,6 +222,8 @@ class BreakdownRowResponse(BaseModel):
 def _settlement(item: Settlement) -> SettlementResponse:
     return SettlementResponse(
         period=item.period,
+        cost_basis=item.cost_basis,  # type: ignore[arg-type]
+        cost_basis_label=COST_BASIS_LABELS.get(item.cost_basis, item.cost_basis),
         status=item.status,  # type: ignore[arg-type]
         status_label=STATUS_LABELS.get(item.status, item.status),
         amount=item.amount,
@@ -277,15 +291,18 @@ async def permissions(
 )
 @inject
 async def list_periods(
-    principal: Principal = _principal, service: SettlementService = _service
+    cost_basis: CostBasis = _BASIS,
+    principal: Principal = _principal,
+    service: SettlementService = _service,
 ) -> list[PeriodResponse]:
-    result = await service.periods(principal)
+    result = await service.periods(principal, cost_basis)
     return [
         PeriodResponse(
             period=item.period,
             is_finished=item.is_finished,
             is_current=item.is_current,
             settlement=_settlement(item.settlement) if item.settlement else None,
+            settlements=[_settlement(stored) for stored in item.settlements.values()],
         )
         for item in result
     ]
@@ -299,9 +316,12 @@ async def list_periods(
 )
 @inject
 async def get_summary(
-    period: str = _PERIOD, principal: Principal = _principal, service: SettlementService = _service
+    period: str = _PERIOD,
+    cost_basis: CostBasis = _BASIS,
+    principal: Principal = _principal,
+    service: SettlementService = _service,
 ) -> SummaryResponse:
-    settlement, rows = await service.summary(principal, period)
+    settlement, rows = await service.summary(principal, period, cost_basis)
     return SummaryResponse(
         settlement=_settlement(settlement),
         suppliers=[
@@ -329,13 +349,14 @@ async def get_summary(
 async def get_references(
     period: str = _PERIOD,
     supplier_code: str | None = _SUPPLIER,
+    cost_basis: CostBasis = _BASIS,
     principal: Principal = _principal,
     service: SettlementService = _service,
 ) -> ReferencesResponse:
     """Each reference with every sale of the month, what its supports pay and its margin
     recomposed ``(sale − cost + support) / sale``."""
 
-    settlement, rows = await service.references(principal, period, supplier_code)
+    settlement, rows = await service.references(principal, period, supplier_code, cost_basis)
     return ReferencesResponse(
         settlement=_settlement(settlement),
         references=[
@@ -369,12 +390,14 @@ async def get_lines(
     status: ItemStatus | None = _STATUS,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=100, ge=1, le=MAX_PAGE_SIZE),
+    cost_basis: CostBasis = _BASIS,
     principal: Principal = _principal,
     service: SettlementService = _service,
 ) -> LinePageResponse:
     rows, total = await service.lines(
         principal,
         period,
+        cost_basis=cost_basis,
         supplier_code=supplier_code,
         sku=sku,
         nit=nit,
@@ -396,10 +419,11 @@ async def get_breakdown(
     period: str = _PERIOD,
     by: Breakdown = _BY,
     supplier_code: str | None = _SUPPLIER,
+    cost_basis: CostBasis = _BASIS,
     principal: Principal = _principal,
     service: SettlementService = _service,
 ) -> list[BreakdownRowResponse]:
-    rows = await service.breakdown(principal, period, by, supplier_code)
+    rows = await service.breakdown(principal, period, by, supplier_code, cost_basis)
     return [
         BreakdownRowResponse(
             key=None if row["key"] is None else str(row["key"]),
@@ -421,12 +445,13 @@ async def get_breakdown(
 async def export(
     period: str = _PERIOD,
     supplier_code: str | None = _SUPPLIER,
+    cost_basis: CostBasis = _BASIS,
     principal: Principal = _principal,
     service: SettlementService = _service,
 ) -> Response:
     """Sheets: Resumen (by reference), Detalle ventas and No liquidados."""
 
-    result = await service.export(principal, period, supplier_code)
+    result = await service.export(principal, period, supplier_code, cost_basis)
     return Response(
         content=result.content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -442,11 +467,15 @@ async def export(
 )
 @inject
 async def recalculate(
-    period: str = _PERIOD, principal: Principal = _principal, service: SettlementService = _service
+    period: str = _PERIOD,
+    cost_basis: CostBasis = _BASIS,
+    principal: Principal = _principal,
+    service: SettlementService = _service,
 ) -> SettlementResponse:
-    """Reads the month's sales from the DWH: it may take a few minutes. 409 when closed."""
+    """Reads the month's sales from the DWH once (it may take a few minutes) and stores both
+    cost bases, the ones not closed; returns ``cost_basis``. 409 when that one is closed."""
 
-    return _settlement(await service.recalculate(principal, period))
+    return _settlement(await service.recalculate(principal, period, cost_basis))
 
 
 @router.post(
@@ -457,9 +486,14 @@ async def recalculate(
 )
 @inject
 async def close(
-    period: str = _PERIOD, principal: Principal = _principal, service: SettlementService = _service
+    period: str = _PERIOD,
+    cost_basis: CostBasis = _BASIS,
+    principal: Principal = _principal,
+    service: SettlementService = _service,
 ) -> SettlementResponse:
-    return _settlement(await service.close(principal, period))
+    """Closes only ``cost_basis``; the other basis stays as it is."""
+
+    return _settlement(await service.close(principal, period, cost_basis))
 
 
 @router.post(
@@ -470,9 +504,12 @@ async def close(
 )
 @inject
 async def reopen(
-    period: str = _PERIOD, principal: Principal = _principal, service: SettlementService = _service
+    period: str = _PERIOD,
+    cost_basis: CostBasis = _BASIS,
+    principal: Principal = _principal,
+    service: SettlementService = _service,
 ) -> SettlementResponse:
-    return _settlement(await service.reopen(principal, period))
+    return _settlement(await service.reopen(principal, period, cost_basis))
 
 
 __all__ = ["router"]
