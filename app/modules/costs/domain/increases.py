@@ -36,6 +36,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.commercial_masters.domain.price_increases import REGIONAL_CENTERS
+
 UP = "subio"
 DOWN = "bajo"
 FLAT = "estable"
@@ -52,14 +54,7 @@ FROM_FORM = "manual"
 SOURCES = (FROM_TEMPLATE, FROM_FORM)
 
 # The regionals of the area's workbook, with the operation center each one stands for.
-REGIONALS: tuple[tuple[str, str], ...] = (
-    ("ANTIOQUIA", "001"),
-    ("BOGOTA", "003"),
-    ("PEREIRA", "002"),
-    ("BUCARAMANGA", "005"),
-    ("CARTAGENA", "004"),
-    ("BARRANQUILLA", "009"),
-)
+REGIONALS: tuple[tuple[str, str], ...] = tuple(REGIONAL_CENTERS.items())
 REGIONAL_NAMES = tuple(name for name, _ in REGIONALS)
 NATIONAL = "NACIONAL"
 REST = "RESTO DE REGIONALES"
@@ -331,6 +326,20 @@ class IncreaseRequest:
     line_count: int
     accepted_count: int
     lines: tuple[RequestLine, ...] = ()
+    support: SupportFile | None = None
+
+
+@dataclass(frozen=True)
+class SupportFile:
+    """The supplier's support of an increase (its letter, an email as PDF), in the bucket
+    under the area."""
+
+    file_name: str
+    content_type: str
+    size_bytes: int
+    storage_key: str
+    uploaded_by: str
+    uploaded_at: datetime
 
 
 @dataclass(frozen=True)
@@ -398,6 +407,7 @@ __all__ = [
     "SOURCES",
     "UP",
     "IncreaseRequest",
+    "SupportFile",
     "IncreaseRequestPage",
     "LineInput",
     "RequestLine",

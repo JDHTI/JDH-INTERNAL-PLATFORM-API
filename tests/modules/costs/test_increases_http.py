@@ -25,12 +25,13 @@ from app.modules.costs.infrastructure.increase_file import (
     workbook_name,
 )
 from app.modules.identity.presentation.principal import get_current_principal
-from tests.modules.costs.fakes import NOW, TODAY, FakeStorage
+from tests.modules.costs.fakes import NOW, TODAY, FakeGuard, FakeStorage
 from tests.modules.costs.increase_fakes import FakeIncreaseRepository, FakeItems, FakeLedger, item
 from tests.modules.fakes import FakeAreaRepository, FakeDirectory
 
 REAL_PERMISSION_GATES = True
 BASE = "/api/v1/costs/increase-requests"
+PDF = b"%PDF-1.7 carta del proveedor"
 COLUMN = {column.header: position for position, column in enumerate(COLUMNS, start=1)}
 
 
@@ -88,6 +89,7 @@ def client(world):
             max_upload_bytes=1024 * 1024,
             today=lambda: TODAY,
             clock=lambda: NOW,
+            support_guard=FakeGuard(),
         )
         with v1.cost_increase_service.override(increases), TestClient(app) as test_client:
             yield test_client
@@ -137,12 +139,23 @@ def test_the_whole_flow_from_workbook_to_history(client, world) -> None:
     loaded = client.post(
         f"{BASE}/upload",
         params={"supplier_code": "50", "apply": "true"},
-        files=files,
+        files={**files, "support": ("Carta alza.pdf", PDF, "application/pdf")},
         data={"note": "Carta"},
     )
     request_id = loaded.json()["request_id"]
     listing = client.get(BASE, params={"status": "en_revision"}).json()
+    support = client.get(f"{BASE}/{request_id}/support", params={"inline": "true"})
     approved = client.post(f"{BASE}/{request_id}/approve", json={"note": None})
+
+    assert listing["items"][0]["support"]["file_name"] == "Carta alza.pdf"
+    assert support.status_code == 200 and support.content == PDF
+    assert support.headers["content-type"] == "application/pdf"
+    assert support.headers["content-disposition"].startswith("inline;")
+    # Decided: the support stays, and can no longer change.
+    late = client.put(
+        f"{BASE}/{request_id}/support", files={"file": ("c.pdf", PDF, "application/pdf")}
+    )
+    assert late.status_code == 409
 
     assert simulated.status_code == 200 and simulated.json()["applied"] is False
     line = simulated.json()["lines"][0]
@@ -193,8 +206,45 @@ def test_a_manual_request_validates_its_body(client, world) -> None:
         f"{BASE}/{created.json()['id']}/lines/{line['id']}", json={"accepted": False}
     )
     assert patched.json()["accepted_count"] == 0
-    rejected = client.post(f"{BASE}/{created.json()['id']}/reject", json={"note": "Sin carta"})
+    request_id = created.json()["id"]
+    assert created.json()["support"] is None
+    assert client.get(f"{BASE}/{request_id}/support").status_code == 404
+    attached = client.put(
+        f"{BASE}/{request_id}/support", files={"file": ("carta.pdf", PDF, "application/pdf")}
+    )
+    assert attached.status_code == 200 and attached.json()["support"]["size_bytes"] == len(PDF)
+    wrong = client.put(
+        f"{BASE}/{request_id}/support", files={"file": ("virus.exe", b"MZ", "application/x")}
+    )
+    assert wrong.status_code == 422
+    assert client.delete(f"{BASE}/{request_id}/support").json()["support"] is None
+    rejected = client.post(f"{BASE}/{request_id}/reject", json={"note": "Sin carta"})
     assert rejected.json()["status"] == "rechazada"
+
+
+def test_a_reader_downloads_the_support_but_cannot_attach_one(client, world) -> None:
+    world.caller = world.member("analista@jdh.com.co", "manage")
+    created = client.post(
+        BASE,
+        json={
+            "supplier_code": "50",
+            "lines": [{"sku": "10042", "new_cost": "23000", "increased_on": "2026-12-01"}],
+        },
+    ).json()
+    client.put(
+        f"{BASE}/{created['id']}/support", files={"file": ("carta.pdf", PDF, "application/pdf")}
+    )
+    world.caller = world.member("lector@jdh.com.co", "read")
+
+    download = client.get(f"{BASE}/{created['id']}/support")
+    refused = client.put(
+        f"{BASE}/{created['id']}/support", files={"file": ("carta.pdf", PDF, "application/pdf")}
+    )
+
+    assert download.status_code == 200 and download.content == PDF
+    assert download.headers["content-disposition"].startswith("attachment;")
+    assert refused.status_code == 403
+    assert client.delete(f"{BASE}/{created['id']}/support").status_code == 403
 
 
 def test_the_real_service_builds_from_the_container() -> None:
@@ -204,3 +254,15 @@ def test_the_real_service_builds_from_the_container() -> None:
 
     assert isinstance(service, IncreaseService)
     assert service.max_upload_bytes == 10 * 1024 * 1024
+    assert service.area_slug == "abastecimiento"
+    assert service.support_guard.allowed_extensions == {
+        "pdf",
+        "png",
+        "jpg",
+        "jpeg",
+        "xlsx",
+        "xls",
+        "docx",
+        "doc",
+    }
+    assert service.support_guard.max_attachment_bytes == 10 * 1024 * 1024

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.errors import ConflictError, InvalidInputError, NotFoundError
 from app.modules.costs.application.access import CostAccess
+from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.entries import supplier_name
 from app.modules.costs.domain.increases import (
     APPROVED,
@@ -34,6 +35,7 @@ from app.modules.costs.domain.increases import (
     RequestLine,
     RowIssue,
     SupplierItem,
+    SupportFile,
     UploadReport,
     build_line,
     list_price,
@@ -42,6 +44,7 @@ from app.modules.costs.domain.increases import (
 )
 from app.modules.costs.domain.modules import INCREASES
 from app.modules.costs.domain.ports import (
+    FileGuard,
     IncreaseLedger,
     IncreaseRepository,
     LedgerEntry,
@@ -116,6 +119,8 @@ class IncreaseService:
         max_upload_bytes: int,
         today: Callable[[], date] = lambda: datetime.now(_BOGOTA).date(),
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        support_guard: FileGuard | None = None,
+        area_slug: str = "abastecimiento",
     ) -> None:
         """Create the service.
 
@@ -132,6 +137,8 @@ class IncreaseService:
             max_upload_bytes (int): Largest workbook accepted.
             today (Callable[[], date]): Today in Bogotá.
             clock (Callable[[], datetime]): Now, in UTC.
+            support_guard (FileGuard | None): Type, size and antivirus of the supports.
+            area_slug (str): The area whose folder of the bucket keeps the supports.
         """
 
         self.repository = repository
@@ -146,6 +153,8 @@ class IncreaseService:
         self.max_upload_bytes = max_upload_bytes
         self.today = today
         self.clock = clock
+        self.support_guard = support_guard
+        self.area_slug = area_slug
 
     async def _require_manager(self, principal: Principal) -> None:
         await self.access.require_manage(
@@ -258,19 +267,27 @@ class IncreaseService:
         *,
         apply: bool,
         note: str | None = None,
+        support: UploadedFile | None = None,
     ) -> UploadReport:
         """Read a returned «MAESTRA»: the rows with a new cost become a request in review.
 
         With ``apply`` false nothing is stored (a simulation). One problem blocks the load.
+        ``support`` (the supplier's letter or email) is optional; a simulation only checks its
+        type and size.
 
         Raises:
             ForbiddenError: The caller does not manage the increases.
-            InvalidInputError: Empty, too large or unreadable workbook, or no new cost in it.
+            InvalidInputError: Empty, too large or unreadable workbook, no new cost in it, or a
+                support that cannot be kept.
             NotFoundError: The supplier has no active products.
         """
 
         await self._require_manager(principal)
         note = _clean_note(note)
+        if support is not None and support.content:
+            self._refuse_support(support)
+        else:
+            support = None
         if not content:
             raise InvalidInputError("El archivo está vacío")
         if len(content) > self.max_upload_bytes:
@@ -290,23 +307,34 @@ class IncreaseService:
         request_id = None
         if apply and not issues:
             request_id = uuid4()
+            stored = await self._store_support(principal, request_id, support) if support else None
             key = f"costs/increase-requests/{request_id}.xlsx"
-            await self.storage.put_object(key, content, _XLSX)
-            request = self._request(
-                principal,
-                code,
-                items,
-                FROM_TEMPLATE,
-                lines,
-                note,
-                filename or "maestra.xlsx",
-                key,
-                request_id,
+            try:
+                await self.storage.put_object(key, content, _XLSX)
+            except Exception:
+                if stored is not None:
+                    await self._drop(stored.storage_key)
+                raise
+            request = replace(
+                self._request(
+                    principal,
+                    code,
+                    items,
+                    FROM_TEMPLATE,
+                    lines,
+                    note,
+                    filename or "maestra.xlsx",
+                    key,
+                    request_id,
+                ),
+                support=stored,
             )
             try:
                 await self.repository.create(request)
             except Exception:
                 await self._drop(key)
+                if stored is not None:
+                    await self._drop(stored.storage_key)
                 raise
         return UploadReport(
             applied=request_id is not None,
@@ -390,6 +418,91 @@ class IncreaseService:
         return request.file_name or "maestra.xlsx", await self.storage.get_object(
             request.storage_key
         )
+
+    # --- The supplier's support ---
+
+    def _refuse_support(self, upload: UploadedFile) -> FileGuard:
+        """The guard, once it takes the support's type and size."""
+
+        if self.support_guard is None:
+            raise InvalidInputError("Los soportes no están habilitados")
+        reason = self.support_guard.refuse(upload.filename, len(upload.content), 0, 0)
+        if reason:
+            raise InvalidInputError(f"El soporte no se puede cargar: {reason}")
+        return self.support_guard
+
+    async def _store_support(
+        self, principal: Principal, request_id: UUID, upload: UploadedFile
+    ) -> SupportFile:
+        """Clean the support (type, antivirus) and keep it in the area's folder of the bucket:
+        ``areas/<area>/costos/alzas/<request>/``."""
+
+        guard = self._refuse_support(upload)
+        name, extension, content_type, data = await guard.clean(upload.filename, upload.content)
+        key = f"areas/{self.area_slug}/costos/alzas/{request_id}/soporte-{uuid4()}.{extension}"
+        await self.storage.put_object(key, data, content_type)
+        return SupportFile(
+            file_name=name,
+            content_type=content_type,
+            size_bytes=len(data),
+            storage_key=key,
+            uploaded_by=principal.email,
+            uploaded_at=self.clock(),
+        )
+
+    async def attach_support(
+        self, principal: Principal, request_id: UUID, upload: UploadedFile
+    ) -> IncreaseRequest:
+        """Attach the supplier's support to a request in review, replacing the one it had
+        (a form typed by hand gets it this way).
+
+        Raises:
+            ForbiddenError: The caller does not manage the increases.
+            NotFoundError: No such request.
+            ConflictError: The request was decided.
+            InvalidInputError: No file, or one that cannot be kept.
+        """
+
+        request = await self._open(principal, request_id)
+        if not upload.content:
+            raise InvalidInputError("Adjunta el soporte del alza")
+        stored = await self._store_support(principal, request.id, upload)
+        try:
+            await self.repository.set_support(request.id, stored, self.clock())
+        except Exception:
+            await self._drop(stored.storage_key)
+            raise
+        if request.support is not None:
+            await self._drop(request.support.storage_key)
+        return await self.get(request.id)
+
+    async def remove_support(self, principal: Principal, request_id: UUID) -> IncreaseRequest:
+        """Take the support off a request in review.
+
+        Raises:
+            ForbiddenError: The caller does not manage the increases.
+            NotFoundError: No such request, or it has no support.
+            ConflictError: The request was decided.
+        """
+
+        request = await self._open(principal, request_id)
+        if request.support is None:
+            raise NotFoundError("La solicitud no tiene soporte")
+        await self.repository.set_support(request.id, None, self.clock())
+        await self._drop(request.support.storage_key)
+        return await self.get(request.id)
+
+    async def support(self, request_id: UUID) -> tuple[SupportFile, bytes]:
+        """The request's support and its bytes.
+
+        Raises:
+            NotFoundError: No such request, or it has no support.
+        """
+
+        request = await self.repository.get(request_id, with_lines=False)
+        if request is None or request.support is None:
+            raise NotFoundError("La solicitud no tiene soporte")
+        return request.support, await self.storage.get_object(request.support.storage_key)
 
     # --- Review ---
 
@@ -560,7 +673,7 @@ class IncreaseService:
         try:
             await self.storage.delete_object(key)
         except Exception:
-            logger.warning("Could not remove increase workbook %s", key)
+            logger.warning("Could not remove increase file %s", key)
 
 
 __all__ = ["MAX_PAGE_SIZE", "IncreaseService", "LineChanges"]

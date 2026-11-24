@@ -198,6 +198,14 @@ class CostIncreaseRequestModel(Base):
     # The workbook as the supplier returned it (``plantilla`` only).
     file_name: Mapped[str | None] = mapped_column(Text)
     storage_key: Mapped[str | None] = mapped_column(Text)
+    # The supplier's support of the increase (a letter, an email, a PDF), kept in the bucket
+    # under the area (2026-11-24).
+    support_file_name: Mapped[str | None] = mapped_column(Text)
+    support_content_type: Mapped[str | None] = mapped_column(String(120))
+    support_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    support_storage_key: Mapped[str | None] = mapped_column(Text)
+    support_uploaded_by: Mapped[str | None] = mapped_column(String(320))
+    support_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     note: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(String(320), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

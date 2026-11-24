@@ -9,14 +9,15 @@ update and leave as it is, and what it could not read, before anything is writte
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from dataclasses import dataclass
+import logging
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from app.core.errors import ForbiddenError, InvalidInputError
-from app.modules.commercial_masters.domain.ports import ManagerPolicy
+from app.core.errors import DependencyUnavailableError, ForbiddenError, InvalidInputError
+from app.modules.commercial_masters.domain.ports import ManagerPolicy, PlacementSource
 from app.modules.commercial_masters.domain.price_increase_analysis import (
     MOVEMENTS,
     PERIODS,
@@ -40,8 +41,11 @@ from app.modules.commercial_masters.domain.price_increases import (
     PriceIncreaseFilters,
     PriceIncreasePage,
     PriceIncreaseValues,
+    Scope,
     UploadIssue,
     UploadReport,
+    place_options,
+    scope_of,
 )
 from app.modules.commercial_masters.infrastructure.price_increases_file import (
     PriceIncreaseFileReader,
@@ -50,6 +54,8 @@ from app.modules.commercial_masters.infrastructure.price_increases_repository im
     SqlAlchemyPriceIncreaseRepository,
 )
 from app.modules.identity.domain.principal import Principal
+
+logger = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
 MAX_REPORTED_ISSUES = 200
@@ -65,14 +71,15 @@ class AnalysisCache:
     process): the service is built per request, the cache is not.
 
     It holds one data version: ``key`` is (today, rows, last change) and ``periods`` maps a
-    window (since, until) to its rows and analysis, worked out the first time it is asked.
+    window (since, until, operation center, installation) to its rows and analysis, worked
+    out the first time it is asked.
     The oldest window goes when more than ``MAX_CACHED_WINDOWS`` are kept.
     """
 
     def __init__(self) -> None:
         self.key: tuple | None = None
         self.rows: list[AnalysisRow] = []
-        self.periods: dict[Window, tuple[list[AnalysisRow], list[ReferenceAnalysis]]] = {}
+        self.periods: dict[tuple, tuple[list[AnalysisRow], list[ReferenceAnalysis]]] = {}
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,28 @@ class AnalysisPage:
     until: date | None
 
 
+def numbered(rows: Sequence[FileRow]) -> dict[str, FileRow]:
+    """The workbook's rows by key, none lost.
+
+    The workbook chains increases with the same reference and dates (sku 15143 on 2021-09-24:
+    15,519 to 15,984.36, then to 16,463.89). Keeping only the last of a key lost 101 such
+    rows (2026-11-24), so each one is the n-th ``occurrence`` of its key, in the file's order.
+    A row equal to an earlier one of its key, value for value, was typed twice and counts once.
+    """
+
+    by_key: dict[str, FileRow] = {}
+    seen: dict[str, list[tuple]] = {}
+    for row in rows:
+        group = seen.setdefault(row.values.key, [])
+        values = row.values.comparable()
+        if values in group:
+            continue
+        group.append(values)
+        numbered_row = replace(row, values=replace(row.values, occurrence=len(group)))
+        by_key[numbered_row.values.key] = numbered_row
+    return by_key
+
+
 class PriceIncreaseService:
     """The price increase history of the products."""
 
@@ -100,6 +129,7 @@ class PriceIncreaseService:
         max_upload_bytes: int,
         today: Callable[[], date] = lambda: datetime.now(_BOGOTA).date(),
         cache: AnalysisCache | None = None,
+        placements: PlacementSource | None = None,
     ) -> None:
         """Create the service.
 
@@ -110,6 +140,8 @@ class PriceIncreaseService:
             max_upload_bytes (int): Largest workbook accepted.
             today (Callable[[], date]): Today in Bogotá, where a period ends.
             cache (AnalysisCache | None): The process-wide analysis cache.
+            placements (PlacementSource | None): Where each reference is set up (the
+                warehouse's inventory), for the operation center and installation filters.
         """
 
         self.repository = repository
@@ -118,6 +150,23 @@ class PriceIncreaseService:
         self.max_upload_bytes = max_upload_bytes
         self.today = today
         self.cache = cache or AnalysisCache()
+        self.placements = placements
+
+    async def scope(self, co: str | None, installation: str | None) -> Scope | None:
+        """The rows an operation center or an installation keeps (:class:`Scope`); ``None``
+        without either.
+
+        Raises:
+            DependencyUnavailableError: The warehouse did not answer.
+        """
+
+        co = (co or "").strip() or None
+        installation = (installation or "").strip() or None
+        if co is None and installation is None:
+            return None
+        if self.placements is None:
+            raise DependencyUnavailableError("El filtro por C.O. o instalación no está disponible")
+        return scope_of(await self.placements.placements(), co, installation)
 
     async def can_manage(self, principal: Principal) -> bool:
         return await self.managers.is_manager(principal)
@@ -126,20 +175,47 @@ class PriceIncreaseService:
         if not await self.can_manage(principal):
             raise ForbiddenError("No tienes permiso para actualizar el histórico de alzas")
 
-    async def page(self, filters: PriceIncreaseFilters, page: int, size: int) -> PriceIncreasePage:
-        """A page of the history, the latest increase first, with the counts of the filter."""
+    async def page(
+        self,
+        filters: PriceIncreaseFilters,
+        page: int,
+        size: int,
+        co: str | None = None,
+        installation: str | None = None,
+    ) -> PriceIncreasePage:
+        """A page of the history, the latest increase first, with the counts of the filter.
+
+        ``co`` and ``installation`` keep the rows that hold there (:class:`Scope`): a
+        reference's detail then shows its national rows and those of that regional.
+
+        Raises:
+            InvalidInputError: Bad page or unknown status.
+            DependencyUnavailableError: A center or installation and the warehouse is down.
+        """
 
         if page < 1 or not 1 <= size <= MAX_PAGE_SIZE:
             raise InvalidInputError(f"Página inválida; el tamaño máximo es {MAX_PAGE_SIZE}")
         if filters.status is not None and filters.status not in STATUSES:
             raise InvalidInputError("Estado desconocido: subio, bajo o estable")
+        scope = await self.scope(co, installation)
+        if scope is not None:
+            filters = replace(filters, scope=scope)
         return await self.repository.page(filters, page, size)
 
     async def filter_options(self) -> FilterOptions:
-        """The suppliers with references in the history and the months with increases: what
-        the dropdowns of the history and the analysis offer."""
+        """The suppliers with references in the history, the months with increases and the
+        operation centers and installations with active references: what the dropdowns of
+        the history and the analysis offer. Without the warehouse the last two come empty."""
 
-        return await self.repository.filter_options()
+        options = await self.repository.filter_options()
+        if self.placements is None:
+            return options
+        try:
+            cos, installations = place_options(await self.placements.placements())
+        except DependencyUnavailableError:
+            logger.warning("Price increase options without centers: the warehouse is down")
+            return options
+        return replace(options, cos=cos, installations=installations)
 
     async def analysis(
         self,
@@ -154,6 +230,8 @@ class PriceIncreaseService:
         since: date | None = None,
         until: date | None = None,
         supplier: str | None = None,
+        co: str | None = None,
+        installation: str | None = None,
     ) -> AnalysisPage:
         """The references of a period with how much they moved, the figures of the period
         and the counts by movement (of the search, before the movement filter).
@@ -164,9 +242,14 @@ class PriceIncreaseService:
         (rows and last change); searching, filtering by supplier and movement, sorting and
         paging run on that result.
 
+        ``co`` and ``installation`` analyze only the rows that hold there (:class:`Scope`):
+        its references, with their national rows and those of its regional. The cost a
+        reference starts and ends at is then that regional's.
+
         Raises:
             InvalidInputError: Unknown period, movement or sort, a range that ends before it
                 starts, or a bad page.
+            DependencyUnavailableError: A center or installation and the warehouse is down.
         """
 
         if page < 1 or not 1 <= size <= MAX_PAGE_SIZE:
@@ -182,7 +265,8 @@ class PriceIncreaseService:
         window: Window = (
             (since, until) if since or until else (period_start(period, self.today()), None)
         )
-        rows, analyses = await self._analyzed(window)
+        scope = await self.scope(co, installation)
+        rows, analyses = await self._analyzed(window, scope, co, installation)
         searched = [item for item in analyses if matches(item, q, None, supplier)]
         if q or supplier:
             skus = {item.sku for item in searched}
@@ -201,8 +285,15 @@ class PriceIncreaseService:
             until=window[1],
         )
 
-    async def _analyzed(self, window: Window) -> tuple[list[AnalysisRow], list[ReferenceAnalysis]]:
-        """The window's rows and analysis, read once per day and data version."""
+    async def _analyzed(
+        self,
+        window: Window,
+        scope: Scope | None = None,
+        co: str | None = None,
+        installation: str | None = None,
+    ) -> tuple[list[AnalysisRow], list[ReferenceAnalysis]]:
+        """The window's rows and analysis, read once per day and data version, for the whole
+        history or the rows of a center or installation."""
 
         cache = self.cache
         key = (self.today(), await self.repository.version())
@@ -210,21 +301,33 @@ class PriceIncreaseService:
             cache.rows = await self.repository.analysis_rows()
             cache.periods = {}
             cache.key = key
-        if window not in cache.periods:
+        where = (
+            (None, None)
+            if scope is None
+            else ((co or "").strip() or None, (installation or "").strip() or None)
+        )
+        cached = (*window, *where)
+        if cached not in cache.periods:
             since, until = window
+            rows = (
+                cache.rows
+                if scope is None
+                else [row for row in cache.rows if scope.holds(row.sku, row.regional)]
+            )
             # Grouping 50 000 rows is CPU work: in a thread, it never holds up the API.
-            analyses = await asyncio.to_thread(analyze, cache.rows, since, until)
+            analyses = await asyncio.to_thread(analyze, rows, since, until)
             if len(cache.periods) >= MAX_CACHED_WINDOWS:
                 cache.periods.pop(next(iter(cache.periods)))
-            cache.periods[window] = (in_period(cache.rows, since, until), analyses)
-        return cache.periods[window]
+            cache.periods[cached] = (in_period(rows, since, until), analyses)
+        return cache.periods[cached]
 
     async def upload(
         self, principal: Principal, filename: str | None, content: bytes, *, apply: bool
     ) -> UploadReport:
         """Upsert the workbook's rows by reference, increase date and notification date.
 
-        A key repeated in the file keeps its last row. Rows of references the product master
+        Rows with the same key are increases in a row and each one is kept (:func:`numbered`);
+        only a row typed twice, value for value, counts once. Rows of references the product master
         does not have are kept too (the history outlives the products) and counted. With
         ``apply`` false nothing is written.
 
@@ -241,9 +344,7 @@ class PriceIncreaseService:
             raise InvalidInputError(f"El archivo pasa de {megas} MB")
         # openpyxl is synchronous: in a thread, a 50 000-row file never holds up the API.
         rows = await asyncio.to_thread(self.reader.read, filename, content)
-        by_key: dict[str, FileRow] = {}
-        for row in rows:
-            by_key[row.values.key] = row
+        by_key = numbered(rows)
         duplicated = len(rows) - len(by_key)
         stored = await self.repository.existing(list(by_key))
         known = await self.repository.known_skus(sorted({row.values.sku for row in rows}))

@@ -114,6 +114,11 @@ class FakeIncreaseRepository:
         lines = tuple(line if item.id == line.id else item for item in request.lines)
         self.requests[request_id] = replace(request, lines=lines)
 
+    async def set_support(self, request_id: UUID, support, now) -> None:
+        if request_id not in self.requests:
+            raise NotFoundError("Solicitud no encontrada")
+        self.requests[request_id] = replace(self.requests[request_id], support=support)
+
     async def decide(self, request_id, status, actor, now, note, ledger_ids) -> None:
         request = self.requests[request_id]
         lines = tuple(replace(line, ledger_id=ledger_ids.get(line.id)) for line in request.lines)

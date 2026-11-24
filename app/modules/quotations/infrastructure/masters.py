@@ -109,6 +109,8 @@ class SqlAlchemyQuotationMasterSource:
                             PriceIncreaseModel.sku,
                             PriceIncreaseModel.increased_on.desc().nulls_last(),
                             PriceIncreaseModel.notified_on.desc().nulls_last(),
+                            # Two increases with the same dates: the later row of the workbook.
+                            PriceIncreaseModel.occurrence.desc(),
                             PriceIncreaseModel.updated_at.desc(),
                         )
                     )

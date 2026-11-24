@@ -15,6 +15,7 @@ from app.modules.costs.domain.increases import (
     IncreaseRequest,
     IncreaseRequestPage,
     RequestLine,
+    SupportFile,
     with_coverage,
 )
 from app.modules.costs.infrastructure.models import (
@@ -68,6 +69,30 @@ def _line(model: CostIncreaseLineModel) -> RequestLine:
     )
 
 
+def _support(model: CostIncreaseRequestModel) -> SupportFile | None:
+    if not model.support_storage_key:
+        return None
+    return SupportFile(
+        file_name=model.support_file_name or "soporte",
+        content_type=model.support_content_type or "application/octet-stream",
+        size_bytes=model.support_size_bytes or 0,
+        storage_key=model.support_storage_key,
+        uploaded_by=model.support_uploaded_by or model.created_by,
+        uploaded_at=model.support_uploaded_at or model.created_at,
+    )
+
+
+def _support_values(support: SupportFile | None) -> dict:
+    return {
+        "support_file_name": support.file_name if support else None,
+        "support_content_type": support.content_type if support else None,
+        "support_size_bytes": support.size_bytes if support else None,
+        "support_storage_key": support.storage_key if support else None,
+        "support_uploaded_by": support.uploaded_by if support else None,
+        "support_uploaded_at": support.uploaded_at if support else None,
+    }
+
+
 def _request(model: CostIncreaseRequestModel, counts: tuple[int, int], lines=()) -> IncreaseRequest:
     return IncreaseRequest(
         id=model.id,
@@ -86,6 +111,7 @@ def _request(model: CostIncreaseRequestModel, counts: tuple[int, int], lines=())
         line_count=counts[0],
         accepted_count=counts[1],
         lines=tuple(lines),
+        support=_support(model),
     )
 
 
@@ -119,6 +145,7 @@ class SqlAlchemyIncreaseRepository:
                     created_by=request.created_by,
                     created_at=request.created_at,
                     updated_at=request.created_at,
+                    **_support_values(request.support),
                 )
             )
             for start in range(0, len(lines), _CHUNK):
@@ -215,6 +242,24 @@ class SqlAlchemyIncreaseRepository:
             if result.rowcount == 0:
                 raise NotFoundError("Línea no encontrada")
             await session.execute(update(Q).where(Q.id == request_id).values(updated_at=now))
+
+    async def set_support(
+        self, request_id: UUID, support: SupportFile | None, now: datetime
+    ) -> None:
+        """Store the request's support, or clear it (``None``).
+
+        Raises:
+            NotFoundError: No such request.
+        """
+
+        async with self.database.session_factory() as session, session.begin():
+            result = await session.execute(
+                update(Q)
+                .where(Q.id == request_id)
+                .values(updated_at=now, **_support_values(support))
+            )
+            if result.rowcount == 0:
+                raise NotFoundError("Solicitud no encontrada")
 
     async def decide(
         self,

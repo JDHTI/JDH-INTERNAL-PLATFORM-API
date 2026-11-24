@@ -324,6 +324,24 @@ Reglas, revisadas por referencia al cargar:
   actualiza esa fila.
 - **Rechazar:** exige el motivo, y nada llega al acumulado.
 
+### Soporte del alza (2026-11-24)
+
+La solicitud guarda el soporte del proveedor: la carta o el correo del alza.
+
+- **Cuándo:** al cargar la MAESTRA (campo opcional `support` del mismo formulario) o después,
+  mientras está en revisión (`PUT /{id}/support`). Así lo recibe también una solicitud digitada a
+  mano. Uno por solicitud: otro lo reemplaza y el anterior se borra del bucket.
+- **Qué archivos:** PDF, PNG, JPG, Excel (xlsx, xls) o Word (docx, doc), hasta 10 MB
+  (`COSTS_INCREASE_SUPPORT_EXTENSIONS`, `COSTS_INCREASE_SUPPORT_MAX_MB`). Pasan por el mismo
+  filtro que las notas crédito: el contenido debe corresponder a la extensión, las imágenes se
+  recodifican y todo pasa por el antivirus. Una simulación solo revisa tipo y tamaño.
+- **Dónde:** en el bucket, bajo la carpeta del área:
+  `areas/<COSTS_AREA_SLUG>/costos/alzas/<solicitud>/soporte-<id>.<ext>` (`abastecimiento` por
+  defecto), con nombre, tipo, tamaño, quién y cuándo en `cost_increase_requests.support_*`
+  (migración `0087`).
+- **Quién:** lo adjunta o lo quita quien gestiona `alzas-proveedor`, solo en revisión; una
+  solicitud decidida conserva el suyo. Lo descarga cualquiera que lea `alzas-proveedor`.
+
 ### API (`/api/v1/costs/increase-requests`, clave `alzas-proveedor`)
 
 `read` basta para consultar y descargar; todo lo que cambia algo exige `manage`.
@@ -332,11 +350,14 @@ Reglas, revisadas por referencia al cargar:
 | --- | --- |
 | `GET /items?supplier_code=&q=` | Productos activos del proveedor con su costo anterior, para el formulario |
 | `GET /template?supplier_code=` | La MAESTRA del proveedor (`Content-Disposition` con el nombre del área) |
-| `POST /upload?supplier_code=&apply=` | Multipart `file` (y `note` opcional). Sin `apply`, simula. Devuelve `{applied, blocked, supplier_code, rows_read, lines, issues[{row_number, sku, problem}], request_id}` |
+| `POST /upload?supplier_code=&apply=` | Multipart `file` (y `note` y `support` opcionales). Sin `apply`, simula. Devuelve `{applied, blocked, supplier_code, rows_read, lines, issues[{row_number, sku, problem}], request_id}` |
 | `POST /` | Formulario manual: `{supplier_code, note?, lines: [{sku, new_cost, increased_on, regional? (NACIONAL por defecto), public_price?, supplier_sku?, ean?, icui_pct?, ibua?, regular_discount_pct?, observation?}]}`. Una referencia puede ir en varias líneas con regionales distintas. 201 con la solicitud |
 | `GET /?status=&supplier=&page=&size=` | Solicitudes, la más reciente primero, con `counts` por estado |
 | `GET /{id}` | Solicitud con `lines` |
 | `GET /{id}/file` | El libro que devolvió el proveedor |
+| `GET /{id}/support?inline=` | El soporte (`inline=true` lo abre en el navegador). 404 sin soporte |
+| `PUT /{id}/support` | Multipart `file`: adjunta o reemplaza el soporte (`manage`, en revisión). 409 si ya se decidió; 422 si el archivo no sirve |
+| `DELETE /{id}/support` | Quita el soporte (`manage`, en revisión) |
 | `PATCH /{id}/lines/{line_id}` | `{accepted?, new_cost?, increased_on?, regular_discount_pct?, public_price?, observation?}` |
 | `POST /{id}/approve` | `{note?}` |
 | `POST /{id}/reject` | `{note}` (obligatorio) |

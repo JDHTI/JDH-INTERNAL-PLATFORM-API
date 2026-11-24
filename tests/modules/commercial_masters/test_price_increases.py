@@ -289,7 +289,10 @@ async def test_an_upload_simulates_then_upserts(service, increases) -> None:
         [
             row(),
             row(**{"Referencia": "16315", "Fecha de actualizacion Sistema": None}),
-            # The same key again: the last row of the file wins.
+            # Typed twice, value for value: counts once.
+            row(**{"Referencia": "16315", "Fecha de actualizacion Sistema": None}),
+            # The same key with other values: a second increase of the day, kept as #2
+            # (the workbook lost 101 of these to the last row; 2026-11-24).
             row(**{"Referencia": "16315", "Fecha de actualizacion Sistema": None, "Precio": 1}),
         ]
     )
@@ -297,16 +300,18 @@ async def test_an_upload_simulates_then_upserts(service, increases) -> None:
 
     simulated = await service.upload(manager, "alzas.xlsx", content, apply=False)
 
-    assert (simulated.applied, simulated.rows_read, simulated.inserted) == (False, 3, 2)
-    assert (simulated.duplicated, simulated.unknown_skus, simulated.pending) == (1, 1, 1)
+    assert (simulated.applied, simulated.rows_read, simulated.inserted) == (False, 4, 3)
+    assert (simulated.duplicated, simulated.unknown_skus, simulated.pending) == (1, 1, 2)
     assert increases.upserts == []
 
     applied = await service.upload(manager, "alzas.xlsx", content, apply=True)
-    assert applied.applied and applied.inserted == 2
-    assert {item.sku: item.price for item in increases.upserts[0]}["16315"] == Decimal(1)
+    assert applied.applied and applied.inserted == 3
+    second = [item for item in increases.upserts[0] if item.sku == "16315"]
+    assert [(item.occurrence, item.price) for item in second][1] == (2, Decimal(1))
+    assert second[1].key == f"{second[0].key}#2" and "#" not in second[0].key
 
     again = await service.upload(manager, "alzas.xlsx", content, apply=False)
-    assert (again.inserted, again.updated, again.unchanged) == (0, 0, 2)
+    assert (again.inserted, again.updated, again.unchanged) == (0, 0, 3)
     changed = workbook([row(**{"Precio": 120000})])
     assert (await service.upload(manager, "alzas.xlsx", changed, apply=False)).updated == 1
 

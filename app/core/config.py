@@ -230,6 +230,11 @@ class Settings(BaseSettings):
     COSTS_CREDIT_NOTE_EXTENSIONS: str = "pdf,png,jpg,jpeg"
     # Largest «MAESTRA» workbook a supplier may return.
     COSTS_INCREASES_MAX_UPLOAD_MB: int = 10
+    # The supplier's support of an increase (its letter or email as PDF, a picture, a sheet),
+    # kept in the bucket under the area: ``areas/<COSTS_AREA_SLUG>/costos/…``.
+    COSTS_AREA_SLUG: str = "abastecimiento"
+    COSTS_INCREASE_SUPPORT_MAX_MB: int = 10
+    COSTS_INCREASE_SUPPORT_EXTENSIONS: str = "pdf,png,jpg,jpeg,xlsx,xls,docx,doc"
 
     # Liquidación de apoyos. A month of sales reads in seconds warm but minutes cold, so the
     # warehouse query waits long; months before the start were not loaded in the platform.
@@ -719,6 +724,9 @@ class Settings(BaseSettings):
                 "credit_note_max_bytes": self.COSTS_CREDIT_NOTE_MAX_MB * 1024 * 1024,
                 "credit_note_extensions": _split_lower(self.COSTS_CREDIT_NOTE_EXTENSIONS),
                 "increases_max_upload_bytes": self.COSTS_INCREASES_MAX_UPLOAD_MB * 1024 * 1024,
+                "area_slug": self.COSTS_AREA_SLUG,
+                "support_max_bytes": self.COSTS_INCREASE_SUPPORT_MAX_MB * 1024 * 1024,
+                "support_extensions": _split_lower(self.COSTS_INCREASE_SUPPORT_EXTENSIONS),
             },
             "support_settlements": {
                 "dwh_timeout": self.SUPPORT_SETTLEMENTS_DWH_TIMEOUT_SECONDS,

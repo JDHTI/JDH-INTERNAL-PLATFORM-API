@@ -16,6 +16,7 @@ from app.modules.costs.domain.increases import (
     IncreaseRequestPage,
     RequestLine,
     SupplierItem,
+    SupportFile,
     WorkbookRows,
 )
 from app.modules.costs.domain.novelties import (
@@ -227,6 +228,10 @@ class IncreaseRepository(Protocol):
     async def get(self, request_id: UUID, with_lines: bool = True) -> IncreaseRequest | None: ...
 
     async def update_line(self, request_id: UUID, line: RequestLine, now: datetime) -> None: ...
+
+    async def set_support(
+        self, request_id: UUID, support: SupportFile | None, now: datetime
+    ) -> None: ...
 
     async def decide(
         self,

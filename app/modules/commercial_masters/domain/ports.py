@@ -23,6 +23,7 @@ from app.modules.commercial_masters.domain.entities import (
     SupplierProductCode,
     TargetMargin,
 )
+from app.modules.commercial_masters.domain.price_increases import Placement
 from app.modules.identity.domain.principal import Principal
 
 Row = Mapping[str, Any]
@@ -38,6 +39,15 @@ class WarehouseCostSource(Protocol):
     """Average inventory costs by warehouse, from the data warehouse."""
 
     async def warehouse_costs(self, warehouse: str) -> list[WarehouseCost]: ...
+
+
+class PlacementSource(Protocol):
+    """Where each reference is set up (operation center and installation), from the data
+    warehouse's inventory."""
+
+    async def placements(self) -> list[Placement]:
+        """Raises ``DependencyUnavailableError`` when the warehouse does not answer."""
+        ...
 
 
 class WarehouseSource(Protocol):

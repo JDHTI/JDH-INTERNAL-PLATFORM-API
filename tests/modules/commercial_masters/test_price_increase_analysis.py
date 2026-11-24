@@ -1,5 +1,6 @@
 """Price increase analysis: how much each reference moved in a period, cached per version."""
 
+import asyncio
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -9,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Environment, Settings
-from app.core.errors import InvalidInputError
+from app.core.errors import DependencyUnavailableError, InvalidInputError
 from app.main import create_app
 from app.modules.commercial_masters.application.price_increases import (
     MAX_CACHED_WINDOWS,
@@ -27,7 +28,13 @@ from app.modules.commercial_masters.domain.price_increase_analysis import (
 from app.modules.commercial_masters.domain.price_increases import (
     FilterOptions,
     MonthOption,
+    Placement,
+    PriceIncreaseFilters,
+    PriceIncreasePage,
+    Scope,
     SupplierOption,
+    place_options,
+    scope_of,
 )
 from app.modules.commercial_masters.infrastructure.price_increases_file import (
     PriceIncreaseFileReader,
@@ -99,6 +106,17 @@ def test_each_reference_compares_its_cost_at_the_end_with_the_start() -> None:
     c = result["C"]
     assert c.movement == "estable" and c.last_status == "estable"
     assert result["E"].accumulated_pct is None and result["E"].movement is None
+
+
+def test_increases_chained_on_the_same_day_follow_the_workbook_order() -> None:
+    # sku 15143 on 2021-09-24: 15,519 to 15,984.36, then to 16,463.89 (the same dates).
+    second = row("F", date(2021, 9, 24), "15984.36", "16463.89", "subio", occurrence=2)
+    first = row("F", date(2021, 9, 24), "15519", "15984.36", "subio")
+
+    result = analyze([second, first], None)[0]
+
+    assert (result.start_cost, result.end_cost) == (Decimal(15519), Decimal("16463.89"))
+    assert result.increases == 2
 
 
 def test_the_whole_history_starts_at_the_first_old_cost() -> None:
@@ -177,16 +195,22 @@ def test_a_workbook_sized_history_analyzes_quickly() -> None:
 
 
 class FakeAnalysisRepository:
-    def __init__(self) -> None:
+    def __init__(self, rows=ROWS) -> None:
         self.reads = 0
         self.stamp = (8, datetime(2026, 11, 11, 8, 0))
+        self.rows = list(rows)
+        self.pages = []
 
     async def version(self):
         return self.stamp
 
     async def analysis_rows(self):
         self.reads += 1
-        return list(ROWS)
+        return list(self.rows)
+
+    async def page(self, filters, page, size):
+        self.pages.append(filters)
+        return PriceIncreasePage((), 0, page, size, {})
 
     async def filter_options(self):
         return FilterOptions(
@@ -205,7 +229,29 @@ def cache() -> AnalysisCache:
     return AnalysisCache()
 
 
-def service_for(repository, cache) -> PriceIncreaseService:
+class FakePlacements:
+    """A in Antioquia (installation 1); B in Bogotá (8); E in both."""
+
+    def __init__(self, down: bool = False) -> None:
+        self.down = down
+        self.reads = 0
+
+    async def placements(self):
+        self.reads += 1
+        if self.down:
+            raise DependencyUnavailableError("down")
+        return [
+            Placement("A", "001", "1", "ANTIOQUIA", "PRINCIPAL"),
+            Placement("B", "003", "8", "CENTRO", "BOGOTA"),
+            Placement("E", "001", "1", "ANTIOQUIA", "PRINCIPAL"),
+            Placement("E", "003", "8", "CENTRO", "BOGOTA"),
+            # An installation with warehouses in two centers.
+            Placement("E", "004", "7", "COSTA", "CARTAGENA"),
+            Placement("C", "001", "7", "ANTIOQUIA", None),
+        ]
+
+
+def service_for(repository, cache, placements=None) -> PriceIncreaseService:
     return PriceIncreaseService(
         repository=repository,
         managers=FakeManagers([]),
@@ -213,6 +259,7 @@ def service_for(repository, cache) -> PriceIncreaseService:
         max_upload_bytes=1024,
         today=lambda: TODAY,
         cache=cache,
+        placements=placements,
     )
 
 
@@ -276,6 +323,93 @@ async def test_filters_search_and_paging(repository, cache) -> None:
         await ask(service, since=date(2026, 6, 30), until=date(2026, 6, 1))
 
 
+async def test_a_center_or_installation_analyzes_its_references_and_regional(cache) -> None:
+    # A went up nationally; Bogotá got its own, higher cost for A in March.
+    rows = [*ROWS, row("A", date(2026, 3, 1), "1050", "1300", "subio", regional=" bogota")]
+    repository = FakeAnalysisRepository(rows)
+    placements = FakePlacements()
+    service = service_for(repository, cache, placements)
+
+    whole = {item.sku: item for item in (await ask(service)).items}
+    antioquia = await ask(service, co="001")
+    bogota = await ask(service, co="003")
+    principal = await ask(service, installation="1")
+    both = await ask(service, co="003", installation="8")
+
+    # The whole history mixes Bogotá's row in: three increases for A.
+    assert whole["A"].increases == 3
+    # Antioquia: its references (A, C, E), A without Bogotá's row.
+    by_sku = {item.sku: item for item in antioquia.items}
+    assert set(by_sku) == {"A", "C", "E"} and by_sku["A"].increases == 2
+    assert by_sku["A"].end_cost == Decimal("1102.5")
+    # Bogotá: B and E only (A is not set up there).
+    assert {item.sku for item in bogota.items} == {"B", "E"}
+    assert {item.sku for item in principal.items} == {"A", "E"}
+    assert {item.sku for item in both.items} == {"B", "E"}
+    assert antioquia.summary.references == 3
+    # Read once per process (the source caches); the history once per version.
+    assert repository.reads == 1
+
+
+async def test_a_bogota_reference_keeps_its_own_regional_rows(cache) -> None:
+    rows = [row("B", date(2026, 3, 1), "2200", "2500", "subio", regional="BOGOTA")]
+    repository = FakeAnalysisRepository([*ROWS, *rows])
+    service = service_for(repository, cache, FakePlacements())
+
+    bogota = {item.sku: item for item in (await ask(service, co="003")).items}
+
+    assert bogota["B"].increases == 2 and bogota["B"].changes == 3
+
+
+async def test_the_history_listing_takes_the_scope(cache) -> None:
+    repository = FakeAnalysisRepository()
+    service = service_for(repository, cache, FakePlacements())
+
+    await service.page(PriceIncreaseFilters(sku="A"), 1, 50, co="001")
+    await service.page(PriceIncreaseFilters(sku="A"), 1, 50)
+
+    scoped, plain = repository.pages
+    assert scoped.scope == Scope(frozenset({"A", "C", "E"}), frozenset({"001"}))
+    assert scoped.scope.regionals == {"ANTIOQUIA"} and plain.scope is None
+    assert scoped.scope.holds("A", None) and scoped.scope.holds("A", " antioquia ")
+    assert scoped.scope.holds("A", "NACIONAL") and not scoped.scope.holds("A", "BOGOTA")
+    assert not scoped.scope.holds("B", None)
+
+
+async def test_without_the_warehouse_the_filter_fails_and_the_options_go_without_it(
+    repository, cache
+) -> None:
+    service = service_for(repository, cache, FakePlacements(down=True))
+
+    with pytest.raises(DependencyUnavailableError):
+        await ask(service, co="001")
+    options = await service.filter_options()
+
+    assert options.cos == () and options.installations == () and options.suppliers
+    # Without a source at all, the filter is not available either.
+    with pytest.raises(DependencyUnavailableError):
+        await ask(service_for(repository, cache), installation="8")
+    # No center nor installation: the warehouse is not asked.
+    assert (await ask(service)).total == 4
+
+
+def test_the_options_list_centers_and_installations() -> None:
+    cos, installations = place_options(asyncio.run(FakePlacements().placements()))
+
+    assert [(item.code, item.name) for item in cos] == [
+        ("001", "ANTIOQUIA"),
+        ("003", "CENTRO"),
+        ("004", "COSTA"),
+    ]
+    assert [(item.code, item.name, item.cos) for item in installations] == [
+        ("8", "BOGOTA", ("003",)),
+        ("7", "CARTAGENA", ("001", "004")),
+        ("1", "PRINCIPAL", ("001",)),
+    ]
+    assert scope_of([], "009", None) == Scope(frozenset(), frozenset({"009"}))
+    assert scope_of([], "009", None).regionals == {"BARRANQUILLA"}
+
+
 async def test_the_cache_keeps_a_bounded_number_of_windows(repository, cache) -> None:
     service = service_for(repository, cache)
     for day in range(1, MAX_CACHED_WINDOWS + 6):
@@ -295,7 +429,9 @@ def test_the_analysis_route(repository, cache) -> None:
     container = app.state.container
     with (
         container.redis.override(AllowAll()),
-        container.v1_container.price_increase_service.override(service_for(repository, cache)),
+        container.v1_container.price_increase_service.override(
+            service_for(repository, cache, FakePlacements())
+        ),
         TestClient(app) as client,
     ):
         response = client.get(
@@ -333,4 +469,23 @@ def test_the_analysis_route(repository, cache) -> None:
                 {"month": "2026-06", "changes": 1, "references": 1},
                 {"month": "2026-05", "changes": 1, "references": 1},
             ],
+            "cos": [
+                {"code": "001", "name": "ANTIOQUIA"},
+                {"code": "003", "name": "CENTRO"},
+                {"code": "004", "name": "COSTA"},
+            ],
+            "installations": [
+                {"code": "8", "name": "BOGOTA", "cos": ["003"]},
+                {"code": "7", "name": "CARTAGENA", "cos": ["001", "004"]},
+                {"code": "1", "name": "PRINCIPAL", "cos": ["001"]},
+            ],
         }
+        scoped = client.get(
+            "/api/v1/commercial/price-increases/analysis", params={"co": "003", "period": "all"}
+        )
+        assert scoped.status_code == 200
+        assert {item["sku"] for item in scoped.json()["items"]} == {"B", "E"}
+        too_long = client.get(
+            "/api/v1/commercial/price-increases/analysis", params={"co": "x" * 11}
+        )
+        assert too_long.status_code == 422

@@ -728,6 +728,9 @@ class PriceIncreaseResponse(BaseModel):
     # ``libro`` (the area's workbook) or ``solicitud`` (a supplier's request approved in Costos).
     source: Literal["libro", "solicitud"]
     request_line_id: UUID | None
+    # The n-th workbook row with the same reference, dates and regional: increases chained
+    # on the same day (1 for the first).
+    occurrence: int
     # No system update date: SIESA does not have it, so the quoter compares its new cost.
     is_pending: bool
     updated_by: str
@@ -862,12 +865,30 @@ class MonthOptionResponse(BaseModel):
     references: int
 
 
+class CenterOptionResponse(BaseModel):
+    # «003»
+    code: str
+    # SIESA's name («CENTRO»).
+    name: str | None
+
+
+class InstallationOptionResponse(BaseModel):
+    # SIESA's installation («8»)
+    code: str
+    name: str | None
+    # The operation centers it has warehouses in: picking a center narrows this list.
+    cos: list[str]
+
+
 class FilterOptionsResponse(BaseModel):
     """What the dropdowns of the history and the analysis offer."""
 
     suppliers: list[SupplierOptionResponse]
     # The latest month first, from the year 2000.
     months: list[MonthOptionResponse]
+    # With active references in the warehouse's inventory; empty when it is down.
+    cos: list[CenterOptionResponse]
+    installations: list[InstallationOptionResponse]
 
 
 @router.get(
@@ -880,15 +901,25 @@ async def price_increase_options(
     _: Principal = _principal,
     service: PriceIncreaseService = _increases,
 ) -> FilterOptionsResponse:
-    """The commercial suppliers with references in the history, by name, and the months with
-    increases taking effect: the supplier and month dropdowns. Suppliers are picked from
-    this list, never typed."""
+    """The commercial suppliers with references in the history, by name, the months with
+    increases taking effect, and the operation centers and installations with active
+    references (the warehouse's inventory): the dropdowns. Suppliers are picked from this
+    list, never typed."""
 
     result = await service.filter_options()
     return FilterOptionsResponse(
         suppliers=[SupplierOptionResponse(**asdict(item)) for item in result.suppliers],
         months=[MonthOptionResponse(**asdict(item)) for item in result.months],
+        cos=[CenterOptionResponse(**asdict(item)) for item in result.cos],
+        installations=[
+            InstallationOptionResponse(code=item.code, name=item.name, cos=list(item.cos))
+            for item in result.installations
+        ],
     )
+
+
+_CO = Query(default=None, max_length=10, description="Operation center code («003»)")
+_INSTALLATION = Query(default=None, max_length=10, description="SIESA installation code («8»)")
 
 
 @router.get(
@@ -902,6 +933,8 @@ async def price_increase_analysis(
     since: date | None = Query(default=None),  # noqa: B008
     until: date | None = Query(default=None),  # noqa: B008
     supplier: str | None = Query(default=None, max_length=40),
+    co: str | None = _CO,
+    installation: str | None = _INSTALLATION,
     movement: Movement | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None, max_length=100),
     sort: Literal["accumulated", "increases", "frequency", "last_change", "sku"] = Query(
@@ -922,13 +955,18 @@ async def price_increase_analysis(
     calendar month. ``q`` matches the reference (prefix) or the description; ``supplier`` is
     a commercial supplier code from ``/price-increases/options``. ``movement`` keeps the
     references that went up, down or stayed; ``summary`` covers the search before that
-    filter."""
+    filter.
+
+    ``co`` and ``installation`` (codes from the options) analyze only the references set up
+    there, with their national rows and those of its regional."""
 
     result = await service.analysis(
         period=period,
         since=since,
         until=until,
         supplier=supplier,
+        co=co,
+        installation=installation,
         q=q,
         movement=movement,
         sort=sort,
@@ -959,6 +997,8 @@ async def list_price_increases(
     pending: bool | None = Query(default=None),
     sku: str | None = Query(default=None, max_length=40),
     supplier: str | None = Query(default=None, max_length=40),
+    co: str | None = _CO,
+    installation: str | None = _INSTALLATION,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=PRICE_INCREASES_MAX_PAGE),
     principal: Principal = _principal,
@@ -966,12 +1006,16 @@ async def list_price_increases(
 ) -> PriceIncreasePageResponse:
     """The history, the latest increase first. ``q`` matches the reference (prefix) or the
     description; ``supplier`` is a commercial supplier code from ``/price-increases/options``;
-    ``pending=true`` keeps the rows SIESA does not have yet."""
+    ``pending=true`` keeps the rows SIESA does not have yet. ``co`` and ``installation``
+    keep the rows that hold there (a reference's detail: its national rows and those of
+    that regional)."""
 
     result = await service.page(
         PriceIncreaseFilters(q=q, status=status, pending=pending, sku=sku, supplier=supplier),
         page,
         size,
+        co=co,
+        installation=installation,
     )
     return PriceIncreasePageResponse(
         items=[_increase(item) for item in result.items],

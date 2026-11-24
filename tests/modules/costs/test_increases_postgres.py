@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -12,12 +13,18 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.domain.price_increases import (
+    PriceIncreaseFilters,
+    PriceIncreaseValues,
+    Scope,
+)
 from app.modules.commercial_masters.infrastructure.models import PriceIncreaseModel
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
 )
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.increases import IncreaseService, LineChanges
+from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.increases import REST, LineInput
 from app.modules.costs.infrastructure.increase_file import (
     IncreaseWorkbookReader,
@@ -28,7 +35,7 @@ from app.modules.costs.infrastructure.increase_repository import SqlAlchemyIncre
 from app.modules.costs.infrastructure.ledger import CommercialIncreaseLedger
 from app.modules.costs.infrastructure.models import CostIncreaseRequestModel
 from app.modules.identity.domain.principal import Principal
-from tests.modules.costs.fakes import NOW, TODAY, FakePolicy, FakeStorage
+from tests.modules.costs.fakes import NOW, TODAY, FakeGuard, FakePolicy, FakeStorage
 from tests.modules.costs.increase_fakes import FakeItems, item
 
 pytestmark = pytest.mark.skipif(
@@ -135,3 +142,55 @@ async def test_an_approved_request_lands_in_the_history_as_pending(world) -> Non
     assert by_regional[(skus[0], "BOGOTA")].request_line_id == rest.id
     assert by_regional[(skus[1], "NACIONAL")].status == "bajo"
     assert by_regional[(skus[1], "NACIONAL")].row_key.count("|") == 2
+
+    # The history of Cartagena's center (004): its own row and the national ones.
+    history = SqlAlchemyPriceIncreaseRepository(database)
+    scope = Scope(frozenset(skus), frozenset({"004"}))
+    page = await history.page(PriceIncreaseFilters(scope=scope), 1, 50)
+    assert {(item.values.sku, item.values.regional) for item in page.items} == {
+        (skus[0], "CARTAGENA"),
+        (skus[1], "NACIONAL"),
+    }
+    assert page.counts["bajo"] == 1
+    nothing = await history.page(PriceIncreaseFilters(scope=Scope(frozenset(), frozenset())), 1, 5)
+    assert nothing.total == 0
+    rows = [row for row in await history.analysis_rows() if row.sku in skus]
+    assert {(row.regional, row.occurrence) for row in rows if row.sku == skus[1]} == {
+        ("NACIONAL", 1)
+    }
+
+
+async def test_increases_chained_on_the_same_day_are_kept_apart(world) -> None:
+    _, database, _, skus = world
+    history = SqlAlchemyPriceIncreaseRepository(database)
+    first = PriceIncreaseValues(
+        skus[0], increased_on=date(2021, 9, 24), old_cost=Decimal(15519), new_cost=Decimal(15984)
+    )
+    second = replace(first, old_cost=Decimal(15984), new_cost=Decimal(16463), occurrence=2)
+
+    await history.upsert([first, second], "bi@jdh.com.co", NOW)
+
+    stored = await history.existing([first.key, second.key])
+    assert stored[second.key].occurrence == 2 and second.key.endswith("#2")
+    page = await history.page(PriceIncreaseFilters(sku=skus[0]), 1, 10)
+    # The later one of the day first.
+    assert [item.values.new_cost for item in page.items] == [Decimal(16463), Decimal(15984)]
+
+
+async def test_the_support_is_stored_with_the_request(world) -> None:
+    increases, _, code, skus = world
+    increases.support_guard = FakeGuard()
+    request = await increases.create(
+        PERSON, code, [LineInput(skus[0], Decimal("1100"), increased_on=TODAY)]
+    )
+
+    attached = await increases.attach_support(
+        PERSON, request.id, UploadedFile("carta.pdf", b"%PDF-1.7 carta")
+    )
+    listed = await increases.page(None, code, 1, 10)
+
+    assert attached.support.file_name == "carta.pdf" and attached.support.size_bytes == 14
+    assert attached.support.uploaded_by == PERSON.email
+    assert listed.items[0].support.storage_key == attached.support.storage_key
+    removed = await increases.remove_support(PERSON, request.id)
+    assert removed.support is None

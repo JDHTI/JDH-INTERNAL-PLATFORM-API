@@ -171,6 +171,9 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/costs/increase-requests/{request_id}/file` | `read` |  |
 | `PATCH` | `/v1/costs/increase-requests/{request_id}/lines/{line_id}` | `relaxed` |  |
 | `POST` | `/v1/costs/increase-requests/{request_id}/reject` | `relaxed` |  |
+| `DELETE` | `/v1/costs/increase-requests/{request_id}/support` | `relaxed` |  |
+| `GET` | `/v1/costs/increase-requests/{request_id}/support` | `read` |  |
+| `PUT` | `/v1/costs/increase-requests/{request_id}/support` | `relaxed` |  |
 | `GET` | `/v1/costs/novelties` | `read` |  |
 | `GET` | `/v1/costs/novelties/options` | `read` |  |
 | `GET` | `/v1/costs/novelties/{novelty_id}` | `read` |  |

@@ -13,6 +13,7 @@ import pytest
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, NotFoundError
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.increases import IncreaseService, LineChanges
+from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.increases import (
     APPROVED,
     NATIONAL,
@@ -40,7 +41,7 @@ from app.modules.costs.infrastructure.increase_file import (
 )
 from app.modules.costs.infrastructure.ledger import ledger_values
 from app.modules.identity.domain.principal import Principal
-from tests.modules.costs.fakes import NOW, TODAY, FakePolicy, FakeStorage
+from tests.modules.costs.fakes import NOW, TODAY, FakeGuard, FakePolicy, FakeStorage
 from tests.modules.costs.increase_fakes import (
     FakeIncreaseRepository,
     FakeItems,
@@ -74,6 +75,7 @@ def service(
         max_upload_bytes=1024 * 1024,
         today=lambda: TODAY,
         clock=lambda: NOW,
+        support_guard=FakeGuard(),
     )
 
 
@@ -337,6 +339,89 @@ async def test_upload_simulates_then_stores_a_request_in_review() -> None:
     assert line.change == "subio" and line.variation_amount == D("960.12")
     assert list(storage.objects) == [request.storage_key]
     assert (await increases.file(request.id))[1] == returned
+
+
+PDF = b"%PDF-1.7 carta del proveedor"
+
+
+async def test_the_supplier_support_goes_with_the_maestra_under_the_area() -> None:
+    storage = FakeStorage()
+    increases = service(storage=storage)
+    _, content = await increases.template("50")
+    returned = filled(
+        content,
+        {
+            "10042": {
+                "Costo Nuevo sin Impuesto Saludable": 23000,
+                "Fecha de Incremento": datetime(2026, 12, 1),
+            }
+        },
+    )
+    letter = UploadedFile("Carta alza.pdf", PDF)
+
+    # A simulation checks the type but keeps nothing.
+    with pytest.raises(InvalidInputError, match="tipo de archivo"):
+        await increases.upload(
+            PERSON, "50", "m.xlsx", returned, apply=False, support=UploadedFile("x.exe", b"MZ")
+        )
+    simulated = await increases.upload(
+        PERSON, "50", "m.xlsx", returned, apply=False, support=letter
+    )
+    assert not simulated.applied and storage.objects == {}
+
+    report = await increases.upload(PERSON, "50", "m.xlsx", returned, apply=True, support=letter)
+    request = await increases.get(report.request_id)
+
+    support = request.support
+    assert support is not None and support.file_name == "Carta alza.pdf"
+    assert support.storage_key.startswith(f"areas/abastecimiento/costos/alzas/{request.id}/")
+    assert (support.content_type, support.size_bytes, support.uploaded_by) == (
+        "application/pdf",
+        len(PDF),
+        PERSON.email,
+    )
+    assert (await increases.support(request.id))[1] == PDF
+    assert len(storage.objects) == 2
+
+
+async def test_a_support_is_attached_replaced_and_removed_while_in_review() -> None:
+    storage = FakeStorage()
+    increases = service(storage=storage)
+    request = await increases.create(
+        PERSON,
+        "50",
+        [LineInput(sku="10042", new_cost=D(23000), increased_on=date(2026, 12, 1))],
+    )
+    with pytest.raises(NotFoundError):
+        await increases.support(request.id)
+
+    first = await increases.attach_support(PERSON, request.id, UploadedFile("carta.pdf", PDF))
+    second = await increases.attach_support(PERSON, request.id, UploadedFile("correo.png", b"png"))
+
+    # The replaced file leaves the bucket.
+    assert first.support.storage_key not in storage.objects
+    assert list(storage.objects) == [second.support.storage_key]
+    assert second.support.content_type == "image/png"
+    with pytest.raises(InvalidInputError):
+        await increases.attach_support(PERSON, request.id, UploadedFile("carta.pdf", b"no pdf"))
+    with pytest.raises(InvalidInputError, match="Adjunta"):
+        await increases.attach_support(PERSON, request.id, UploadedFile("carta.pdf", b""))
+    with pytest.raises(ForbiddenError):
+        await service(manage=False).attach_support(
+            PERSON, request.id, UploadedFile("carta.pdf", PDF)
+        )
+
+    removed = await increases.remove_support(PERSON, request.id)
+    assert removed.support is None and storage.objects == {}
+    with pytest.raises(NotFoundError):
+        await increases.remove_support(PERSON, request.id)
+
+    await increases.attach_support(PERSON, request.id, UploadedFile("carta.pdf", PDF))
+    await increases.reject(PERSON, request.id, "Sin carta firmada")
+    with pytest.raises(ConflictError):
+        await increases.attach_support(PERSON, request.id, UploadedFile("carta.pdf", PDF))
+    # A decided request keeps its support for whoever reads it.
+    assert (await increases.support(request.id))[1] == PDF
 
 
 async def test_unknown_or_repeated_references_block_the_upload() -> None:
