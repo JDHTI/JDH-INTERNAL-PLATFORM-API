@@ -158,6 +158,15 @@ services:
     <<: *api
     container_name: platform-api
     restart: unless-stopped
+    # deploy.sh brings the API up with `up -d --wait`: with this check the container is
+    # "healthy" only once it answers readiness, so a recreate never reports done while the
+    # app is still booting. That removes the empty window the edge proxy marked down on.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=4); c.request('GET','/api/health/ready'); sys.exit(0 if c.getresponse().status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
