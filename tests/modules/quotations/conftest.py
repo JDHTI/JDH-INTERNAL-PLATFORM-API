@@ -41,6 +41,7 @@ from app.modules.quotations.domain.entities import (
     ValueTaxKey,
 )
 from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesWorkbook
+from app.modules.quotations.infrastructure.list_template_file import ListTemplateFile
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.siesa_file import SiesaPriceFileWriter
 from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWriter
@@ -684,6 +685,7 @@ def service(repository, warehouse, masters, supports) -> QuotationService:
         max_lines=100,
         offer_writer=CustomerOfferWorkbook(),
         lines_writer=QuotationLinesWorkbook(),
+        template_reader=ListTemplateFile(),
         list_managers=FakeManagers([MANAGER, LIST_MANAGER]),
         list_approvers=FakeManagers([APPROVER]),
         main_lists=("1", "001", "002", "003", "004", "005", "009"),
