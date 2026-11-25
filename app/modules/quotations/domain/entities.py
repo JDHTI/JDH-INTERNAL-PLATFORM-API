@@ -6,7 +6,7 @@ are fractions (0.18 = 18 %); ``vat_pct`` is in points (19 = 19 %), as the master
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -19,9 +19,13 @@ from app.modules.supplier_supports.domain.pricing import guaranteed_amount
 
 @dataclass(frozen=True)
 class QuotationPolicy:
-    """The general rule: how far below its target margin a new price may leave a line."""
+    """The general rule: how far below its target margin a new price may leave a line (the
+    negotiation threshold), and the factor on the cost of each list family. Both come from
+    module ``ajuste-costos`` when it has them (2026-11-25); ``cost_factors`` empty is the
+    code's (:data:`pricing.COST_FACTOR`)."""
 
     max_points_below_target: Decimal = Decimal("0.01")
+    cost_factors: Mapping[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

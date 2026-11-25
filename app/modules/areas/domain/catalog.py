@@ -223,6 +223,15 @@ MODULES: tuple[Module, ...] = (
         "Cuánto reconoce cada proveedor por las ventas apoyadas del mes y el margen recompuesto",
         locked=True,
     ),
+    # The cost rules of the quoter in one place (2026-11-25): the cost factor of each list
+    # family, the negotiation threshold and the supplier branch per operation center. BI by
+    # default; ``read`` sees them, ``manage`` changes them.
+    Module(
+        "ajuste-costos",
+        "Ajuste de costos",
+        ("bi",),
+        "Factor de costo por familia, umbral de negociación y sucursal del proveedor por C.O.",
+    ),
     Module(
         MASTERS_MODULE,
         "Maestros",

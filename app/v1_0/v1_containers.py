@@ -57,6 +57,8 @@ from app.modules.commercial_masters.infrastructure.siesa_quotations import (
 from app.modules.consumption.application.cursor import ClientCursorCodec
 from app.modules.consumption.application.service import ConsumptionService
 from app.modules.consumption.infrastructure.repository import WarehouseClientRepository
+from app.modules.cost_settings.application.service import CostSettingsService
+from app.modules.cost_settings.infrastructure.repository import SqlAlchemyCostSettingsRepository
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.entries import EntryAnalysisService, EntryCache
 from app.modules.costs.application.increases import IncreaseService
@@ -832,6 +834,16 @@ class V1Container(containers.DeclarativeContainer):
         QuotationPolicy, max_points_below_target=config.quotations.max_points_below_target
     )
     quotation_offer_writer = providers.Singleton(CustomerOfferWorkbook)
+    # --- Ajuste de costos: the quoter's cost rules (2026-11-25) ---
+    # ``read`` and ``manage`` on ``ajuste-costos`` in any area where it is on (BI by default).
+    cost_settings_service = providers.Factory(
+        CostSettingsService,
+        repository=providers.Factory(SqlAlchemyCostSettingsRepository, database=database),
+        managers=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="ajuste-costos"
+        ),
+        threshold_default=config.quotations.max_points_below_target,
+    )
     quotation_lines_writer = providers.Singleton(QuotationLinesWorkbook)
     quotation_template_reader = providers.Singleton(ListTemplateFile)
     quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
@@ -841,6 +853,7 @@ class V1Container(containers.DeclarativeContainer):
         schema=settings.provided.DWH_SCHEMA,
         timeout=config.quotations.dwh_timeout,
         sales_timeout=config.quotations.dwh_sales_timeout,
+        cost_rules=cost_settings_service,
     )
     quotation_insight_source = providers.Factory(
         WarehouseInsightSource,
@@ -932,6 +945,7 @@ class V1Container(containers.DeclarativeContainer):
         offer_writer=quotation_offer_writer,
         lines_writer=quotation_lines_writer,
         template_reader=quotation_template_reader,
+        cost_rules=cost_settings_service,
         list_managers=list_update_manager_policy,
         list_approvers=list_update_approver_policy,
         main_lists=config.quotations.main_lists,
@@ -1164,6 +1178,7 @@ class V1Container(containers.DeclarativeContainer):
         SupportCostService,
         repository=providers.Factory(SqlAlchemyCostRepository, database=database),
         warehouse=supplier_support_cost_source,
+        cost_rules=cost_settings_service,
     )
     # The bulk load assigns the DWH cost of its supports as part of the load (not the job).
     supplier_support_bulk_service = providers.Factory(

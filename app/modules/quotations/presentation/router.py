@@ -1110,7 +1110,7 @@ async def quotation_rules(
                 for rule in section.rules
             ],
         )
-        for section in service.rule_catalog()
+        for section in await service.rule_catalog()
     ]
 
 

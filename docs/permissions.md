@@ -109,6 +109,7 @@ Un coordinador sin equipo en el maestro no ve a nadie, hasta que se le complete 
 | abastecimiento | `novedades-compras` | bandeja de novedades (`/costs/novelties`), su historial y la nota crédito | asignar motivo, registrar o quitar la nota crédito, editar el catálogo de motivos |
 | abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla, soporte y comunicado | cargar, crear, editar, aprobar y rechazar alzas |
 | abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`), lotes de cargue a SIESA y sus archivos | generar, confirmar y anular lotes de cargue a SIESA, poner o quitar la fecha de SIESA (igual que `maestros` en BI) |
+| bi | `ajuste-costos` | factor de costo por familia, umbral de negociación y sucursal del proveedor por C.O., con su historial (`/cost-settings`) | cambiar parámetros y reglas de sucursal |
 | bi (bloqueado) | `liquidacion-apoyos` | liquidación de apoyos del mes por proveedor, referencia y venta; Excel (`/support-settlements`) | recalcular y cerrar el mes vencido. Reabrir un mes cerrado: solo el líder o responsable de BI y los administradores (`AreaLeaderPolicy`) |
 
 `/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,

@@ -125,8 +125,18 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
 3. **Costo**: el **mayor** entre:
    - la **cotización vigente del proveedor** (`consumo.cotizaciones_proveedores`: vigente, ítem
      activo, unidad `UNID` o `KL`): `redondear(costo_bruto) × (1 + ICUI/100) + IBUA`, la mayor por
-     referencia. **Lactalis** (NIT 800245795) cotiza por sucursal: la `003` para las listas de
-     Centro (003, 10U, 10S, o un cliente que factura desde el CO 003) y la `001` para el resto;
+     referencia.
+     - **Sucursal del proveedor por C.O.** (2026-11-25, [ajuste-costos.md](ajuste-costos.md)):
+       algunos proveedores tienen una lista por sucursal. SIESA no llena el C.O. de la
+       cotización, así que BI define en Ajuste de costos qué sucursal cotiza para cada C.O.
+     - Un proveedor con regla toma, por referencia, la cotización de la sucursal del C.O. del
+       plan; si no la tiene, la de su sucursal general; si tampoco, las demás.
+     - Hoy son dos:
+       - Team Foods: el C.O. 001 (Antioquia, y las listas 001, 1M y 10X) con la sucursal 002;
+       - Lactalis: el C.O. 003 (Centro, y las listas 003, 10U y 10S) con la 003.
+     - Nacional y la lista 1 no aplican reglas: toman la mayor.
+     - Antes Lactalis estaba fijo en el código, y en Centro sus referencias sin cotización en la
+       003 se quedaban sin costo de cotización;
    - el **costo promedio de inventario** (`consumo.inventario_fecha`, la foto de SIESA de la
      mañana) de la bodega de la lista, redondeado al peso. La **bodega 2** (cuarto frío) aplica
      solo a las referencias de línea `CONGELADOS` y `REFRIGERADOS` (`consumo.productos.linea`);
@@ -144,7 +154,9 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      ([alzas-precios.md](alzas-precios.md)).
 
    El mayor se redondea hacia arriba y se multiplica por el factor de la familia de la lista:
-   **1,004** en Generales, Salsamentarias y Market; **1** en Mayoristas. La cotización indica de
+   **1,004** (0,4 % más) en Generales, Salsamentarias y Market; **1** en Mayoristas. Desde el
+   2026-11-25 BI lo ajusta en [Ajuste de costos](ajuste-costos.md); esos son los valores por
+   defecto. La cotización indica de
    dónde salió (`cost_source`: `cotizacion`, `inventario` o `alza`) y trae los valores
    (`quote_cost`, `inventory_cost`, `increase_cost`).
    - **Cotización fuera de rango**: una cotización mayor que **3 veces la mediana del último
@@ -317,18 +329,25 @@ margen con apoyo      = (precio − (costo − apoyo)) / precio
 variación             = precio nuevo / último precio − 1
 margen mínimo         = margen objetivo − 1 punto
 precio mínimo         = techo((costo − apoyo) / (1 − margen mínimo))           en pesos
-precio óptimo         = redondeo((costo − apoyo) / (1 − margen objetivo))      en pesos
-precio a un margen m  = redondeo((costo − apoyo) / (1 − m)), nunca bajo el mínimo si m cumple
+precio óptimo         = techo((costo − apoyo) / (1 − margen objetivo))         en pesos
+precio a un margen m  = techo((costo − apoyo) / (1 − m)), nunca bajo el mínimo si m cumple
 ```
 
-El redondeo es al peso: normal en Generales y Mayoristas, hacia arriba en Salsamentarias y Market
-(como los archivos del área). Los precios nuevos van en **pesos enteros**.
+Los precios nuevos van en **pesos enteros**. Un precio que sale de un margen (el óptimo, el
+mínimo, o llevar referencias a un margen) se redondea **siempre hacia arriba**, en todas las
+familias, desde el 2026-11-25.
+- **Por qué:** antes, en Generales y Mayoristas, iba al peso más cercano. Un margen de 20 % podía
+  quedar en 19,99 % y salir con alerta. Por ejemplo, 1.001 / 0,8 = 1.251,25 se volvía 1.251
+  (19,98 %); ahora es 1.252 (20,05 %).
 
 ## Regla general
 
 Un precio nuevo puede dejar el margen (con apoyo) **como máximo 1 punto por debajo del margen
 objetivo**: objetivo 20 % → mínimo 19 %. Exactamente 1 punto todavía cumple.
-`QUOTATIONS_MAX_POINTS_BELOW_TARGET` (en puntos, por defecto `1`).
+Es el **umbral de negociación**. Desde el 2026-11-25 lo ajusta BI en
+[Ajuste de costos](ajuste-costos.md); `QUOTATIONS_MAX_POINTS_BELOW_TARGET` (en puntos, por
+defecto `1`) es su valor mientras BI no lo cambie. Cada cotización guarda el umbral con el que se
+armó (`max_points_below_target`) y lo cambia al refrescarse.
 
 Cada línea con precio nuevo dice su `compliance`:
 
@@ -680,7 +699,7 @@ Avisos de la cotización (`warnings`): `sin_canal`, `cliente_inactivo`, `listas_
 | --- | --- | --- |
 | `QUOTATIONS_MANAGER_AREA_SLUG` | `comercial` | quién cotiza (además de BI) |
 | `QUOTATIONS_APPROVER_AREA_SLUG` | `bi` | quién valida; también cotiza |
-| `QUOTATIONS_MAX_POINTS_BELOW_TARGET` | `1` | puntos bajo el objetivo que se toleran |
+| `QUOTATIONS_MAX_POINTS_BELOW_TARGET` | `1` | puntos bajo el objetivo que se toleran, mientras BI no fije el umbral en [Ajuste de costos](ajuste-costos.md) |
 | `QUOTATIONS_MAX_LINES` | `3000` | referencias máximas por cotización |
 | `QUOTATIONS_SIESA_COMPANY` | `001` | compañía del plano |
 | `QUOTATIONS_DWH_TIMEOUT_SECONDS` | `30` | segundos por consulta al DWH del cotizador |

@@ -34,6 +34,7 @@ from app.modules.quotations.domain.entities import (
     StockRow,
     ValueTaxKey,
 )
+from app.modules.quotations.domain.ports import CostRules
 from app.modules.quotations.domain.pricing import StockPlan
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class WarehouseQuotationSource:
         schema: str = "consumo",
         timeout: float | None = 30.0,
         sales_timeout: float | None = None,
+        cost_rules: CostRules | None = None,
     ) -> None:
         """Create the source.
 
@@ -62,6 +64,9 @@ class WarehouseQuotationSource:
             sales_timeout (float | None): Seconds for a customer's or group's sales history
                 (building or refreshing a quotation); ``None`` is ``timeout``. On a cold
                 cache it passed 30 s, and the retry answered at once (2026-11-19).
+            cost_rules (CostRules | None): Module ``ajuste-costos``: which branch of a
+                supplier quotes for each operation center (2026-11-25). Without it every
+                supplier takes its highest quotation in force.
 
         Raises:
             ValueError: The schema is not a SQL identifier.
@@ -73,6 +78,19 @@ class WarehouseQuotationSource:
         self.schema = schema
         self.timeout = timeout
         self.sales_timeout = sales_timeout
+        self.cost_rules = cost_rules
+
+    async def _quote_rules(self, center: str | None) -> list[tuple[str, str | None, str]]:
+        """``(supplier NIT, branch of the center, general branch)`` of each rule in force."""
+
+        if self.cost_rules is None or not center:
+            return []
+        try:
+            found = await self.cost_rules.quote_rules(center)
+        except Exception as exc:  # noqa: BLE001 - without rules, the highest quotation
+            logger.warning("quotations: supplier branch rules not read: %s", exc)
+            return []
+        return [(rule.supplier_nit, rule.branch, rule.general_branch) for rule in found]
 
     def _view(self, name: str) -> str:
         return f'"{self.schema}"."{name}"'
@@ -292,9 +310,12 @@ class WarehouseQuotationSource:
         """The supplier quotation and the inventory cost of each SKU (skill ``lista-precios``).
 
         - Quotation: the highest in force per SKU, unit or kilo, item active, gross cost
-          rounded, plus ICUI (percent) and IBUA (per unit). Lactalis only from the branch of
-          the plan. One more than ``QUOTE_OUTLIER_FACTOR`` times the median last cost of the
-          SKU's installations is a capture error: it comes apart as ``discarded_quote``.
+          rounded, plus ICUI (percent) and IBUA (per unit). A supplier with a branch rule for
+          the plan's center (module ``ajuste-costos``, 2026-11-25) counts only that branch's
+          quotation, else its general branch's, else its others: Team Foods' C.O. 001 takes
+          branch 002, Lactalis' C.O. 003 branch 003. One more than
+          ``QUOTE_OUTLIER_FACTOR`` times the median last cost of the SKU's installations is
+          a capture error: it comes apart as ``discarded_quote``.
         - Inventory: ``inventario_fecha`` (SIESA's own snapshot of the morning), average cost
           of the list's warehouse rounded to pesos; warehouse 2 for frozen and refrigerated
           lines; the highest of the list 1 warehouses when the plan says so, or of the
@@ -309,6 +330,7 @@ class WarehouseQuotationSource:
         if not skus:
             return {}
         dry, cold = plan.reads()
+        rules = await self._quote_rules(plan.center)
         rows = await self._fetch(
             "WITH prod AS ("
             ' SELECT p."producto_key", p."sku", p."linea", p."estado"'
@@ -319,13 +341,24 @@ class WarehouseQuotationSource:
             ' FROM (SELECT DISTINCT f."producto_key", f."instalacion", f."ultimo_costo_unit"'
             f' FROM {self._view("inventario_fecha")} f JOIN prod USING ("producto_key")'
             ' WHERE f."ultimo_costo_unit" > 1) s GROUP BY 1'
-            "), cot AS ("
+            "), cot_all AS ("
             ' SELECT c."producto_key", round(round(c."costo_bruto")'
-            ' * (1 + coalesce(c."icui_tasa_pct", 0) / 100) + coalesce(c."ibua_valor", 0)) AS costo'
+            ' * (1 + coalesce(c."icui_tasa_pct", 0) / 100) + coalesce(c."ibua_valor", 0)) AS costo,'
+            " coalesce(trim(c.\"proveedor_nit\"), '') AS nit,"
+            # A supplier with a branch rule: its branch for the plan's center first, then
+            # the general one, then the rest. Without a rule every quotation ranks the same.
+            " CASE WHEN r.nit IS NULL THEN 0"
+            ' WHEN trim(c."proveedor_sucursal_id") = r.branch THEN 0'
+            ' WHEN trim(c."proveedor_sucursal_id") = r.general THEN 1 ELSE 2 END AS prio'
             f' FROM {self._view("cotizaciones_proveedores")} c JOIN prod USING ("producto_key")'
+            " LEFT JOIN unnest($2::text[], $5::text[], $7::text[]) AS r(nit, branch, general)"
+            ' ON r.nit = trim(c."proveedor_nit")'
             ' WHERE c."es_vigente" AND c."producto_activo"'
             " AND c.\"unidad_medida_id\" IN ('UNID', 'KL')"
-            ' AND (coalesce(c."proveedor_nit", \'\') <> $5 OR c."proveedor_sucursal_id" = $2)'
+            "), cot AS ("
+            ' SELECT s."producto_key", s.costo FROM (SELECT a.*,'
+            ' min(a.prio) OVER (PARTITION BY a."producto_key", a.nit) AS best FROM cot_all a) s'
+            " WHERE s.prio = s.best"
             "), cot_ok AS ("
             ' SELECT c."producto_key",'
             " max(c.costo) FILTER (WHERE r.med IS NULL OR c.costo <= $6 * r.med) AS costo_cot,"
@@ -349,11 +382,12 @@ class WarehouseQuotationSource:
             ' FROM prod pr LEFT JOIN cot_ok c USING ("producto_key")'
             ' LEFT JOIN inv i USING ("producto_key")',
             list(skus),
-            plan.lactalis_branch,
+            [nit for nit, _, _ in rules],
             list(dry),
             list(cold),
-            pricing.LACTALIS_NIT,
+            [branch for _, branch, _ in rules],
             pricing.QUOTE_OUTLIER_FACTOR,
+            [general for _, _, general in rules],
         )
         result: dict[str, CostInfo] = {}
         for row in rows:

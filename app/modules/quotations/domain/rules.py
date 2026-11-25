@@ -90,6 +90,14 @@ def variation(new_price: Decimal | None, last_price: Decimal | None) -> Decimal 
     return ratio(new_price / last_price - ONE)
 
 
+def cost_factor(policy: QuotationPolicy, family: str) -> Decimal:
+    """The factor on the cost of a list family: module ``ajuste-costos``'s, else the
+    code's."""
+
+    found = policy.cost_factors.get(family)
+    return found if found is not None else pricing.COST_FACTOR.get(family, ONE)
+
+
 def minimum_margin(target: Decimal | None, policy: QuotationPolicy) -> Decimal | None:
     return None if target is None else ratio(target - policy.max_points_below_target)
 
@@ -110,14 +118,16 @@ def minimum_price(
 def price_at_margin(
     cost: Decimal | None, support: Decimal, target: Decimal | None, family: str
 ) -> Decimal | None:
-    """``(cost - support) / (1 - target)`` in whole pesos, rounded as the list family does."""
+    """``(cost - support) / (1 - target)`` in whole pesos, rounded up (2026-11-25): the margin
+    is never under ``target``. ``family`` is kept for the callers; every family rounds up."""
 
+    del family
     if cost is None or target is None or target >= ONE:
         return None
     price = (cost - support) / (ONE - target)
     if price <= 0:
         return None
-    return pricing.round_price(price, family)
+    return pricing.price_from_margin(price)
 
 
 def supported_price(
@@ -146,7 +156,7 @@ def supported_price(
     price = cost / (ONE - target) - support
     if price <= 0:
         return None
-    return pricing.round_price(price, family)
+    return pricing.price_from_margin(price)
 
 
 def _list_target(agreement: Agreement, product_target: Decimal | None) -> Decimal | None:
@@ -797,7 +807,7 @@ def build_line(
     cost_value, cost_source = pricing.effective_cost(
         cost.quote_cost if cost else None,
         cost.inventory_cost if cost else None,
-        pricing.COST_FACTOR.get(price_family, ONE),
+        cost_factor(policy, price_family),
         increase,
     )
     if cost_value is None:

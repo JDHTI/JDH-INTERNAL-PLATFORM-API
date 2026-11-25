@@ -14,8 +14,16 @@ the lists; the quoter applies the same rules so a quoted price matches the list 
   A list outside the skill uses the warehouses of the operation centers the quotation is
   costed from: *Nacional* (the highest among those 17 warehouses, SKU by SKU), one center,
   or several (each SKU takes the costliest of them).
-- **Lactalis** quotes by branch: branch 003 for the Centro lists, 001 for the rest.
+- **Supplier branches** (2026-11-25): a supplier may quote one price list per branch (Team
+  Foods' Antioquia list in branch 002, Lactalis' Centro list in 003). Module
+  ``ajuste-costos`` says which branch quotes for each operation center; the plan carries its
+  center (``StockPlan.center``) and the cost query takes that branch, else the general one,
+  else the highest. Until 2026-11-25 Lactalis was fixed here: 003 for the Centro lists.
+- **Factor** and **negotiation threshold**: module ``ajuste-costos`` (:data:`COST_FACTOR` and
+  ``QUOTATIONS_MAX_POINTS_BELOW_TARGET`` are the defaults).
 - **Price** = cost / (1 - margin), rounded to whole pesos (up for the salsamentarias lists).
+  A price set from a margin (optimal, at a margin) always goes up (2026-11-25), so it never
+  lands a hundredth under the margin asked for.
 - **Liquor tax**: the Coast (billing operation center 004) pays its own value.
 
 Validated against the warehouse in ``docs/cotizador-dwh.md`` (second round).
@@ -129,9 +137,15 @@ CENTER_STOCK_WAREHOUSES: dict[str, tuple[str, ...]] = {
 # Product lines that go to warehouse 2.
 COLD_LINES = ("CONGELADOS", "REFRIGERADOS")
 
-LACTALIS_NIT = "800245795"
-CENTRAL_LISTS = ("003", "10U", "10S")
-CENTRAL_CENTER = "003"
+# The operation center of each list with its own warehouses: the one those warehouses belong
+# to. A supplier branch rule of that center applies to the list (module ``ajuste-costos``,
+# 2026-11-25). Market (35P, URA6) and list 1 have none.
+LIST_CENTERS: dict[str, str] = {
+    code: center
+    for code, pair in LIST_WAREHOUSES.items()
+    for center, own in CENTER_WAREHOUSES.items()
+    if pair == own
+}
 
 COAST_CENTERS = ("004",)
 # Source of the plan of a quotation costed *Nacional*: no center, every warehouse.
@@ -168,13 +182,15 @@ class StockPlan:
     ``highest`` the cost is the highest among ``GENERAL_WAREHOUSES`` (list 1). ``selected``
     are the warehouses chosen inside a center (2026-11-20) and ``cold_room`` the center's
     cold room, if it is one of them. ``promos`` are the promotional warehouses added to the
-    center, read for every line.
+    center, read for every line. ``center`` is the operation center the plan stands for:
+    the supplier branch rules of that center choose which quotation of a supplier counts
+    (2026-11-25); ``None`` (*Nacional*, list 1, Market) takes the highest.
     """
 
     warehouses: tuple[str, str] | None
     highest: bool
     source: str
-    lactalis_branch: str
+    center: str | None = None
     selected: tuple[str, ...] = ()
     cold_room: str | None = None
     promos: tuple[str, ...] = ()
@@ -238,18 +254,18 @@ def family(price_list_id: str | None, margin_basis: str | None = None) -> str:
 
 
 def stock_plan(price_list_id: str | None, billing_center: str | None) -> StockPlan:
-    """Warehouses whose cost a quotation uses, and the Lactalis branch it quotes from."""
+    """Warehouses whose cost a quotation uses, and the operation center it stands for."""
 
     if price_list_id == vocabulary.GENERAL_PRICE_LIST:
-        return StockPlan(None, True, "lista", "001")
+        return StockPlan(None, True, "lista")
     if price_list_id in LIST_WAREHOUSES:
-        branch = CENTRAL_CENTER if price_list_id in CENTRAL_LISTS else "001"
-        return StockPlan(LIST_WAREHOUSES[price_list_id], False, "lista", branch)
-    branch = CENTRAL_CENTER if billing_center == CENTRAL_CENTER else "001"
+        return StockPlan(
+            LIST_WAREHOUSES[price_list_id], False, "lista", LIST_CENTERS.get(price_list_id)
+        )
     if billing_center in CENTER_WAREHOUSES:
-        return StockPlan(CENTER_WAREHOUSES[billing_center], False, "co", branch)
+        return StockPlan(CENTER_WAREHOUSES[billing_center], False, "co", billing_center)
     # No rule for the operation center (Urabá, Valledupar, Yumbo, Quindío, Market, none).
-    return StockPlan(None, True, "general", branch)
+    return StockPlan(None, True, "general", billing_center or None)
 
 
 def centers_set_cost(price_list_id: str | None) -> bool:
@@ -268,12 +284,11 @@ def warehouse_plan(center: str, warehouses: Sequence[str]) -> StockPlan:
 
     pair = CENTER_WAREHOUSES.get(center)
     cold = pair[1] if pair is not None and pair[0] != pair[1] else None
-    branch = CENTRAL_CENTER if center == CENTRAL_CENTER else "001"
     return StockPlan(
         None,
         False,
         WAREHOUSES_SOURCE,
-        branch,
+        center,
         selected=tuple(dict.fromkeys(warehouses)),
         cold_room=cold if cold in warehouses else None,
     )
@@ -321,7 +336,7 @@ def stock_plans(
     if not centers_set_cost(price_list_id):
         return {None: stock_plan(price_list_id, centers[0] if centers else None)}
     if not centers:
-        return {None: StockPlan(None, True, NATIONAL_SOURCE, "001")}
+        return {None: StockPlan(None, True, NATIONAL_SOURCE)}
     return {code: stock_plan(price_list_id, code) for code in centers}
 
 
@@ -548,6 +563,14 @@ def round_price(value: Decimal, family_name: str) -> Decimal:
     return value.quantize(PESO, rounding=PRICE_ROUNDING.get(family_name, ROUND_HALF_UP))
 
 
+def price_from_margin(value: Decimal) -> Decimal:
+    """A price set from a margin, in whole pesos, always up (2026-11-25): rounding to the
+    nearest peso could leave it a hundredth under the margin asked for (20 % showing 19,99 %
+    and its alert); up, the margin is at least the one asked for, in every family."""
+
+    return value.quantize(PESO, rounding=ROUND_CEILING)
+
+
 __all__ = [
     "COST_FACTOR",
     "FAMILY_LABELS",
@@ -568,6 +591,7 @@ __all__ = [
     "family",
     "highest_cost",
     "prefer_stocked",
+    "price_from_margin",
     "regional",
     "regional_of",
     "round_price",

@@ -56,7 +56,7 @@ async def test_create_builds_every_sku_with_cost_support_and_target(
     assert "sin_costo" in second.problems
     assert ("last_sales", NIT, 12) in warehouse.calls
     plan = next(call[2] for call in warehouse.calls if call[0] == "costs")
-    assert plan.warehouses == ("MDE1", "MDE3") and plan.lactalis_branch == "001"
+    assert plan.warehouses == ("MDE1", "MDE3") and plan.center == "001"
 
 
 async def test_a_customer_on_list_one_goes_by_creation(service, advisor, warehouse) -> None:

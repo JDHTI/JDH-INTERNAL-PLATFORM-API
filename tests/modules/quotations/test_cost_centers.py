@@ -118,7 +118,7 @@ def test_plans_by_list_and_centers() -> None:
         "001": ("MDE1", "MDE3"),
         "003": ("BTA9", "BTA8"),
     }
-    assert several["003"].lactalis_branch == "003"
+    assert several["003"].center == "003"
     assert pricing.stock_label(several) == "Mayor costo entre los C.O. 001, 003"
     assert pricing.stock_label(pricing.stock_plans(OUTSIDE_SKILL, ["002"])) == (
         "OCC1 / OCC16 (congelados y refrigerados)"

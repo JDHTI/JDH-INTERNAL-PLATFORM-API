@@ -163,6 +163,13 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/suppliers` | `read` |  |
 | `GET` | `/v1/commercial/suppliers/{code}` | `read` |  |
 | `PATCH` | `/v1/commercial/suppliers/{code}` | `relaxed` |  |
+| `GET` | `/v1/cost-settings` | `read` |  |
+| `POST` | `/v1/cost-settings/branch-rules` | `relaxed` |  |
+| `DELETE` | `/v1/cost-settings/branch-rules/{rule_id}` | `relaxed` |  |
+| `PATCH` | `/v1/cost-settings/branch-rules/{rule_id}` | `relaxed` |  |
+| `GET` | `/v1/cost-settings/changes` | `read` |  |
+| `PUT` | `/v1/cost-settings/parameters` | `relaxed` |  |
+| `GET` | `/v1/cost-settings/permissions` | `read` |  |
 | `GET` | `/v1/costs/entries` | `read` |  |
 | `GET` | `/v1/costs/entries/options` | `read` |  |
 | `PUT` | `/v1/costs/entries/{line_key}/reason` | `relaxed` |  |

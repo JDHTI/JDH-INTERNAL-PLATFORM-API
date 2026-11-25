@@ -9,6 +9,7 @@ from app.modules.areas.presentation.permissions_router import router as permissi
 from app.modules.areas.presentation.router import router as areas_router
 from app.modules.commercial_masters.presentation.router import router as commercial_router
 from app.modules.consumption.presentation.router import router as consumption_router
+from app.modules.cost_settings.presentation.router import router as cost_settings_router
 from app.modules.costs.presentation.increases_router import router as cost_increases_router
 from app.modules.costs.presentation.router import router as costs_router
 from app.modules.directory.presentation.admin_router import router as directory_admin_router
@@ -99,6 +100,7 @@ v1_router.include_router(cost_increases_router, prefix="/costs", tags=["costs"])
 v1_router.include_router(
     support_settlements_router, prefix="/support-settlements", tags=["support-settlements"]
 )
+v1_router.include_router(cost_settings_router, prefix="/cost-settings", tags=["cost-settings"])
 # The bulk router goes first: its fixed paths (/form-schema) must win over /{support_id}.
 v1_router.include_router(
     supports_bulk_router, prefix="/supplier-supports", tags=["supplier-supports"]
