@@ -30,6 +30,7 @@ from app.modules.commercial_masters.domain.price_increase_analysis import Analys
 from app.modules.commercial_masters.domain.price_increases import (
     EARLIEST_DATE,
     VALUE_FIELDS,
+    ExportRow,
     FilterOptions,
     MonthOption,
     PriceIncrease,
@@ -41,6 +42,7 @@ from app.modules.commercial_masters.domain.price_increases import (
 )
 from app.modules.commercial_masters.infrastructure.models import (
     CommercialSupplierModel,
+    CommercialSupplierNitModel,
     PriceIncreaseModel,
     ProductModel,
 )
@@ -261,6 +263,76 @@ class SqlAlchemyPriceIncreaseRepository:
         statement = statement.order_by(P.increased_on.desc().nulls_last(), P.id).limit(limit)
         async with self.database.session_factory() as session:
             return list(await session.scalars(statement))
+
+    async def export_rows(self, filters: PriceIncreaseFilters) -> list[ExportRow]:
+        """Every row of the filter with its product's data and its supplier's primary NIT, in
+        increase order (the rows of a key in their workbook order, so an upload keeps them)."""
+
+        joined, where = self._query(filters)
+        primary = (
+            select(CommercialSupplierModel.code.label("code"), CommercialSupplierNitModel.nit)
+            .join(
+                CommercialSupplierNitModel,
+                CommercialSupplierNitModel.commercial_supplier_id == CommercialSupplierModel.id,
+            )
+            .where(CommercialSupplierNitModel.is_primary.is_(True))
+            .distinct(CommercialSupplierModel.code)
+            .order_by(CommercialSupplierModel.code, CommercialSupplierNitModel.nit)
+            .subquery()
+        )
+        statement = select(
+            P,
+            ProductModel.commercial_supplier_code,
+            CommercialSupplierModel.name,
+            primary.c.nit,
+            ProductModel.description,
+            ProductModel.pack_factor,
+            ProductModel.state,
+            ProductModel.category,
+        ).select_from(
+            joined.outerjoin(primary, primary.c.code == ProductModel.commercial_supplier_code)
+        )
+        if where is not None:
+            statement = statement.where(where)
+        statement = statement.order_by(
+            P.increased_on.nulls_first(),
+            P.notified_on.nulls_first(),
+            P.sku,
+            P.regional,
+            P.occurrence,
+        )
+        async with self.database.session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            ExportRow(_values(model), code, name, nit, description, pack, state, category)
+            for model, code, name, nit, description, pack, state, category in rows
+        ]
+
+    async def mark_loaded(self, ids: Sequence[UUID], day: date, actor: str, now: datetime) -> int:
+        """Give SIESA's date to these increases when they are pending and in no open SIESA
+        load; how many got it."""
+
+        opened = select(open_rows().subquery().c.increase_id)
+        total = 0
+        async with self.database.session_factory() as session, session.begin():
+            for start in range(0, len(ids), _CHUNK):
+                chunk = list(ids[start : start + _CHUNK])
+                result = await session.execute(
+                    update(P)
+                    .where(
+                        P.id.in_(chunk),
+                        P.system_updated_on.is_(None),
+                        P.id.not_in(opened),
+                    )
+                    .values(
+                        system_updated_on=day,
+                        siesa_changed=True,
+                        updated_by=actor,
+                        updated_at=now,
+                    )
+                )
+                total += result.rowcount
+        return total
 
     async def by_ids(self, ids: Sequence[UUID]) -> list[PriceIncrease]:
         """These rows with their product's data (the missing ones are left out)."""

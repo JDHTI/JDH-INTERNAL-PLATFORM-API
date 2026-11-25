@@ -9,11 +9,12 @@ A row whose ``system_updated_on`` is empty is an increase SIESA does not have ye
 compares its new cost with the supplier's quotation and the inventory cost (see
 :func:`pending_cost`).
 
-The history was the area's workbook, uploaded until 2026-11-25; since then the suppliers'
-increases approved in Costos are its only source. The cell parsers below read workbooks as the
-area keeps them (the supplier's «MAESTRA» uses them): money as text in two formats
+Two sources fill it: the suppliers' increases approved in Costos, and the area's workbook,
+which is exported, kept in a sheet and uploaded back while the two run side by side
+(2026-11-25). The workbook comes as the area keeps it: money as text in two formats
 (``$ 81.960,00`` and ``$ 95.484``), formula errors (``#N/D``), notes typed where a cost goes
-(:class:`CellNote`), dates of 1900 or with a mistyped year, dashes for zero.
+(:class:`CellNote`), dates of 1900 or with a mistyped year, dashes for zero. All of it loads;
+only a number that cannot be read is reported for its row.
 """
 
 from __future__ import annotations
@@ -246,6 +247,54 @@ class PriceIncreaseValues:
 
 
 VALUE_FIELDS = tuple(name for name in PriceIncreaseValues.__dataclass_fields__ if name != "sku")
+# Where a row came from: an upload of the workbook never takes it from the request it was.
+ORIGIN_FIELDS = ("source", "request_line_id")
+
+
+@dataclass(frozen=True)
+class FileRow:
+    """A row of the uploaded workbook: its values and what could not be read."""
+
+    row_number: int
+    values: PriceIncreaseValues
+    problems: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExportRow:
+    """A row of the history as the area's workbook has it: its values and the product's."""
+
+    values: PriceIncreaseValues
+    supplier_code: str | None = None
+    supplier_name: str | None = None
+    nit: str | None = None
+    description: str | None = None
+    pack_factor: Decimal | None = None
+    state: str | None = None
+    category: str | None = None
+
+
+@dataclass(frozen=True)
+class UploadIssue:
+    row_number: int
+    sku: str | None
+    problem: str
+
+
+@dataclass(frozen=True)
+class UploadReport:
+    """What an upload did, or would do (a simulation)."""
+
+    applied: bool
+    rows_read: int
+    inserted: int
+    updated: int
+    unchanged: int
+    duplicated: int
+    unknown_skus: int
+    pending: int
+    issues: tuple[UploadIssue, ...]
+    issues_truncated: bool
 
 
 @dataclass(frozen=True)
@@ -453,6 +502,11 @@ __all__ = [
     "UP",
     "CellError",
     "CellNote",
+    "ExportRow",
+    "FileRow",
+    "ORIGIN_FIELDS",
+    "UploadIssue",
+    "UploadReport",
     "CenterOption",
     "FilterOptions",
     "InstallationOption",

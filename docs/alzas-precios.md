@@ -9,12 +9,16 @@ notificó para una referencia:
 - el costo anterior y el nuevo, con y sin impuesto saludable;
 - la variación, y si subió, bajó o quedó estable.
 
-Desde el 2026-11-25 **no se carga el libro**: las alzas entran solas cuando se aprueba una
-solicitud de proveedor en Costos ([costos.md](costos.md)), y llegan a SIESA con un **lote de
-cargue** (abajo). La fecha de SIESA también se puede poner o quitar fila por fila.
+Las alzas entran solas cuando se aprueba una solicitud de proveedor en Costos
+([costos.md](costos.md)) y llegan a SIESA con un **lote de cargue** (abajo). Mientras el área
+siga llevando el libro en su sheet, el acumulado se **exporta** en ese formato, se edita allá y
+se **vuelve a cargar**, y las alzas que el área cargó en SIESA por su cuenta se **marcan como
+cargadas** sin lote (2026-11-25, ver «El libro del área»). La fecha de SIESA también se puede
+poner o quitar fila por fila.
 
 Código: `app/modules/commercial_masters/domain/price_increases.py` (reglas y lectura de
-celdas), `domain/siesa_loads.py` y `infrastructure/siesa_load_files.py` (cargue a SIESA), `infrastructure/
+celdas), `infrastructure/price_increases_file.py` (lector y exportación del libro),
+`domain/siesa_loads.py` y `infrastructure/siesa_load_files.py` (cargue a SIESA), `infrastructure/
 price_increases_repository.py`, `application/price_increases.py`. Tabla
 `product_price_increases` (migración `0055_price_increases`).
 
@@ -38,6 +42,35 @@ categoría del maestro.
 
 El histórico conserva referencias que el maestro ya no tiene; se marcan como «No está en el
 maestro de productos».
+
+## El libro del área (exportar, cargar y marcar cargadas)
+
+El 2026-11-25 se quitó la carga del libro (#127) y el mismo día se devolvió (pedido de Daniel): el
+acumulado y el sheet del área corren desincronizados y hay que ponerlos al día sin lotes ni
+archivos de SIESA.
+
+- **Exportar** (`GET /price-increases/export`, con los filtros del histórico): `Acumulado Alza
+  Precios dd-mm-aaaa.xlsx` con las 29 columnas del libro, en el orden del área, una fila por
+  alza; las alzas de una misma llave van en su orden, así que se recuperan como `#2`, `#3`.
+  Proveedor (`1214 - FELLIN`), NIT principal, descripción, empaque, estado y categoría salen del
+  maestro; «Grupo Impositivo» y «Descuento Regular» van vacíos. Con el libro real de noviembre
+  (50.198 alzas) se escribe en unos 20 s y, **cargado tal cual, no cambia nada**.
+- **Cargar** (`POST /price-increases/upload`, multipart `file`, `apply`): como antes del #127.
+  - **Llave:** referencia + fecha de incremento + fecha de notificación + regional (si no es
+    NACIONAL); en una llave repetida, cada fila es una alza encadenada (`#2`), y solo una fila
+    idéntica cuenta una vez.
+  - El libro se lee como lo lleva el área: montos como texto, errores de fórmula vacíos, notas
+    a Observaciones; solo se reporta un número ilegible.
+  - **Una fila que vino de una solicitud de proveedor conserva su origen** (`source` y
+    `request_line_id`): el libro actualiza sus valores, nunca de dónde vino.
+  - El reporte: filas leídas, nuevas, que cambian, sin cambios, repetidas, referencias fuera
+    del maestro, pendientes en SIESA y las primeras 200 celdas ilegibles.
+- **Marcar como cargadas en SIESA** (`POST /price-increases/system-date`): las alzas elegidas (o
+  todas las pendientes del filtro, hasta 2.000) toman la fecha dada (hoy o anterior) y la marca
+  «Cambio en SIESA». Solo cambian las pendientes; **las que están en un lote abierto quedan por
+  fuera** (se confirma o anula el lote entero). Responde `{updated, skipped}`.
+
+Cargar y marcar exige gestionar el acumulado; exportar, leerlo.
 
 ## Cargue a SIESA (lotes)
 
@@ -118,8 +151,8 @@ idéntica. Tablas `price_increase_siesa_loads` y `price_increase_siesa_load_rows
 
 **Alzas encadenadas el mismo día** (migración `0088`): el libro del área repetía 99 llaves en
 101 filas que eran alzas seguidas con las mismas fechas, y la carga se quedaba con la última.
-Cada fila guarda su `occurrence` y, desde la segunda, la llave lleva `#2`. Con el libro fuera de
-uso, esas 101 filas históricas siguen perdidas salvo que se recuperen una vez a mano.
+Cada fila guarda su `occurrence` y, desde la segunda, la llave lleva `#2`. Para recuperar esas
+101 filas basta cargar una vez el libro del área (o su sheet).
 
 ## Regla en el cotizador
 
@@ -242,6 +275,9 @@ Cada fila dice de dónde vino (`source`, migración `0082`):
 | `GET /price-increases/options` | Los proveedores comerciales con referencias en el histórico (`code`, `name`, `references`, por nombre) y los meses con alzas desde el año 2000 (`month` «AAAA-MM», `changes`, `references`, el más reciente primero), los C.O. (`cos`: `code`, `name`) y las instalaciones (`installations`: `code`, `name`, `cos` donde tiene bodegas, por nombre) con referencias activas: los dropdowns |
 | `GET /price-increases` | `q` (prefijo de referencia o descripción), `supplier` (código del proveedor comercial), `co`, `installation`, `status` (`subio`, `bajo`, `estable`), `pending` (`true`: sin fecha en SIESA), `sku`, `page`, `size` (≤ 100). Devuelve `items`, `total`, `counts: {subio, bajo, estable, pendientes}` del filtro completo y `can_manage` |
 | `GET /price-increases/analysis` | `period` (`12m` por defecto, `1m`, `24m`, `all`), o `since` y `until` (AAAA-MM-DD, ambos incluidos; reemplazan a `period`), `supplier`, `co`, `installation` (503 si el DWH no responde), `movement` (`subio`, `bajo`, `estable`), `q`, `sort` (`accumulated` por defecto, `increases`, `frequency`, `last_change`, `sku`), `order` (`desc` por defecto), `page`, `size` (≤ 100). Devuelve `items` (por referencia: `start_cost`, `end_cost`, `accumulated_pct`, `movement`, `increases`, `decreases`, `changes`, `frequency_days`, `last_increased_on`, `last_status`, `last_change_pct`, `is_pending` y los datos del maestro, con `supplier_code`), `total`, `since`, `until` (null: abierto) y `summary: {references, increases, typical_increase_pct, pending, movements}` de la búsqueda, antes del filtro de movimiento |
+| `GET /price-increases/export` | `q`, `supplier`, `status`, `pending`, `co`, `installation` (los del histórico). `Acumulado Alza Precios dd-mm-aaaa.xlsx` con las 29 columnas del libro |
+| `POST /price-increases/upload?apply=` | Multipart `file`. Sin `apply`, simula. Devuelve `{applied, rows_read, inserted, updated, unchanged, duplicated, unknown_skus, pending, issues[{row_number, sku, problem}], issues_truncated}`. 403 sin gestión; 422 si el archivo no sirve |
+| `POST /price-increases/system-date` | `{system_updated_on, increase_ids: [...]}` o `{system_updated_on, all: true, filters: {q, status, sku, supplier, co, installation}}` (hasta 2.000). Fecha de hoy o anterior. Devuelve `{updated, skipped}` (ya fechadas o en un lote abierto). 403 sin gestión |
 | `PATCH /price-increases/{id}` | `{system_updated_on: "AAAA-MM-DD" \| null}`. `null` la deja pendiente otra vez. 403 sin permiso de gestión; 422 antes del año 2000 (a mano es un error de digitación; el libro sí guarda fechas viejas) |
 | `POST /price-increases/siesa-loads?apply=` | Body `{increase_ids: [...]}` o `{all: true, filters: {q, status, sku, supplier, co, installation}}` (todas las pendientes del filtro, hasta 2.000). Sin `apply` es la revisión. Devuelve `{applied, rows: [{increase_id, sku, description, nit, branch, currency, unit, price, activation_date, delivery_days, increased_on, other_nits}], excluded: [{increase_id, sku, reason}], load}`. 403 sin gestión; 409 si una alza entró a otro lote en el camino; 422 si nada se puede cargar; 503 sin DWH |
 | `GET /price-increases/siesa-loads?status=&page=&size=` | Lotes, el más reciente primero, con `counts` por estado (`generado`, `cargado`, `anulado`) y `can_manage` |
