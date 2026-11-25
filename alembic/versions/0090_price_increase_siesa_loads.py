@@ -6,6 +6,9 @@ Whoever manages the history of increases generates the supplier quotation file (
 - ``price_increase_siesa_loads``: a generated load, ``generado`` → ``cargado`` or ``anulado``.
 - ``price_increase_siesa_load_rows``: each increase as it went to SIESA (supplier, branch,
   unit, price, activation), so the files are written again byte for byte.
+
+Renumbered from ``0089`` and chained after ``0089_quotation_warehouse_groups`` (2026-11-25):
+both were merged on top of ``0088`` and master had two heads. Production never applied it.
 """
 
 from collections.abc import Sequence
@@ -14,8 +17,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "0089_price_increase_siesa_loads"
-down_revision: str | Sequence[str] | None = "0088_increases_chain_support"
+revision: str = "0090_price_increase_siesa_loads"
+down_revision: str | Sequence[str] | None = "0089_quotation_warehouse_groups"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
