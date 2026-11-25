@@ -114,7 +114,7 @@ igual con `.txt`.
 
 Los archivos se escriben de nuevo desde lo guardado del lote, así que una segunda descarga es
 idéntica. Tablas `price_increase_siesa_loads` y `price_increase_siesa_load_rows` (migración
-`0089`).
+`0090`).
 
 **Alzas encadenadas el mismo día** (migración `0088`): el libro del área repetía 99 llaves en
 101 filas que eran alzas seguidas con las mismas fechas, y la carga se quedaba con la última.
