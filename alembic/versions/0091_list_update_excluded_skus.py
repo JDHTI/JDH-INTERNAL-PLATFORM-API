@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0090_list_update_excluded_skus"
-down_revision: str | Sequence[str] | None = "0089_quotation_warehouse_groups"
+revision: str = "0091_list_update_excluded_skus"
+down_revision: str | Sequence[str] | None = "0090_price_increase_siesa_loads"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
