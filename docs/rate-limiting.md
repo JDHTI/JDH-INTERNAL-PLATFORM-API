@@ -144,6 +144,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
 | `GET` | `/v1/commercial/price-increases` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/analysis` | `read` |  |
+| `GET` | `/v1/commercial/price-increases/export` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/options` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/siesa-loads` | `read` |  |
 | `POST` | `/v1/commercial/price-increases/siesa-loads` | `relaxed` |  |
@@ -151,6 +152,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/commercial/price-increases/siesa-loads/{load_id}/confirm` | `relaxed` |  |
 | `GET` | `/v1/commercial/price-increases/siesa-loads/{load_id}/file` | `read` |  |
 | `POST` | `/v1/commercial/price-increases/siesa-loads/{load_id}/void` | `relaxed` |  |
+| `POST` | `/v1/commercial/price-increases/system-date` | `relaxed` |  |
+| `POST` | `/v1/commercial/price-increases/upload` | `relaxed` |  |
 | `PATCH` | `/v1/commercial/price-increases/{increase_id}` | `relaxed` |  |
 | `GET` | `/v1/commercial/products` | `read` |  |
 | `GET` | `/v1/commercial/products/employee-prices` | `read` |  |

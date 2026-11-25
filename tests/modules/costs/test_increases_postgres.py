@@ -236,6 +236,26 @@ async def test_a_load_dates_the_increases_and_the_notice_takes_them(world) -> No
             )
 
 
+async def test_the_history_exports_and_dates_without_a_load(world) -> None:
+    increases, database, code, skus = world
+    request = await increases.create(
+        PERSON, code, [LineInput(skus[0], Decimal("1100"), increased_on=date(2026, 12, 1))]
+    )
+    await increases.approve(PERSON, request.id)
+    history = SqlAlchemyPriceIncreaseRepository(database)
+
+    exported = await history.export_rows(PriceIncreaseFilters(sku=skus[0]))
+    assert [row.values.sku for row in exported] == [skus[0]]
+    assert exported[0].values.source == "solicitud"
+
+    ids = await history.ids_for(PriceIncreaseFilters(sku=skus[0], pending=True), 10)
+    assert await history.mark_loaded(ids, date(2026, 11, 24), PERSON.email, NOW) == 1
+    # Already dated: nothing changes the second time.
+    assert await history.mark_loaded(ids, date(2026, 11, 25), PERSON.email, NOW) == 0
+    row = (await history.by_ids(ids))[0]
+    assert row.values.system_updated_on == date(2026, 11, 24) and row.values.siesa_changed
+
+
 async def test_increases_chained_on_the_same_day_are_kept_apart(world) -> None:
     _, database, _, skus = world
     history = SqlAlchemyPriceIncreaseRepository(database)

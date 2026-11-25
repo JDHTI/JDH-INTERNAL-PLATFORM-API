@@ -1,17 +1,19 @@
-"""Use cases of the price increase history: read and analyze it, set SIESA's date.
+"""Use cases of the price increase history: read, analyze and export it, upload the area's
+workbook, set SIESA's date.
 
-The history fills itself: the suppliers' increases approved in Costos land in it (the area's
-workbook stopped being uploaded on 2026-11-25), and SIESA loads date them
-(:mod:`.siesa_loads`). Reading is open to whoever reads the commercial masters (the router's
-gate). Changing the system update date needs the history's manager permission (``maestros``
-in BI or ``acumulado-alzas`` in Costos).
+The suppliers' increases approved in Costos land in the history by themselves, and SIESA loads
+date them (:mod:`.siesa_loads`). While the area still keeps the workbook in a sheet, it exports
+the history in that format, edits it and uploads it back, and marks increases as loaded in SIESA
+without a load (2026-11-25). Reading and exporting are open to whoever reads the commercial
+masters (the router's gate). Uploading and changing the system update date need the history's
+manager permission (``maestros`` in BI or ``acumulado-alzas`` in Costos).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from uuid import UUID
@@ -35,14 +37,23 @@ from app.modules.commercial_masters.domain.price_increase_analysis import (
 )
 from app.modules.commercial_masters.domain.price_increases import (
     EARLIEST_DATE,
+    ORIGIN_FIELDS,
     STATUSES,
+    FileRow,
     FilterOptions,
     PriceIncrease,
     PriceIncreaseFilters,
     PriceIncreasePage,
+    PriceIncreaseValues,
     Scope,
+    UploadIssue,
+    UploadReport,
     place_options,
     scope_of,
+)
+from app.modules.commercial_masters.infrastructure.price_increases_file import (
+    PriceIncreaseFileReader,
+    history_workbook,
 )
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
@@ -52,6 +63,9 @@ from app.modules.identity.domain.principal import Principal
 logger = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
+MAX_REPORTED_ISSUES = 200
+# The most increases dated at once without a load (the same as a SIESA load).
+MAX_DATED_AT_ONCE = 2000
 # Windows kept per data version: the presets plus the months and ranges people look at.
 MAX_CACHED_WINDOWS = 32
 _BOGOTA = ZoneInfo("America/Bogota")
@@ -89,6 +103,38 @@ class AnalysisPage:
     until: date | None
 
 
+def numbered(rows: Sequence[FileRow]) -> dict[str, FileRow]:
+    """The workbook's rows by key, none lost.
+
+    The workbook chains increases with the same reference and dates (sku 15143 on 2021-09-24:
+    15,519 to 15,984.36, then to 16,463.89). Keeping only the last of a key lost 101 such
+    rows (2026-11-24), so each one is the n-th ``occurrence`` of its key, in the file's order.
+    A row equal to an earlier one of its key, value for value, was typed twice and counts once.
+    The export writes the rows of a key in that order, so a round trip keeps them.
+    """
+
+    by_key: dict[str, FileRow] = {}
+    seen: dict[str, list[tuple]] = {}
+    for row in rows:
+        group = seen.setdefault(row.values.key, [])
+        values = row.values.comparable()
+        if values in group:
+            continue
+        group.append(values)
+        numbered_row = replace(row, values=replace(row.values, occurrence=len(group)))
+        by_key[numbered_row.values.key] = numbered_row
+    return by_key
+
+
+@dataclass(frozen=True)
+class SystemDateResult:
+    """How many picked increases got SIESA's date, and how many were left as they were
+    (already dated, or in an open SIESA load)."""
+
+    updated: int
+    skipped: int
+
+
 class PriceIncreaseService:
     """The price increase history of the products."""
 
@@ -99,6 +145,8 @@ class PriceIncreaseService:
         today: Callable[[], date] = lambda: datetime.now(_BOGOTA).date(),
         cache: AnalysisCache | None = None,
         placements: PlacementSource | None = None,
+        reader: PriceIncreaseFileReader | None = None,
+        max_upload_bytes: int = 20 * 1024 * 1024,
     ) -> None:
         """Create the service.
 
@@ -110,6 +158,8 @@ class PriceIncreaseService:
             cache (AnalysisCache | None): The process-wide analysis cache.
             placements (PlacementSource | None): Where each reference is set up (the
                 warehouse's inventory), for the operation center and installation filters.
+            reader (PriceIncreaseFileReader | None): Reads the area's workbook.
+            max_upload_bytes (int): Largest workbook accepted.
         """
 
         self.repository = repository
@@ -117,6 +167,8 @@ class PriceIncreaseService:
         self.today = today
         self.cache = cache or AnalysisCache()
         self.placements = placements
+        self.reader = reader or PriceIncreaseFileReader()
+        self.max_upload_bytes = max_upload_bytes
 
     async def scope(self, co: str | None, installation: str | None) -> Scope | None:
         """The rows an operation center or an installation keeps (:class:`Scope`); ``None``
@@ -287,6 +339,126 @@ class PriceIncreaseService:
             cache.periods[cached] = (in_period(rows, since, until), analyses)
         return cache.periods[cached]
 
+    async def upload(
+        self, principal: Principal, filename: str | None, content: bytes, *, apply: bool
+    ) -> UploadReport:
+        """Upsert the area's workbook by reference, increase and notification dates and
+        regional (the export, edited in the sheet, comes back this way).
+
+        Rows with the same key are increases in a row and each one is kept (:func:`numbered`);
+        only a row typed twice, value for value, counts once. A row that came from a supplier's
+        request keeps that origin: the workbook updates its values, never where it came from.
+        Rows of references the product master does not have are kept too and counted. With
+        ``apply`` false nothing is written.
+
+        Raises:
+            ForbiddenError: The caller does not manage the history.
+            InvalidInputError: Empty, too large or unreadable file.
+        """
+
+        await self._require_manager(principal)
+        if not content:
+            raise InvalidInputError("El archivo está vacío")
+        if len(content) > self.max_upload_bytes:
+            megas = self.max_upload_bytes // (1024 * 1024)
+            raise InvalidInputError(f"El archivo pasa de {megas} MB")
+        # openpyxl is synchronous: in a thread, a 50 000-row file never holds up the API.
+        rows = await asyncio.to_thread(self.reader.read, filename, content)
+        by_key = numbered(rows)
+        duplicated = len(rows) - len(by_key)
+        stored = await self.repository.existing(list(by_key))
+        known = await self.repository.known_skus(sorted({row.values.sku for row in rows}))
+        inserted: list[PriceIncreaseValues] = []
+        updated: list[PriceIncreaseValues] = []
+        for key, row in by_key.items():
+            current = stored.get(key)
+            if current is None:
+                inserted.append(row.values)
+                continue
+            values = replace(row.values, **{name: getattr(current, name) for name in ORIGIN_FIELDS})
+            if current.comparable() != values.comparable():
+                updated.append(values)
+        issues = [
+            UploadIssue(row.row_number, row.values.sku, problem)
+            for row in rows
+            for problem in row.problems
+        ]
+        if apply:
+            await self.repository.upsert([*inserted, *updated], principal.email, datetime.now(UTC))
+        return UploadReport(
+            applied=apply,
+            rows_read=len(rows),
+            inserted=len(inserted),
+            updated=len(updated),
+            unchanged=len(by_key) - len(inserted) - len(updated),
+            duplicated=duplicated,
+            unknown_skus=len({row.values.sku for row in rows} - known),
+            pending=sum(1 for row in by_key.values() if row.values.system_updated_on is None),
+            issues=tuple(issues[:MAX_REPORTED_ISSUES]),
+            issues_truncated=len(issues) > MAX_REPORTED_ISSUES,
+        )
+
+    async def export(
+        self,
+        filters: PriceIncreaseFilters,
+        co: str | None = None,
+        installation: str | None = None,
+    ) -> tuple[str, bytes]:
+        """The history of the filter as the area's workbook («Acumulado Alza Precios»), ready
+        to edit in the sheet and upload back.
+
+        Raises:
+            DependencyUnavailableError: A center or installation and the warehouse is down.
+        """
+
+        scope = await self.scope(co, installation)
+        if scope is not None:
+            filters = replace(filters, scope=scope)
+        rows = await self.repository.export_rows(filters)
+        content = await asyncio.to_thread(history_workbook, rows)
+        return f"Acumulado Alza Precios {self.today():%d-%m-%Y}.xlsx", content
+
+    async def mark_loaded(
+        self,
+        principal: Principal,
+        day: date,
+        increase_ids: Sequence[UUID] = (),
+        *,
+        all: bool = False,
+        filters: PriceIncreaseFilters | None = None,
+        co: str | None = None,
+        installation: str | None = None,
+    ) -> SystemDateResult:
+        """Give SIESA's date to pending increases without a SIESA load (the area loaded them
+        by itself): these ids, or every pending one of the filters (``all``). Those already
+        dated or in an open load are left as they are (a load is confirmed or voided whole).
+
+        Raises:
+            ForbiddenError: The caller does not manage the history.
+            InvalidInputError: A day in the future or before 2000, nothing picked or too many.
+            DependencyUnavailableError: A center or installation and the warehouse is down.
+        """
+
+        await self._require_manager(principal)
+        if day < EARLIEST_DATE or day > self.today():
+            raise InvalidInputError("La fecha de actualización debe ser de hoy o anterior")
+        if all:
+            chosen = replace(filters or PriceIncreaseFilters(), pending=True)
+            scope = await self.scope(co, installation)
+            if scope is not None:
+                chosen = replace(chosen, scope=scope)
+            ids = await self.repository.ids_for(chosen, MAX_DATED_AT_ONCE + 1)
+        else:
+            ids = list(dict.fromkeys(increase_ids))
+        if not ids:
+            raise InvalidInputError("Elige al menos un alza pendiente")
+        if len(ids) > MAX_DATED_AT_ONCE:
+            raise InvalidInputError(
+                f"Se marcan hasta {MAX_DATED_AT_ONCE} alzas a la vez; filtra un poco más"
+            )
+        updated = await self.repository.mark_loaded(ids, day, principal.email, datetime.now(UTC))
+        return SystemDateResult(updated=updated, skipped=len(ids) - updated)
+
     async def set_system_date(
         self, principal: Principal, increase_id: UUID, day: date | None
     ) -> PriceIncrease:
@@ -305,4 +477,4 @@ class PriceIncreaseService:
         return await self.repository.get(increase_id)
 
 
-__all__ = ["MAX_PAGE_SIZE", "PriceIncreaseService"]
+__all__ = ["MAX_DATED_AT_ONCE", "MAX_PAGE_SIZE", "PriceIncreaseService", "SystemDateResult"]

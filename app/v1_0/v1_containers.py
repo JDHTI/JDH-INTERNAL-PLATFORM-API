@@ -612,6 +612,8 @@ class V1Container(containers.DeclarativeContainer):
                 PermissionPolicy, areas=area_service, area_slug=None, module="acumulado-alzas"
             ),
         ),
+        # The area's workbook, uploaded back from its sheet (2026-11-25).
+        max_upload_bytes=config.product_margins.max_upload_bytes,
         cache=price_increase_analysis_cache,
         # The operation center and installation filters (2026-11-24).
         placements=providers.Factory(

@@ -166,13 +166,6 @@ def test_the_price_increase_routes(service, increases) -> None:
         assert body["items"][0]["open_load"] == 7
         assert client.get(f"{BASE}/price-increases", params={"status": "otro"}).status_code == 422
 
-        # The workbook is no longer uploaded.
-        gone = client.post(
-            f"{BASE}/price-increases/upload",
-            files={"file": ("alzas.xlsx", b"x", "application/octet-stream")},
-        )
-        assert gone.status_code in (404, 405)
-
         increase_id = uuid4()
         patched = client.patch(
             f"{BASE}/price-increases/{increase_id}", json={"system_updated_on": "2026-11-11"}

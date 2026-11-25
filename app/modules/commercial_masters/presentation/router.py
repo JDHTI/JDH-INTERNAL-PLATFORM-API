@@ -17,9 +17,12 @@ from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.commercial_masters.application.employee_prices import EmployeePriceService
 from app.modules.commercial_masters.application.price_increases import (
+    MAX_DATED_AT_ONCE,
+    PriceIncreaseService,
+)
+from app.modules.commercial_masters.application.price_increases import (
     MAX_PAGE_SIZE as PRICE_INCREASES_MAX_PAGE,
 )
-from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
 from app.modules.commercial_masters.application.service import (
     MAX_PAGE_SIZE,
     CommercialMasterService,
@@ -1021,9 +1024,28 @@ async def list_price_increases(
     )
 
 
-# --- SIESA loads: pending increases into SIESA's supplier quotations (0212) ---
+# --- The area's workbook, while it is still kept in a sheet (2026-11-25) ---
 
-LoadStatus = Literal["generado", "cargado", "anulado"]
+
+class PriceIncreaseIssueResponse(BaseModel):
+    row_number: int
+    sku: str | None
+    problem: str
+
+
+class PriceIncreaseReportResponse(BaseModel):
+    """What an upload did, or would do."""
+
+    applied: bool
+    rows_read: int
+    inserted: int
+    updated: int
+    unchanged: int
+    duplicated: int
+    unknown_skus: int
+    pending: int
+    issues: list[PriceIncreaseIssueResponse]
+    issues_truncated: bool
 
 
 class LoadFiltersBody(BaseModel):
@@ -1035,6 +1057,118 @@ class LoadFiltersBody(BaseModel):
     supplier: str | None = Field(default=None, max_length=40)
     co: str | None = Field(default=None, max_length=10)
     installation: str | None = Field(default=None, max_length=10)
+
+
+class MarkLoadedBody(BaseModel):
+    """These increases (``increase_ids``), or every pending one of ``filters`` (``all``), get
+    ``system_updated_on`` as their SIESA date."""
+
+    system_updated_on: date
+    increase_ids: list[UUID] = Field(default_factory=list, max_length=MAX_DATED_AT_ONCE)
+    all: bool = False
+    filters: LoadFiltersBody = Field(default_factory=LoadFiltersBody)
+
+
+class MarkLoadedResponse(BaseModel):
+    # Got the date; left as they were (already dated, or in an open SIESA load).
+    updated: int
+    skipped: int
+
+
+@router.get("/price-increases/export", summary="The history as the area's workbook")
+@inject
+async def export_price_increases(
+    q: str | None = Query(default=None, max_length=100),
+    status: Literal["subio", "bajo", "estable"] | None = Query(default=None),
+    pending: bool | None = Query(default=None),
+    supplier: str | None = Query(default=None, max_length=40),
+    co: str | None = _CO,
+    installation: str | None = _INSTALLATION,
+    service: PriceIncreaseService = _increases,
+) -> Response:
+    """«Acumulado Alza Precios dd-mm-aaaa.xlsx»: the history of the filters (those of the
+    listing) in the workbook's 29 columns, to keep in the sheet and upload back unchanged."""
+
+    name, content = await service.export(
+        PriceIncreaseFilters(q=q, status=status, pending=pending, supplier=supplier),
+        co=co,
+        installation=installation,
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/price-increases/upload",
+    response_model=PriceIncreaseReportResponse,
+    summary="Upsert the area's price increase workbook",
+    description=(
+        "multipart/form-data with `file` (.xlsx, the `Acumulado Alza Precios` layout, as the "
+        "export writes it). Rows are upserted by Referencia, Fecha de Incremento, Fecha de "
+        "notificación and Regional; the product's own columns are ignored. A simulation unless "
+        "`apply=true`. Managers of the history only."
+    ),
+)
+@inject
+async def upload_price_increases(
+    file: UploadFile = File(...),  # noqa: B008
+    apply: bool = Query(default=False),
+    principal: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> PriceIncreaseReportResponse:
+    """Compare the workbook with the history and, with ``apply``, write the differences."""
+
+    content = await file.read(service.max_upload_bytes + 1)
+    report = await service.upload(principal, file.filename, content, apply=apply)
+    return PriceIncreaseReportResponse(
+        **{
+            name: getattr(report, name)
+            for name in PriceIncreaseReportResponse.model_fields
+            if name != "issues"
+        },
+        issues=[PriceIncreaseIssueResponse(**asdict(issue)) for issue in report.issues],
+    )
+
+
+@router.post(
+    "/price-increases/system-date",
+    response_model=MarkLoadedResponse,
+    summary="Mark pending increases as loaded in SIESA, without a load",
+)
+@inject
+async def mark_price_increases_loaded(
+    body: MarkLoadedBody,
+    principal: Principal = _principal,
+    service: PriceIncreaseService = _increases,
+) -> MarkLoadedResponse:
+    """For increases the area loaded in SIESA by itself: they get ``system_updated_on`` (today
+    or before) and the «Cambio en SIESA» mark. Only pending ones change; those in an open SIESA
+    load are skipped (confirm or void the load). Up to 2000 at once."""
+
+    filters = body.filters
+    result = await service.mark_loaded(
+        principal,
+        body.system_updated_on,
+        tuple(body.increase_ids),
+        all=body.all,
+        filters=PriceIncreaseFilters(
+            q=filters.q, status=filters.status, sku=filters.sku, supplier=filters.supplier
+        ),
+        co=filters.co,
+        installation=filters.installation,
+    )
+    return MarkLoadedResponse(updated=result.updated, skipped=result.skipped)
+
+
+# --- SIESA loads: pending increases into SIESA's supplier quotations (0212) ---
+
+LoadStatus = Literal["generado", "cargado", "anulado"]
 
 
 class LoadSelectionBody(BaseModel):
