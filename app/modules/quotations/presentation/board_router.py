@@ -187,6 +187,7 @@ def _filter(
     desc: bool,
     trend: str | None = None,
     without_list_price: bool = False,
+    in_stock: bool = True,
 ) -> BoardFilter:
     return BoardFilter(
         lists=tuple(dict.fromkeys(code.strip() for code in lists or () if code.strip()))[:20],
@@ -196,6 +197,7 @@ def _filter(
         chip=chip,
         trend=trend,
         without_list_price=without_list_price,
+        in_stock=in_stock,
         sort=sort,
         descending=desc,
     )
@@ -304,6 +306,7 @@ async def rows(
     chip: Chip | None = None,
     trend: Trend | None = None,
     without_list_price: bool = False,
+    in_stock: bool = True,
     sort: Sort = "lista",
     desc: bool = False,
     page: int = Query(default=1, ge=1),
@@ -315,14 +318,17 @@ async def rows(
 
     ``trend`` compares the new price with the list's current one: ``sube``, ``baja``, or
     ``estable`` (the same, or no new price); a row without a current price is in none.
-    ``without_list_price`` keeps only those (the board already leaves out what has no
-    stock). ``counts`` has the rows of each chip (under every filter but the chip), of
-    ``sube``, ``baja``, ``estable`` and ``sin_precio`` (one group, under every filter but
-    the trend and ``without_list_price``), and ``todos``."""
+    ``without_list_price`` keeps only those. ``in_stock`` (default ``true``) leaves out what
+    the sync read without stock; ``false`` shows it too. ``counts`` has the rows of each
+    chip (under every filter but the chip), of ``sube``, ``baja``, ``estable`` and
+    ``sin_precio`` (one group, under every filter but the trend and
+    ``without_list_price``), and ``todos``; every count follows ``in_stock``."""
 
     result = await service.rows(
         principal,
-        _filter(lists, q, suppliers, categories, chip, sort, desc, trend, without_list_price),
+        _filter(
+            lists, q, suppliers, categories, chip, sort, desc, trend, without_list_price, in_stock
+        ),
         page,
         size,
     )
@@ -354,15 +360,27 @@ async def keys(
     chip: Chip | None = None,
     trend: Trend | None = None,
     without_list_price: bool = False,
+    in_stock: bool = True,
     principal: Principal = _principal,
     service: MainBoardService = _service,
 ) -> list[BoardKeyModel]:
-    """At most 10,000, for a bulk action on every row of the filter (``trend`` and
-    ``without_list_price`` as in ``/main/rows``)."""
+    """At most 10,000, for a bulk action on every row of the filter (``trend``,
+    ``without_list_price`` and ``in_stock`` as in ``/main/rows``)."""
 
     found = await service.keys(
         principal,
-        _filter(lists, q, suppliers, categories, chip, "lista", False, trend, without_list_price),
+        _filter(
+            lists,
+            q,
+            suppliers,
+            categories,
+            chip,
+            "lista",
+            False,
+            trend,
+            without_list_price,
+            in_stock,
+        ),
     )
     return [BoardKeyModel(quotation_id=item.quotation_id, sku=item.sku) for item in found]
 

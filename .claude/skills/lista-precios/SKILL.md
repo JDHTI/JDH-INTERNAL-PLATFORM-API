@@ -57,7 +57,7 @@ Costo máximo = el más alto entre:
 - Inventario: Costo prom. unit. (ins) **de la bodega de la lista** (URA6 para la 35P). No tomar el máximo entre bodegas (salvo la lista 1, ver Generales).
 - Costo Final de las alzas (ver abajo).
 
-Redondear hacia arriba. Luego el archivo de la 35P multiplica por **1,004** (factor fijo, verificado en 805 de 805 referencias): costo = costo máximo × 1,004. Las Mayoristas NO llevan ese factor (ver su sección); las Salsamentarias sí.
+Redondear hacia arriba. Luego el archivo de la 35P multiplica por **1,004** (factor fijo, verificado en 805 de 805 referencias): costo = costo máximo × 1,004. Las Mayoristas NO llevan ese factor (ver su sección), y desde el 2026-11-25 tampoco las Salsamentarias, que se trabajan como Mayoristas.
 
 ### Costo Final desde el Acumulado de alzas
 
@@ -75,7 +75,7 @@ Precio = costo / (1 − margen ideal), redondeado hacia arriba. Ejemplo validado
 
 - Generales (1, 001–005, 009): Margen Lista 1 de Maestro Margen (Food Service).
 - Mayoristas (1M, 10T, 10U, 11N, 10N, 1DR): Margen Mayorista de Maestro Margen.
-- Salsamentarias (10X, 10R, 10S): Margen Salsamentarias.
+- Salsamentarias (10X, 10R, 10S): Margen Mayorista desde el 2026-11-23 (el Margen Salsamentarias salió de Maestro Margen).
 - 35P Market: Margen Market Apartadó.
 - Margen Masivo Food: no se usa y **no se modifica**.
 
@@ -110,7 +110,9 @@ En cada revisión, además de las variaciones, listar las referencias que están
 - Precio actual: `precios_lista_vigentes` con `trim(lista_precio_id)` en ('1M','10T','10U','11N','1DR','10N'). Impuesto: 11N usa Costa; las demás Nacional.
 - **En Mayoristas NO se agregan referencias faltantes**: no calcular ni reportar Faltantes en lista para estas listas (en el Resumen va "No aplica"). El surtido de las mayoristas es limitado a propósito.
 
-## Salsamentarias (10X, 10S, 10R) — verificado el 27/10/2026
+## Salsamentarias (10X, 10S, 10R) — verificado el 27/10/2026, cambiado el 2026-11-25
+
+**Desde el 2026-11-25 se trabajan como Mayoristas:** margen Mayorista, costo SIN el factor 1,004 y precio con el redondeo de las Mayoristas. Las tres listas siguen vivas en SIESA (10S Bogotá en pleno uso). Lo que sigue describe el archivo hasta esa fecha; margen, factor y redondeo ya no aplican.
 
 - Archivo: Listas de Precios Salsamentarias.xlsx (carpeta Listas de Precios; pesa 27 MB, se trae con device_stage_files), hojas `10X Antioquia` (4.681 filas), `10S Centro` (2.896) y `10R Pereira` (1.856). Misma estructura que Mayoristas (columnas Referencia, Bodega, Costo, Precio). El universo son las filas de cada hoja.
 - Bodegas: 10X MDE1 / MDE3, 10S BTA9 / BTA8, 10R OCC1 / OCC16 (la columna Bodega de la fila; Bodega 2 si la LINEA es CONGELADOS o REFRIGERADOS).

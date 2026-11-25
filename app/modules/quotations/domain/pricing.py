@@ -21,7 +21,7 @@ the lists; the quoter applies the same rules so a quoted price matches the list 
   else the highest. Until 2026-11-25 Lactalis was fixed here: 003 for the Centro lists.
 - **Factor** and **negotiation threshold**: module ``ajuste-costos`` (:data:`COST_FACTOR` and
   ``QUOTATIONS_MAX_POINTS_BELOW_TARGET`` are the defaults).
-- **Price** = cost / (1 - margin), rounded to whole pesos (up for the salsamentarias lists).
+- **Price** = cost / (1 - margin), rounded to whole pesos (up for Market).
   A price set from a margin (optimal, at a margin) always goes up (2026-11-25), so it never
   lands a hundredth under the margin asked for.
 - **Liquor tax**: the Coast (billing operation center 004) pays its own value.
@@ -43,34 +43,32 @@ PESO = Decimal(1)
 
 GENERAL = "generales"
 WHOLESALE = "mayoristas"
-SALSAMENTARIAS = "salsamentarias"
 MARKET = "market"
 FAMILY_LABELS = {
     GENERAL: "Generales",
     WHOLESALE: "Mayoristas",
-    SALSAMENTARIAS: "Salsamentarias",
     MARKET: "Market",
 }
 
-# Lists of each family in the skill.
+# Lists of each family in the skill. Salsamentarias is no family since 2026-11-25: the margin
+# master dropped its margin on 2026-11-23 (the channel uses Mayoristas), so its SIESA lists
+# (10X Antioquia, 10R Pereira, 10S Bogotá, still in use) are costed and priced as Mayoristas.
+SALSAMENTARIAS_LISTS = ("10X", "10R", "10S")
 FAMILY_LISTS = {
     GENERAL: ("1", "001", "002", "003", "004", "005", "009"),
-    WHOLESALE: ("1M", "10T", "10U", "11N", "1DR", "10N"),
-    SALSAMENTARIAS: ("10X", "10R", "10S"),
+    WHOLESALE: ("1M", "10T", "10U", "11N", "1DR", "10N", *SALSAMENTARIAS_LISTS),
     MARKET: ("35P",),
 }
 # Factor on the cost by family (the wholesale lists do not carry it).
 COST_FACTOR = {
     GENERAL: Decimal("1.004"),
     WHOLESALE: ONE,
-    SALSAMENTARIAS: Decimal("1.004"),
     MARKET: Decimal("1.004"),
 }
-# Rounding of the price by family: up for salsamentarias and Market, nearest for the rest.
+# Rounding of the price by family: up for Market, nearest for the rest.
 PRICE_ROUNDING = {
     GENERAL: ROUND_HALF_UP,
     WHOLESALE: ROUND_HALF_UP,
-    SALSAMENTARIAS: ROUND_CEILING,
     MARKET: ROUND_CEILING,
 }
 

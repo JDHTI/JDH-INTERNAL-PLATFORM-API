@@ -3,7 +3,8 @@
 Two kinds of rule live here:
 
 - **Parameters**: numbers the quoter applies to every line. The factor on the cost of each
-  list family (1,004: 0,4 % more, except the wholesale lists) and the negotiation threshold
+  list family (1,004: 0,4 % more, except the wholesale lists; Salsamentarias is no family
+  since 2026-11-25, its customers use Mayoristas) and the negotiation threshold
   (how many margin points under the target a price may go and still pass without an alert,
   1 point). A parameter without a stored value takes its default (the code's, or the
   setting ``QUOTATIONS_MAX_POINTS_BELOW_TARGET``), so nothing changes until BI sets one.
@@ -28,7 +29,6 @@ from uuid import UUID
 # Parameters, by key.
 FACTOR_GENERAL = "factor_costo_generales"
 FACTOR_WHOLESALE = "factor_costo_mayoristas"
-FACTOR_SALSAMENTARIAS = "factor_costo_salsamentarias"
 FACTOR_MARKET = "factor_costo_market"
 THRESHOLD = "umbral_negociacion"
 
@@ -62,15 +62,6 @@ PARAMETERS: tuple[ParameterSpec, ...] = (
         Decimal("1"),
         Decimal("1.1"),
         "generales",
-    ),
-    ParameterSpec(
-        FACTOR_SALSAMENTARIAS,
-        "Factor de costo: Salsamentarias",
-        "Multiplica el costo de las listas Salsamentarias.",
-        "factor",
-        Decimal("1"),
-        Decimal("1.1"),
-        "salsamentarias",
     ),
     ParameterSpec(
         FACTOR_MARKET,
@@ -222,7 +213,6 @@ __all__ = [
     "BRANCH_RULE",
     "FACTOR_GENERAL",
     "FACTOR_MARKET",
-    "FACTOR_SALSAMENTARIAS",
     "FACTOR_WHOLESALE",
     "PARAMETER",
     "PARAMETERS",

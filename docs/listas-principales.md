@@ -43,14 +43,17 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
     - `estable`: igual, o sin precio nuevo.
   - Una fila sin precio actual no entra en ninguna tendencia: está en `without_list_price=true`
     (sin precio de lista, o con el precio marcador de $1).
-  - Como el tablero ya deja fuera lo que no tiene existencia, en la práctica es «con existencia
-    y sin precio».
+  - Con «Con existencia» encendido (por defecto), es «con existencia y sin precio».
   - Conteos `sube`, `baja`, `estable` y `sin_precio`:
     - son un solo grupo de opciones, así que se cuentan con todos los filtros menos la
       tendencia y «sin precio»;
     - los chips se cuentan con la tendencia y «sin precio» puestos.
+- **Con existencia** (`in_stock`, filtro rápido desde el 2026-11-25): encendido por defecto, deja
+  fuera lo que la sincronización leyó en 0, como la regla de abajo. Con `in_stock=false` esas filas
+  aparecen, también en los conteos y en `/main/keys`. En la UI, la tendencia va en un desplegable y
+  «Con existencia» y «Sin precio de lista» son botones que se encienden o se apagan.
 - **Reglas del 2026-11-23:**
-  - **Solo lo que tiene existencia:** una fila que la sincronización leyó en 0 no aparece en el
+  - **Solo lo que tiene existencia** (salvo `in_stock=false`): una fila que la sincronización leyó en 0 no aparece en el
     tablero, ni en los conteos ni en «todas las filas del filtro». Una cuyo inventario no se leyó
     (`null`, por ejemplo con el DWH caído) sí aparece.
   - **«Alza» solo desde el 1 %:** una fila bajo el objetivo cuenta como `alza` solo si su precio
@@ -175,7 +178,7 @@ La revisión por ítem, el staging y las cargas son los de
 | --- | --- |
 | `GET /main` | las 14 listas, armadas o no, con sus conteos, los proveedores y categorías para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
 | `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
-| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio` |
+| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&in_stock=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio` |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
 | `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos (pasan a `por_validar`); `null` lo borra. Trae las filas como quedaron (`rows`) |
 | `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas (sin `rows`: pueden ser 10.000) |

@@ -26,8 +26,9 @@ ninguna regla; la migración `0080_drop_salsamentarias_margin` la borra (al reve
 valores no se recuperan). Mientras la UI se despliega, `PATCH /products/{sku}` y
 `PUT /products/{sku}/margins` aún aceptan `margin_salsamentarias`, pero **se ignora**; las respuestas
 ya no lo traen. Un archivo de márgenes con la columna `Margen Salsamentarias` se lee sin error y esa
-columna se ignora. La familia de listas Salsamentarias (10X, 10R, 10S) del cotizador no cambia: es
-una familia de listas de precios, no un margen.
+columna se ignora. Desde el 2026-11-25 tampoco hay familia de listas Salsamentarias en el
+cotizador: sus listas de SIESA (10X, 10R, 10S, que siguen vivas) se costean y se precian como
+Mayoristas, sin factor de costo ([cotizador.md](cotizador.md)).
 
 Además: `margin_source` (`importacion` o `manual`), `margin_updated_by` y `margin_updated_at`, para saber
 de dónde viene el valor y quién lo cambió por última vez.

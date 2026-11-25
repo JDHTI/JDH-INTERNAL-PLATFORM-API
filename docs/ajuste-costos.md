@@ -27,13 +27,16 @@ negocio.
 | Clave | Qué es | Por defecto | Rango |
 | --- | --- | --- | --- |
 | `factor_costo_generales` | Factor sobre el costo de las listas Generales | 1,004 (0,4 % más) | 1 a 1,1 |
-| `factor_costo_salsamentarias` | Ídem, Salsamentarias | 1,004 | 1 a 1,1 |
 | `factor_costo_market` | Ídem, Market | 1,004 | 1 a 1,1 |
-| `factor_costo_mayoristas` | Ídem, Mayoristas | 1 (sin factor) | 1 a 1,1 |
+| `factor_costo_mayoristas` | Ídem, Mayoristas (también las listas Salsamentarias 10X, 10R y 10S) | 1 (sin factor) | 1 a 1,1 |
 | `umbral_negociacion` | Puntos de margen bajo el objetivo que un precio puede bajar y pasar sin alerta (fracción: 0,01 = 1 punto) | `QUOTATIONS_MAX_POINTS_BELOW_TARGET` / 100 (1 punto) | 0 a 0,1 |
 
 - **Valor por defecto:** mientras BI no fija un valor, el parámetro toma su valor por defecto. Por
   eso la migración no cambia nada.
+- **Sin Salsamentarias (2026-11-25):** el margen Salsamentarias salió del maestro el 2026-11-23 y el
+  canal usa Mayoristas, así que su factor (`factor_costo_salsamentarias`) se quitó el mismo día en
+  que nació el módulo. Sus listas de SIESA siguen vivas y se costean como Mayoristas. Un valor
+  guardado con esa clave, si lo hubiera, se ignora.
 - **Desde cuándo aplica un cambio:** en la siguiente cotización que se arme o se refresque. Las
   guardadas conservan sus precios y su umbral (`max_points_below_target`) hasta refrescarse.
 

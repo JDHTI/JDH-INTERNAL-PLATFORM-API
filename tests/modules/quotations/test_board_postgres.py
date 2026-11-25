@@ -110,5 +110,10 @@ async def test_the_trend_and_the_rows_without_a_list_price(
         assert (await skus(chip="sin_marcar", trend="baja"))[0] == ["90001"]
         keys = await board.keys([quotation_id], BoardFilter(trend="sube"))
         assert [key.sku for key in keys] == ["2537"]
+        # «Con existencia» (on by default) leaves out what the sync read at 0; off, it shows.
+        await board.set_stock(quotation_id, {"2537": (Decimal(5), Decimal(5))})
+        assert (await skus())[0] == ["2537"]
+        found, counts = await skus(in_stock=False)
+        assert found == ["2537", "90001", "90002", "90003"] and counts["todos"] == 4
     finally:
         await repository.delete(quotation_id)
