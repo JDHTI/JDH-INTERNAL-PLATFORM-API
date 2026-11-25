@@ -65,6 +65,7 @@ from app.modules.quotations.domain.export import (
 )
 from app.modules.quotations.domain.ports import (
     Calendar,
+    CostRules,
     ExportWriter,
     LinesWriter,
     ManagerPolicy,
@@ -457,6 +458,7 @@ class QuotationService:
         directors: ManagerPolicy | None = None,
         template_reader: TemplateReader | None = None,
         template_max_bytes: int = TEMPLATE_MAX_BYTES,
+        cost_rules: CostRules | None = None,
     ) -> None:
         """Create the service.
 
@@ -499,8 +501,12 @@ class QuotationService:
             template_reader (TemplateReader | None): Reads the list update template an
                 advisor uploads back without the references to leave out (2026-11-25).
             template_max_bytes (int): Largest template accepted.
+            cost_rules (CostRules | None): Module ``ajuste-costos`` (2026-11-25): the
+                negotiation threshold and the cost factor of each list family in force.
+                Without it, ``policy`` and the code's factors.
         """
 
+        self.cost_rules = cost_rules
         self.template_reader = template_reader
         self.template_max_bytes = template_max_bytes
         self.directors = directors
@@ -751,8 +757,26 @@ class QuotationService:
             )
             return {}
 
-    def rule_catalog(self) -> tuple[Section, ...]:
-        return catalog(self.policy)
+    async def rule_catalog(self) -> tuple[Section, ...]:
+        return catalog(await self._load_policy())
+
+    async def _load_policy(self) -> QuotationPolicy:
+        """The negotiation threshold and the cost factors of module ``ajuste-costos``
+        (2026-11-25), kept for the rest of the request. Without the module, or when it does
+        not answer, the policy the service was built with (``QUOTATIONS_MAX_POINTS_BELOW_
+        TARGET`` and the code's factors)."""
+
+        if self.cost_rules is None:
+            return self.policy
+        try:
+            threshold, factors = await self.cost_rules.threshold_and_factors()
+        except Exception as exc:  # noqa: BLE001 - the quoter goes on with its defaults
+            logger.warning("quotations: cost settings not read: %s", exc)
+            return self.policy
+        self.policy = replace(
+            self.policy, max_points_below_target=threshold, cost_factors=dict(factors)
+        )
+        return self.policy
 
     # ------------------------------------------------------------ sales scope
 
@@ -978,6 +1002,9 @@ class QuotationService:
         customer of the list, and each entry carries its last sale.
         """
 
+        # The threshold and the cost factors in force (module ``ajuste-costos``), also for a
+        # quotation that starts empty: it stores the threshold it was built with.
+        await self._load_policy()
         if not entries:
             return [], None
         setup = _setup(context)

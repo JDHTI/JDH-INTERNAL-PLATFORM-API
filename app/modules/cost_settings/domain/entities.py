@@ -1,0 +1,238 @@
+"""The cost rules of the quoter that BI adjusts (module ``ajuste-costos``, 2026-11-25).
+
+Two kinds of rule live here:
+
+- **Parameters**: numbers the quoter applies to every line. The factor on the cost of each
+  list family (1,004: 0,4 % more, except the wholesale lists) and the negotiation threshold
+  (how many margin points under the target a price may go and still pass without an alert,
+  1 point). A parameter without a stored value takes its default (the code's, or the
+  setting ``QUOTATIONS_MAX_POINTS_BELOW_TARGET``), so nothing changes until BI sets one.
+- **Supplier branch rules**: which branch of a supplier quotes for each operation center. In
+  SIESA a supplier may keep one price list per branch (``consumo.cotizaciones_proveedores``,
+  ``proveedor_sucursal_id``; ``centro_operacion_id`` is always empty): Team Foods quotes
+  Antioquia from branch 002 since 2026-11-19 and Lactalis Centro from branch 003. A rule says
+  "for C.O. 001 take branch 002; elsewhere the general branch 001". For a reference the
+  branch does not quote, the general one; if neither does, the highest of the others.
+  Suppliers without a rule take, as always, the highest quotation in force.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+# Parameters, by key.
+FACTOR_GENERAL = "factor_costo_generales"
+FACTOR_WHOLESALE = "factor_costo_mayoristas"
+FACTOR_SALSAMENTARIAS = "factor_costo_salsamentarias"
+FACTOR_MARKET = "factor_costo_market"
+THRESHOLD = "umbral_negociacion"
+
+# Entities of the change history.
+PARAMETER = "parametro"
+BRANCH_RULE = "regla_sucursal"
+
+
+@dataclass(frozen=True)
+class ParameterSpec:
+    """A parameter: what it is, its unit and the range it accepts (inclusive)."""
+
+    key: str
+    label: str
+    description: str
+    # ``factor`` multiplies the cost (1.004); ``margen`` is a fraction of margin (0.01 is
+    # one point).
+    unit: str
+    minimum: Decimal
+    maximum: Decimal
+    # The list family a cost factor belongs to (``pricing.FAMILY_LABELS``).
+    family: str | None = None
+
+
+PARAMETERS: tuple[ParameterSpec, ...] = (
+    ParameterSpec(
+        FACTOR_GENERAL,
+        "Factor de costo: Generales",
+        "Multiplica el costo de las listas Generales (1,004 es 0,4 % más).",
+        "factor",
+        Decimal("1"),
+        Decimal("1.1"),
+        "generales",
+    ),
+    ParameterSpec(
+        FACTOR_SALSAMENTARIAS,
+        "Factor de costo: Salsamentarias",
+        "Multiplica el costo de las listas Salsamentarias.",
+        "factor",
+        Decimal("1"),
+        Decimal("1.1"),
+        "salsamentarias",
+    ),
+    ParameterSpec(
+        FACTOR_MARKET,
+        "Factor de costo: Market",
+        "Multiplica el costo de la lista Market.",
+        "factor",
+        Decimal("1"),
+        Decimal("1.1"),
+        "market",
+    ),
+    ParameterSpec(
+        FACTOR_WHOLESALE,
+        "Factor de costo: Mayoristas",
+        "Multiplica el costo de las listas Mayoristas (hoy 1: sin factor).",
+        "factor",
+        Decimal("1"),
+        Decimal("1.1"),
+        "mayoristas",
+    ),
+    ParameterSpec(
+        THRESHOLD,
+        "Umbral de negociación",
+        "Puntos de margen por debajo del objetivo que un precio puede bajar y pasar sin "
+        "alerta (0,01 es 1 punto: con objetivo 20 %, el mínimo es 19 %).",
+        "margen",
+        Decimal("0"),
+        Decimal("0.1"),
+    ),
+)
+PARAMETER_SPECS = {spec.key: spec for spec in PARAMETERS}
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """A parameter's value in force: the stored one, else its default."""
+
+    spec: ParameterSpec
+    value: Decimal
+    default: Decimal
+    # Who set the stored value and when; ``None`` while it is the default.
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def is_default(self) -> bool:
+        return self.updated_at is None
+
+
+@dataclass(frozen=True)
+class BranchRule:
+    """Which branch of a supplier quotes for each operation center."""
+
+    id: UUID
+    supplier_nit: str
+    general_branch: str
+    # Operation center -> the supplier's branch that quotes for it.
+    center_branches: dict[str, str]
+    is_active: bool
+    supplier_name: str | None = None
+    note: str | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_by: str | None = None
+    updated_at: datetime | None = None
+
+    def branch_for(self, center: str | None) -> str | None:
+        """The branch of ``center`` (``None`` when the center has none: the general one)."""
+
+        return self.center_branches.get(center) if center else None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "supplier_nit": self.supplier_nit,
+            "supplier_name": self.supplier_name,
+            "general_branch": self.general_branch,
+            "center_branches": dict(self.center_branches),
+            "is_active": self.is_active,
+            "note": self.note,
+        }
+
+
+@dataclass(frozen=True)
+class QuoteRule:
+    """What the cost query needs of a rule for one operation center: the supplier, the
+    branch that quotes for that center (``None``: none for it) and the general branch."""
+
+    supplier_nit: str
+    branch: str | None
+    general_branch: str
+
+
+@dataclass(frozen=True)
+class CostSettings:
+    """The rules in force, as the quoter reads them."""
+
+    parameters: Mapping[str, Decimal]
+    rules: tuple[BranchRule, ...] = ()
+
+    def value(self, key: str) -> Decimal:
+        return self.parameters[key]
+
+    def cost_factors(self) -> dict[str, Decimal]:
+        """The factor on the cost by list family (``pricing.FAMILY_LABELS`` keys)."""
+
+        return {
+            spec.family: self.parameters[spec.key]
+            for spec in PARAMETERS
+            if spec.family is not None and spec.key in self.parameters
+        }
+
+    def quote_rules(self, center: str | None) -> tuple[QuoteRule, ...]:
+        """The active branch rules for a plan of ``center``. *Nacional* and list 1 (no
+        center) take, as always, the highest quotation: no rule applies."""
+
+        if not center:
+            return ()
+        return tuple(
+            QuoteRule(rule.supplier_nit, rule.branch_for(center), rule.general_branch)
+            for rule in self.rules
+            if rule.is_active
+        )
+
+
+@dataclass(frozen=True)
+class Change:
+    """One change of the rules: what it was, what it is, who and when."""
+
+    id: UUID
+    entity: str
+    ref: str
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    actor: str
+    at: datetime
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Overview:
+    """Everything the screen shows."""
+
+    parameters: tuple[Parameter, ...]
+    rules: tuple[BranchRule, ...]
+    changes: tuple[Change, ...] = field(default_factory=tuple)
+    can_manage: bool = False
+
+
+__all__ = [
+    "BRANCH_RULE",
+    "FACTOR_GENERAL",
+    "FACTOR_MARKET",
+    "FACTOR_SALSAMENTARIAS",
+    "FACTOR_WHOLESALE",
+    "PARAMETER",
+    "PARAMETERS",
+    "PARAMETER_SPECS",
+    "THRESHOLD",
+    "BranchRule",
+    "Change",
+    "CostSettings",
+    "Overview",
+    "Parameter",
+    "ParameterSpec",
+    "QuoteRule",
+]

@@ -312,10 +312,14 @@ def test_stock_plan_and_family_follow_the_skill() -> None:
     by_center = pricing.stock_plan("31A", "003")
     unmapped = pricing.stock_plan("62Y", "008")
 
-    assert central.warehouses == ("BTA9", "BTA8") and central.lactalis_branch == "003"
-    assert general.highest and general.lactalis_branch == "001"
+    # Each plan stands for an operation center (2026-11-25): the list's own for a list with
+    # its warehouses, the billing one otherwise; list 1 for none.
+    assert central.warehouses == ("BTA9", "BTA8") and central.center == "003"
+    assert general.highest and general.center is None
     assert by_center.warehouses == ("BTA9", "BTA8") and by_center.source == "co"
-    assert unmapped.highest and unmapped.source == "general"
+    assert by_center.center == "003"
+    assert unmapped.highest and unmapped.source == "general" and unmapped.center == "008"
+    assert pricing.LIST_CENTERS["10X"] == "001" and "35P" not in pricing.LIST_CENTERS
     assert pricing.family("1M") == pricing.WHOLESALE
     assert pricing.family("31A", "mayoristas") == pricing.WHOLESALE
     assert pricing.family("10X") == pricing.SALSAMENTARIAS

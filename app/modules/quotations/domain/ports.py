@@ -330,6 +330,32 @@ class TemplateContent:
     price_list_id: str | None
 
 
+class QuoteBranch(Protocol):
+    """A supplier branch rule for one operation center (module ``ajuste-costos``): the
+    branch that quotes for that center (``None``: none for it) and the general one."""
+
+    @property
+    def supplier_nit(self) -> str: ...
+
+    @property
+    def branch(self) -> str | None: ...
+
+    @property
+    def general_branch(self) -> str: ...
+
+
+class CostRules(Protocol):
+    """Module ``ajuste-costos`` (2026-11-25): the cost rules in force."""
+
+    async def threshold_and_factors(self) -> tuple[Decimal, Mapping[str, Decimal]]:
+        """The negotiation threshold and the cost factor of each list family."""
+        ...
+
+    async def quote_rules(self, center: str | None) -> Sequence[QuoteBranch]:
+        """The supplier branch rules for a cost plan of ``center``."""
+        ...
+
+
 class TemplateReader(Protocol):
     """Reads an uploaded list update template.
 

@@ -17,7 +17,8 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
     """Every rule the quoter applies, with the values in force."""
 
     points = _points(policy.max_points_below_target)
-    factor = f"{pricing.COST_FACTOR[pricing.GENERAL]}".replace(".", ",")
+    general = policy.cost_factors.get(pricing.GENERAL, pricing.COST_FACTOR[pricing.GENERAL])
+    factor = f"{general.normalize()}".replace(".", ",")
     return (
         Section(
             "precio",
@@ -47,8 +48,9 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "referencia toma el más costoso. Si la alza más reciente del producto no "
                     "tiene fecha de actualización en SIESA, su costo nuevo también se compara y "
                     "gana si es mayor. Se redondea hacia arriba y se multiplica por "
-                    f"{factor} (las listas mayoristas no llevan ese factor). Lactalis cotiza por "
-                    "sucursal: 003 para Centro y 001 para el resto.",
+                    f"{factor} (las listas mayoristas no llevan ese factor). Un proveedor con "
+                    "una lista por sucursal (Team Foods en Antioquia, Lactalis en Centro) cotiza "
+                    "con la sucursal de ese C.O.; lo define BI en Ajuste de costos.",
                     INFORMS,
                     {"factor_costo": factor},
                 ),

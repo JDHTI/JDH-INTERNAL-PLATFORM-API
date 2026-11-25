@@ -2,11 +2,13 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
 from app.core.errors import DependencyUnavailableError
 from app.infrastructure.data_provider import DataProviderUnavailable
+from app.modules.cost_settings.domain.entities import BranchRule, CostSettings
 from app.modules.quotations.domain import pricing
 from app.modules.quotations.infrastructure.dwh_source import WarehouseQuotationSource
 
@@ -168,6 +170,20 @@ async def test_items_carry_the_category() -> None:
     assert items["26278"].category == "LICORES" and items["1485"].category is None
 
 
+class FakeCostRules:
+    """The two rules of the migration ``0092_cost_settings``."""
+
+    async def quote_rules(self, center):
+        return CostSettings(
+            {},
+            (
+                BranchRule(uuid4(), "800245795", "001", {"003": "003"}, True),
+                BranchRule(uuid4(), "860000006", "001", {"001": "002"}, True),
+                BranchRule(uuid4(), "900000001", "001", {"003": "009"}, False),
+            ),
+        ).quote_rules(center)
+
+
 async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> None:
     snapshot = datetime(2026, 11, 3, 8, 18)
     connection = FakeConnection(
@@ -194,7 +210,7 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
             },
         ]
     )
-    source = WarehouseQuotationSource(connection)
+    source = WarehouseQuotationSource(connection, cost_rules=FakeCostRules())
 
     costs = await source.costs(["12779", "1081"], pricing.stock_plan("10U", "003"))
 
@@ -202,8 +218,19 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
     assert '"consumo"."inventario_fecha"' in query
     assert '"consumo"."cotizaciones_proveedores"' in query
     assert "es_vigente" in query and "percentile_cont" in query
-    # Other lines read warehouse 1, frozen and refrigerated ones warehouse 2.
-    assert args == (["12779", "1081"], "003", ["BTA9"], ["BTA8"], "800245795", Decimal(3))
+    # Other lines read warehouse 1, frozen and refrigerated ones warehouse 2. List 10U is
+    # Centro: the supplier branch rules of C.O. 003 go along (2026-11-25), Lactalis' 003
+    # first, its 001 next; Team Foods has no branch for Centro, so its general one.
+    assert args == (
+        ["12779", "1081"],
+        ["800245795", "860000006"],
+        ["BTA9"],
+        ["BTA8"],
+        ["003", None],
+        Decimal(3),
+        ["001", "001"],
+    )
+    assert "min(a.prio) OVER" in query and 'trim(c."proveedor_sucursal_id") = r.branch' in query
     assert costs["12779"].discarded_quote == Decimal("80552")
     assert costs["12779"].quote_cost is None and costs["12779"].inventory_cost == Decimal("2049")
     assert costs["12779"].snapshot_date == date(2026, 11, 3)
@@ -213,8 +240,10 @@ async def test_costs_compare_quotation_and_inventory_of_the_list_warehouse() -> 
     assert costs["1081"].inventory_stocked is None
     assert costs["1081"].quote_cost == Decimal("13104") and not costs["1081"].is_active
     await source.costs(["1"], pricing.stock_plan("1", None))
-    # List 1 takes the highest cost among its warehouses, for every line.
+    # List 1 takes the highest cost among its warehouses, for every line, and no branch
+    # rule applies (no center): the highest quotation of each supplier.
     assert connection.queries[1][1][2] == connection.queries[1][1][3]
+    assert connection.queries[1][1][1] == [] and connection.queries[1][1][4] == []
     assert "BAQ10" in connection.queries[1][1][2]
     # Warehouses chosen in a center: the cold room for cold lines, the rest for the others.
     await source.costs(["1"], pricing.warehouse_plan("001", ["MDE1", "MDE3", "MDE4"]))

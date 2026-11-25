@@ -25,7 +25,7 @@ def test_a_center_with_chosen_warehouses_reads_only_those() -> None:
     assert spot.cold_room is None and spot.reads() == (("MDE4",), ("MDE4",))
     # Only the cold room: every line reads it.
     assert pricing.warehouse_plan("003", ["BTA8"]).reads() == (("BTA8",), ("BTA8",))
-    assert pricing.warehouse_plan("003", ["BTA20"]).lactalis_branch == "003"
+    assert pricing.warehouse_plan("003", ["BTA20"]).center == "003"
     # The plans of today keep reading as before.
     assert pricing.stock_plan(OUTSIDE_SKILL, "001").reads() == (("MDE1",), ("MDE3",))
     general = pricing.stock_plan("1", None).reads()

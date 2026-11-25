@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 from app.modules.order_validation.domain.rules import BASIS
 from app.modules.quotations.domain import pricing, vocabulary
 from app.modules.quotations.domain.entities import CostInfo
+from app.modules.quotations.domain.ports import CostRules
 from app.modules.quotations.domain.pricing import StockPlan
 from app.modules.supplier_supports.domain.entities import SupportCost
 
@@ -91,7 +92,9 @@ def client_plans(branches: Sequence[BranchPlan]) -> list[StockPlan]:
 
 
 def client_options(
-    branches: Sequence[BranchPlan], basis: str | None = None
+    branches: Sequence[BranchPlan],
+    basis: str | None = None,
+    factors: Mapping[str, Decimal] | None = None,
 ) -> list[tuple[StockPlan, Decimal]]:
     """The plans of a client's active branches, each with the cost factor of its list family
     (the list's when the skill names it, else ``basis``, the client's margin list)."""
@@ -100,14 +103,21 @@ def client_options(
     options: dict[str, tuple[StockPlan, Decimal]] = {}
     for branch in chosen:
         plan = pricing.stock_plan(branch.price_list_id, branch.billing_center)
-        options.setdefault(plan_key(plan), (plan, cost_factor(branch.price_list_id, basis)))
-    return list(options.values()) or [(GENERAL_PLAN, cost_factor(None, basis))]
+        options.setdefault(
+            plan_key(plan), (plan, cost_factor(branch.price_list_id, basis, factors))
+        )
+    return list(options.values()) or [(GENERAL_PLAN, cost_factor(None, basis, factors))]
 
 
-def cost_factor(price_list_id: str | None, basis: str | None) -> Decimal:
-    """The quoter's factor on the cost of a list family (1,004; 1 for the wholesale lists)."""
+def cost_factor(
+    price_list_id: str | None, basis: str | None, factors: Mapping[str, Decimal] | None = None
+) -> Decimal:
+    """The quoter's factor on the cost of a list family: module ``ajuste-costos``'s
+    (``factors``, 2026-11-25), else the code's (1,004; 1 for the wholesale lists)."""
 
-    return pricing.COST_FACTOR.get(pricing.family(price_list_id, basis), ONE)
+    family = pricing.family(price_list_id, basis)
+    found = (factors or {}).get(family)
+    return found if found is not None else pricing.COST_FACTOR.get(family, ONE)
 
 
 class SupportCostService:
@@ -118,6 +128,7 @@ class SupportCostService:
         repository: CostRepository,
         warehouse: CostWarehouse,
         clock: Callable[[], datetime] | None = None,
+        cost_rules: CostRules | None = None,
     ) -> None:
         """Create the service.
 
@@ -125,11 +136,24 @@ class SupportCostService:
             repository (CostRepository): The supports and their stored costs.
             warehouse (CostWarehouse): Clients and costs in the DWH.
             clock (Callable[[], datetime] | None): Current instant, for tests.
+            cost_rules (CostRules | None): Module ``ajuste-costos``: the cost factor of each
+                list family (2026-11-25). Without it, the code's.
         """
 
         self.repository = repository
         self.warehouse = warehouse
+        self.cost_rules = cost_rules
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def _factors(self) -> Mapping[str, Decimal]:
+        if self.cost_rules is None:
+            return {}
+        try:
+            _, factors = await self.cost_rules.threshold_and_factors()
+        except Exception as exc:  # noqa: BLE001 - the code's factors then
+            logger.warning("supports costs: cost settings not read: %s", exc)
+            return {}
+        return factors
 
     async def run(self) -> Mapping[str, Any]:
         """Refresh every cost; returns a summary for the job's run.
@@ -185,6 +209,7 @@ class SupportCostService:
         nits = sorted({target.customer_nit for target in targets if target.customer_nit})
         branches = await self.warehouse.branches(nits) if nits else {}
         fields = await self.repository.margin_fields(nits) if nits else {}
+        factors = await self._factors()
         plans_of: dict[UUID, list[tuple[StockPlan, Decimal]]] = {}
         skus_by_plan: dict[str, tuple[StockPlan, set[str]]] = {}
         for target in targets:
@@ -192,9 +217,10 @@ class SupportCostService:
                 client_options(
                     branches.get(target.customer_nit, []),
                     BASIS.get(fields.get(target.customer_nit, ""), "lista"),
+                    factors,
                 )
                 if target.customer_nit
-                else [(GENERAL_PLAN, cost_factor(None, None))]
+                else [(GENERAL_PLAN, cost_factor(None, None, factors))]
             )
             plans_of[target.support_id] = options
             for plan, _ in options:

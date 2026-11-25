@@ -78,6 +78,9 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   proveedor por las ventas apoyadas del mes (cotización del proveedor, descuento real, copias
   una vez), margen recompuesto, cierre del mes vencido y Excel por proveedor. Ver
   [`docs/liquidacion-apoyos.md`](docs/liquidacion-apoyos.md).
+- El ajuste de costos (BI) vive en `/api/v1/cost-settings`: el factor de costo por familia, el
+  umbral de negociación y la sucursal del proveedor por C.O. (Team Foods en Antioquia, Lactalis
+  en Centro), con su historial. Ver [`docs/ajuste-costos.md`](docs/ajuste-costos.md).
 - El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
   archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
   calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).
