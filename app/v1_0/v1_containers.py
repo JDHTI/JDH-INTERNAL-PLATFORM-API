@@ -189,6 +189,7 @@ from app.modules.quotations.infrastructure.lines_workbook import QuotationLinesW
 from app.modules.quotations.infrastructure.liquor_repository import (
     SqlAlchemyLiquorTaxRepository,
 )
+from app.modules.quotations.infrastructure.list_template_file import ListTemplateFile
 from app.modules.quotations.infrastructure.masters import SqlAlchemyQuotationMasterSource
 from app.modules.quotations.infrastructure.offer_workbook import CustomerOfferWorkbook
 from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
@@ -820,6 +821,7 @@ class V1Container(containers.DeclarativeContainer):
     )
     quotation_offer_writer = providers.Singleton(CustomerOfferWorkbook)
     quotation_lines_writer = providers.Singleton(QuotationLinesWorkbook)
+    quotation_template_reader = providers.Singleton(ListTemplateFile)
     quotation_repository = providers.Factory(SqlAlchemyQuotationRepository, database=database)
     quotation_warehouse_source = providers.Factory(
         WarehouseQuotationSource,
@@ -917,6 +919,7 @@ class V1Container(containers.DeclarativeContainer):
         approvers=quotation_approver_policy,
         offer_writer=quotation_offer_writer,
         lines_writer=quotation_lines_writer,
+        template_reader=quotation_template_reader,
         list_managers=list_update_manager_policy,
         list_approvers=list_update_approver_policy,
         main_lists=config.quotations.main_lists,

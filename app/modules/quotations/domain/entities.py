@@ -669,6 +669,9 @@ class Quotation:
     # The warehouse groups chosen in each center (``BP``, ``BSP``, ``PROMO``; 2026-11-25):
     # the screen shows these, the two fields above keep their breakdown.
     warehouse_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # A list update's references taken out with its template (2026-11-25): a refresh does
+    # not bring them back from the list; adding one again does.
+    excluded_skus: tuple[str, ...] = ()
     # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
     # (chosen; a refresh keeps it).
     billing_center_source: str = vocabulary.CENTER_AUTO

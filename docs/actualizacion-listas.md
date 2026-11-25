@@ -147,6 +147,47 @@ para vaciarlo, y `GET /loads?kind=lista` guarda el historial. No entran ítems n
 La revisión por ítem y el staging se describen en [Listas principales](listas-principales.md),
 que los conserva.
 
+## Plantilla para quitar referencias (2026-11-25)
+
+Solo en Actualización de listas (`kind = 'lista'`), no en Listas principales ni en el
+cotizador (422). Sirve para quitar muchas referencias de una vez en una lista grande (Sodexo,
+lista 5: 3.652 referencias).
+
+1. **Descargar:** `GET /quotations/{id}/list-template.xlsx`, para quien puede ver la
+   actualización.
+   - Es la plantilla de BI sin costos: hoja `Lineas` con Referencia, Descripción, Categoría,
+     Proveedor, Unidad, Estado, Origen, Fecha última venta, Último precio, Precio de lista,
+     Margen actual con apoyo, Precio nuevo, Margen nuevo con apoyo, Variación, Apoyo y
+     Alertas, con filtro en el encabezado; hoja `Cotizacion` con la cabecera.
+   - Nombre: `Plantilla <nombre de la lista> <AAAA-MM-DD>.xlsx`.
+   - Se escribe en modo solo escritura y en un hilo aparte, así que una lista de miles de
+     referencias no frena el API.
+2. **Editar:** se borran las filas de las referencias que no deben ir en la actualización.
+   - Solo cuenta la columna Referencia: los precios y las demás columnas no se leen.
+   - Una referencia que Excel volvió número (`2537`) se reconoce igual.
+3. **Subir:** `POST /quotations/{id}/list-template`, multipart con `file`, `version` y `apply`.
+   - `apply=false` (vista previa): dice qué saldría (`removed`, con descripción), qué
+     referencias del archivo no están en la actualización (`unknown`, se ignoran) y cuántas
+     quedan (`kept`). No cambia nada.
+   - `apply=true`: quita esas líneas, vuelve a borrador, sube la versión y devuelve la
+     actualización (`quotation`).
+   - Las referencias quitadas quedan en `excluded_skus`: un refresco no las trae de nuevo
+     desde la lista. Agregarlas otra vez (pegar referencias) las devuelve y las saca de esa
+     lista.
+   - El archivo se lee en modo solo lectura y en un hilo aparte. Máximo 10 MB y 20.000 filas.
+   - **422 si:**
+     - el archivo no es un libro de Excel o no tiene la hoja `Lineas` con la columna
+       Referencia;
+     - la fila «Lista de precios» de la hoja `Cotizacion` es de otra lista;
+     - no trae referencias;
+     - no deja ninguna referencia de la actualización;
+     - con `apply`, no hay nada que quitar.
+   - Mismas reglas de edición que las líneas: 409 por versión o si la actualización está
+     cerrada.
+
+**Qué pasa en SIESA:** la solicitud de actualización va sin esas referencias, así que su precio
+en la lista no cambia. Quitarlas de la lista en SIESA no lo hace esta carga.
+
 ## Detalle del ítem
 
 - **Existencias por bodega** (`consumo.inventario_fecha`, la foto de SIESA de la mañana),

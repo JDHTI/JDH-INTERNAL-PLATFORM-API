@@ -47,6 +47,7 @@ def _header_values(quotation: Quotation) -> dict[str, Any]:
     values["warnings"] = list(quotation.warnings)
     values["conditions"] = list(quotation.conditions)
     values["cost_centers"] = list(quotation.cost_centers)
+    values["excluded_skus"] = list(quotation.excluded_skus)
     for name in _BY_CENTER:
         values[name] = {center: list(codes) for center, codes in getattr(quotation, name).items()}
     values["seller_contact"] = (
@@ -63,6 +64,7 @@ def _quotation(model: QuotationModel) -> Quotation:
     values["warnings"] = tuple(model.warnings or ())
     values["conditions"] = tuple(model.conditions or ())
     values["cost_centers"] = tuple(model.cost_centers or ())
+    values["excluded_skus"] = tuple(model.excluded_skus or ())
     for name in _BY_CENTER:
         values[name] = {
             center: tuple(codes) for center, codes in (getattr(model, name) or {}).items()

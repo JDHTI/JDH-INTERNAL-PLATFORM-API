@@ -76,6 +76,7 @@ from app.modules.quotations.domain.ports import (
     SupportRequestLinks,
     SupportSource,
     TeamLookup,
+    TemplateReader,
     WarehouseSource,
 )
 
@@ -92,6 +93,8 @@ LIST_MAX_LINES = 10_000
 LIST_SALES_BRANCH_LIMIT = 1_000
 # SKUs one paste may carry.
 MAX_PASTED_SKUS = 500
+# The list update template of a 10.000-reference list weighs about 1 MB.
+TEMPLATE_MAX_BYTES = 10 * 1024 * 1024
 # Excel columns arrive one per line; lists may use commas, semicolons, tabs or spaces.
 _SEPARATORS = re.compile(r"[\s,;|]+")
 # A number cell copied from Excel may come as ``26278.0``.
@@ -177,6 +180,18 @@ class _Audience:
 
     nits: tuple[str, ...]
     sale_keys: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class TemplateRemoval:
+    """What an uploaded list update template leaves out: the references of the update that
+    are no longer in the file (``removed``, with their description), the file's references
+    the update does not have (``unknown``, ignored) and how many stay."""
+
+    removed: tuple[tuple[str, str | None], ...]
+    unknown: tuple[str, ...]
+    kept: int
+    applied: bool
 
 
 @dataclass(frozen=True)
@@ -440,6 +455,8 @@ class QuotationService:
         sales_backfill: SalesBackfill | None = None,
         team: TeamLookup | None = None,
         directors: ManagerPolicy | None = None,
+        template_reader: TemplateReader | None = None,
+        template_max_bytes: int = TEMPLATE_MAX_BYTES,
     ) -> None:
         """Create the service.
 
@@ -479,8 +496,13 @@ class QuotationService:
             directors (ManagerPolicy | None): Comercial's directors (permission
                 ``comercial-director``, 2026-11-23): they read every customer quotation and
                 edit only their own.
+            template_reader (TemplateReader | None): Reads the list update template an
+                advisor uploads back without the references to leave out (2026-11-25).
+            template_max_bytes (int): Largest template accepted.
         """
 
+        self.template_reader = template_reader
+        self.template_max_bytes = template_max_bytes
         self.directors = directors
         self.team = team
         self.sales_backfill = sales_backfill
@@ -1721,6 +1743,10 @@ class QuotationService:
         branches, items = await asyncio.gather(
             self._list_branches(code), self.warehouse.list_items(code)
         )
+        if quotation.excluded_skus:
+            # Taken out with the template (2026-11-25): the list does not bring them back.
+            excluded = {sku.upper() for sku in quotation.excluded_skus}
+            items = [entry for entry in items if entry.item.sku.upper() not in excluded]
         nit = quotation.customer_nit or None
         context = rules.list_context(
             code,
@@ -2601,6 +2627,15 @@ class QuotationService:
         lines = [by_sku.get(line.sku, line) for line in detail.lines]
         lines += [by_sku[sku] for sku in valid]
         quotation = self._touched(detail.quotation, lines, principal.email)
+        if quotation.excluded_skus and valid:
+            # A reference taken out with the template and added again comes back for good.
+            back = {sku.upper() for sku in valid}
+            quotation = replace(
+                quotation,
+                excluded_skus=tuple(
+                    sku for sku in quotation.excluded_skus if sku.upper() not in back
+                ),
+            )
         saved = await self.repository.save(
             quotation,
             [by_sku[sku] for sku in existing],
@@ -2811,6 +2846,114 @@ class QuotationService:
             f"Plantilla {name} {today.isoformat()}.xlsx",
             _XLSX,
         )
+
+    # ------------------------------------------------------------ list update template
+
+    @staticmethod
+    def _template_kind(quotation: Quotation) -> None:
+        if quotation.kind != vocabulary.LIST_UPDATE:
+            raise InvalidInputError("La plantilla es solo de Actualización de listas")
+
+    async def list_template_file(self, principal: Principal, quotation_id: UUID) -> ExportFile:
+        """The list update template (2026-11-25): every line with what the advisors see and
+        no costs, with a filter on the header. Whoever reads the update downloads it; they
+        delete the rows of the references to leave out and upload it back
+        (:meth:`upload_list_template`). Written in a worker thread, so a list of thousands of
+        references never holds up the API.
+
+        Raises:
+            InvalidInputError: Not a list update of ``actualizacion-listas``.
+        """
+
+        if self.lines_writer is None:
+            raise InvalidInputError("La plantilla en Excel no está disponible")
+        detail = await self.get(principal, quotation_id)
+        self._template_kind(detail.quotation)
+        names = {}
+        try:
+            names = {item.code: item.name for item in await self.warehouse.billing_centers()}
+        except Exception as exc:  # noqa: BLE001 - the names only label the codes
+            logger.warning("quotations: centers for the list template not read: %s", exc)
+        quotation = detail.quotation
+        name = _file_name(quotation.price_list_name or quotation.price_list_id or "lista")
+        return ExportFile(
+            await asyncio.to_thread(self.lines_writer.write, detail, names, True),
+            f"Plantilla {name} {self.calendar.today().isoformat()}.xlsx",
+            _XLSX,
+        )
+
+    async def upload_list_template(
+        self,
+        principal: Principal,
+        quotation_id: UUID,
+        version: int,
+        content: bytes,
+        apply: bool = False,
+    ) -> tuple[QuotationDetail, TemplateRemoval]:
+        """Take out of a list update the references deleted from its template.
+
+        Every reference of the update that is not in the file's ``Referencia`` column is
+        removed; references of the file the update does not have are reported and ignored,
+        and so are prices or any other column. Without ``apply`` it only says what would be
+        removed (nothing changes); with it the lines go, the quotation goes back to draft and
+        the removed references are kept in ``excluded_skus``, so a refresh does not bring
+        them back from the list (adding one again lifts that). The workbook is read in a
+        worker thread.
+
+        Raises:
+            InvalidInputError: Not a list update, a file too large or not the template, one
+                of another list, no references in it, or one that would leave the update
+                empty; with ``apply``, nothing to remove.
+            ConflictError: ``version`` is not the current one, or the update is not editable.
+        """
+
+        if self.template_reader is None:
+            raise InvalidInputError("La carga de la plantilla no está disponible")
+        detail = await self._editable(principal, quotation_id)
+        quotation = detail.quotation
+        self._template_kind(quotation)
+        self._check_version(quotation, version)
+        if len(content) > self.template_max_bytes:
+            megas = self.template_max_bytes // (1024 * 1024)
+            raise InvalidInputError(f"El archivo pasa de {megas} MB")
+        if not content:
+            raise InvalidInputError("El archivo está vacío")
+        read = await asyncio.to_thread(self.template_reader.read, content)
+        own = (quotation.price_list_id or "").strip().upper()
+        if read.price_list_id and read.price_list_id.strip().upper() != own:
+            raise InvalidInputError(
+                f"La plantilla es de la lista {read.price_list_id}; esta actualización es de "
+                f"la lista {quotation.price_list_id}"
+            )
+        if not read.skus:
+            raise InvalidInputError("La plantilla no trae referencias")
+        in_file = {sku.upper() for sku in read.skus}
+        present = {line.sku.upper() for line in detail.lines}
+        gone = [line for line in detail.lines if line.sku.upper() not in in_file]
+        kept = len(detail.lines) - len(gone)
+        unknown = tuple(sku for sku in read.skus if sku.upper() not in present)
+        if gone and kept == 0:
+            raise InvalidInputError(
+                "La plantilla no deja ninguna referencia de la actualización; para no "
+                "actualizar la lista, retira la actualización"
+            )
+        removal = TemplateRemoval(
+            removed=tuple((line.sku, line.description) for line in gone),
+            unknown=unknown,
+            kept=kept,
+            applied=False,
+        )
+        if not apply:
+            return detail, removal
+        if not gone:
+            raise InvalidInputError(
+                "La plantilla trae todas las referencias: no hay nada que quitar"
+            )
+        lines = [line for line in detail.lines if line.sku.upper() in in_file]
+        excluded = tuple(dict.fromkeys([*quotation.excluded_skus, *(line.sku for line in gone)]))
+        changed = replace(self._touched(quotation, lines, principal.email), excluded_skus=excluded)
+        saved = await self.repository.save(changed, [], version, removed=[line.id for line in gone])
+        return saved, replace(removal, applied=True)
 
     # ------------------------------------------------------------ review
 

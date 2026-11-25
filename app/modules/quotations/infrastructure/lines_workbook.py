@@ -5,7 +5,10 @@ not see (the cost the rule uses, which source set it, the operation center, the 
 quotation, the inventory cost and a quotation left out), so BI can cross-check them against
 SIESA. Sheet ``Cotizacion``: the header (customer, list, centers, warehouse, cut-off).
 
-It is read-only reference: nothing is uploaded back. The workbook is written in
+BI's workbook is read-only reference: nothing is uploaded back. The list update template
+(2026-11-25) is the same workbook with the columns the advisors see and no costs; they delete
+the rows of the references to leave out and upload it back (:mod:`list_template_file`).
+The workbook is written in
 openpyxl's write-only mode (rows stream to the file, no cell objects kept in memory) and
 carries no formulas, validations or conditional formats, so it stays light to write and to
 open however many lines it has.
@@ -87,6 +90,40 @@ _COLUMNS: tuple[tuple[str, int, str | None, Any], ...] = (
 )
 
 
+# The list update template (2026-11-25): what the advisors see, no costs, in this order. The
+# advisors delete the rows of the references to leave out and upload it back.
+TEMPLATE_COLUMNS = (
+    "Referencia",
+    "Descripción",
+    "Categoría",
+    "Proveedor",
+    "Unidad",
+    "Estado",
+    "Origen",
+    "Fecha última venta",
+    "Último precio",
+    "Precio de lista",
+    "Margen actual con apoyo",
+    "Precio nuevo",
+    "Margen nuevo con apoyo",
+    "Variación",
+    "Apoyo",
+    "Alertas",
+)
+_TEMPLATE_WIDTHS = {
+    "Fecha última venta": 19,
+    "Margen actual con apoyo": 24,
+    "Margen nuevo con apoyo": 23,
+}
+_BY_TITLE = {column[0]: column for column in _COLUMNS}
+_TEMPLATE = tuple(
+    (title, _TEMPLATE_WIDTHS.get(title, width), fmt, read)
+    for title, width, fmt, read in (_BY_TITLE[name] for name in TEMPLATE_COLUMNS)
+)
+SKU_COLUMN = TEMPLATE_COLUMNS[0]
+LIST_ROW = "Lista de precios"
+
+
 def _center(code: str | None, names: Mapping[str, str | None]) -> str | None:
     if not code:
         return None
@@ -156,18 +193,30 @@ def _header_rows(quotation: Quotation, names: Mapping[str, str | None]) -> list[
 
 
 class QuotationLinesWorkbook:
-    """Writes BI's workbook of a quotation's lines and costs."""
+    """Writes BI's workbook of a quotation's lines and costs, or the list update template."""
 
-    def write(self, detail: QuotationDetail, center_names: Mapping[str, str | None]) -> bytes:
+    def write(
+        self,
+        detail: QuotationDetail,
+        center_names: Mapping[str, str | None],
+        template: bool = False,
+    ) -> bytes:
+        """The workbook; with ``template`` only :data:`TEMPLATE_COLUMNS` (no costs) and a
+        filter on the header, for the advisors to delete rows and upload it back."""
+
+        columns = _TEMPLATE if template else _COLUMNS
         book = Workbook(write_only=True)
         lines = book.create_sheet(LINES_SHEET)
-        for index, (_, width, _, _) in enumerate(_COLUMNS, start=1):
+        for index, (_, width, _, _) in enumerate(columns, start=1):
             lines.column_dimensions[get_column_letter(index)].width = width
         lines.freeze_panes = "B2"
-        lines.append([_bold(lines, title) for title, _, _, _ in _COLUMNS])
+        if template:
+            last = get_column_letter(len(columns))
+            lines.auto_filter.ref = f"A1:{last}{len(detail.lines) + 1}"
+        lines.append([_bold(lines, title) for title, _, _, _ in columns])
         for line in detail.lines:
             lines.append(
-                [_cell(lines, read(line, center_names), fmt) for _, _, fmt, read in _COLUMNS]
+                [_cell(lines, read(line, center_names), fmt) for _, _, fmt, read in columns]
             )
 
         header = book.create_sheet(HEADER_SHEET)
@@ -187,4 +236,11 @@ class QuotationLinesWorkbook:
         return buffer.getvalue()
 
 
-__all__ = ["HEADER_SHEET", "LINES_SHEET", "QuotationLinesWorkbook"]
+__all__ = [
+    "HEADER_SHEET",
+    "LINES_SHEET",
+    "LIST_ROW",
+    "SKU_COLUMN",
+    "TEMPLATE_COLUMNS",
+    "QuotationLinesWorkbook",
+]
