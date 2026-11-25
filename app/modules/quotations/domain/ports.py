@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
@@ -309,9 +310,34 @@ class OfferWriter(Protocol):
 
 
 class LinesWriter(Protocol):
-    """Turns every line of a quotation, with its costs, into a workbook for BI."""
+    """Turns every line of a quotation, with its costs, into a workbook for BI; with
+    ``template``, the list update template the advisors upload back (no costs)."""
 
-    def write(self, detail: QuotationDetail, center_names: Mapping[str, str | None]) -> bytes: ...
+    def write(
+        self,
+        detail: QuotationDetail,
+        center_names: Mapping[str, str | None],
+        template: bool = False,
+    ) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class TemplateContent:
+    """What an uploaded list update template says: its references, in the file's order and
+    once each, and the price list in its header (``None`` if the row is gone)."""
+
+    skus: tuple[str, ...]
+    price_list_id: str | None
+
+
+class TemplateReader(Protocol):
+    """Reads an uploaded list update template.
+
+    Raises:
+        InvalidInputError: It is not a workbook, or not the template.
+    """
+
+    def read(self, content: bytes) -> TemplateContent: ...
 
 
 class SupportRequestRef(Protocol):

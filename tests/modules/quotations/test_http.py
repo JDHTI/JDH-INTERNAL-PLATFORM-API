@@ -543,3 +543,37 @@ def test_people_outside_the_area_are_refused(client) -> None:
     assert client.get(f"{BASE}/permissions").json()["can_manage"] is False
     assert client.post(BASE, json={"customer_nit": NIT}).status_code == 403
     assert client.get(BASE).status_code == 403
+
+
+def test_list_template_contract(client) -> None:
+    created = client.post(f"{BASE}/list-updates", json={"price_list_id": "10U"})
+    assert created.status_code == 201 and created.json()["excluded_skus"] == []
+    url = f"{BASE}/{created.json()['id']}"
+
+    download = client.get(f"{url}/list-template.xlsx")
+    assert download.status_code == 200
+    assert "Plantilla%20MAYORISTAS%20CENTRO" in download.headers["content-disposition"]
+    book = load_workbook(io.BytesIO(download.content))
+    book["Lineas"].delete_rows(3)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    upload = {"file": ("plantilla.xlsx", buffer.getvalue())}
+
+    preview = client.post(f"{url}/list-template", files=upload, data={"version": "1"})
+    assert preview.status_code == 200
+    body = preview.json()
+    assert (body["removed_count"], body["kept"], body["applied"]) == (1, 1, False)
+    assert body["removed"][0]["sku"] == "26278" and body["quotation"] is None
+
+    applied = client.post(
+        f"{url}/list-template", files=upload, data={"version": "1", "apply": "true"}
+    )
+    assert applied.status_code == 200 and applied.json()["applied"] is True
+    assert applied.json()["quotation"]["excluded_skus"] == ["26278"]
+    assert [line["sku"] for line in applied.json()["quotation"]["lines"]] == ["2537"]
+
+    stale = client.post(f"{url}/list-template", files=upload, data={"version": "1"})
+    assert stale.status_code == 409
+    quotation = client.post(BASE, json={"customer_nit": NIT}).json()
+    other = client.get(f"{BASE}/{quotation['id']}/list-template.xlsx")
+    assert other.status_code == 422

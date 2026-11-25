@@ -400,6 +400,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `PUT` | `/v1/quotations/{quotation_id}/lines` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}/lines.xlsx` | `read` |  |
 | `DELETE` | `/v1/quotations/{quotation_id}/lines/{sku}` | `relaxed` |  |
+| `POST` | `/v1/quotations/{quotation_id}/list-template` | `relaxed` |  |
+| `GET` | `/v1/quotations/{quotation_id}/list-template.xlsx` | `read` |  |
 | `POST` | `/v1/quotations/{quotation_id}/local-lines` | `relaxed` |  |
 | `PATCH` | `/v1/quotations/{quotation_id}/offer` | `relaxed` |  |
 | `GET` | `/v1/quotations/{quotation_id}/offer.xlsx` | `read` |  |

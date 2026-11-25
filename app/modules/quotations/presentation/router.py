@@ -10,7 +10,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
@@ -686,6 +686,9 @@ class QuotationResponse(SummaryResponse):
     # The warehouse groups chosen inside the centers (2026-11-25), what the screen shows.
     # Empty with warehouses chosen one by one before that date.
     cost_warehouse_groups: list[WarehouseGroupResponse]
+    # A list update's references taken out with its template (2026-11-25); a refresh
+    # does not bring them back.
+    excluded_skus: list[str]
     # False when the list has its own warehouses (list 1 and the skill's) and no warehouse
     # was chosen: the centers then change only the liquor tax regional, not the cost.
     centers_set_cost: bool
@@ -991,6 +994,7 @@ def _detail(
             )
         ],
         cost_warehouse_groups=_warehouse_groups(quotation),
+        excluded_skus=list(quotation.excluded_skus),
         centers_set_cost=bool(quotation.cost_warehouses or quotation.promo_warehouses)
         or pricing.centers_set_cost(quotation.price_list_id),
         with_history=quotation.with_history,
@@ -2076,6 +2080,95 @@ async def lines_workbook(
 
     result = await service.lines_file(principal, quotation_id)
     return _file(result.content, result.filename, result.media_type)
+
+
+@router.get(
+    "/{quotation_id}/list-template.xlsx",
+    dependencies=[_READ_GATE],
+    response_class=Response,
+    responses={
+        200: {"content": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {}}}
+    },
+    summary="Download the list update template",
+)
+@inject
+async def list_template(
+    quotation_id: UUID,
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> Response:
+    """A list update's lines with what the advisors see and no costs (sheets ``Lineas`` and
+    ``Cotizacion``), with a filter on the header. Whoever reads the update; 422 on another
+    kind. Delete the rows of the references to leave out and upload it back."""
+
+    result = await service.list_template_file(principal, quotation_id)
+    return _file(result.content, result.filename, result.media_type)
+
+
+class RemovedReferenceResponse(BaseModel):
+    sku: str
+    description: str | None
+
+
+class TemplateUploadResponse(BaseModel):
+    """What the uploaded template leaves out of the list update.
+
+    ``removed``: the update's references no longer in the file. ``unknown``: the file's
+    references the update does not have (ignored). ``applied`` false is the preview:
+    nothing changed and ``quotation`` is ``null``; true, the lines are gone and
+    ``quotation`` is the update as it stands."""
+
+    removed: list[RemovedReferenceResponse]
+    removed_count: int
+    unknown: list[str]
+    unknown_count: int
+    kept: int
+    applied: bool
+    quotation: QuotationResponse | None = None
+
+
+@router.post(
+    "/{quotation_id}/list-template",
+    dependencies=[_READ_GATE],
+    response_model=TemplateUploadResponse,
+    summary="Upload the list update template without the references to leave out",
+    description=(
+        "multipart/form-data with `file` (the template, .xlsx), `version` and `apply` "
+        "(false: only say what would be removed; true: remove it)."
+    ),
+)
+@inject
+async def upload_list_template(
+    quotation_id: UUID,
+    file: UploadFile = File(...),  # noqa: B008
+    version: int = Form(ge=1),  # noqa: B008
+    apply: bool = Form(default=False),  # noqa: B008
+    principal: Principal = _principal,
+    service: QuotationService = _service,
+) -> TemplateUploadResponse:
+    """Only the ``Referencia`` column counts: every reference of the update missing from the
+    file leaves it (prices and other columns are ignored). Removed references stay out after
+    a refresh. Same editing rules as the lines: 409 on a stale version or a closed update.
+    422 on another kind, a file of another list, without references, too large or not the
+    template, one that leaves nothing, or ``apply`` with nothing to remove."""
+
+    # One byte over the limit is enough for the service to reject the file.
+    content = await file.read(service.template_max_bytes + 1)
+    detail, removal = await service.upload_list_template(
+        principal, quotation_id, version, content, apply
+    )
+    return TemplateUploadResponse(
+        removed=[
+            RemovedReferenceResponse(sku=sku, description=description)
+            for sku, description in removal.removed
+        ],
+        removed_count=len(removal.removed),
+        unknown=list(removal.unknown),
+        unknown_count=len(removal.unknown),
+        kept=removal.kept,
+        applied=removal.applied,
+        quotation=await _respond(principal, service, detail) if removal.applied else None,
+    )
 
 
 @router.get(

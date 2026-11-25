@@ -172,6 +172,7 @@ class QuotationModel(Base):
     warehouse_groups: Mapped[dict[str, list[str]]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
+    excluded_skus: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     billing_center_source: Mapped[str] = mapped_column(String(10), nullable=False, default="auto")
     billing_center_name: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
