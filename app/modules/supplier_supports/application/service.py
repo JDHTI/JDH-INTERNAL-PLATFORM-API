@@ -897,9 +897,9 @@ class SupplierSupportService:
             match (str): ``all`` (AND) or ``any`` (OR) for the top-level conditions.
             conditions (Sequence[Mapping[str, Any]] | None): Conditions or nested groups;
                 see :mod:`app.modules.supplier_supports.domain.filters`.
-            customer_nits (Sequence[str] | None): Base search by client NIT(s): their supports,
-                for the whole NIT or one of its branches, never a business group's
-                (2026-11-24).
+            customer_nits (Sequence[str] | None): Base search by client NIT(s), the general
+                one: their supports, for the whole NIT or one of its branches, and those of
+                their business groups, each once (2026-11-25).
             business_groups (Sequence[str] | None): Base search by business group: the
                 supports loaded for the whole group (2026-11-23).
             customer_branches (Sequence[tuple[str, str]] | None): Base search by NIT-sucursal:

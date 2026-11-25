@@ -131,10 +131,10 @@ async def test_a_group_support_covers_a_customer_that_joined_later(world) -> Non
     outside, _ = await repo.search(spec(salesperson_codes=(f"V{run}other",)))
     assert not {copy.id for copy in copies} & {row.support.id for row in outside}
 
-    # The base search by that customer is its own supports (2026-11-24); the group's support
-    # is found by the group, once.
+    # The base search by that customer brings its group's support too (2026-11-25), once:
+    # it has no copy of its own, so the lowest NIT's stands for it. By group, the same.
     found, _ = await repo.search(spec(customer_nits=(nits["late"],)))
-    assert found == []
+    assert {row.support.id for row in found} == {copies[0].id}
     by_group, _ = await repo.search(spec(business_groups=(group,)))
     assert {row.support.id for row in by_group} == {copies[0].id}
 
@@ -201,10 +201,16 @@ async def test_a_group_support_is_one_row_and_a_nit_support_stays_apart(world) -
         now,
     )
 
-    # By NIT (2026-11-24): its own supports, for the whole NIT and its branches, never the
-    # group's copy.
+    # By NIT, the general filter (2026-11-25): its own supports, for the whole NIT and its
+    # branches, and its group's once, by its own copy.
     by_nit, total = await repo.search(spec(customer_nits=(nits["b"],)))
-    assert {row.support.id for row in by_nit} == {own.id, branch.id} and total == 2
+    assert {row.support.id for row in by_nit} == {own.id, branch.id, copies[1].id}
+    assert total == 3
+    counts = await repo.state_counts(spec(customer_nits=(nits["b"],)))
+    assert counts["vigente"] == 3
+    # A NIT outside the group: none of the group's.
+    outside, _ = await repo.search(spec(customer_nits=(nits["other"],)))
+    assert not {copy.id for copy in copies} & {row.support.id for row in outside}
     # By NIT-sucursal: only that branch's.
     by_branch, _ = await repo.search(spec(customer_branches=((nits["b"], "001"),)))
     assert [row.support.id for row in by_branch] == [branch.id]

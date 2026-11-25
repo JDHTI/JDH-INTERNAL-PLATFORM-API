@@ -447,6 +447,8 @@ class LiquorOverviewResponse(BaseModel):
     coast_lists: list[str]
     # The caller changes the liquor tax and generates its files (``impuesto-licor: manage``).
     can_manage: bool = False
+    # Lists left out of the values, the flags and the changes (``LIQUOR_TAX_EXCLUDED_LISTS``).
+    excluded_lists: list[str] = []
 
 
 class LiquorChangeRequest(BaseModel):
@@ -589,6 +591,7 @@ async def liquor_taxes(
             for item in result.suspects
         ],
         coast_lists=list(result.coast_lists),
+        excluded_lists=list(result.excluded_lists),
         can_manage=result.can_manage,
     )
 

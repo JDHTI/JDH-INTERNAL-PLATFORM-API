@@ -35,6 +35,7 @@ from app.modules.commercial_masters.domain.margins import (
 from app.modules.commercial_masters.infrastructure.groups import (
     group_key,
     group_label,
+    groups_of_nits,
     groups_of_salespeople,
 )
 from app.modules.commercial_masters.infrastructure.models import (
@@ -455,11 +456,18 @@ def _one_copy(nits: Sequence[str] = (), enabled: bool = True) -> ColumnElement[b
 
 
 def _of_customers(nits: Sequence[str]) -> ColumnElement[bool]:
-    """The base search by customer (2026-11-24): the supports of these NITs, for the whole
-    NIT or one of its branches, never a business group's copy (the group has its own
-    filter)."""
+    """The base search by customer, the general one (2026-11-25): the supports of these NITs,
+    for the whole NIT or one of its branches, and those of their business groups. The group
+    and NIT-sucursal filters stay narrow: only the group, only the branch.
 
-    return and_(S.customer_nit.in_(list(nits)), S.group_wide.is_(False))
+    Each group's support comes once, by the copy of one of these NITs when there is one
+    (:func:`_one_copy` with the NITs, in :meth:`SqlAlchemySupportRepository._conditions`).
+    """
+
+    return or_(
+        and_(S.customer_nit.in_(list(nits)), S.group_wide.is_(False)),
+        _by_group(groups_of_nits(nits)),
+    )
 
 
 def _of_branches(pairs: Sequence[tuple[str, str]]) -> ColumnElement[bool]:
@@ -1107,8 +1115,9 @@ class SqlAlchemySupportRepository:
         if spec.business_groups:
             conditions.append(_of_groups(spec.business_groups, one_copy=one_copy))
         if one_copy and not spec.business_groups:
-            # Without a customer filter too, each business group's support shows once.
-            conditions.append(_one_copy())
+            # Without a customer filter too, each business group's support shows once; with
+            # NITs, by the copy of one of them.
+            conditions.append(_one_copy(spec.customer_nits))
         return conditions
 
     async def state_counts(self, spec: SearchSpec) -> dict[str, int]:

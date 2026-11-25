@@ -42,7 +42,7 @@ _STEP = Decimal("0.0001")
 class LiquorSource(Protocol):
     async def liquor_products(self, skus: Sequence[str] | None = None) -> list[LiquorProduct]: ...
 
-    async def liquor_suspects(self) -> list[LiquorSuspect]: ...
+    async def liquor_suspects(self, excluded_lists: Sequence[str] = ()) -> list[LiquorSuspect]: ...
 
 
 class LiquorMasters(Protocol):
@@ -70,6 +70,8 @@ class LiquorOverview:
     coast_lists: tuple[str, ...]
     # The caller is one of the collaborators who change the liquor tax.
     can_manage: bool = False
+    # Lists left out of the values, the flags and the changes (2026-11-25).
+    excluded_lists: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,7 @@ class LiquorTaxService:
         flat_file: ExportWriter,
         coast_lists: Sequence[str] = (),
         managers: ManagerPolicy | None = None,
+        excluded_lists: Sequence[str] = (),
     ) -> None:
         """Create the service.
 
@@ -107,6 +110,9 @@ class LiquorTaxService:
             workbook (ExportWriter): SIESA workbook (``Precios`` and ``Impuestos en valor``).
             flat_file (ExportWriter): SIESA import file (``0126`` and ``0127``).
             coast_lists (Sequence[str]): Lists that pay the Coast value.
+            excluded_lists (Sequence[str]): Lists left out entirely (25, EMP and PRM as of
+                2026-11-25): not in the national and Coast values, the flags, the lists of
+                a liquor nor the files of a change.
         """
 
         self.quotations = quotations
@@ -118,6 +124,15 @@ class LiquorTaxService:
         self.workbook = workbook
         self.flat_file = flat_file
         self.coast_lists = liquor.regional_lists(coast_lists)
+        self.excluded_lists = liquor.list_codes(excluded_lists)
+
+    async def _products(self, skus: Sequence[str] | None = None) -> list[LiquorProduct]:
+        """The liquors and their prices, without the excluded lists."""
+
+        return [
+            liquor.without_lists(product, self.excluded_lists)
+            for product in await self.source.liquor_products(skus)
+        ]
 
     async def can_manage(self, principal: Principal) -> bool:
         """Whether the caller is one of the collaborators who manage the liquor tax
@@ -140,7 +155,7 @@ class LiquorTaxService:
             raise ForbiddenError(message)
 
     async def _summaries(self, skus: Sequence[str] | None = None) -> list[LiquorSummary]:
-        products = await self.source.liquor_products(skus)
+        products = await self._products(skus)
         masters = await self.masters.products([product.sku for product in products])
         return [
             liquor.summarize(product, self.coast_lists, masters.get(product.sku))
@@ -151,12 +166,15 @@ class LiquorTaxService:
         """Every active liquor with its values per list, and the liquors without a key."""
 
         await self._require(principal, "read")
-        summaries, suspects = await asyncio.gather(self._summaries(), self.source.liquor_suspects())
+        summaries, suspects = await asyncio.gather(
+            self._summaries(), self.source.liquor_suspects(sorted(self.excluded_lists))
+        )
         return LiquorOverview(
             tuple(summaries),
             tuple(suspects),
             tuple(sorted(self.coast_lists)),
             await self.can_manage(principal),
+            tuple(sorted(self.excluded_lists)),
         )
 
     async def create(
@@ -216,7 +234,7 @@ class LiquorTaxService:
         text = " ".join((note or "").split()) or None
         if text is not None and len(text) > liquor.NOTE_LENGTH:
             raise InvalidInputError(f"La nota admite máximo {liquor.NOTE_LENGTH} caracteres")
-        products = {product.sku: product for product in await self.source.liquor_products(skus)}
+        products = {product.sku: product for product in await self._products(skus)}
         export = liquor.export_rows(products, rows, self.coast_lists)
         if not export:
             raise InvalidInputError("Ninguna lista activa tiene precio para estos productos")

@@ -19,6 +19,10 @@ from app.modules.quotations.domain.entities import QuotationLine
 REVIEW_CHIPS = ("sin_marcar", "por_validar", "validada", "cargada")
 MARGIN_CHIPS = ("alza", "objetivo", "encima", "alerta")
 CHIPS = REVIEW_CHIPS + MARGIN_CHIPS
+# Where the new price leaves the list's current one (2026-11-25): up, down, or the same (or no
+# new price). A row without a current price is in none: it is «sin precio».
+TRENDS = ("sube", "baja", "estable")
+NO_LIST_PRICE = "sin_precio"
 # Half a point of room either way around the target (decided 2026-11-12).
 TARGET_TOLERANCE = Decimal("0.005")
 # Least increase that makes a row an «alza»: under 1 % of the current price it is on target
@@ -41,13 +45,15 @@ MAX_KEYS = 10_000
 @dataclass(frozen=True)
 class BoardFilter:
     """What the board shows: lists (none is every one), text, suppliers, categories, one
-    chip, and the order."""
+    chip, the trend of the new price, only the rows without a list price, and the order."""
 
     lists: tuple[str, ...] = ()
     q: str | None = None
     suppliers: tuple[str, ...] = ()
     categories: tuple[str, ...] = ()
     chip: str | None = None
+    trend: str | None = None
+    without_list_price: bool = False
     sort: str = "lista"
     descending: bool = False
 
@@ -94,8 +100,9 @@ class BoardPage:
     total: int
     page: int
     size: int
-    # Rows of each chip under the other filters (lists, text, suppliers, categories), and
-    # ``todos``: every row under those filters.
+    # Rows of each chip under every filter but the chip; of each trend (``sube``, ``baja``,
+    # ``estable``) and ``sin_precio``, one group of options, under every filter but that
+    # group; and ``todos``: every row under the filters but the chip.
     counts: dict[str, int]
 
 
@@ -105,7 +112,9 @@ __all__ = [
     "MAX_KEYS",
     "MAX_PAGE_SIZE",
     "MIN_INCREASE",
+    "NO_LIST_PRICE",
     "REVIEW_CHIPS",
+    "TRENDS",
     "SORTS",
     "TARGET_TOLERANCE",
     "BoardFilter",

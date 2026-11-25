@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -182,6 +182,25 @@ class LiquorTaxUpdate:
 
 def regional_lists(coast_lists: Iterable[str]) -> frozenset[str]:
     return frozenset(code.strip() for code in coast_lists if code.strip())
+
+
+def list_codes(codes: Iterable[str]) -> frozenset[str]:
+    """List codes to compare however they are written (``emp`` is ``EMP``)."""
+
+    return frozenset(code.strip().upper() for code in codes if code.strip())
+
+
+def without_lists(product: LiquorProduct, excluded: frozenset[str]) -> LiquorProduct:
+    """The liquor without its prices on ``excluded`` (:func:`list_codes`; 25, EMP and PRM
+    as of 2026-11-25): they do not count in its values, its flags, its lists nor the files
+    of a change."""
+
+    if not excluded:
+        return product
+    kept = tuple(
+        price for price in product.prices if price.price_list_id.strip().upper() not in excluded
+    )
+    return product if len(kept) == len(product.prices) else replace(product, prices=kept)
 
 
 def _values(prices: Sequence[LiquorListPrice]) -> tuple[TaxValue, ...]:

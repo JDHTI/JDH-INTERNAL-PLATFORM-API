@@ -989,6 +989,7 @@ class V1Container(containers.DeclarativeContainer):
         workbook=quotation_workbook_writer,
         flat_file=quotation_flat_file_writer,
         coast_lists=config.quotations.coast_lists,
+        excluded_lists=config.quotations.liquor_excluded_lists,
         # The few collaborators who change the liquor tax: ``manage`` on ``impuesto-licor``.
         managers=providers.Factory(
             PermissionPolicy,

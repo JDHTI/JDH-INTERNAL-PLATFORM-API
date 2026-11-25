@@ -57,7 +57,8 @@ class FakeLiquorSource:
     async def liquor_products(self, skus=None):
         return [item for item in self.products if skus is None or item.sku in skus]
 
-    async def liquor_suspects(self):
+    async def liquor_suspects(self, excluded_lists=()):
+        self.suspects_excluded = tuple(excluded_lists)
         return [LiquorSuspect("16438", "Ron Medellín 375", "0507", "IVA 5% LICORES", 0)]
 
 
@@ -169,6 +170,52 @@ async def test_a_bulk_change_has_its_files_at_once_with_each_regional(
 
     assert uploaded.status == "cargada"
     assert masters_liquor.written == [{"18973": (Decimal(4200), Decimal(4300), "0509")}]
+
+
+async def test_the_lists_left_out_never_count(service, masters_liquor) -> None:
+    """2026-11-25: lists 25, EMP and PRM are not in the values, the flags, the lists of a
+    liquor nor the files of a change, however their code is written."""
+
+    source = FakeLiquorSource()
+    juniper = source.products[0]
+    source.products[0] = LiquorProduct(
+        juniper.sku,
+        juniper.description,
+        juniper.tax_key,
+        juniper.tax_key_name,
+        juniper.tax_group,
+        (
+            *juniper.prices,
+            _price("25", "9999"),
+            _price("emp", None),
+            _price("PRM", "1"),
+        ),
+    )
+    taxes = LiquorTaxService(
+        quotations=service,
+        source=source,
+        masters=masters_liquor,
+        repository=FakeLiquorRepository(),
+        calendar=FixedCalendar(),
+        workbook=PriceListWorkbookWriter(),
+        flat_file=SiesaPriceFileWriter(),
+        coast_lists=COAST,
+        managers=FakeManagers([LIQUOR_MANAGER]),
+        excluded_lists=("25", "EMP", " prm "),
+    )
+
+    overview = await taxes.overview(person(MAIN_MANAGER))
+
+    summary = overview.summaries[0]
+    listed = {code for value in summary.national_values for code in value.lists}
+    assert listed == {"1", "77X", "88Z"} and summary.lists_with_price == 5
+    assert overview.excluded_lists == ("25", "EMP", "PRM")
+    assert source.suspects_excluded == ("25", "EMP", "PRM")
+    change = await taxes.create(
+        person(LIQUOR_MANAGER), [ChangeInput("18973", "4200", "4300")], None
+    )
+    assert {row["price_list_id"] for row in change.export_rows} == {"1", "004", "11N", "77X", "88Z"}
+    assert change.changes[0].lists == 5
 
 
 async def test_only_the_liquor_tax_collaborators_change_it(taxes) -> None:

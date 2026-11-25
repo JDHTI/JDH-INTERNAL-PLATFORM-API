@@ -219,15 +219,17 @@ class WarehouseInsightSource(WarehouseQuotationSource):
             for sku, entry in products.items()
         ]
 
-    async def liquor_suspects(self) -> list[LiquorSuspect]:
+    async def liquor_suspects(self, excluded_lists: Sequence[str] = ()) -> list[LiquorSuspect]:
         """Active products of a liquor tax group without the liquor key (12 in group 0507
-        on 2026-11-12), with the lists that still carry a value for them."""
+        on 2026-11-12), with the lists that still carry a value for them, not counting
+        ``excluded_lists`` (upper case)."""
 
         rows = await self._fetch(
             'SELECT p."sku", p."descripcion", p."grupo_impositivo_id", p."grupo_impositivo",'
             " (SELECT count(*) FROM"
             f' {self._view("precios_lista_vigentes")} v WHERE v."producto_key" = p."producto_key"'
-            ' AND v."es_unidad_inventario" AND v."impoconsumo_valor" > 0) AS con_valor'
+            ' AND v."es_unidad_inventario" AND v."impoconsumo_valor" > 0'
+            ' AND NOT upper(trim(v."lista_precio_id")) = ANY($3::text[])) AS con_valor'
             f" FROM {self._view('productos')} p"
             ' WHERE p."estado" = \'A\' AND p."grupo_impositivo_id" = ANY($1::text[])'
             " AND NOT EXISTS (SELECT 1 FROM"
@@ -236,6 +238,7 @@ class WarehouseInsightSource(WarehouseQuotationSource):
             ' ORDER BY p."sku"',
             list(LIQUOR_GROUPS),
             LIQUOR_CLASS,
+            [code.strip().upper() for code in excluded_lists if code.strip()],
         )
         return [
             LiquorSuspect(

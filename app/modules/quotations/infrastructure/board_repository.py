@@ -7,12 +7,13 @@ from collections.abc import Sequence
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, bindparam, case, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, bindparam, case, func, or_, select, true, update
 
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.board import (
     MAX_KEYS,
     MIN_INCREASE,
+    NO_LIST_PRICE,
     TARGET_TOLERANCE,
     BoardFilter,
     BoardKey,
@@ -56,6 +57,15 @@ _CHIP_CONDITIONS = {
         or_(L.below_target, L.cost.is_(None), L.problems.contains(["precio_marcador"])),
     ),
 }
+# The new price against the list's current one (2026-11-25). Without a current price a row is
+# in none of them: it is «sin precio».
+_PRICED = L.last_price.is_not(None)
+_TREND_CONDITIONS = {
+    "sube": and_(_PRICED, L.new_price.is_not(None), L.new_price > L.last_price),
+    "baja": and_(_PRICED, L.new_price.is_not(None), L.new_price < L.last_price),
+    "estable": and_(_PRICED, or_(L.new_price.is_(None), L.new_price == L.last_price)),
+}
+_NO_LIST_PRICE = L.last_price.is_(None)
 _SORT_COLUMNS = {
     "sku": (L.sku,),
     "precio_actual": (L.last_price,),
@@ -68,6 +78,25 @@ _SORT_COLUMNS = {
 
 def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _facets(board: BoardFilter) -> tuple[ColumnElement[bool], ...]:
+    """The chip, the trend and «sin precio» of the filter, each ``true`` when not set."""
+
+    return (
+        _CHIP_CONDITIONS[board.chip] if board.chip else true(),
+        _TREND_CONDITIONS[board.trend] if board.trend else true(),
+        _NO_LIST_PRICE if board.without_list_price else true(),
+    )
+
+
+def _zero_counts() -> dict[str, int]:
+    return {
+        **{chip: 0 for chip in _CHIP_CONDITIONS},
+        **{trend: 0 for trend in _TREND_CONDITIONS},
+        NO_LIST_PRICE: 0,
+        "todos": 0,
+    }
 
 
 class SqlAlchemyBoardRepository:
@@ -123,18 +152,20 @@ class SqlAlchemyBoardRepository:
     async def rows(
         self, quotation_ids: Sequence[UUID], board: BoardFilter, page: int, size: int
     ) -> tuple[list[BoardRow], int, dict[str, int]]:
-        """One page of the board, its total and the rows of each chip.
+        """One page of the board, its total and the rows of each chip, trend and
+        «sin precio».
 
-        The chips are counted under every filter but the chip itself, so each one says how
-        many rows it would show.
+        Each one is counted under every filter but its own group, so each says how many rows
+        it would show: the chips without the chip; the trends and «sin precio», one group of
+        options, without the trend nor «sin precio». ``todos`` is every row under the
+        filters but the chip.
         """
 
         if not quotation_ids:
-            return [], 0, {**{chip: 0 for chip in _CHIP_CONDITIONS}, "todos": 0}
+            return [], 0, _zero_counts()
         base = self._base(quotation_ids, board)
-        filtered = list(base)
-        if board.chip:
-            filtered.append(_CHIP_CONDITIONS[board.chip])
+        chip, trend, unpriced = _facets(board)
+        filtered = [*base, chip, trend, unpriced]
         sort = _SORT_COLUMNS.get(board.sort)
         if sort:
             order = [
@@ -148,11 +179,18 @@ class SqlAlchemyBoardRepository:
             counts_row = (
                 await session.execute(
                     select(
-                        func.count().label("todos"),
+                        func.count().filter(and_(trend, unpriced)).label("todos"),
                         *(
-                            func.count().filter(condition).label(chip)
-                            for chip, condition in _CHIP_CONDITIONS.items()
+                            func.count().filter(and_(condition, trend, unpriced)).label(name)
+                            for name, condition in _CHIP_CONDITIONS.items()
                         ),
+                        # The trends and «sin precio» are one group of options: counted
+                        # under the chip and the rest, not under any of them.
+                        *(
+                            func.count().filter(and_(condition, chip)).label(name)
+                            for name, condition in _TREND_CONDITIONS.items()
+                        ),
+                        func.count().filter(and_(_NO_LIST_PRICE, chip)).label(NO_LIST_PRICE),
                     )
                     .select_from(L)
                     .join(Q, Q.id == L.quotation_id)
@@ -189,8 +227,7 @@ class SqlAlchemyBoardRepository:
             )
             for line, quotation_id, version, list_id, list_name in found
         ]
-        counts = {chip: int(getattr(counts_row, chip) or 0) for chip in _CHIP_CONDITIONS}
-        counts["todos"] = int(counts_row.todos or 0)
+        counts = {name: int(getattr(counts_row, name) or 0) for name in _zero_counts()}
         return rows, int(total), counts
 
     async def keys(self, quotation_ids: Sequence[UUID], board: BoardFilter) -> list[BoardKey]:
@@ -198,9 +235,7 @@ class SqlAlchemyBoardRepository:
 
         if not quotation_ids:
             return []
-        conditions = self._base(quotation_ids, board)
-        if board.chip:
-            conditions.append(_CHIP_CONDITIONS[board.chip])
+        conditions = [*self._base(quotation_ids, board), *_facets(board)]
         async with self.database.session_factory() as session:
             found = (
                 await session.execute(

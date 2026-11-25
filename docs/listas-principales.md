@@ -35,6 +35,20 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   chip: revisión (`sin_marcar`, `por_validar`, `validada`, `cargada`) o margen (`alza`, `objetivo`,
   `encima`, `alerta`, con ±0,5 puntos). Cada chip trae cuántas filas mostraría con los demás
   filtros; `todos`, el total.
+- **Tendencia y sin precio** (2026-11-25), combinables con el chip y los demás filtros, también
+  en `/main/keys`:
+  - `trend` compara el precio nuevo con el precio actual de la lista:
+    - `sube`: el nuevo es mayor;
+    - `baja`: el nuevo es menor;
+    - `estable`: igual, o sin precio nuevo.
+  - Una fila sin precio actual no entra en ninguna tendencia: está en `without_list_price=true`
+    (sin precio de lista, o con el precio marcador de $1).
+  - Como el tablero ya deja fuera lo que no tiene existencia, en la práctica es «con existencia
+    y sin precio».
+  - Conteos `sube`, `baja`, `estable` y `sin_precio`:
+    - son un solo grupo de opciones, así que se cuentan con todos los filtros menos la
+      tendencia y «sin precio»;
+    - los chips se cuentan con la tendencia y «sin precio» puestos.
 - **Reglas del 2026-11-23:**
   - **Solo lo que tiene existencia:** una fila que la sincronización leyó en 0 no aparece en el
     tablero, ni en los conteos ni en «todas las filas del filtro». Una cuyo inventario no se leyó
@@ -75,6 +89,7 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
 | Impuesto licor | `impuesto-licor`, también bloqueado a `bi`, sin pantalla propia: su `manage` cambia el impuesto y genera el plano, sin validación |
 | Listas | `LIST_UPDATES_MAIN_LISTS` = `1,001,002,003,004,005,009,1M,10T,10U,11N,10N,1DR,35P` (códigos exactos de SIESA) |
 | Regional del impuesto licor | `LIQUOR_TAX_COAST_LISTS` = `004,11N,22N,36J,46V` pagan el valor Costa; el resto, el Nacional |
+| Listas fuera del impuesto licor | `LIQUOR_TAX_EXCLUDED_LISTS` = `25,EMP,PRM` (2026-11-25): no cuentan en los valores, en lo que no cuadra, en las listas del licor ni en los archivos del cambio masivo |
 | Migraciones | `0059_main_lists_review`, `0060_main_lists_stock` |
 | Validado contra el DWH | 2026-11-12 ([cotizador-dwh.md](cotizador-dwh.md) §10) |
 
@@ -122,6 +137,11 @@ Aparte trae los **licores sin llave** (`suspects`): productos activos de un grup
 licores (`0503`, `0507`, `0509`) sin la llave de la clase 99. Eran 12 del grupo 0507 el
 2026-11-12; el área decide si deben llevarla.
 
+**Listas que no cuentan** (2026-11-25): 25, EMP y PRM (`LIQUOR_TAX_EXCLUDED_LISTS`, se comparan en
+mayúsculas). No entran en los valores Nacional y Costa, en lo que no cuadra, en las listas de cada
+licor (`lists_with_price`), en el conteo de los licores sin llave, ni en las filas y archivos de un
+cambio masivo. La pantalla las recibe en `excluded_lists`.
+
 ### Cambio masivo
 
 **No pasa por validación.** Lo administran unos colaboradores puntuales (`impuesto-licor: manage`),
@@ -155,7 +175,7 @@ La revisión por ítem, el staging y las cargas son los de
 | --- | --- |
 | `GET /main` | las 14 listas, armadas o no, con sus conteos, los proveedores y categorías para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
 | `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
-| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip |
+| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio` |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
 | `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos (pasan a `por_validar`); `null` lo borra. Trae las filas como quedaron (`rows`) |
 | `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas (sin `rows`: pueden ser 10.000) |
