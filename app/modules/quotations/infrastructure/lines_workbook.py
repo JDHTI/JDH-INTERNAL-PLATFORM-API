@@ -144,7 +144,11 @@ def _header_rows(quotation: Quotation, names: Mapping[str, str | None]) -> list[
         ("Canal", quotation.channel),
         ("C.O. del costo", _centers(quotation, names)),
         ("Bodega", quotation.stock_source),
-        ("Regional", vocabulary.REGIONAL_LABELS.get(quotation.regional, quotation.regional)),
+        # The liquor tax one (Nacional or Costa), not the center's regional.
+        (
+            "Regional impuesto licores",
+            vocabulary.REGIONAL_LABELS.get(quotation.regional, quotation.regional),
+        ),
         ("Costo al corte", quotation.cost_cut_date),
         ("Armada", quotation.built_at),
         ("Referencias", quotation.line_count),

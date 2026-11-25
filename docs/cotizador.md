@@ -64,10 +64,17 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      (`centers_set_cost: false`): el CO decide las bodegas de las listas fuera de la tabla y de un
      cliente temporal.
    - **Bodegas dentro de un CO** (2026-11-20): al elegir uno o varios CO se pueden marcar, en
-     cada uno, sus **bodegas principales** (`BP`) o de **solicitudes puntuales** (`BSP`), una o
-     varias (`cost_warehouses` en `PATCH /billing-center`). La lista sale del maestro de bodegas
-     de SIESA (`consumo.bodegas.clasificacion_bodega`, filtrado por el código, nunca por la
-     descripción) y llega con cada CO en `GET /billing-centers`; no está fija en el código.
+     cada uno, sus **bodegas principales** (`BP`) o de **solicitudes puntuales** (`BSP`). La
+     lista sale del maestro de bodegas de SIESA (`consumo.bodegas.clasificacion_bodega`,
+     filtrado por el código, nunca por la descripción) y llega con cada CO en
+     `GET /billing-centers`; no está fija en el código.
+     - **Solo por grupos** (2026-11-25): la pantalla muestra los grupos (principales,
+       solicitudes puntuales, promocionales), no cada bodega (`cost_warehouse_groups` en
+       `PATCH /billing-center`). El API abre cada grupo en sus bodegas y guarda las dos cosas:
+       el grupo (`warehouse_groups`, lo que vuelve en `cost_warehouse_groups`) y el desglose
+       (`cost_warehouses`, `promo_warehouses`), que es lo que costea. Unas bodegas sueltas que
+       dejan un grupo a medias dan 422. Una cotización con bodegas marcadas una por una antes
+       de ese día conserva su desglose.
      - Un CO con bodegas marcadas toma el costo y las existencias **solo de esas**: el mayor
        costo con existencia entre ellas (la misma regla del paso 3). Las referencias
        `CONGELADOS` y `REFRIGERADOS` leen la cava del CO si se marcó; el resto, las demás
@@ -171,6 +178,11 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
    márgenes según la **regional**: **Costa** si alguno de los CO del costo es el `004`; con
    Nacional, la del CO que factura; Nacional para el resto (`regional` en la cabecera). El IVA no
    se muestra ni se suma.
+   - Esa es la regional **del impuesto**, solo Costa o Nacional. La regional del CO elegido
+     (Antioquia, Oriente…) es otra: viene del maestro de CO (`regional_name` en
+     `GET /billing-centers`) y es la que muestra la tarjeta del CO (2026-11-25; antes la
+     tarjeta mostraba la del impuesto y un CO de Antioquia u Oriente salía «Nacional»). En la
+     plantilla de BI la fila se llama «Regional impuesto licores».
 6. **Margen objetivo Listas de Unidad Negocio** (reglas v2, 2026-11-17): el margen óptimo del
    producto en la lista del cliente, igual en el validador y el maestro de apoyos
    (`customer_margin_field`), en este orden:
@@ -581,7 +593,7 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/rules` | Reglas vigentes por secciones (`precio`, `margen`, `regla`, `formato`) |
 | `GET /quotations/customers` | Clientes para cotizar: `scope=mine` (defecto) o `all`, `q`, `page`, `size` (≤ 100) |
 | `POST /quotations` | `{customer_nit, window_months: 6 \| 12, validity_days?: 1..365 (15), billing_center_code?, with_history?: true}` (`with_history: false` empieza vacía) o, para un cliente temporal, `{temporary_customer: {name, legal_name, trade_name?, nit?}, billing_center_code, window_months?, validity_days?}` → 201 con la cotización (borrador). 422 si llegan los dos, ninguno, falta el CO del cliente temporal o el CO no existe |
-| `GET /quotations/billing-centers` | `[{code, name, regional, regional_label, warehouses: [{code, name, classification: BP \| BSP \| PROMO, classification_label}]}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`); `warehouses`, las bodegas principales, de solicitudes puntuales y promocionales activas de cada CO (`consumo.bodegas`), vacío si no tiene o si el maestro no responde (sus vistas se recrean hacia las 07:30) |
+| `GET /quotations/billing-centers` | `[{code, name, regional, regional_label, regional_code, regional_name, warehouses: [{code, name, classification: BP \| BSP \| PROMO, classification_label}]}]`: los CO activos del maestro `centros-operacion` (`consumo.centros_operacion`), por código; `regional` es la del impuesto de licores (`costa` para `004`) y `regional_name` la regional del CO en el maestro (`desc_regional`: Antioquia, Oriente…); `warehouses`, las bodegas principales, de solicitudes puntuales y promocionales activas de cada CO (`consumo.bodegas`), vacío si no tiene o si el maestro no responde (sus vistas se recrean hacia las 07:30) |
 | `GET /quotations` | `mine` (defecto `true`; quien valida usa `mine=false`), `status` (`borrador`, `pendiente_validacion`, `pendiente_carga`, `cargada`), `customer_nit`, `q`, `page`, `size` |
 | `GET /quotations/{id}` | Cotización completa |
 | `PUT /quotations/{id}/lines` | `{version, lines: [{sku, new_price?, margin_pct?, quantity?}]}`. `quantity` (texto o número; `null` la quita) va sola o con `new_price`, nunca con `margin_pct`. Un lote con **solo** cantidades se acepta en cualquier estado, no cambia el estado y sube la versión; uno que toca precios sigue las reglas de siempre. `new_price: null` quita el precio; `margin_pct` (fracción) le pone a esa referencia el precio de ese margen: así se lleva una **selección** a un margen estándar. Las que no se pueden calcular (sin costo, o un producto solo para cotización) vuelven en `skipped: [{sku, reason}]`; 422 si ninguna. 409 por versión o si está pendiente de validación |
@@ -590,7 +602,7 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `DELETE /quotations/{id}/lines/{sku}?version=N` | Quita una referencia **agregada**, **inactiva** o **solo para cotización** |
 | `PATCH /quotations/{id}/offer` | `{version, validity_days?, conditions?, include_seller?, quote_quantities?, offer_scope?: changed \| all, include_variation?}`: solo cambian las llaves enviadas (`null` deja el valor). En borrador o pendiente de validación y sin cambiar el estado; 409 si está cerrada. Sube la versión; 409 por versión. Una vigencia nueva empieza hoy |
 | `GET /quotations/{id}/offer.xlsx` | La oferta para el cliente, en cualquier estado, para quien puede leer la cotización |
-| `PATCH /quotations/{id}/billing-center` | `{version, national: true}` (Nacional) o `{version, cost_centers: [...], cost_warehouses?: [...]}` (uno o varios CO, y si se quiere bodegas BP/BSP o promocionales de esos CO; `billing_center_code` sigue sirviendo para uno): fija el CO del costo (`manual`) y recalcula regional, bodegas, costo, impuesto de licores, objetivo, mínimo, óptimo, márgenes, cumplimiento y existencias de cada línea; conserva precios nuevos, cantidades y productos locales. Mismas reglas que `/refresh` (vuelve a borrador; 409 por versión o pendiente de validación). 422 si un CO no existe o está inactivo, si llega Nacional con CO o bodegas, ninguno de los dos, o una bodega que no es BP/BSP ni promocional de los CO elegidos |
+| `PATCH /quotations/{id}/billing-center` | `{version, national: true}` (Nacional) o `{version, cost_centers: [...], cost_warehouse_groups?: [{center_code, classification: BP \| BSP \| PROMO}]}` (uno o varios CO, y si se quiere grupos de bodegas de esos CO; `cost_warehouses` una por una sigue sirviendo si forman grupos completos, y `billing_center_code` para un CO): fija el CO del costo (`manual`) y recalcula regional, bodegas, costo, impuesto de licores, objetivo, mínimo, óptimo, márgenes, cumplimiento y existencias de cada línea; conserva precios nuevos, cantidades y productos locales. Mismas reglas que `/refresh` (vuelve a borrador; 409 por versión o pendiente de validación). 422 si un CO no existe o está inactivo, si llega Nacional con CO o bodegas, ninguno de los dos, una bodega que no es BP/BSP ni promocional de los CO elegidos, un grupo que el CO no tiene o bodegas que dejan un grupo a medias |
 | `POST /quotations/{id}/refresh` | `{version}`: reconstruye desde el DWH conservando los precios nuevos y el CO del costo elegido; los productos solo para cotización quedan iguales, al final. Un cliente temporal no tiene ventas: se recalculan sus líneas |
 | `POST /quotations/{id}/confirm` | `{version, list_action?, new_list_name?, activation_date?}` → `pendiente_validacion`. La regla no bloquea; 422 si no hay ninguna línea activa con precio nuevo, si la lista 1 o un cliente temporal se quiere actualizar, o la fecha es anterior a hoy. Ya no recibe `price_list_id` |
 | `POST /quotations/{id}/return` | `{version, note}` → `borrador`. Quien valida debe escribir la nota |
@@ -599,7 +611,7 @@ Decimales en texto; márgenes y variación como fracción (`0.18` = 18 %).
 | `GET /quotations/{id}/export.xlsx` | El Excel (solo `pendiente_carga`/`cargada`; si no, 409) |
 | `GET /quotations/{id}/export.txt` | El plano SIESA (solo `pendiente_carga`/`cargada`; si no, 409) |
 | `GET /quotations/{id}/lines.xlsx` | La plantilla de BI: cada línea con sus costos (también el alza pendiente), en cualquier estado. Solo quien valida (403 para el resto) |
-| `GET /quotations/{id}/cost-centers/compare?codes=001&codes=003&warehouses=MDE4` | `{highest}`: el CO que más cuesta para las referencias de la cotización (mayor suma de costos unitarios), cada uno con sus bodegas marcadas (`warehouses`, opcional), o `null` si empatan o la lista tiene bodegas propias y no se marcó ninguna. Para quien lee la cotización: sin montos. 422 con menos de dos CO, uno inexistente o una bodega fuera de ellos |
+| `GET /quotations/{id}/cost-centers/compare?codes=001&codes=003&groups=001:BSP` | `{highest}`: el CO que más cuesta para las referencias de la cotización (mayor suma de costos unitarios), cada uno con sus grupos de bodegas marcados (`groups`, `C.O.:grupo`, opcional; `warehouses` una por una si forman grupos completos), o `null` si empatan o la lista tiene bodegas propias y no se marcó ninguna. Para quien lee la cotización: sin montos. 422 con menos de dos CO, uno inexistente, un grupo mal escrito o fuera de ellos |
 | `DELETE /quotations/{id}` | 204. Quien la creó o un administrador |
 
 **Resumen** (lista): `id, customer_nit, customer_name, channel, price_list_id, window_months,
@@ -611,7 +623,10 @@ valid_until, is_temporary_customer, temporary_customer: {name, legal_name, trade
 
 **Cotización completa**: el resumen más `channel_code, price_list_name, price_list_customers,
 billing_center_code, billing_center_name, cost_centers (vacío = Nacional), cost_warehouses
-(bodegas marcadas dentro de los CO, en el orden de los CO), centers_set_cost,
+(bodegas marcadas dentro de los CO, en el orden de los CO: el desglose de los grupos),
+cost_warehouse_groups: [{center_code, classification, classification_label}] (los grupos
+marcados, lo que muestra la pantalla; vacío si se marcaron una por una antes del 2026-11-25),
+centers_set_cost,
 with_history,
 billing_center_source: auto | manual, regional,
 regional_label, price_family, price_family_label, stock_source, salesperson_code,

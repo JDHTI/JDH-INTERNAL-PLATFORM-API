@@ -106,7 +106,7 @@ async def test_chosen_warehouses_cost_and_stock_each_center(
     service, advisor, warehouse, masters
 ) -> None:
     national_customer(warehouse, masters)
-    warehouse.plan_costs["MDE1,MDE4"] = {
+    warehouse.plan_costs["MDE1,MDE3,MDE4"] = {
         "2537": cost("2537", inventory="3400", **SNAPSHOT),
         "26278": cost("26278", inventory="900", **SNAPSHOT),
     }
@@ -114,34 +114,41 @@ async def test_chosen_warehouses_cost_and_stock_each_center(
     warehouse.calls.clear()
 
     changed = await service.set_billing_center(
-        advisor, created.quotation.id, 1, ["003", "001"], ["mde4", "MDE1"]
+        advisor,
+        created.quotation.id,
+        1,
+        ["003", "001"],
+        groups=[("001", "bsp"), (" 001", "BP")],
     )
 
     quotation = changed.quotation
     assert quotation.cost_centers == ("001", "003")
-    assert quotation.cost_warehouses == {"001": ("MDE1", "MDE4")}
+    # The groups open into their warehouses; both are kept, in the master's order.
+    assert quotation.warehouse_groups == {"001": ("BP", "BSP")}
+    assert quotation.cost_warehouses == {"001": ("MDE1", "MDE3", "MDE4")}
     plans = [call[2] for call in warehouse.calls if call[0] == "costs"]
-    assert [plan.selected for plan in plans] == [("MDE1", "MDE4"), ()]
+    assert [plan.selected for plan in plans] == [("MDE1", "MDE3", "MDE4"), ()]
     # Each line keeps the costliest center, now with 001 read from its chosen warehouses.
     by_sku = {line.sku: line for line in changed.lines}
     assert (by_sku["2537"].cost_center, by_sku["2537"].inventory_cost) == ("001", 3400)
     assert (by_sku["26278"].cost_center, by_sku["26278"].inventory_cost) == ("003", 1200)
     stock = [call for call in warehouse.calls if call[0] == "stock"]
-    assert stock[-1][1] == ("MDE1", "MDE4", "BTA9", "BTA8", "BTA20")
-    assert quotation.stock_source.startswith("Mayor costo entre C.O. 001: Bodegas MDE1, MDE4")
+    assert stock[-1][1] == ("MDE1", "MDE3", "MDE4", "BTA9", "BTA8", "BTA20")
+    assert quotation.stock_source.startswith("Mayor costo entre C.O. 001: Bodegas MDE1, MDE3, MDE4")
 
     # A refresh keeps the choice; choosing centers again without warehouses clears it.
     refreshed = await service.refresh(advisor, quotation.id, 2)
-    assert refreshed.quotation.cost_warehouses == {"001": ("MDE1", "MDE4")}
+    assert refreshed.quotation.cost_warehouses == {"001": ("MDE1", "MDE3", "MDE4")}
+    assert refreshed.quotation.warehouse_groups == {"001": ("BP", "BSP")}
     cleared = await service.set_billing_center(advisor, quotation.id, 3, ["001", "003"])
-    assert cleared.quotation.cost_warehouses == {}
+    assert cleared.quotation.cost_warehouses == {} and cleared.quotation.warehouse_groups == {}
 
 
 async def test_promotional_warehouses_join_the_center_and_the_highest_cost_wins(
     service, advisor, warehouse, masters
 ) -> None:
     national_customer(warehouse, masters)
-    warehouse.plan_costs["MDE1+MDE27"] = {
+    warehouse.plan_costs["MDE1+MDE27,MDE28"] = {
         "2537": cost("2537", inventory="3900", **SNAPSHOT),
         "26278": cost("26278", inventory="1000", **SNAPSHOT),
     }
@@ -149,19 +156,21 @@ async def test_promotional_warehouses_join_the_center_and_the_highest_cost_wins(
     warehouse.calls.clear()
 
     changed = await service.set_billing_center(
-        advisor, created.quotation.id, 1, ["001", "003"], ["MDE27"]
+        advisor, created.quotation.id, 1, ["001", "003"], groups=[("001", "PROMO")]
     )
 
     quotation = changed.quotation
-    assert quotation.cost_warehouses == {} and quotation.promo_warehouses == {"001": ("MDE27",)}
+    assert quotation.cost_warehouses == {}
+    assert quotation.promo_warehouses == {"001": ("MDE27", "MDE28")}
+    assert quotation.warehouse_groups == {"001": ("PROMO",)}
     plans = [call[2] for call in warehouse.calls if call[0] == "costs"]
-    assert [plan.promos for plan in plans] == [("MDE27",), ()]
+    assert [plan.promos for plan in plans] == [("MDE27", "MDE28"), ()]
     by_sku = {line.sku: line for line in changed.lines}
     assert (by_sku["2537"].cost_center, by_sku["2537"].inventory_cost) == ("001", 3900)
     stock = [call for call in warehouse.calls if call[0] == "stock"]
-    assert stock[-1][1] == ("MDE1", "MDE3", "MDE4", "MDE27", "BTA9", "BTA8", "BTA20")
+    assert stock[-1][1] == ("MDE1", "MDE3", "MDE4", "MDE27", "MDE28", "BTA9", "BTA8", "BTA20")
     refreshed = await service.refresh(advisor, quotation.id, 2)
-    assert refreshed.quotation.promo_warehouses == {"001": ("MDE27",)}
+    assert refreshed.quotation.promo_warehouses == {"001": ("MDE27", "MDE28")}
 
 
 async def test_only_main_or_spot_warehouses_of_the_chosen_centers(
@@ -178,6 +187,37 @@ async def test_only_main_or_spot_warehouses_of_the_chosen_centers(
         await service.set_billing_center(advisor, quotation.id, 1, ["001"], ["MDE10"])
     with pytest.raises(InvalidInputError, match="no con Nacional"):
         await service.set_billing_center(advisor, quotation.id, 1, [], ["MDE4"])
+    with pytest.raises(InvalidInputError, match="no con Nacional"):
+        await service.set_billing_center(advisor, quotation.id, 1, [], groups=[("001", "BP")])
+
+
+async def test_warehouses_are_chosen_by_whole_groups(service, advisor, warehouse, masters) -> None:
+    """2026-11-25: the screen offers only the groups; the API refuses half a group."""
+
+    national_customer(warehouse, masters)
+    quotation = (await service.create(advisor, NIT, 12)).quotation
+
+    # One by one, only when they make up the whole group (MDE1 without the cava MDE3).
+    with pytest.raises(InvalidInputError, match="por grupo: las bodegas principales del C.O. 001"):
+        await service.set_billing_center(advisor, quotation.id, 1, ["001"], ["MDE1"])
+    with pytest.raises(InvalidInputError, match="por grupo: las bodegas promocionales"):
+        await service.set_billing_center(advisor, quotation.id, 1, ["001"], ["MDE27"])
+    with pytest.raises(InvalidInputError, match="no tiene bodegas promocionales"):
+        await service.set_billing_center(
+            advisor, quotation.id, 1, ["003"], groups=[("003", "PROMO")]
+        )
+    with pytest.raises(InvalidInputError, match="no pertenecen"):
+        await service.set_billing_center(advisor, quotation.id, 1, ["003"], groups=[("001", "BP")])
+    with pytest.raises(InvalidInputError, match="desconocido"):
+        await service.set_billing_center(advisor, quotation.id, 1, ["001"], groups=[("001", "X")])
+
+    # A whole group sent one by one counts as that group.
+    changed = await service.set_billing_center(
+        advisor, quotation.id, 1, ["001"], ["MDE3", "MDE1"], [("001", "PROMO")]
+    )
+    assert changed.quotation.warehouse_groups == {"001": ("BP", "PROMO")}
+    assert changed.quotation.cost_warehouses == {"001": ("MDE1", "MDE3")}
+    assert changed.quotation.promo_warehouses == {"001": ("MDE27", "MDE28")}
 
 
 async def test_comparing_centers_uses_their_chosen_warehouses(
@@ -192,6 +232,10 @@ async def test_comparing_centers_uses_their_chosen_warehouses(
 
     assert await service.compare_centers(advisor, quotation.id, ["001", "003"]) == "003"
     assert await service.compare_centers(advisor, quotation.id, ["001", "003"], ["MDE4"]) == "001"
+    assert (
+        await service.compare_centers(advisor, quotation.id, ["001", "003"], [], [("001", "BSP")])
+        == "001"
+    )
 
 
 async def test_a_list_update_costs_from_the_chosen_warehouses(service, warehouse) -> None:
@@ -204,6 +248,7 @@ async def test_a_list_update_costs_from_the_chosen_warehouses(service, warehouse
     changed = await service.set_billing_center(lister, detail.quotation.id, 1, ["003"], ["BTA20"])
 
     assert changed.quotation.cost_warehouses == {"003": ("BTA20",)}
+    assert changed.quotation.warehouse_groups == {"003": ("BSP",)}
     plans = [call[2] for call in warehouse.calls if call[0] == "costs"]
     assert [plan.selected for plan in plans] == [("BTA20",)]
     assert [call[1] for call in warehouse.calls if call[0] == "stock"][-1] == ("BTA20",)

@@ -8,7 +8,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -177,6 +177,15 @@ class _Audience:
 
     nits: tuple[str, ...]
     sale_keys: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class _WarehouseChoice:
+    """The warehouse groups chosen inside the centers and their breakdown, by center."""
+
+    sites: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    promos: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def _list_entry_of(line: QuotationLine) -> _Entry:
@@ -2270,9 +2279,11 @@ class QuotationService:
         source: str | None = None,
         warehouses: Mapping[str, tuple[str, ...]] | None = None,
         promos: Mapping[str, tuple[str, ...]] | None = None,
+        groups: Mapping[str, tuple[str, ...]] | None = None,
     ) -> QuotationDetail:
         """Price every SIESA line again as it is stored, costed from ``centers`` (none is
         *Nacional*), the ``warehouses`` chosen inside them and the promotional ones added.
+        ``groups`` are the warehouse groups those come from; ``None`` keeps the stored ones.
 
         Cost (the stock plans of the centers), liquor tax (their regional), target, minimum,
         optimal price, margins and compliance are recomputed; new prices, quantities and
@@ -2313,6 +2324,10 @@ class QuotationService:
             values["cost_cut_date"] = snapshot
         if source is not None:
             values["billing_center_source"] = source
+        if groups is not None:
+            values["warehouse_groups"] = {
+                center: tuple(groups[center]) for center in centers if groups.get(center)
+            }
         changed = replace(
             self._touched(quotation, lines, principal.email),
             **values,  # type: ignore[arg-type]
@@ -2326,51 +2341,77 @@ class QuotationService:
         version: int,
         codes: Sequence[str],
         warehouses: Sequence[str] = (),
+        groups: Sequence[tuple[str, str]] = (),
     ) -> QuotationDetail:
         """Cost the quotation from other operation centers (``manual``); none is *Nacional*.
 
         *Nacional* takes, SKU by SKU, the highest cost among every warehouse. One center
         takes its warehouses; several take, SKU by SKU, the costliest of them, and each line
         says which one it was. Inside a center some of its main or spot-request warehouses
-        can be chosen (2026-11-20): the center then costs and shows stock from those only
-        (:func:`pricing.warehouse_plan`); a center without any chosen keeps its own. Its
-        promotional warehouses can be added too: read for every line, the highest cost with
-        stock wins. Same state and permission rules as :meth:`refresh`; the quotation goes
-        back to draft. Lines are priced again (stock plans and regional), keeping new prices,
-        quantities and local products. A refresh keeps the choice.
+        can be chosen (2026-11-20), by whole groups (2026-11-25, :meth:`_warehouses`): the
+        center then costs and shows stock from those only (:func:`pricing.warehouse_plan`);
+        a center without any chosen keeps its own. Its promotional warehouses can be added
+        too: read for every line, the highest cost with stock wins. Same state and permission
+        rules as :meth:`refresh`; the quotation goes back to draft. Lines are priced again
+        (stock plans and regional), keeping new prices, quantities and local products. A
+        refresh keeps the choice.
 
         Raises:
-            InvalidInputError: A code is not an active operation center, or a warehouse is
-                not a main, spot-request or promotional one of the chosen centers.
+            InvalidInputError: A code is not an active operation center, or the warehouses
+                are not whole groups of the chosen centers.
         """
 
         detail = await self._editable(principal, quotation_id)
         self._check_version(detail.quotation, version)
         centers = await self._centers(codes)
-        chosen, promos = await self._warehouses(centers, warehouses)
+        choice = await self._warehouses(centers, warehouses, groups)
         return await self._repriced(
-            principal, detail, version, centers, vocabulary.CENTER_MANUAL, chosen, promos
+            principal,
+            detail,
+            version,
+            centers,
+            vocabulary.CENTER_MANUAL,
+            choice.sites,
+            choice.promos,
+            choice.groups,
         )
 
     async def _warehouses(
-        self, centers: Sequence[str], codes: Sequence[str]
-    ) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
-        """The chosen warehouses grouped by their center, in the master's order: the main
-        and spot-request ones, and the promotional ones.
+        self,
+        centers: Sequence[str],
+        codes: Sequence[str],
+        groups: Sequence[tuple[str, str]] = (),
+    ) -> _WarehouseChoice:
+        """The warehouses chosen inside the centers, always by whole groups (2026-11-25):
+        the main ones (``BP``), the spot-request ones (``BSP``) or the promotional ones
+        (``PROMO``) of a center. The screen shows only the groups; the breakdown is kept.
+
+        ``groups`` are ``(center, class)`` pairs, opened into every warehouse of that class
+        in that center. ``codes`` (warehouses one by one, as earlier clients send them) must
+        make up whole groups too. Returns the main and spot-request warehouses by center,
+        the promotional ones by center, and the groups by center, in the master's order.
 
         Raises:
-            InvalidInputError: Warehouses with *Nacional*, one that is not a main,
-                spot-request or promotional warehouse, or one outside the chosen centers.
+            InvalidInputError: Warehouses or groups with *Nacional*; a warehouse that is not
+                a main, spot-request or promotional one; one outside the chosen centers; a
+                group the center does not have; or warehouses that leave a group half chosen.
         """
 
         wanted = list(dict.fromkeys(code.strip().upper() for code in codes if code.strip()))
-        if not wanted:
-            return {}, {}
+        pairs = list(
+            dict.fromkeys((center.strip(), kind.strip().upper()) for center, kind in groups)
+        )
+        if not wanted and not pairs:
+            return _WarehouseChoice()
         if not centers:
             raise InvalidInputError(
                 "Las bodegas se eligen dentro de un centro de operación, no con Nacional"
             )
-        known = {item.code.upper(): item for item in await self.warehouse.center_warehouses()}
+        found = await self.warehouse.center_warehouses()
+        known = {item.code.upper(): item for item in found}
+        members: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for item in found:
+            members[(item.center_code, item.classification)].append(item.code.upper())
         unknown = [code for code in wanted if code not in known]
         if unknown:
             raise InvalidInputError(
@@ -2382,15 +2423,51 @@ class QuotationService:
             raise InvalidInputError(
                 f"La bodega {', '.join(outside)} no pertenece a los centros de operación elegidos"
             )
+        for center, kind in pairs:
+            label = pricing.WAREHOUSE_CLASSES.get(kind)
+            if label is None:
+                raise InvalidInputError(
+                    f"Grupo de bodegas desconocido: {kind} (válidos: "
+                    f"{', '.join(pricing.WAREHOUSE_CLASSES)})"
+                )
+            if center not in centers:
+                raise InvalidInputError(
+                    f"Las {label.lower()} del C.O. {center} no pertenecen a los centros de "
+                    "operación elegidos"
+                )
+            if not members.get((center, kind)):
+                raise InvalidInputError(f"El C.O. {center} no tiene {label.lower()}")
+        chosen = set(wanted)
+        for code in wanted:
+            item = known[code]
+            group = members[(item.center_code, item.classification)]
+            missing = [other for other in group if other not in chosen]
+            if missing:
+                label = pricing.WAREHOUSE_CLASSES[item.classification].lower()
+                raise InvalidInputError(
+                    f"Las bodegas se eligen por grupo: las {label} del C.O. "
+                    f"{item.center_code} son {', '.join(group)}"
+                )
+        picked = {(known[code].center_code, known[code].classification) for code in wanted}
+        picked.update(pairs)
         sites: dict[str, list[str]] = defaultdict(list)
         promos: dict[str, list[str]] = defaultdict(list)
-        for code, item in known.items():
-            if code in wanted:
+        for item in found:
+            if (item.center_code, item.classification) in picked:
                 promo = item.classification == pricing.PROMO_WAREHOUSES
                 (promos if promo else sites)[item.center_code].append(item.code)
-        return (
-            {center: tuple(sites[center]) for center in centers if sites.get(center)},
-            {center: tuple(promos[center]) for center in centers if promos.get(center)},
+        return _WarehouseChoice(
+            sites={center: tuple(sites[center]) for center in centers if sites.get(center)},
+            promos={center: tuple(promos[center]) for center in centers if promos.get(center)},
+            groups={
+                center: kinds
+                for center in centers
+                if (
+                    kinds := tuple(
+                        kind for kind in pricing.WAREHOUSE_CLASSES if (center, kind) in picked
+                    )
+                )
+            },
         )
 
     async def compare_centers(
@@ -2399,6 +2476,7 @@ class QuotationService:
         quotation_id: UUID,
         codes: Sequence[str],
         warehouses: Sequence[str] = (),
+        groups: Sequence[tuple[str, str]] = (),
     ) -> str | None:
         """Which of two or more centers costs the most for the quotation's SIESA references,
         before choosing them (see :func:`pricing.costliest_center`).
@@ -2415,7 +2493,8 @@ class QuotationService:
         centers = await self._centers(codes)
         if len(centers) < 2:
             raise InvalidInputError("Elige al menos dos centros de operación para compararlos")
-        chosen, promos = await self._warehouses(centers, warehouses)
+        choice = await self._warehouses(centers, warehouses, groups)
+        chosen, promos = choice.sites, choice.promos
         price_list_id = detail.quotation.price_list_id
         skus = sorted({line.sku for line in detail.lines if not line.is_local})
         if not skus or not (chosen or promos or pricing.centers_set_cost(price_list_id)):

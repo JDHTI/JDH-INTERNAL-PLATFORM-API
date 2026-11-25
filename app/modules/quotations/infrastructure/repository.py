@@ -38,6 +38,8 @@ _HEADER_FIELDS = tuple(item.name for item in fields(Quotation))
 _LINE_SPECIAL = {"support", "support_candidates", "support_options", "problems"}
 _LINE_FIELDS = tuple(item.name for item in fields(QuotationLine) if item.name not in _LINE_SPECIAL)
 _CHANGED = "La cotización cambió desde que la abriste; recárgala"
+# Header fields stored as ``{center: [codes]}``.
+_BY_CENTER = ("cost_warehouses", "promo_warehouses", "warehouse_groups")
 
 
 def _header_values(quotation: Quotation) -> dict[str, Any]:
@@ -45,7 +47,7 @@ def _header_values(quotation: Quotation) -> dict[str, Any]:
     values["warnings"] = list(quotation.warnings)
     values["conditions"] = list(quotation.conditions)
     values["cost_centers"] = list(quotation.cost_centers)
-    for name in ("cost_warehouses", "promo_warehouses"):
+    for name in _BY_CENTER:
         values[name] = {center: list(codes) for center, codes in getattr(quotation, name).items()}
     values["seller_contact"] = (
         quotation.seller_contact.as_dict() if quotation.seller_contact else None
@@ -61,7 +63,7 @@ def _quotation(model: QuotationModel) -> Quotation:
     values["warnings"] = tuple(model.warnings or ())
     values["conditions"] = tuple(model.conditions or ())
     values["cost_centers"] = tuple(model.cost_centers or ())
-    for name in ("cost_warehouses", "promo_warehouses"):
+    for name in _BY_CENTER:
         values[name] = {
             center: tuple(codes) for center, codes in (getattr(model, name) or {}).items()
         }
