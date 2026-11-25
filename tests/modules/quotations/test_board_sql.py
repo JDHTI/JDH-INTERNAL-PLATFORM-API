@@ -90,6 +90,18 @@ async def test_the_board_hides_rows_without_stock_and_small_rises_are_no_alza() 
     assert rise in page
 
 
+async def test_the_stock_filter_can_be_turned_off() -> None:
+    """2026-11-25: «Con existencia» is a quick filter, on by default; off, the rows the sync
+    read at 0 show too, in the page and in the counts."""
+
+    database = _Database()
+
+    await SqlAlchemyBoardRepository(database).rows([uuid4()], BoardFilter(in_stock=False), 1, 100)
+    await SqlAlchemyBoardRepository(database).keys([uuid4()], BoardFilter(in_stock=False))
+
+    assert all("stock_on_hand >" not in _sql(statement) for statement, _ in database.statements)
+
+
 async def test_the_stock_of_a_list_is_stored_in_two_statements() -> None:
     database = _Database()
     quotation_id = uuid4()

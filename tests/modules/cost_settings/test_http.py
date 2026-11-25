@@ -49,9 +49,15 @@ def test_the_cost_settings_contract(client) -> None:
     assert {item["family"] for item in body["parameters"] if item["unit"] == "factor"} == {
         "generales",
         "mayoristas",
-        "salsamentarias",
         "market",
     }
+    # Salsamentarias is no family since 2026-11-25: its lists are Mayoristas.
+    assert (
+        client.put(
+            f"{BASE}/parameters", json={"values": {"factor_costo_salsamentarias": 1.004}}
+        ).status_code
+        == 422
+    )
 
     changed = client.put(
         f"{BASE}/parameters", json={"values": {"umbral_negociacion": 0.015}, "note": "BI"}

@@ -121,8 +121,8 @@ def catalog(policy: QuotationPolicy) -> tuple[Section, ...]:
                     "Precio óptimo y precio mínimo",
                     "Sin apoyo, el precio óptimo es el precio lista: costo / (1 − objetivo). Con "
                     "apoyo, es el precio apoyado sugerido: precio lista − apoyo (el cliente "
-                    "recibe exactamente el dinero del proveedor). En pesos enteros, hacia arriba "
-                    "en Salsamentarias y Market. Precio mínimo: el más bajo que cumple la regla "
+                    "recibe exactamente el dinero del proveedor). En pesos enteros, siempre hacia "
+                    "arriba. Precio mínimo: el más bajo que cumple la regla "
                     f"(objetivo − {points} punto), o el margen mínimo autorizado por JDH si el "
                     "apoyo lo trae: (costo − apoyo) / (1 − margen autorizado), hacia arriba.",
                     INFORMS,

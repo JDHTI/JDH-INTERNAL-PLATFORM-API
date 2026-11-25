@@ -154,9 +154,10 @@ las centraliza en `app/modules/quotations/domain/pricing.py`; si la skill cambia
      ([alzas-precios.md](alzas-precios.md)).
 
    El mayor se redondea hacia arriba y se multiplica por el factor de la familia de la lista:
-   **1,004** (0,4 % más) en Generales, Salsamentarias y Market; **1** en Mayoristas. Desde el
+   **1,004** (0,4 % más) en Generales y Market; **1** en Mayoristas. Desde el
    2026-11-25 BI lo ajusta en [Ajuste de costos](ajuste-costos.md); esos son los valores por
-   defecto. La cotización indica de
+   defecto. Ese día dejó de existir la familia Salsamentarias: sus listas de SIESA (10X, 10R y
+   10S) son Mayoristas, sin factor, como el margen de su canal. La cotización indica de
    dónde salió (`cost_source`: `cotizacion`, `inventario` o `alza`) y trae los valores
    (`quote_cost`, `inventory_cost`, `increase_cost`).
    - **Cotización fuera de rango**: una cotización mayor que **3 veces la mediana del último

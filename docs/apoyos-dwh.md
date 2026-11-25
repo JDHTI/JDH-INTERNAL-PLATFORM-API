@@ -146,8 +146,8 @@ El costo de un apoyo **siempre** sale del DWH, con la regla del cotizador
   cotizarle. Un cliente con varias sucursales activas toma el **mayor** de sus planes. Un apoyo
   para todos los clientes usa la lista 1: el mayor entre sus 17 bodegas.
 - **Con el factor de la familia de lista del cliente** (BI, 2026-11-18): el mismo costo del
-  cotizador (`pricing.COST_FACTOR`): × 1,004 en Food service, Masivo food, Salsamentarias y
-  Market; × 1 en mayoristas. Se redondea hacia arriba y luego se aplica el factor. La familia es
+  cotizador (`pricing.COST_FACTOR`): × 1,004 en Food service, Masivo food y
+  Market; × 1 en mayoristas (con las listas Salsamentarias desde el 2026-11-25). Se redondea hacia arriba y luego se aplica el factor. La familia es
   la de la lista de precios del cliente cuando el skill la nombra; si no, la de su lista de margen
   (`customer_margin_field`). Un apoyo para todos usa la familia general (× 1,004). Ejemplo: NIT
   900635048, SKU 9951: 189.944 × 1,004 = 190.703,78, igual que el cotizador.

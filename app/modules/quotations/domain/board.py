@@ -45,7 +45,9 @@ MAX_KEYS = 10_000
 @dataclass(frozen=True)
 class BoardFilter:
     """What the board shows: lists (none is every one), text, suppliers, categories, one
-    chip, the trend of the new price, only the rows without a list price, and the order."""
+    chip, the trend of the new price, only the rows without a list price, only the rows in
+    stock (the default; off, the rows the sync read at 0 show too, 2026-11-25), and the
+    order."""
 
     lists: tuple[str, ...] = ()
     q: str | None = None
@@ -54,6 +56,7 @@ class BoardFilter:
     chip: str | None = None
     trend: str | None = None
     without_list_price: bool = False
+    in_stock: bool = True
     sort: str = "lista"
     descending: bool = False
 

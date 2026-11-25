@@ -126,12 +126,12 @@ class SqlAlchemyBoardRepository:
         return [_quotation(row) for row in rows]
 
     def _base(self, quotation_ids: Sequence[UUID], board: BoardFilter) -> list:
-        conditions = [
-            L.quotation_id.in_(list(quotation_ids)),
-            # Only what is in stock (2026-11-23): a SKU the sync read at 0 is left out; one
-            # whose stock was not read (``None``) stays, so a DWH outage hides nothing.
-            or_(L.stock_on_hand.is_(None), L.stock_on_hand > 0),
-        ]
+        conditions = [L.quotation_id.in_(list(quotation_ids))]
+        if board.in_stock:
+            # Only what is in stock (2026-11-23; the default, a quick filter since 2026-11-25):
+            # a SKU the sync read at 0 is left out; one whose stock was not read (``None``)
+            # stays, so a DWH outage hides nothing.
+            conditions.append(or_(L.stock_on_hand.is_(None), L.stock_on_hand > 0))
         if board.lists:
             conditions.append(Q.price_list_id.in_(list(board.lists)))
         if board.q:

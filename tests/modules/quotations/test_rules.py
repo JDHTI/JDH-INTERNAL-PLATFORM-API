@@ -117,11 +117,11 @@ def test_price_for_a_margin_rounds_by_family_and_never_under_the_minimum() -> No
 
     # 3000 / 0.7 = 4285.71
     assert rules.price_for_margin(line, Decimal("0.30"), pricing.WHOLESALE) == Decimal("4286")
-    assert rules.price_for_margin(line, Decimal("0.30"), pricing.SALSAMENTARIAS) == Decimal("4286")
+    assert rules.price_for_margin(line, Decimal("0.30"), pricing.MARKET) == Decimal("4286")
     # 3000 / 0.81 = 3703.70: nearest would be 3704 anyway; the floor guards the rounding down.
     assert rules.price_for_margin(line, Decimal("0.19"), pricing.WHOLESALE) == Decimal("3704")
     assert rules.price_for_margin(build(inventory=None), Decimal("0.3"), "x") is None
-    assert pricing.round_price(Decimal("3750.2"), pricing.SALSAMENTARIAS) == Decimal("3751")
+    assert pricing.round_price(Decimal("3750.2"), pricing.MARKET) == Decimal("3751")
     assert pricing.round_price(Decimal("3750.2"), pricing.GENERAL) == Decimal("3750")
 
 
@@ -322,7 +322,9 @@ def test_stock_plan_and_family_follow_the_skill() -> None:
     assert pricing.LIST_CENTERS["10X"] == "001" and "35P" not in pricing.LIST_CENTERS
     assert pricing.family("1M") == pricing.WHOLESALE
     assert pricing.family("31A", "mayoristas") == pricing.WHOLESALE
-    assert pricing.family("10X") == pricing.SALSAMENTARIAS
+    # The Salsamentarias lists are Mayoristas since 2026-11-25: no factor on their cost.
+    assert {pricing.family(code) for code in ("10X", "10R", "10S")} == {pricing.WHOLESALE}
+    assert pricing.COST_FACTOR[pricing.family("10S")] == 1
     assert pricing.family("31A") == pricing.GENERAL
     assert pricing.regional("004") == "costa" and pricing.regional("009") == "nacional"
 
