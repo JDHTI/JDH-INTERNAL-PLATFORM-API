@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -18,7 +18,7 @@ from app.modules.costs.domain.increases import (
     with_coverage,
     with_tax,
 )
-from app.modules.costs.domain.ports import LedgerEntry
+from app.modules.costs.domain.ports import LedgerEntry, LedgerRow
 
 D = Decimal
 
@@ -66,6 +66,8 @@ class FakeLedger:
     def __init__(self, margins: Mapping[str, Decimal | None] | None = None) -> None:
         self.margin_by_sku = dict(margins or {})
         self.entries: list[LedgerEntry] = []
+        # History row id → its entry and the day SIESA got it (``load``).
+        self.history: dict[UUID, tuple[LedgerEntry, date | None]] = {}
 
     async def margins(self, skus: Sequence[str]) -> dict[str, Decimal | None]:
         return {sku: self.margin_by_sku.get(sku) for sku in skus}
@@ -74,8 +76,26 @@ class FakeLedger:
         self.entries.extend(entries)
         first: dict[UUID, UUID] = {}
         for entry in entries:
-            first.setdefault(entry.line_id, uuid4())
+            row_id = uuid4()
+            self.history[row_id] = (entry, None)
+            first.setdefault(entry.line_id, row_id)
         return first
+
+    def load(self, day: date, *skus: str) -> None:
+        """SIESA got these references' increases (all of them without ``skus``)."""
+
+        for row_id, (entry, _) in list(self.history.items()):
+            if not skus or entry.sku in skus:
+                self.history[row_id] = (entry, day)
+
+    async def rows(self, ids) -> dict[UUID, LedgerRow]:
+        return {
+            row_id: LedgerRow(
+                row_id, entry.sku, loaded, entry.price, entry.variation_pct, entry.status
+            )
+            for row_id, (entry, loaded) in self.history.items()
+            if row_id in ids
+        }
 
 
 class FakeIncreaseRepository:

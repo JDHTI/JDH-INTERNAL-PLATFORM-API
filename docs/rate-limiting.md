@@ -145,7 +145,12 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/commercial/price-increases` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/analysis` | `read` |  |
 | `GET` | `/v1/commercial/price-increases/options` | `read` |  |
-| `POST` | `/v1/commercial/price-increases/upload` | `relaxed` |  |
+| `GET` | `/v1/commercial/price-increases/siesa-loads` | `read` |  |
+| `POST` | `/v1/commercial/price-increases/siesa-loads` | `relaxed` |  |
+| `GET` | `/v1/commercial/price-increases/siesa-loads/{load_id}` | `read` |  |
+| `POST` | `/v1/commercial/price-increases/siesa-loads/{load_id}/confirm` | `relaxed` |  |
+| `GET` | `/v1/commercial/price-increases/siesa-loads/{load_id}/file` | `read` |  |
+| `POST` | `/v1/commercial/price-increases/siesa-loads/{load_id}/void` | `relaxed` |  |
 | `PATCH` | `/v1/commercial/price-increases/{increase_id}` | `relaxed` |  |
 | `GET` | `/v1/commercial/products` | `read` |  |
 | `GET` | `/v1/commercial/products/employee-prices` | `read` |  |
@@ -164,6 +169,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/costs/increase-requests` | `read` |  |
 | `POST` | `/v1/costs/increase-requests` | `relaxed` |  |
 | `GET` | `/v1/costs/increase-requests/items` | `read` |  |
+| `POST` | `/v1/costs/increase-requests/notice` | `relaxed` |  |
 | `GET` | `/v1/costs/increase-requests/template` | `read` |  |
 | `POST` | `/v1/costs/increase-requests/upload` | `relaxed` |  |
 | `GET` | `/v1/costs/increase-requests/{request_id}` | `read` |  |

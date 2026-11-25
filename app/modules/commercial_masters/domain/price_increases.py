@@ -9,15 +9,11 @@ A row whose ``system_updated_on`` is empty is an increase SIESA does not have ye
 compares its new cost with the supplier's quotation and the inventory cost (see
 :func:`pending_cost`).
 
-The workbook is the area's own and comes as it is kept: money as text in two formats
-(``$ 81.960,00`` and ``$ 95.484``), formula errors (``#N/D``, ``#¡REF!``, ``#¡VALOR!``),
-notes typed where a cost goes (``DESCODIFICADO``), dates of 1900 or with a mistyped year
-(``18/09/0206``), dashes for zero. All of it loads:
-
-- a formula error is a cell without a value: it stays empty, it is not a problem;
-- a note in a money column goes to the observations (:class:`CellNote`);
-- a date is kept as the file has it, however old (the history is the area's record);
-- only what is neither (a number that cannot be read) is reported for the row.
+The history was the area's workbook, uploaded until 2026-11-25; since then the suppliers'
+increases approved in Costos are its only source. The cell parsers below read workbooks as the
+area keeps them (the supplier's «MAESTRA» uses them): money as text in two formats
+(``$ 81.960,00`` and ``$ 95.484``), formula errors (``#N/D``), notes typed where a cost goes
+(:class:`CellNote`), dates of 1900 or with a mistyped year, dashes for zero.
 """
 
 from __future__ import annotations
@@ -253,15 +249,6 @@ VALUE_FIELDS = tuple(name for name in PriceIncreaseValues.__dataclass_fields__ i
 
 
 @dataclass(frozen=True)
-class FileRow:
-    """A row of the uploaded workbook: its values and what could not be read."""
-
-    row_number: int
-    values: PriceIncreaseValues
-    problems: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class PriceIncrease:
     """A stored row, with the product's description, supplier and category from the master."""
 
@@ -273,6 +260,8 @@ class PriceIncrease:
     supplier_name: str | None = None
     category: str | None = None
     is_known_product: bool = True
+    # The number of the SIESA load it is in, generated and not yet confirmed.
+    open_load: int | None = None
 
     @property
     def is_pending(self) -> bool:
@@ -442,29 +431,6 @@ class PriceIncreasePage:
     counts: dict[str, int] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class UploadIssue:
-    row_number: int
-    sku: str | None
-    problem: str
-
-
-@dataclass(frozen=True)
-class UploadReport:
-    """What an upload did, or would do (a simulation)."""
-
-    applied: bool
-    rows_read: int
-    inserted: int
-    updated: int
-    unchanged: int
-    duplicated: int
-    unknown_skus: int
-    pending: int
-    issues: tuple[UploadIssue, ...]
-    issues_truncated: bool
-
-
 def pending_cost(values: PriceIncreaseValues) -> Decimal | None:
     """The cost the quoter compares for a reference whose latest increase SIESA does not
     have yet; ``None`` when it is loaded or has no new cost."""
@@ -488,7 +454,6 @@ __all__ = [
     "CellError",
     "CellNote",
     "CenterOption",
-    "FileRow",
     "FilterOptions",
     "InstallationOption",
     "MonthOption",
@@ -499,8 +464,6 @@ __all__ = [
     "PriceIncreaseValues",
     "Scope",
     "SupplierOption",
-    "UploadIssue",
-    "UploadReport",
     "clean_text",
     "place_options",
     "scope_of",

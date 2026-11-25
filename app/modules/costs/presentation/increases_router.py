@@ -14,7 +14,12 @@ from pydantic import BaseModel, Field
 
 from app.app_container import ApplicationContainer
 from app.modules.areas.presentation.dependencies import require_permission
-from app.modules.costs.application.increases import MAX_PAGE_SIZE, IncreaseService, LineChanges
+from app.modules.costs.application.increases import (
+    MAX_NOTICE_REQUESTS,
+    MAX_PAGE_SIZE,
+    IncreaseService,
+    LineChanges,
+)
 from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.increases import (
     CHANGE_LABELS,
@@ -130,6 +135,16 @@ class RequestResponse(BaseModel):
     decision_note: str | None
     line_count: int
     accepted_count: int
+    # Approved lines SIESA already has (a confirmed load): what the notice takes.
+    loaded_count: int
+
+
+class NoticeBody(BaseModel):
+    """These requests, or every approved one (``all``), of ``supplier`` when given."""
+
+    request_ids: list[UUID] = Field(default_factory=list, max_length=MAX_NOTICE_REQUESTS)
+    all: bool = False
+    supplier: str | None = Field(default=None, max_length=20)
 
 
 class RequestDetailResponse(RequestResponse):
@@ -273,6 +288,7 @@ def _summary(request: IncreaseRequest) -> dict:
         "decision_note": request.decision_note,
         "line_count": request.line_count,
         "accepted_count": request.accepted_count,
+        "loaded_count": request.loaded_count,
     }
 
 
@@ -411,6 +427,23 @@ async def create(
         for line in body.lines
     ]
     return _detail(await service.create(principal, body.supplier_code, lines, body.note))
+
+
+@router.post("/increase-requests/notice", summary="The increase notice of approved requests")
+@inject
+async def notice(body: NoticeBody, service: IncreaseService = _service) -> Response:
+    """«Comunicado Alza de precios proveedor»: one row per approved line SIESA already has
+    (its load confirmed in the history), to email. ``request_ids`` picks the requests one by
+    one; ``all`` takes every approved one (of ``supplier``). Lines not yet in SIESA are left
+    out and counted in ``X-Notice-Skipped``; 422 when none is in SIESA."""
+
+    name, content, rows, skipped = await service.notice(
+        body.request_ids, all_approved=body.all, supplier=body.supplier
+    )
+    response = _download(name, content)
+    response.headers["X-Notice-Rows"] = str(rows)
+    response.headers["X-Notice-Skipped"] = str(skipped)
+    return response
 
 
 @router.get("/increase-requests", response_model=RequestPageResponse, summary="Increase requests")

@@ -44,6 +44,7 @@ from app.modules.commercial_masters.infrastructure.models import (
     PriceIncreaseModel,
     ProductModel,
 )
+from app.modules.commercial_masters.infrastructure.siesa_load_repository import open_rows
 
 P = PriceIncreaseModel
 _CHUNK = 1000
@@ -52,6 +53,36 @@ _FIELDS = ("sku", *VALUE_FIELDS)
 
 def _values(row: Any) -> PriceIncreaseValues:
     return PriceIncreaseValues(**{name: getattr(row, name) for name in _FIELDS})
+
+
+def _JOINED():  # noqa: N802 - a table expression, built per query
+    return P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(
+        CommercialSupplierModel,
+        CommercialSupplierModel.code == ProductModel.commercial_supplier_code,
+    )
+
+
+_COLUMNS = (
+    P,
+    ProductModel.description,
+    CommercialSupplierModel.name,
+    ProductModel.category,
+    ProductModel.id,
+)
+
+
+def _increase(model, description, supplier, category, product_id, open_load=None):
+    return PriceIncrease(
+        id=model.id,
+        values=_values(model),
+        updated_by=model.updated_by,
+        updated_at=model.updated_at,
+        description=description,
+        supplier_name=supplier,
+        category=category,
+        is_known_product=product_id is not None,
+        open_load=open_load,
+    )
 
 
 # The regional as ``regional_key`` reads it: trimmed, single spaces, upper case.
@@ -190,14 +221,10 @@ class SqlAlchemyPriceIncreaseRepository:
         """The rows of the filter, the latest increase first, with the counts by status."""
 
         joined, where = self._query(filters)
-        columns = (
-            P,
-            ProductModel.description,
-            CommercialSupplierModel.name,
-            ProductModel.category,
-            ProductModel.id,
+        opened = open_rows().subquery()
+        listing = select(*_COLUMNS, opened.c.number).select_from(
+            joined.outerjoin(opened, opened.c.increase_id == P.id)
         )
-        listing = select(*columns).select_from(joined)
         counting = select(
             func.count(),
             *(func.count(case((P.status == status, 1))) for status in ("subio", "bajo", "estable")),
@@ -220,21 +247,36 @@ class SqlAlchemyPriceIncreaseRepository:
         async with self.database.session_factory() as session:
             total, up, down, flat, pending = (await session.execute(counting)).one()
             rows = (await session.execute(listing)).all()
-        items = tuple(
-            PriceIncrease(
-                id=model.id,
-                values=_values(model),
-                updated_by=model.updated_by,
-                updated_at=model.updated_at,
-                description=description,
-                supplier_name=supplier,
-                category=category,
-                is_known_product=product_id is not None,
-            )
-            for model, description, supplier, category, product_id in rows
-        )
+        items = tuple(_increase(*row) for row in rows)
         counts = {"subio": up, "bajo": down, "estable": flat, "pendientes": pending}
         return PriceIncreasePage(items, int(total), page, size, counts)
+
+    async def ids_for(self, filters: PriceIncreaseFilters, limit: int) -> list[UUID]:
+        """The identifiers of the filter's rows, the latest increase first, up to ``limit``."""
+
+        joined, where = self._query(filters)
+        statement = select(P.id).select_from(joined)
+        if where is not None:
+            statement = statement.where(where)
+        statement = statement.order_by(P.increased_on.desc().nulls_last(), P.id).limit(limit)
+        async with self.database.session_factory() as session:
+            return list(await session.scalars(statement))
+
+    async def by_ids(self, ids: Sequence[UUID]) -> list[PriceIncrease]:
+        """These rows with their product's data (the missing ones are left out)."""
+
+        opened = open_rows().subquery()
+        found: list[PriceIncrease] = []
+        async with self.database.session_factory() as session:
+            for start in range(0, len(ids), _CHUNK):
+                chunk = list(ids[start : start + _CHUNK])
+                statement = (
+                    select(*_COLUMNS, opened.c.number)
+                    .select_from(_JOINED().outerjoin(opened, opened.c.increase_id == P.id))
+                    .where(P.id.in_(chunk))
+                )
+                found.extend(_increase(*row) for row in (await session.execute(statement)).all())
+        return found
 
     async def version(self) -> tuple[int, datetime | None]:
         """Rows and last change: when either moves, the analysis is worked out again."""
@@ -342,43 +384,10 @@ class SqlAlchemyPriceIncreaseRepository:
             NotFoundError: The row does not exist.
         """
 
-        page = await self._one(increase_id)
-        if page is None:
+        found = await self.by_ids([increase_id])
+        if not found:
             raise NotFoundError("Alza no encontrada")
-        return page
-
-    async def _one(self, increase_id: UUID) -> PriceIncrease | None:
-        statement = (
-            select(
-                P,
-                ProductModel.description,
-                CommercialSupplierModel.name,
-                ProductModel.category,
-                ProductModel.id,
-            )
-            .select_from(
-                P.__table__.outerjoin(ProductModel, ProductModel.sku == P.sku).outerjoin(
-                    CommercialSupplierModel,
-                    CommercialSupplierModel.code == ProductModel.commercial_supplier_code,
-                )
-            )
-            .where(P.id == increase_id)
-        )
-        async with self.database.session_factory() as session:
-            row = (await session.execute(statement)).first()
-        if row is None:
-            return None
-        model, description, supplier, category, product_id = row
-        return PriceIncrease(
-            id=model.id,
-            values=_values(model),
-            updated_by=model.updated_by,
-            updated_at=model.updated_at,
-            description=description,
-            supplier_name=supplier,
-            category=category,
-            is_known_product=product_id is not None,
-        )
+        return found[0]
 
 
 __all__ = ["SqlAlchemyPriceIncreaseRepository"]

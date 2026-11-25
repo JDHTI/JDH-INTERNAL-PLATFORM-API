@@ -8,6 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -320,3 +321,64 @@ class PriceIncreaseModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class PriceIncreaseLoadModel(Base):
+    """A generated SIESA load of pending increases (the ``0212`` import file)."""
+
+    __tablename__ = "price_increase_siesa_loads"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('generado','cargado','anulado')",
+            name="ck_price_increase_siesa_loads_status",
+        ),
+        Index("ix_price_increase_siesa_loads_status", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_by: Mapped[str | None] = mapped_column(String(320))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The day SIESA got it: the increases' ``system_updated_on``.
+    loaded_on: Mapped[date | None] = mapped_column(Date)
+    voided_by: Mapped[str | None] = mapped_column(String(320))
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PriceIncreaseLoadRowModel(Base):
+    """One increase of a load, as it went to SIESA (the files are written again from it)."""
+
+    __tablename__ = "price_increase_siesa_load_rows"
+    __table_args__ = (
+        Index("ix_price_increase_siesa_load_rows_load", "load_id", "position"),
+        Index("ix_price_increase_siesa_load_rows_increase", "increase_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    load_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("price_increase_siesa_loads.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    increase_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("product_price_increases.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    sku: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    nit: Mapped[str] = mapped_column(String(15), nullable=False)
+    branch: Mapped[str] = mapped_column(String(3), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    unit: Mapped[str] = mapped_column(String(4), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    activation_date: Mapped[date] = mapped_column(Date, nullable=False)
+    delivery_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    increased_on: Mapped[date | None] = mapped_column(Date)
+    # Other suppliers with a quotation in force when it was generated, comma separated.
+    other_nits: Mapped[str | None] = mapped_column(Text)

@@ -13,14 +13,23 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.application.price_increases import PriceIncreaseService
+from app.modules.commercial_masters.application.siesa_loads import Selection, SiesaLoadService
 from app.modules.commercial_masters.domain.price_increases import (
     PriceIncreaseFilters,
     PriceIncreaseValues,
     Scope,
 )
-from app.modules.commercial_masters.infrastructure.models import PriceIncreaseModel
+from app.modules.commercial_masters.domain.siesa_loads import CurrentQuotation
+from app.modules.commercial_masters.infrastructure.models import (
+    PriceIncreaseLoadModel,
+    PriceIncreaseModel,
+)
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
+)
+from app.modules.commercial_masters.infrastructure.siesa_load_repository import (
+    SqlAlchemySiesaLoadRepository,
 )
 from app.modules.costs.application.access import CostAccess
 from app.modules.costs.application.increases import IncreaseService, LineChanges
@@ -37,6 +46,7 @@ from app.modules.costs.infrastructure.models import CostIncreaseRequestModel
 from app.modules.identity.domain.principal import Principal
 from tests.modules.costs.fakes import NOW, TODAY, FakeGuard, FakePolicy, FakeStorage
 from tests.modules.costs.increase_fakes import FakeItems, item
+from tests.modules.supplier_supports.conftest import FakeManagers
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("COSTS_TEST_DATABASE_URL"),
@@ -158,6 +168,72 @@ async def test_an_approved_request_lands_in_the_history_as_pending(world) -> Non
     assert {(row.regional, row.occurrence) for row in rows if row.sku == skus[1]} == {
         ("NACIONAL", 1)
     }
+
+
+class Quotations:
+    def __init__(self, skus) -> None:
+        self.skus = skus
+
+    async def current(self, skus):
+        return {
+            sku: CurrentQuotation(sku, "890928577", "001", "UNID", "COP", 5, date(2026, 1, 1))
+            for sku in skus
+            if sku in self.skus
+        }
+
+
+async def test_a_load_dates_the_increases_and_the_notice_takes_them(world) -> None:
+    increases, database, code, skus = world
+    request = await increases.create(
+        PERSON,
+        code,
+        [
+            LineInput(skus[0], Decimal("1100"), increased_on=date(2026, 12, 1)),
+            LineInput(skus[1], Decimal("450"), increased_on=date(2026, 12, 1), regional="BOGOTA"),
+        ],
+    )
+    await increases.approve(PERSON, request.id)
+    history = SqlAlchemyPriceIncreaseRepository(database)
+    loads = SiesaLoadService(
+        SqlAlchemySiesaLoadRepository(database),
+        PriceIncreaseService(history, FakeManagers([PERSON.email])),
+        Quotations(skus),
+        today=lambda: TODAY,
+        clock=lambda: NOW,
+    )
+    picked = await history.ids_for(PriceIncreaseFilters(sku=skus[0], pending=True), 10)
+    picked += await history.ids_for(PriceIncreaseFilters(sku=skus[1], pending=True), 10)
+    load_ids = []
+    try:
+        result = await loads.generate(PERSON, Selection(tuple(picked)), apply=True)
+        load = result.load
+        load_ids.append(load.id)
+        # The Bogotá line stays out: SIESA's quotation is the whole company's.
+        assert [row.sku for row in load.rows] == [skus[0]]
+        assert [item.sku for item in result.plan.excluded] == [skus[1]]
+        page = await history.page(PriceIncreaseFilters(sku=skus[0]), 1, 5)
+        assert page.items[0].open_load == load.number
+        file = await loads.file(load.id, "txt")
+        # Update the quotation, the NIT left aligned, branch, currency, no item id, the SKU.
+        line = b"021200020011890928577      001COP0000000" + skus[0].encode()
+        assert line in file.content
+
+        await loads.confirm(PERSON, load.id, date(2026, 11, 22))
+
+        row = (await history.page(PriceIncreaseFilters(sku=skus[0]), 1, 5)).items[0]
+        assert row.values.system_updated_on == date(2026, 11, 22) and row.open_load is None
+        assert row.values.siesa_changed is True
+        listed = await increases.page("aprobada", code, 1, 10)
+        assert listed.items[0].loaded_count == 1
+        _, _, rows, skipped = await increases.notice([request.id])
+        assert (rows, skipped) == (1, 1)
+        stored = await loads.page(None, 1, 50)
+        assert any(item.id == load.id and item.status == "cargado" for item in stored.items)
+    finally:
+        async with database.session_factory() as session, session.begin():
+            await session.execute(
+                delete(PriceIncreaseLoadModel).where(PriceIncreaseLoadModel.id.in_(load_ids))
+            )
 
 
 async def test_increases_chained_on_the_same_day_are_kept_apart(world) -> None:

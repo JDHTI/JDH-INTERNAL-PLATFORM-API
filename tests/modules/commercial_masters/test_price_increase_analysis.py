@@ -36,9 +36,6 @@ from app.modules.commercial_masters.domain.price_increases import (
     place_options,
     scope_of,
 )
-from app.modules.commercial_masters.infrastructure.price_increases_file import (
-    PriceIncreaseFileReader,
-)
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
 from tests.modules.commercial_masters.test_http import AllowAll
@@ -255,8 +252,6 @@ def service_for(repository, cache, placements=None) -> PriceIncreaseService:
     return PriceIncreaseService(
         repository=repository,
         managers=FakeManagers([]),
-        reader=PriceIncreaseFileReader(),
-        max_upload_bytes=1024,
         today=lambda: TODAY,
         cache=cache,
         placements=placements,

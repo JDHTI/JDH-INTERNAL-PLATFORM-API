@@ -206,10 +206,24 @@ class LedgerEntry:
     regional: str = "NACIONAL"
 
 
+@dataclass(frozen=True)
+class LedgerRow:
+    """What the history keeps of an approved line: when SIESA got it, its list price."""
+
+    id: UUID
+    sku: str
+    system_updated_on: date | None
+    price: Decimal | None
+    variation_pct: Decimal | None
+    status: str | None
+
+
 class IncreaseLedger(Protocol):
     """The history of increases of the products (``commercial_masters``)."""
 
     async def margins(self, skus: Sequence[str]) -> dict[str, Decimal | None]: ...
+
+    async def rows(self, ids: Sequence[UUID]) -> dict[UUID, LedgerRow]: ...
 
     async def record(
         self, entries: Sequence[LedgerEntry], actor: str, now: datetime
@@ -249,6 +263,7 @@ __all__ = [
     "IncreaseLedger",
     "IncreaseRepository",
     "LedgerEntry",
+    "LedgerRow",
     "SupplierItemSource",
     "WorkbookReader",
     "EntryWindow",
