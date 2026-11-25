@@ -237,15 +237,21 @@ class WarehouseQuotationSource:
 
     async def billing_centers(self) -> list[BillingCenter]:
         """Active operation centers (``consumo.centros_operacion``, the ``centros-operacion``
-        master), one per code, by code."""
+        master), one per code, by code, with their regional."""
 
         rows = await self._fetch(
-            'SELECT DISTINCT ON (trim("codigo")) trim("codigo") AS codigo, "descripcion"'
+            'SELECT DISTINCT ON (trim("codigo")) trim("codigo") AS codigo, "descripcion",'
+            ' trim("cod_regional") AS cod_regional, "desc_regional"'
             f" FROM {self._view('centros_operacion')} WHERE \"estado\" = 'A'"
             ' ORDER BY trim("codigo"), "descripcion"'
         )
         return [
-            BillingCenter(str(row["codigo"]).strip(), _strip(row["descripcion"]))
+            BillingCenter(
+                str(row["codigo"]).strip(),
+                _strip(row["descripcion"]),
+                regional_code=_strip(row["cod_regional"]),
+                regional_name=_strip(row["desc_regional"]),
+            )
             for row in rows
             if _strip(row["codigo"])
         ]

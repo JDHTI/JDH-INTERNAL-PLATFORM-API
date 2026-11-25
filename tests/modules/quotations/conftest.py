@@ -144,9 +144,9 @@ class FakeWarehouse:
             "0051": SellerContact("0051", "PEREZ ANA", MANAGER, "3001234567")
         }
         self.centers: list[BillingCenter] = [
-            BillingCenter("004", "COSTA"),
-            BillingCenter("001", "ANTIOQUIA"),
-            BillingCenter("003", "CENTRO"),
+            BillingCenter("004", "COSTA", regional_code="04", regional_name="COSTA"),
+            BillingCenter("001", "ANTIOQUIA", regional_code="01", regional_name="ANTIOQUIA"),
+            BillingCenter("003", "CENTRO", regional_code="03", regional_name="CENTRO"),
         ]
         # The main (BP) and spot-request (BSP) warehouses of three centers.
         self.center_warehouse_rows: list[CenterWarehouse] = [

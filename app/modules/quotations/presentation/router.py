@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.app_container import ApplicationContainer
-from app.core.errors import ForbiddenError
+from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.areas.presentation.dependencies import require_permission
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
@@ -292,14 +292,26 @@ class OfferRequest(BaseModel):
     include_variation: bool | None = None
 
 
+WarehouseClass = Literal["BP", "BSP", "PROMO"]
+
+
+class WarehouseGroupRequest(BaseModel):
+    """A whole group of warehouses inside a chosen center."""
+
+    center_code: str = Field(min_length=1, max_length=10)
+    classification: WarehouseClass
+
+
 class BillingCenterRequest(BaseModel):
     """The operation centers to cost from: ``national`` alone, or one or more centers.
 
-    ``cost_warehouses`` are warehouses of the chosen centers (``GET /billing-centers``): a
-    center with main or spot-request ones chosen costs and shows stock from those only; one
-    without any keeps its own. Promotional ones are added on top, for every line (the
-    highest cost with stock wins). ``billing_center_code`` is the single center of
-    earlier clients.
+    Inside the centers the warehouses are chosen by whole groups (2026-11-25):
+    ``cost_warehouse_groups``, each a center and its main (``BP``), spot-request (``BSP``)
+    or promotional (``PROMO``) warehouses (``GET /billing-centers``). A center with main or
+    spot-request ones chosen costs and shows stock from those only; one without any keeps
+    its own. Promotional ones are added on top, for every line (the highest cost with stock
+    wins). ``cost_warehouses`` (one by one, earlier clients) must make up whole groups.
+    ``billing_center_code`` is the single center of earlier clients.
     """
 
     version: int = Field(ge=1)
@@ -307,6 +319,7 @@ class BillingCenterRequest(BaseModel):
     cost_centers: list[Annotated[str, Field(min_length=1, max_length=10)]] = Field(
         default_factory=list, max_length=30
     )
+    cost_warehouse_groups: list[WarehouseGroupRequest] = Field(default_factory=list, max_length=90)
     cost_warehouses: list[Annotated[str, Field(min_length=1, max_length=10)]] = Field(
         default_factory=list, max_length=100
     )
@@ -319,9 +332,13 @@ class BillingCenterRequest(BaseModel):
         single = [self.billing_center_code] if self.billing_center_code else []
         return [*self.cost_centers, *single]
 
+    @property
+    def groups(self) -> list[tuple[str, str]]:
+        return [(item.center_code, item.classification) for item in self.cost_warehouse_groups]
+
     @model_validator(mode="after")
     def _one_choice(self) -> BillingCenterRequest:
-        if self.national and (self.codes or self.cost_warehouses):
+        if self.national and (self.codes or self.cost_warehouses or self.cost_warehouse_groups):
             raise ValueError("Nacional va sola: no se combina con centros de operación ni bodegas")
         if not self.national and not self.codes:
             raise ValueError("Elige Nacional o al menos un centro de operación")
@@ -572,18 +589,32 @@ class CenterWarehouseResponse(BaseModel):
     name: str | None
     # ``BP`` main warehouses, ``BSP`` spot requests (SIESA's groups for the platform),
     # ``PROMO`` promotional ones (added on top of the center's, read for every line).
-    classification: Literal["BP", "BSP", "PROMO"]
+    classification: WarehouseClass
+    classification_label: str
+
+
+class WarehouseGroupResponse(BaseModel):
+    """A group of warehouses chosen inside a center; its breakdown is in
+    ``cost_warehouses``."""
+
+    center_code: str
+    classification: WarehouseClass
     classification_label: str
 
 
 class BillingCenterResponse(BaseModel):
     """An operation center a quotation can be billed and priced from, with the main and
-    spot-request warehouses that can be chosen inside it (empty: none to choose)."""
+    spot-request warehouses that can be chosen inside it (empty: none to choose).
+
+    ``regional`` is the liquor tax regional it bills with; ``regional_name`` the center's
+    regional in the master (``ANTIOQUIA``, ``ORIENTE``…; 2026-11-25)."""
 
     code: str
     name: str | None
     regional: Literal["nacional", "costa"]
     regional_label: str
+    regional_code: str | None = None
+    regional_name: str | None = None
     warehouses: list[CenterWarehouseResponse] = Field(default_factory=list)
 
 
@@ -650,8 +681,11 @@ class QuotationResponse(SummaryResponse):
     # Operation centers the lines are costed from; empty is Nacional (every warehouse).
     cost_centers: list[str]
     # The warehouses chosen inside the centers (2026-11-20); a center with none keeps its
-    # own warehouses.
+    # own warehouses. The breakdown of ``cost_warehouse_groups``.
     cost_warehouses: list[str]
+    # The warehouse groups chosen inside the centers (2026-11-25), what the screen shows.
+    # Empty with warehouses chosen one by one before that date.
+    cost_warehouse_groups: list[WarehouseGroupResponse]
     # False when the list has its own warehouses (list 1 and the skill's) and no warehouse
     # was chosen: the centers then change only the liquor tax regional, not the cost.
     centers_set_cost: bool
@@ -920,6 +954,20 @@ def _deleted_on(quotation: Quotation) -> date | None:
     return quotation.created_at.date() + timedelta(days=vocabulary.STALE_DRAFT_DAYS)
 
 
+def _warehouse_groups(quotation: Quotation) -> list[WarehouseGroupResponse]:
+    """The chosen groups, by center in the quotation's order."""
+
+    return [
+        WarehouseGroupResponse(
+            center_code=center,
+            classification=kind,  # type: ignore[arg-type]
+            classification_label=pricing.WAREHOUSE_CLASSES.get(kind, kind),
+        )
+        for center in quotation.cost_centers
+        for kind in quotation.warehouse_groups.get(center, ())
+    ]
+
+
 def _detail(
     detail: QuotationDetail,
     requests: Mapping[str, Any] | None = None,
@@ -942,6 +990,7 @@ def _detail(
                 *quotation.promo_warehouses.get(center, ()),
             )
         ],
+        cost_warehouse_groups=_warehouse_groups(quotation),
         centers_set_cost=bool(quotation.cost_warehouses or quotation.promo_warehouses)
         or pricing.centers_set_cost(quotation.price_list_id),
         with_history=quotation.with_history,
@@ -1568,6 +1617,8 @@ async def billing_centers(
                 name=item.name,
                 regional=regional,  # type: ignore[arg-type]
                 regional_label=REGIONAL_LABELS.get(regional, regional),
+                regional_code=item.regional_code,
+                regional_name=item.regional_name,
                 warehouses=[
                     CenterWarehouseResponse(
                         code=warehouse.code,
@@ -1914,17 +1965,24 @@ async def compare_cost_centers(
     quotation_id: UUID,
     codes: list[str] = Query(min_length=2, max_length=30),  # noqa: B008
     warehouses: list[str] = Query(default=[], max_length=100),  # noqa: B008
+    groups: list[str] = Query(default=[], max_length=90),  # noqa: B008
     principal: Principal = _principal,
     service: QuotationService = _service,
 ) -> CenterComparisonResponse:
     """For the quotation's SIESA references, the center with the highest sum of unit costs,
-    before choosing them, each center costed from its chosen ``warehouses`` if any. Only
-    the code: no amounts. 422 with fewer than two centers, an unknown one or a warehouse
-    outside them; ``null`` when they tie or the list has its own warehouses and none was
-    chosen."""
+    before choosing them, each center costed from its chosen warehouse ``groups``
+    (``001:BP``, ``001:PROMO``) if any. Only the code: no amounts. 422 with fewer than two
+    centers, an unknown one or a group outside them; ``null`` when they tie or the list
+    has its own warehouses and none was chosen."""
 
+    pairs = []
+    for item in groups:
+        center, _, kind = item.partition(":")
+        if not center.strip() or not kind.strip():
+            raise InvalidInputError(f"Grupo de bodegas inválido: {item} (usa C.O.:grupo, 001:BP)")
+        pairs.append((center, kind))
     return CenterComparisonResponse(
-        highest=await service.compare_centers(principal, quotation_id, codes, warehouses)
+        highest=await service.compare_centers(principal, quotation_id, codes, warehouses, pairs)
     )
 
 
@@ -1943,19 +2001,25 @@ async def set_billing_center(
 ) -> QuotationResponse:
     """Nacional (``national``) takes, SKU by SKU, the highest cost of every warehouse; one
     center its warehouses; several the costliest of them per SKU (``cost_center`` on each
-    line). Inside a center, ``cost_warehouses`` narrows it to the chosen main or
-    spot-request warehouses: the highest cost with stock among them (frozen and
-    refrigerated lines read the cold room when it was chosen), and their stock. Every line
-    is priced again (stock plans, regional, liquor tax, target, margins), keeping new
-    prices, quantities and local products; back to draft. Same rules as ``/refresh``. 422
-    on an unknown center, on Nacional with centers or warehouses, or on a warehouse that is
-    not a main or spot-request one of the chosen centers."""
+    line). Inside a center, ``cost_warehouse_groups`` narrows it to its main or
+    spot-request warehouses, by whole groups: the highest cost with stock among them (frozen
+    and refrigerated lines read the cold room when it was chosen), and their stock; the
+    promotional group adds on top. Every line is priced again (stock plans, regional, liquor
+    tax, target, margins), keeping new prices, quantities and local products; back to
+    draft. Same rules as ``/refresh``. 422 on an unknown center, on Nacional with centers or
+    warehouses, on a group the center does not have, or on warehouses that leave a group
+    half chosen."""
 
     return await _respond(
         principal,
         service,
         await service.set_billing_center(
-            principal, quotation_id, body.version, body.codes, body.cost_warehouses
+            principal,
+            quotation_id,
+            body.version,
+            body.codes,
+            body.cost_warehouses,
+            body.groups,
         ),
     )
 

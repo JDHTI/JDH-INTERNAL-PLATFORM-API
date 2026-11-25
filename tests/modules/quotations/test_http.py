@@ -346,6 +346,8 @@ def test_centers_and_temporary_customers_contract(client) -> None:
         "name": "COSTA",
         "regional": "costa",
         "regional_label": "Costa",
+        "regional_code": "04",
+        "regional_name": "COSTA",
         "warehouses": [
             {
                 "code": "CTG1",
@@ -368,6 +370,9 @@ def test_centers_and_temporary_customers_contract(client) -> None:
         ],
     }
     assert [item["code"] for item in centers.json()] == ["001", "003", "004"]
+    # Antioquia keeps its own regional, though it pays the national liquor tax.
+    antioquia = centers.json()[0]
+    assert (antioquia["regional_name"], antioquia["regional_label"]) == ("ANTIOQUIA", "Nacional")
 
     missing = client.post(BASE, json={"temporary_customer": {"name": "Espiga", "legal_name": "E"}})
     assert missing.status_code == 422 and "centro de operación" in missing.json()["detail"]
@@ -434,11 +439,45 @@ def test_cost_centers_and_the_lines_workbook_contract(client, warehouse, masters
         "2537": "001",
         "26278": "003",
     }
+    half = client.patch(
+        f"{url}/billing-center",
+        json={"version": 2, "cost_centers": ["001", "003"], "cost_warehouses": ["MDE1"]},
+    )
+    assert half.status_code == 422 and "por grupo" in half.json()["detail"]
+    grouped = client.get(
+        f"{url}/cost-centers/compare",
+        params=[("codes", "001"), ("codes", "003"), ("groups", "001:BSP")],
+    )
+    assert grouped.status_code == 200
+    bad = client.get(
+        f"{url}/cost-centers/compare", params=[("codes", "001"), ("codes", "003"), ("groups", "BP")]
+    )
+    assert bad.status_code == 422
     narrowed = client.patch(
         f"{url}/billing-center",
-        json={"version": 2, "cost_centers": ["001", "003"], "cost_warehouses": ["MDE4"]},
+        json={
+            "version": 2,
+            "cost_centers": ["001", "003"],
+            "cost_warehouse_groups": [
+                {"center_code": "001", "classification": "BSP"},
+                {"center_code": "001", "classification": "PROMO"},
+            ],
+        },
     )
-    assert narrowed.status_code == 200 and narrowed.json()["cost_warehouses"] == ["MDE4"]
+    assert narrowed.status_code == 200
+    assert narrowed.json()["cost_warehouses"] == ["MDE4", "MDE27", "MDE28"]
+    assert narrowed.json()["cost_warehouse_groups"] == [
+        {
+            "center_code": "001",
+            "classification": "BSP",
+            "classification_label": "Bodegas solicitudes puntuales",
+        },
+        {
+            "center_code": "001",
+            "classification": "PROMO",
+            "classification_label": "Bodegas promocionales",
+        },
+    ]
     assert narrowed.json()["centers_set_cost"] is True
     outside = client.patch(
         f"{url}/billing-center",
@@ -453,6 +492,16 @@ def test_cost_centers_and_the_lines_workbook_contract(client, warehouse, masters
     national = client.patch(f"{url}/billing-center", json={"version": 3, "national": True})
     assert national.status_code == 200 and national.json()["cost_centers"] == []
     assert national.json()["cost_warehouses"] == []
+    assert national.json()["cost_warehouse_groups"] == []
+    grouped_national = client.patch(
+        f"{url}/billing-center",
+        json={
+            "version": 4,
+            "national": True,
+            "cost_warehouse_groups": [{"center_code": "001", "classification": "BP"}],
+        },
+    )
+    assert grouped_national.status_code == 422
 
     assert client.get(f"{url}/lines.xlsx").status_code == 403
     client.app.dependency_overrides[get_current_principal] = lambda: person(APPROVER)

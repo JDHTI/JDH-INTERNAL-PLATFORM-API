@@ -112,9 +112,14 @@ async def test_a_list_last_sales_get_the_sales_limit_unless_given_one() -> None:
 async def test_billing_centers_are_the_active_operation_centers() -> None:
     connection = FakeConnection(
         [
-            {"codigo": "001", "descripcion": "ANTIOQUIA"},
-            {"codigo": "004 ", "descripcion": "COSTA"},
-            {"codigo": " ", "descripcion": "VACIO"},
+            {
+                "codigo": "001",
+                "descripcion": "ANTIOQUIA",
+                "cod_regional": "01",
+                "desc_regional": "ANTIOQUIA ",
+            },
+            {"codigo": "004 ", "descripcion": "COSTA", "cod_regional": None, "desc_regional": None},
+            {"codigo": " ", "descripcion": "VACIO", "cod_regional": None, "desc_regional": None},
         ]
     )
 
@@ -126,6 +131,9 @@ async def test_billing_centers_are_the_active_operation_centers() -> None:
         ("001", "ANTIOQUIA"),
         ("004", "COSTA"),
     ]
+    # The center's own regional, apart from the liquor tax one.
+    assert (centers[0].regional_code, centers[0].regional_name) == ("01", "ANTIOQUIA")
+    assert centers[1].regional_name is None
 
 
 async def test_items_carry_the_category() -> None:

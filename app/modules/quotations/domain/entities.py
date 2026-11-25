@@ -167,6 +167,10 @@ class BillingCenter:
     code: str
     name: str | None
     warehouses: tuple[CenterWarehouse, ...] = ()
+    # The center's regional in the master (``cod_regional``, ``desc_regional``), not the
+    # liquor tax one.
+    regional_code: str | None = None
+    regional_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -662,6 +666,9 @@ class Quotation:
     cost_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # The promotional warehouses added to each center (2026-11-20), read for every line.
     promo_warehouses: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # The warehouse groups chosen in each center (``BP``, ``BSP``, ``PROMO``; 2026-11-25):
+    # the screen shows these, the two fields above keep their breakdown.
+    warehouse_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Where ``cost_centers`` comes from: ``auto`` (the customer's branches) or ``manual``
     # (chosen; a refresh keeps it).
     billing_center_source: str = vocabulary.CENTER_AUTO
