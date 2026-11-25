@@ -194,11 +194,16 @@ sola.
 
   | Filtro | Qué trae |
   | --- | --- |
-  | `customer_nits` | Los apoyos del NIT, de todo el NIT y de sus sucursales, nunca los del grupo |
-  | `business_groups` | Los del grupo completo |
-  | `customer_branches: [{nit, branch_id}]` | Los de esa sucursal |
+  | `customer_nits` | El filtro general (2026-11-25): los apoyos del NIT, de todo el NIT y de sus sucursales, y también los del grupo empresarial del NIT. Cada apoyo de grupo sale una vez, con la copia de ese NIT si la tiene |
+  | `business_groups` | Solo los del grupo completo |
+  | `customer_branches: [{nit, branch_id}]` | Solo los de esa sucursal |
 
-  `customer_nit_only` (NIT sin grupo) se retiró, porque ahora es lo que hace `customer_nits`.
+  - Lo mismo vale en la búsqueda, el resumen por estado y los filtros de retirar, borrar y
+    adjuntos.
+  - Ojo al retirar o borrar por NIT: un apoyo de grupo que entra en el filtro se retira con todas
+    sus copias, es decir, para todo el grupo.
+  - `customer_nit_only` (NIT sin grupo) se retiró el 2026-11-24.
+  - Entre el 2026-11-24 y el 2026-11-25 el filtro por NIT no traía los apoyos del grupo.
 - **Producción (2026-11-24):** 57 apoyos tienen sucursal, todos del NIT 800230447, sucursal 681.
   Desde el despliegue solo aplican a una cotización de esa sucursal y a sus ventas en la
   liquidación; el validador ya no los toma.

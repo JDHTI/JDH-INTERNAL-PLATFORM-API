@@ -348,6 +348,8 @@ class MainBoardService:
     def _checked(self, filters: BoardFilter) -> BoardFilter:
         if filters.chip is not None and filters.chip not in board.CHIPS:
             raise InvalidInputError("Filtro desconocido")
+        if filters.trend is not None and filters.trend not in board.TRENDS:
+            raise InvalidInputError("Tendencia desconocida: sube, baja o estable")
         if filters.sort not in board.SORTS:
             raise InvalidInputError("Orden desconocido")
         unknown = [code for code in filters.lists if code not in self.codes]

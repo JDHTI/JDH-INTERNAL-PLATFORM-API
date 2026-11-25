@@ -278,6 +278,9 @@ class Settings(BaseSettings):
     # Lists that pay the Coast liquor tax (the rest pay the national one), as SIESA carries
     # it on 2026-11-12. The operation center cannot tell it: list 009 pays the national one.
     LIQUOR_TAX_COAST_LISTS: str = "004,11N,22N,36J,46V"
+    # Lists the liquor tax screen leaves out (2026-11-25): not in the national and Coast
+    # values, what does not add up, nor the files of a bulk change.
+    LIQUOR_TAX_EXCLUDED_LISTS: str = "25,EMP,PRM"
 
     # Commercial map (mapa-comercial): the monthly prospects workbook and road routing through
     # openrouteservice (HeiGIT's free plan: 2,000 routes a day, 50 points each, no card). An
@@ -755,6 +758,11 @@ class Settings(BaseSettings):
                 ),
                 "coast_lists": tuple(
                     code.strip() for code in self.LIQUOR_TAX_COAST_LISTS.split(",") if code.strip()
+                ),
+                "liquor_excluded_lists": tuple(
+                    code.strip()
+                    for code in self.LIQUOR_TAX_EXCLUDED_LISTS.split(",")
+                    if code.strip()
                 ),
             },
             "territory": {

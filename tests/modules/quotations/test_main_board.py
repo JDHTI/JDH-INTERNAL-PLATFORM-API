@@ -29,6 +29,18 @@ def _rise(line) -> bool:
     return bool(last and last > 0 and price is not None and price >= last * Decimal("1.01"))
 
 
+def _trend(line, trend: str) -> bool:
+    """As the board's SQL: a row without a current price has no trend."""
+
+    if line.last_price is None:
+        return False
+    if trend == "estable":
+        return line.new_price is None or line.new_price == line.last_price
+    if line.new_price is None:
+        return False
+    return line.new_price > line.last_price if trend == "sube" else line.new_price < line.last_price
+
+
 def _chip(line, chip: str) -> bool:
     margin, target = line.current_margin_with_support_pct, line.target_margin_pct
     judged = line.last_price is not None and margin is not None and target is not None
@@ -84,6 +96,10 @@ class FakeBoardRepository:
                 ):
                     continue
                 if with_chip and board.chip and not _chip(line, board.chip):
+                    continue
+                if board.trend and not _trend(line, board.trend):
+                    continue
+                if board.without_list_price and line.last_price is not None:
                     continue
                 on_hand, available = self.stock.get((quotation.id, line.sku), (None, None))
                 if on_hand is not None and on_hand <= 0:
@@ -338,6 +354,22 @@ async def test_the_sync_stores_the_stock_and_the_board_sorts_by_it(
     assert again.stock_read and again.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
     # One read per list.
     assert [call[0] for call in insights.calls] == ["stock", "stock"]
+
+
+async def test_the_trend_filter_is_checked_and_reaches_the_keys(board, collaborator) -> None:
+    """2026-11-25: ``trend`` and ``without_list_price`` filter the rows and the keys; the
+    SQL is checked on PostgreSQL in ``test_board_postgres``."""
+
+    await board.build(collaborator, "002")
+    with pytest.raises(InvalidInputError, match="Tendencia desconocida"):
+        await board.rows(collaborator, BoardFilter(trend="arriba"), 1, 50)
+    every = await board.keys(collaborator, BoardFilter())
+    stable = await board.keys(collaborator, BoardFilter(trend="estable"))
+    rising = await board.keys(collaborator, BoardFilter(trend="sube"))
+    # Nothing has a new price yet: what has a current price is stable, nothing rises.
+    assert rising == [] and stable and set(stable) <= set(every)
+    unpriced = await board.keys(collaborator, BoardFilter(without_list_price=True))
+    assert not set(unpriced) & set(stable)
 
 
 async def test_the_board_hides_what_is_out_of_stock_and_small_rises(
