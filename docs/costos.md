@@ -324,6 +324,24 @@ Reglas, revisadas por referencia al cargar:
   actualiza esa fila.
 - **Rechazar:** exige el motivo, y nada llega al acumulado.
 
+### Comunicado del alza (2026-11-25)
+
+Una vez SIESA tiene los costos nuevos (el lote de cargue confirmado en el acumulado, ver
+[`alzas-precios.md`](alzas-precios.md)), el área envía por correo el **comunicado**: el libro
+`Comunicado Alza de precios proveedor <dd-mm-aaaa>.xlsx`, como el del área del 2026-11-18.
+
+- **Qué solicitudes:** las aprobadas que se eligen una a una, o todas las aprobadas (de un
+  proveedor), como en el cotizador.
+- **Qué filas:** una por línea aprobada **que SIESA ya tiene** (decisión del 2026-11-25). Las
+  que aún no están cargadas quedan por fuera y se cuentan (`X-Notice-Skipped`); si ninguna está
+  cargada, responde 422. Cada solicitud dice cuántas lleva (`loaded_count`).
+- **Columnas:** las del área: «Fecha de actualizacion Sistema» (el día del cargue), «Referencia»,
+  «PROVEEDOR» (`50 - ASCENDER S.A.`), «Desc. Item», «Variacion %», «Analisis» (SUBIO, BAJO,
+  ESTABLE) y «Precio Nuevo» (el precio Lista 1 del acumulado). Por proveedor y referencia.
+- **Dos cambios frente al archivo del área:** la fecha va `dd/mm/aaaa` (la del área era
+  `mm-dd-yy`) y la variación lleva dos decimales (2,34 % y no 2 %).
+- Lo genera quien lee `alzas-proveedor`.
+
 ### Soporte del alza (2026-11-24)
 
 La solicitud guarda el soporte del proveedor: la carta o el correo del alza.
@@ -355,6 +373,7 @@ La solicitud guarda el soporte del proveedor: la carta o el correo del alza.
 | `GET /?status=&supplier=&page=&size=` | Solicitudes, la más reciente primero, con `counts` por estado |
 | `GET /{id}` | Solicitud con `lines` |
 | `GET /{id}/file` | El libro que devolvió el proveedor |
+| `POST /notice` | `{request_ids: [...]}` o `{all: true, supplier?}`: el comunicado (`.xlsx`) con las líneas aprobadas que SIESA ya tiene. Encabezados `X-Notice-Rows` y `X-Notice-Skipped`. 422 si ninguna está cargada |
 | `GET /{id}/support?inline=` | El soporte (`inline=true` lo abre en el navegador). 404 sin soporte |
 | `PUT /{id}/support` | Multipart `file`: adjunta o reemplaza el soporte (`manage`, en revisión). 409 si ya se decidió; 422 si el archivo no sirve |
 | `DELETE /{id}/support` | Quita el soporte (`manage`, en revisión) |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import unquote
 
 import openpyxl
@@ -171,6 +171,17 @@ def test_the_whole_flow_from_workbook_to_history(client, world) -> None:
         ("10042", "CARTAGENA")
     ]
     assert client.get(f"{BASE}/{request_id}/file").content == buffer.getvalue()
+
+    # Not in SIESA yet: no notice. Once its load is confirmed, the notice has it.
+    early = client.post(f"{BASE}/notice", json={"request_ids": [request_id]})
+    assert early.status_code == 422
+    world.ledger.load(date(2026, 11, 25))
+    notice = client.post(f"{BASE}/notice", json={"all": True, "supplier": "50"})
+    assert notice.status_code == 200, notice.text
+    assert notice.headers["x-notice-rows"] == "1" and notice.headers["x-notice-skipped"] == "0"
+    assert "Comunicado Alza de precios proveedor" in unquote(notice.headers["content-disposition"])
+    world.caller = world.member("lector@jdh.com.co", "read")
+    assert client.post(f"{BASE}/notice", json={"request_ids": [request_id]}).status_code == 200
 
 
 def test_a_manual_request_validates_its_body(client, world) -> None:

@@ -424,6 +424,57 @@ async def test_a_support_is_attached_replaced_and_removed_while_in_review() -> N
     assert (await increases.support(request.id))[1] == PDF
 
 
+async def test_the_notice_takes_the_approved_lines_siesa_has() -> None:
+    ledger = FakeLedger({"10042": D("0.18"), "9894": D("0.2")})
+    increases = service(ledger=ledger)
+    request = await increases.create(
+        PERSON,
+        "50",
+        [
+            LineInput("10042", D("23000"), increased_on=date(2026, 12, 1)),
+            LineInput("9894", D("60000"), increased_on=date(2026, 12, 1)),
+        ],
+    )
+    in_review = await increases.create(
+        PERSON, "50", [LineInput("10042", D("1"), increased_on=TODAY)]
+    )
+    with pytest.raises(InvalidInputError, match="cargada en SIESA"):
+        await increases.notice([request.id])
+    await increases.approve(PERSON, request.id)
+    with pytest.raises(InvalidInputError, match="cargada en SIESA"):
+        await increases.notice([request.id])
+
+    ledger.load(date(2026, 11, 25), "10042")
+    name, content, rows, skipped = await increases.notice([request.id, in_review.id])
+
+    assert name == "Comunicado Alza de precios proveedor 23-11-2026.xlsx"
+    assert (rows, skipped) == (1, 1)
+    sheet = openpyxl.load_workbook(io.BytesIO(content))["Comunicado"]
+    assert [cell.value for cell in sheet[1]] == [
+        "Fecha de actualizacion Sistema",
+        "Referencia",
+        "PROVEEDOR",
+        "Desc. Item",
+        "Variacion %",
+        "Analisis",
+        "Precio Nuevo",
+    ]
+    values = [cell.value for cell in sheet[2]]
+    assert values[0] == datetime(2026, 11, 25) and values[1:3] == ["10042", "50 - ASCENDER S.A."]
+    assert values[3] == "Producto 10042" and values[5] == "SUBIO"
+    # The «Lista 1» price of the history: 23000 / (1 - 0.18).
+    assert values[6] == pytest.approx(28048.78, abs=0.01)
+    assert round(values[4], 4) == round(float(D("23000") / D("22039.88") - 1), 4)
+    assert sheet.max_row == 2
+
+    ledger.load(date(2026, 11, 25))
+    everything = await increases.notice(all_approved=True)
+    assert everything[2:] == (2, 0)
+    assert (await increases.get(request.id)).loaded_count == 0  # the fake keeps no count
+    with pytest.raises(InvalidInputError, match="al menos"):
+        await increases.notice([])
+
+
 async def test_unknown_or_repeated_references_block_the_upload() -> None:
     increases = service()
     _, content = await increases.template("50")

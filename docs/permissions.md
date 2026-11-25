@@ -107,8 +107,8 @@ Un coordinador sin equipo en el maestro no ve a nadie, hasta que se le complete 
 | bi (se enciende en otras áreas) | `maestros` | los maestros generales activos en el área (proveedores comerciales y legales, clientes, productos; `/commercial`); descarga | editar producto o proveedor, cargar márgenes; ver los campos personales |
 | abastecimiento | `analisis-entradas` | entradas de compra contra la cotización vigente (`/costs/entries`), motivos | asignar el motivo de una línea |
 | abastecimiento | `novedades-compras` | bandeja de novedades (`/costs/novelties`), su historial y la nota crédito | asignar motivo, registrar o quitar la nota crédito, editar el catálogo de motivos |
-| abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla | cargar, crear, editar, aprobar y rechazar alzas |
-| abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`) | poner o quitar la fecha de SIESA, cargar el libro (igual que `maestros` en BI) |
+| abastecimiento | `alzas-proveedor` | solicitudes de alza de los proveedores, plantilla, soporte y comunicado | cargar, crear, editar, aprobar y rechazar alzas |
+| abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`), lotes de cargue a SIESA y sus archivos | generar, confirmar y anular lotes de cargue a SIESA, poner o quitar la fecha de SIESA (igual que `maestros` en BI) |
 | bi (bloqueado) | `liquidacion-apoyos` | liquidación de apoyos del mes por proveedor, referencia y venta; Excel (`/support-settlements`) | recalcular y cerrar el mes vencido. Reabrir un mes cerrado: solo el líder o responsable de BI y los administradores (`AreaLeaderPolicy`) |
 
 `/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,

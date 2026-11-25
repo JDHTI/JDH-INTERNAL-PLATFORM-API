@@ -10,6 +10,7 @@ from sqlalchemy import case, func, insert, select, update
 
 from app.core.errors import NotFoundError
 from app.infrastructure.database import Database
+from app.modules.commercial_masters.infrastructure.models import PriceIncreaseModel
 from app.modules.costs.domain.increases import (
     REQUEST_STATUSES,
     IncreaseRequest,
@@ -25,6 +26,7 @@ from app.modules.costs.infrastructure.models import (
 
 Q = CostIncreaseRequestModel
 L = CostIncreaseLineModel
+H = PriceIncreaseModel
 _CHUNK = 1000
 _LINE_FIELDS = (
     "row_number",
@@ -93,7 +95,9 @@ def _support_values(support: SupportFile | None) -> dict:
     }
 
 
-def _request(model: CostIncreaseRequestModel, counts: tuple[int, int], lines=()) -> IncreaseRequest:
+def _request(
+    model: CostIncreaseRequestModel, counts: tuple[int, int, int], lines=()
+) -> IncreaseRequest:
     return IncreaseRequest(
         id=model.id,
         supplier_code=model.supplier_code,
@@ -110,6 +114,7 @@ def _request(model: CostIncreaseRequestModel, counts: tuple[int, int], lines=())
         decision_note=model.decision_note,
         line_count=counts[0],
         accepted_count=counts[1],
+        loaded_count=counts[2],
         lines=tuple(lines),
         support=_support(model),
     )
@@ -152,12 +157,15 @@ class SqlAlchemyIncreaseRepository:
                 await session.execute(insert(L), lines[start : start + _CHUNK])
 
     def _counts(self):
+        # Lines whose history row SIESA already has (read, never written, from the history).
         return (
             select(
                 L.request_id,
                 func.count().label("lines"),
                 func.count(case((L.accepted.is_(True), 1))).label("accepted"),
+                func.count(case((H.system_updated_on.is_not(None), 1))).label("loaded"),
             )
+            .outerjoin(H, H.id == L.ledger_id)
             .group_by(L.request_id)
             .subquery()
         )
@@ -178,7 +186,7 @@ class SqlAlchemyIncreaseRepository:
         """
 
         counts = self._counts()
-        listing = select(Q, counts.c.lines, counts.c.accepted).outerjoin(
+        listing = select(Q, counts.c.lines, counts.c.accepted, counts.c.loaded).outerjoin(
             counts, counts.c.request_id == Q.id
         )
         counting = select(*(func.count(case((Q.status == value, 1))) for value in REQUEST_STATUSES))
@@ -200,7 +208,8 @@ class SqlAlchemyIncreaseRepository:
         )
         return IncreaseRequestPage(
             items=tuple(
-                _request(model, (lines or 0, accepted or 0)) for model, lines, accepted in rows
+                _request(model, (lines or 0, accepted or 0, loaded or 0))
+                for model, lines, accepted, loaded in rows
             ),
             total=int(count),
             page=page,
@@ -223,7 +232,19 @@ class SqlAlchemyIncreaseRepository:
                     .order_by(L.row_number.nulls_last(), L.sku, L.regional)
                 )
             )
-        counts = (len(line_models), sum(1 for line in line_models if line.accepted))
+            loaded = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(L)
+                    .join(H, H.id == L.ledger_id)
+                    .where(L.request_id == request_id, H.system_updated_on.is_not(None))
+                )
+            ).scalar_one()
+        counts = (
+            len(line_models),
+            sum(1 for line in line_models if line.accepted),
+            int(loaded),
+        )
         lines = with_coverage([_line(line) for line in line_models]) if with_lines else []
         return _request(model, counts, lines)
 

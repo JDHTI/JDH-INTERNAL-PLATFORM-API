@@ -209,8 +209,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
-        # Lets the browser read the server-chosen name of downloaded files.
-        expose_headers=["Content-Disposition"],
+        # Lets the browser read the server-chosen name of downloaded files, and how many rows
+        # the increase notice took and left out (Costos).
+        expose_headers=["Content-Disposition", "X-Notice-Rows", "X-Notice-Skipped"],
     )
     app.add_middleware(RequestContextMiddleware)
     register_error_handlers(app)

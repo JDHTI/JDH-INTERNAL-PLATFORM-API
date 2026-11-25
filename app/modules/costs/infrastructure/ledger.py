@@ -18,7 +18,7 @@ from app.modules.commercial_masters.domain.price_increases import (
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
 )
-from app.modules.costs.domain.ports import LedgerEntry
+from app.modules.costs.domain.ports import LedgerEntry, LedgerRow
 
 
 def ledger_values(entry: LedgerEntry) -> PriceIncreaseValues:
@@ -67,6 +67,21 @@ class CommercialIncreaseLedger:
         """The «Lista 1» margin of each reference (the product master's)."""
 
         return await self.repository.list_margins(list(skus))
+
+    async def rows(self, ids: Sequence[UUID]) -> dict[UUID, LedgerRow]:
+        """These history rows, by id: when SIESA got them and their list price."""
+
+        return {
+            item.id: LedgerRow(
+                id=item.id,
+                sku=item.values.sku,
+                system_updated_on=item.values.system_updated_on,
+                price=item.values.price,
+                variation_pct=item.values.variation_pct,
+                status=item.values.status,
+            )
+            for item in await self.repository.by_ids(list(ids))
+        }
 
     async def record(
         self, entries: Sequence[LedgerEntry], actor: str, now: datetime

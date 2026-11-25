@@ -19,6 +19,7 @@ from app.modules.costs.application.novelties import UploadedFile
 from app.modules.costs.domain.entries import supplier_name
 from app.modules.costs.domain.increases import (
     APPROVED,
+    CHANGE_LABELS,
     FROM_FORM,
     FROM_TEMPLATE,
     IN_REVIEW,
@@ -52,12 +53,14 @@ from app.modules.costs.domain.ports import (
     SupplierItemSource,
     WorkbookReader,
 )
+from app.modules.costs.infrastructure.notice_file import NoticeRow, notice_name, notice_workbook
 from app.modules.identity.domain.principal import Principal
 
 logger = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
 MAX_REPORTED_ISSUES = 500
+MAX_NOTICE_REQUESTS = 200
 _BOGOTA = ZoneInfo("America/Bogota")
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -418,6 +421,83 @@ class IncreaseService:
         return request.file_name or "maestra.xlsx", await self.storage.get_object(
             request.storage_key
         )
+
+    # --- The notice («Comunicado») ---
+
+    async def notice(
+        self,
+        request_ids: Sequence[UUID] = (),
+        *,
+        all_approved: bool = False,
+        supplier: str | None = None,
+    ) -> tuple[str, bytes, int, int]:
+        """The notice of the picked requests (or every approved one, of a supplier when
+        given): one row per approved line SIESA already has, with the day it got it.
+
+        Returns:
+            tuple: File name, the workbook, the rows in it and the approved lines left out
+            because SIESA does not have them yet.
+
+        Raises:
+            InvalidInputError: Nothing picked, too many, or no line loaded in SIESA.
+        """
+
+        if all_approved:
+            page = await self.repository.page(
+                APPROVED, (supplier or "").strip() or None, 1, MAX_NOTICE_REQUESTS + 1
+            )
+            ids = [item.id for item in page.items]
+        else:
+            ids = list(dict.fromkeys(request_ids))
+        if not ids:
+            raise InvalidInputError("Elige al menos una solicitud aprobada")
+        if len(ids) > MAX_NOTICE_REQUESTS:
+            raise InvalidInputError(
+                f"El comunicado lleva hasta {MAX_NOTICE_REQUESTS} solicitudes; filtra por proveedor"
+            )
+        requests = [await self.repository.get(request_id, with_lines=True) for request_id in ids]
+        lines = [
+            (request, line)
+            for request in requests
+            if request is not None and request.status == APPROVED
+            for line in request.lines
+            if line.accepted and line.ledger_id is not None
+        ]
+        history = await self.ledger.rows([line.ledger_id for _, line in lines])
+        rows: list[NoticeRow] = []
+        skipped = 0
+        for request, line in lines:
+            loaded = history.get(line.ledger_id)
+            if loaded is None or loaded.system_updated_on is None:
+                skipped += 1
+                continue
+            supplier_label = " - ".join(
+                part for part in (request.supplier_code, request.supplier_name) if part
+            )
+            change = loaded.status or line.change
+            rows.append(
+                NoticeRow(
+                    loaded_on=loaded.system_updated_on,
+                    sku=line.sku,
+                    supplier=supplier_label or None,
+                    description=line.description,
+                    variation_pct=(
+                        loaded.variation_pct
+                        if loaded.variation_pct is not None
+                        else line.variation_pct
+                    ),
+                    analysis=CHANGE_LABELS.get(change or ""),
+                    price=loaded.price,
+                )
+            )
+        if not rows:
+            raise InvalidInputError(
+                "Ninguna alza de las solicitudes elegidas está cargada en SIESA todavía; "
+                "confirma su cargue en el acumulado"
+            )
+        rows.sort(key=lambda row: (row.supplier or "", row.sku))
+        content = await asyncio.to_thread(notice_workbook, rows)
+        return notice_name(self.today()), content, len(rows), skipped
 
     # --- The supplier's support ---
 

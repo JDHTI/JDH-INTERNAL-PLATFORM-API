@@ -1,16 +1,17 @@
-"""Use cases of the price increase history: read it, upload the workbook, set SIESA's date.
+"""Use cases of the price increase history: read and analyze it, set SIESA's date.
 
-Reading is open to whoever reads the commercial masters (the router's gate). Uploading and
-changing the system update date need the masters' manager permission (BI, module
-``maestros``). An upload is a simulation unless ``apply``: it says what it would insert,
-update and leave as it is, and what it could not read, before anything is written.
+The history fills itself: the suppliers' increases approved in Costos land in it (the area's
+workbook stopped being uploaded on 2026-11-25), and SIESA loads date them
+(:mod:`.siesa_loads`). Reading is open to whoever reads the commercial masters (the router's
+gate). Changing the system update date needs the history's manager permission (``maestros``
+in BI or ``acumulado-alzas`` in Costos).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from uuid import UUID
@@ -35,20 +36,13 @@ from app.modules.commercial_masters.domain.price_increase_analysis import (
 from app.modules.commercial_masters.domain.price_increases import (
     EARLIEST_DATE,
     STATUSES,
-    FileRow,
     FilterOptions,
     PriceIncrease,
     PriceIncreaseFilters,
     PriceIncreasePage,
-    PriceIncreaseValues,
     Scope,
-    UploadIssue,
-    UploadReport,
     place_options,
     scope_of,
-)
-from app.modules.commercial_masters.infrastructure.price_increases_file import (
-    PriceIncreaseFileReader,
 )
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
@@ -58,7 +52,6 @@ from app.modules.identity.domain.principal import Principal
 logger = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
-MAX_REPORTED_ISSUES = 200
 # Windows kept per data version: the presets plus the months and ranges people look at.
 MAX_CACHED_WINDOWS = 32
 _BOGOTA = ZoneInfo("America/Bogota")
@@ -96,28 +89,6 @@ class AnalysisPage:
     until: date | None
 
 
-def numbered(rows: Sequence[FileRow]) -> dict[str, FileRow]:
-    """The workbook's rows by key, none lost.
-
-    The workbook chains increases with the same reference and dates (sku 15143 on 2021-09-24:
-    15,519 to 15,984.36, then to 16,463.89). Keeping only the last of a key lost 101 such
-    rows (2026-11-24), so each one is the n-th ``occurrence`` of its key, in the file's order.
-    A row equal to an earlier one of its key, value for value, was typed twice and counts once.
-    """
-
-    by_key: dict[str, FileRow] = {}
-    seen: dict[str, list[tuple]] = {}
-    for row in rows:
-        group = seen.setdefault(row.values.key, [])
-        values = row.values.comparable()
-        if values in group:
-            continue
-        group.append(values)
-        numbered_row = replace(row, values=replace(row.values, occurrence=len(group)))
-        by_key[numbered_row.values.key] = numbered_row
-    return by_key
-
-
 class PriceIncreaseService:
     """The price increase history of the products."""
 
@@ -125,8 +96,6 @@ class PriceIncreaseService:
         self,
         repository: SqlAlchemyPriceIncreaseRepository,
         managers: ManagerPolicy,
-        reader: PriceIncreaseFileReader,
-        max_upload_bytes: int,
         today: Callable[[], date] = lambda: datetime.now(_BOGOTA).date(),
         cache: AnalysisCache | None = None,
         placements: PlacementSource | None = None,
@@ -135,9 +104,8 @@ class PriceIncreaseService:
 
         Args:
             repository (SqlAlchemyPriceIncreaseRepository): Stored rows.
-            managers (ManagerPolicy): Who manages the commercial masters.
-            reader (PriceIncreaseFileReader): Reads the workbook.
-            max_upload_bytes (int): Largest workbook accepted.
+            managers (ManagerPolicy): Who manages the history (BI's masters, Costos'
+                ``acumulado-alzas``).
             today (Callable[[], date]): Today in Bogotá, where a period ends.
             cache (AnalysisCache | None): The process-wide analysis cache.
             placements (PlacementSource | None): Where each reference is set up (the
@@ -146,8 +114,6 @@ class PriceIncreaseService:
 
         self.repository = repository
         self.managers = managers
-        self.reader = reader
-        self.max_upload_bytes = max_upload_bytes
         self.today = today
         self.cache = cache or AnalysisCache()
         self.placements = placements
@@ -320,61 +286,6 @@ class PriceIncreaseService:
                 cache.periods.pop(next(iter(cache.periods)))
             cache.periods[cached] = (in_period(rows, since, until), analyses)
         return cache.periods[cached]
-
-    async def upload(
-        self, principal: Principal, filename: str | None, content: bytes, *, apply: bool
-    ) -> UploadReport:
-        """Upsert the workbook's rows by reference, increase date and notification date.
-
-        Rows with the same key are increases in a row and each one is kept (:func:`numbered`);
-        only a row typed twice, value for value, counts once. Rows of references the product master
-        does not have are kept too (the history outlives the products) and counted. With
-        ``apply`` false nothing is written.
-
-        Raises:
-            ForbiddenError: The caller does not manage the masters.
-            InvalidInputError: Empty, too large or unreadable file.
-        """
-
-        await self._require_manager(principal)
-        if not content:
-            raise InvalidInputError("El archivo está vacío")
-        if len(content) > self.max_upload_bytes:
-            megas = self.max_upload_bytes // (1024 * 1024)
-            raise InvalidInputError(f"El archivo pasa de {megas} MB")
-        # openpyxl is synchronous: in a thread, a 50 000-row file never holds up the API.
-        rows = await asyncio.to_thread(self.reader.read, filename, content)
-        by_key = numbered(rows)
-        duplicated = len(rows) - len(by_key)
-        stored = await self.repository.existing(list(by_key))
-        known = await self.repository.known_skus(sorted({row.values.sku for row in rows}))
-        inserted: list[PriceIncreaseValues] = []
-        updated: list[PriceIncreaseValues] = []
-        for key, row in by_key.items():
-            current = stored.get(key)
-            if current is None:
-                inserted.append(row.values)
-            elif current.comparable() != row.values.comparable():
-                updated.append(row.values)
-        issues = [
-            UploadIssue(row.row_number, row.values.sku, problem)
-            for row in rows
-            for problem in row.problems
-        ]
-        if apply:
-            await self.repository.upsert([*inserted, *updated], principal.email, datetime.now(UTC))
-        return UploadReport(
-            applied=apply,
-            rows_read=len(rows),
-            inserted=len(inserted),
-            updated=len(updated),
-            unchanged=len(by_key) - len(inserted) - len(updated),
-            duplicated=duplicated,
-            unknown_skus=len({row.values.sku for row in rows} - known),
-            pending=sum(1 for row in by_key.values() if row.values.system_updated_on is None),
-            issues=tuple(issues[:MAX_REPORTED_ISSUES]),
-            issues_truncated=len(issues) > MAX_REPORTED_ISSUES,
-        )
 
     async def set_system_date(
         self, principal: Principal, increase_id: UUID, day: date | None

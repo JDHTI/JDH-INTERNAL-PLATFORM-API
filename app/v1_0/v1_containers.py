@@ -37,18 +37,22 @@ from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
     MasterLookup,
 )
+from app.modules.commercial_masters.application.siesa_loads import SiesaLoadService
 from app.modules.commercial_masters.application.sync import MasterSyncService
 from app.modules.commercial_masters.infrastructure.dwh_source import WarehouseMasterSource
 from app.modules.commercial_masters.infrastructure.margins_file import SpreadsheetMarginReader
 from app.modules.commercial_masters.infrastructure.placements import WarehousePlacementSource
-from app.modules.commercial_masters.infrastructure.price_increases_file import (
-    PriceIncreaseFileReader,
-)
 from app.modules.commercial_masters.infrastructure.price_increases_repository import (
     SqlAlchemyPriceIncreaseRepository,
 )
 from app.modules.commercial_masters.infrastructure.repository import (
     SqlAlchemyCommercialMasterRepository,
+)
+from app.modules.commercial_masters.infrastructure.siesa_load_repository import (
+    SqlAlchemySiesaLoadRepository,
+)
+from app.modules.commercial_masters.infrastructure.siesa_quotations import (
+    WarehouseCurrentQuotations,
 )
 from app.modules.consumption.application.cursor import ClientCursorCodec
 from app.modules.consumption.application.service import ConsumptionService
@@ -592,7 +596,6 @@ class V1Container(containers.DeclarativeContainer):
     price_increase_repository = providers.Factory(
         SqlAlchemyPriceIncreaseRepository, database=database
     )
-    price_increase_reader = providers.Singleton(PriceIncreaseFileReader)
     # Kept across requests: the analysis of a period is worked out once per data version.
     price_increase_analysis_cache = providers.Singleton(AnalysisCache)
     price_increase_service = providers.Factory(
@@ -606,12 +609,21 @@ class V1Container(containers.DeclarativeContainer):
                 PermissionPolicy, areas=area_service, area_slug=None, module="acumulado-alzas"
             ),
         ),
-        reader=price_increase_reader,
-        max_upload_bytes=config.product_margins.max_upload_bytes,
         cache=price_increase_analysis_cache,
         # The operation center and installation filters (2026-11-24).
         placements=providers.Factory(
             WarehousePlacementSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+        ),
+    )
+    # Pending increases into SIESA's supplier quotations (the 0212 file; 2026-11-25).
+    siesa_load_service = providers.Factory(
+        SiesaLoadService,
+        repository=providers.Factory(SqlAlchemySiesaLoadRepository, database=database),
+        increases=price_increase_service,
+        quotations=providers.Factory(
+            WarehouseCurrentQuotations,
             connection=data_provider,
             schema=settings.provided.DWH_SCHEMA,
         ),

@@ -327,6 +327,8 @@ class IncreaseRequest:
     accepted_count: int
     lines: tuple[RequestLine, ...] = ()
     support: SupportFile | None = None
+    # Approved lines whose increase SIESA already has (a confirmed load): the notice has them.
+    loaded_count: int = 0
 
 
 @dataclass(frozen=True)

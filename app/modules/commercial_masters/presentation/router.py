@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
@@ -24,6 +25,10 @@ from app.modules.commercial_masters.application.service import (
     CommercialMasterService,
     LiquorTax,
 )
+from app.modules.commercial_masters.application.siesa_loads import (
+    MAX_PAGE_SIZE as SIESA_LOADS_MAX_PAGE,
+)
+from app.modules.commercial_masters.application.siesa_loads import Selection, SiesaLoadService
 from app.modules.commercial_masters.domain.entities import Product
 from app.modules.commercial_masters.domain.margins import MARGIN_FIELDS, MarginReport
 from app.modules.commercial_masters.domain.price_increases import (
@@ -32,6 +37,12 @@ from app.modules.commercial_masters.domain.price_increases import (
 from app.modules.commercial_masters.domain.price_increases import (
     PriceIncrease,
     PriceIncreaseFilters,
+)
+from app.modules.commercial_masters.domain.siesa_loads import (
+    LOAD_STATUS_LABELS,
+    MAX_LOAD_ROWS,
+    LoadRow,
+    SiesaLoad,
 )
 from app.modules.commercial_masters.infrastructure.margins_file import template_workbook
 from app.modules.identity.domain.principal import Principal
@@ -58,6 +69,7 @@ router = APIRouter(
 _service = Depends(Provide[ApplicationContainer.v1_container.commercial_master_service])
 _increases = Depends(Provide[ApplicationContainer.v1_container.price_increase_service])
 _employee_prices = Depends(Provide[ApplicationContainer.v1_container.employee_price_service])
+_loads = Depends(Provide[ApplicationContainer.v1_container.siesa_load_service])
 _principal = Depends(get_current_principal)
 
 
@@ -733,6 +745,8 @@ class PriceIncreaseResponse(BaseModel):
     occurrence: int
     # No system update date: SIESA does not have it, so the quoter compares its new cost.
     is_pending: bool
+    # The number of the SIESA load it is in, generated and not yet confirmed; null otherwise.
+    open_load: int | None
     updated_by: str
     updated_at: datetime
 
@@ -751,29 +765,8 @@ class PriceIncreasePageResponse(BaseModel):
     size: int
     # Counts of the whole filter, not the page.
     counts: PriceIncreaseCountsResponse
-    # Whether the caller may upload the workbook and set the system update date.
+    # Whether the caller may load increases into SIESA and set the system update date.
     can_manage: bool
-
-
-class PriceIncreaseIssueResponse(BaseModel):
-    row_number: int
-    sku: str | None
-    problem: str
-
-
-class PriceIncreaseReportResponse(BaseModel):
-    """What an upload did, or would do."""
-
-    applied: bool
-    rows_read: int
-    inserted: int
-    updated: int
-    unchanged: int
-    duplicated: int
-    unknown_skus: int
-    pending: int
-    issues: list[PriceIncreaseIssueResponse]
-    issues_truncated: bool
 
 
 class SystemDateRequest(BaseModel):
@@ -792,6 +785,7 @@ def _increase(item: PriceIncrease) -> PriceIncreaseResponse:
         is_known_product=item.is_known_product,
         status_label=PRICE_STATUS_LABELS.get(values.status or ""),
         is_pending=item.is_pending,
+        open_load=item.open_load,
         updated_by=item.updated_by,
         updated_at=item.updated_at,
         **asdict(values),
@@ -1027,36 +1021,247 @@ async def list_price_increases(
     )
 
 
+# --- SIESA loads: pending increases into SIESA's supplier quotations (0212) ---
+
+LoadStatus = Literal["generado", "cargado", "anulado"]
+
+
+class LoadFiltersBody(BaseModel):
+    """The history's filters, as ``GET /price-increases`` takes them (pending is forced)."""
+
+    q: str | None = Field(default=None, max_length=100)
+    status: Literal["subio", "bajo", "estable"] | None = None
+    sku: str | None = Field(default=None, max_length=40)
+    supplier: str | None = Field(default=None, max_length=40)
+    co: str | None = Field(default=None, max_length=10)
+    installation: str | None = Field(default=None, max_length=10)
+
+
+class LoadSelectionBody(BaseModel):
+    """These increases (``increase_ids``), or every pending one of ``filters`` (``all``)."""
+
+    increase_ids: list[UUID] = Field(default_factory=list, max_length=MAX_LOAD_ROWS)
+    all: bool = False
+    filters: LoadFiltersBody = Field(default_factory=LoadFiltersBody)
+
+
+class LoadRowResponse(BaseModel):
+    increase_id: UUID
+    sku: str
+    description: str | None
+    # Who and where SIESA quotes it: the quotation in force in the inventory unit.
+    nit: str
+    branch: str
+    currency: str
+    unit: str
+    # The new cost without the healthy-food tax.
+    price: Decimal
+    activation_date: date
+    delivery_days: int
+    increased_on: date | None
+    # Other suppliers with a quotation in force: SIESA gets the latest one's (nit).
+    other_nits: list[str]
+
+
+class ExcludedResponse(BaseModel):
+    increase_id: UUID
+    sku: str
+    reason: str
+
+
+class LoadResponse(BaseModel):
+    id: UUID
+    number: int
+    status: LoadStatus
+    status_label: str
+    row_count: int
+    created_by: str
+    created_at: datetime
+    confirmed_by: str | None
+    confirmed_at: datetime | None
+    # The day it was loaded in SIESA: its increases' system update date.
+    loaded_on: date | None
+    voided_by: str | None
+    voided_at: datetime | None
+
+
+class LoadDetailResponse(LoadResponse):
+    rows: list[LoadRowResponse]
+
+
+class LoadResultResponse(BaseModel):
+    """What the selection loads (``rows``) and leaves out (``excluded``); ``load`` when
+    ``apply`` stored it."""
+
+    applied: bool
+    rows: list[LoadRowResponse]
+    excluded: list[ExcludedResponse]
+    load: LoadDetailResponse | None
+
+
+class LoadPageResponse(BaseModel):
+    items: list[LoadResponse]
+    total: int
+    page: int
+    size: int
+    counts: dict[LoadStatus, int]
+    can_manage: bool
+
+
+class ConfirmLoadBody(BaseModel):
+    """The day the file was loaded in SIESA; today when left out."""
+
+    loaded_on: date | None = None
+
+
+def _load_row(row: LoadRow) -> LoadRowResponse:
+    return LoadRowResponse(**{**asdict(row), "other_nits": list(row.other_nits)})
+
+
+def _load_summary(load: SiesaLoad) -> dict:
+    return {
+        "id": load.id,
+        "number": load.number,
+        "status": load.status,
+        "status_label": LOAD_STATUS_LABELS[load.status],
+        "row_count": load.row_count,
+        "created_by": load.created_by,
+        "created_at": load.created_at,
+        "confirmed_by": load.confirmed_by,
+        "confirmed_at": load.confirmed_at,
+        "loaded_on": load.loaded_on,
+        "voided_by": load.voided_by,
+        "voided_at": load.voided_at,
+    }
+
+
+def _load(load: SiesaLoad) -> LoadDetailResponse:
+    return LoadDetailResponse(**_load_summary(load), rows=[_load_row(row) for row in load.rows])
+
+
 @router.post(
-    "/price-increases/upload",
-    response_model=PriceIncreaseReportResponse,
-    summary="Upsert the price increase workbook",
-    description=(
-        "multipart/form-data with `file` (.xlsx, the `Acumulado Alza Precios` layout). Rows "
-        "are upserted by Referencia, Fecha de Incremento and Fecha de notificación; the "
-        "product's own columns are ignored. A simulation unless `apply=true`. Masters "
-        "managers only."
-    ),
+    "/price-increases/siesa-loads",
+    response_model=LoadResultResponse,
+    summary="Generate a SIESA load of pending increases",
 )
 @inject
-async def upload_price_increases(
-    file: UploadFile = File(...),  # noqa: B008
-    apply: bool = Query(default=False),
+async def generate_siesa_load(
+    body: LoadSelectionBody,
+    apply: bool = Query(default=False, description="Store the load; a preview otherwise"),
     principal: Principal = _principal,
-    service: PriceIncreaseService = _increases,
-) -> PriceIncreaseReportResponse:
-    """Compare the workbook with the history and, with ``apply``, write the differences."""
+    service: SiesaLoadService = _loads,
+) -> LoadResultResponse:
+    """The picked increases (or every pending one of the filters, ``all``) as SIESA supplier
+    quotations: what goes, with the supplier, unit and price it takes, and what is left out and
+    why. With ``apply`` the load is stored and its files can be downloaded (managers of the
+    history only)."""
 
-    content = await file.read(service.max_upload_bytes + 1)
-    report = await service.upload(principal, file.filename, content, apply=apply)
-    return PriceIncreaseReportResponse(
-        **{
-            name: getattr(report, name)
-            for name in PriceIncreaseReportResponse.model_fields
-            if name != "issues"
-        },
-        issues=[PriceIncreaseIssueResponse(**asdict(issue)) for issue in report.issues],
+    filters = body.filters
+    result = await service.generate(
+        principal,
+        Selection(
+            increase_ids=tuple(body.increase_ids),
+            all=body.all,
+            filters=PriceIncreaseFilters(
+                q=filters.q, status=filters.status, sku=filters.sku, supplier=filters.supplier
+            ),
+            co=filters.co,
+            installation=filters.installation,
+        ),
+        apply=apply,
     )
+    return LoadResultResponse(
+        applied=result.load is not None,
+        rows=[_load_row(row) for row in result.plan.rows],
+        excluded=[ExcludedResponse(**asdict(item)) for item in result.plan.excluded],
+        load=_load(result.load) if result.load else None,
+    )
+
+
+@router.get("/price-increases/siesa-loads", response_model=LoadPageResponse, summary="SIESA loads")
+@inject
+async def siesa_loads(
+    status_filter: LoadStatus | None = Query(default=None, alias="status"),  # noqa: B008
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=50, ge=1, le=SIESA_LOADS_MAX_PAGE),
+    principal: Principal = _principal,
+    service: SiesaLoadService = _loads,
+    increases: PriceIncreaseService = _increases,
+) -> LoadPageResponse:
+    """The loads, the latest first, with the counts by status."""
+
+    result = await service.page(status_filter, page, size)
+    return LoadPageResponse(
+        items=[LoadResponse(**_load_summary(item)) for item in result.items],
+        total=result.total,
+        page=result.page,
+        size=result.size,
+        counts=result.counts,
+        can_manage=await increases.can_manage(principal),
+    )
+
+
+@router.get(
+    "/price-increases/siesa-loads/{load_id}",
+    response_model=LoadDetailResponse,
+    summary="A SIESA load and its quotations",
+)
+@inject
+async def siesa_load(load_id: UUID, service: SiesaLoadService = _loads) -> LoadDetailResponse:
+    return _load(await service.get(load_id))
+
+
+@router.get("/price-increases/siesa-loads/{load_id}/file", summary="A SIESA load's file")
+@inject
+async def siesa_load_file(
+    load_id: UUID,
+    kind: Literal["txt", "xlsx"] = Query(default="txt"),
+    service: SiesaLoadService = _loads,
+) -> Response:
+    """``txt``: the import file (Impodatos ``0212``) for SIESA; ``xlsx``: the same
+    quotations as the area's «IncrementoCostos Entradas» workbook."""
+
+    file = await service.file(load_id, kind)
+    return Response(
+        content=file.content,
+        media_type=file.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file.name)}",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/price-increases/siesa-loads/{load_id}/confirm",
+    response_model=LoadDetailResponse,
+    summary="Confirm a load was loaded in SIESA",
+)
+@inject
+async def confirm_siesa_load(
+    load_id: UUID,
+    body: ConfirmLoadBody,
+    principal: Principal = _principal,
+    service: SiesaLoadService = _loads,
+) -> LoadDetailResponse:
+    """Its increases get ``loaded_on`` (today by default) as their system update date and stop
+    being pending. 409 when it was already confirmed or voided."""
+
+    return _load(await service.confirm(principal, load_id, body.loaded_on))
+
+
+@router.post(
+    "/price-increases/siesa-loads/{load_id}/void",
+    response_model=LoadDetailResponse,
+    summary="Void a load that was not loaded",
+)
+@inject
+async def void_siesa_load(
+    load_id: UUID, principal: Principal = _principal, service: SiesaLoadService = _loads
+) -> LoadDetailResponse:
+    """Its increases are free for another load. 409 when it was already confirmed or voided."""
+
+    return _load(await service.void(principal, load_id))
 
 
 @router.patch(
