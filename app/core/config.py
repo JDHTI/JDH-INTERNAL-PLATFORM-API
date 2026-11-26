@@ -244,7 +244,7 @@ class Settings(BaseSettings):
     # Presupuesto comercial. The board offers months from the start; sales are copied by month
     # from a year before it (its comparison with last year), a few missing months per run.
     COMMERCIAL_BUDGET_START_PERIOD: str = "2026-01"
-    COMMERCIAL_BUDGET_BACKFILL_MONTHS: int = 6
+    COMMERCIAL_BUDGET_BACKFILL_MONTHS: int = 24
     COMMERCIAL_BUDGET_DWH_TIMEOUT_SECONDS: float = 300.0
     COMMERCIAL_BUDGET_MAX_UPLOAD_MB: int = 10
     # Areas whose leader (or responsible) closes and reopens a month.

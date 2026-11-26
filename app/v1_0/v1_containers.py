@@ -1180,33 +1180,7 @@ class V1Container(containers.DeclarativeContainer):
         start_period=config.support_settlements.start_period,
         writer=providers.Object(settlement_workbook),
     )
-    # --- Gestión comercial: the budget by sales rep and the rep master upload ---
-    commercial_budget_service = providers.Factory(
-        BudgetService,
-        repository=providers.Factory(SqlAlchemyBudgetRepository, database=database),
-        warehouse=providers.Factory(
-            WarehouseBudgetSource,
-            connection=data_provider,
-            schema=settings.provided.DWH_SCHEMA,
-            timeout=config.commercial_budget.dwh_timeout,
-        ),
-        # BI and Comercial fill the budget by role (any area where the module is on).
-        policy=providers.Factory(
-            PermissionPolicy, areas=area_service, area_slug=None, module="presupuesto-comercial"
-        ),
-        leaders=providers.Factory(
-            AnyAreaLeaderPolicy,
-            areas=area_service,
-            area_slugs=config.commercial_budget.leader_area_slugs,
-        ),
-        scopes=sales_scope_service,
-        start_period=config.commercial_budget.start_period,
-        backfill_months=config.commercial_budget.backfill_months,
-        max_upload_bytes=config.commercial_budget.max_upload_bytes,
-        writer=providers.Object(board_workbook),
-        template_writer=providers.Object(budget_template),
-        reader=providers.Object(read_budget_file),
-    )
+    # --- Gestión comercial: the rep master upload (the budget goes after the jobs) ---
     vendor_master_service = providers.Factory(
         VendorMasterService,
         client=providers.Factory(
@@ -1265,6 +1239,37 @@ class V1Container(containers.DeclarativeContainer):
         poll_seconds=config.jobs.poll_seconds,
         fallback_at=config.jobs.fallback_at,
         timezone=config.jobs.timezone,
+    )
+    # --- Gestión comercial: the budget by sales rep; its copy of the sales is the background
+    # job ``commercial-budget-sales`` (a manual sync queues it) ---
+    commercial_budget_service = providers.Factory(
+        BudgetService,
+        repository=providers.Factory(SqlAlchemyBudgetRepository, database=database),
+        warehouse=providers.Factory(
+            WarehouseBudgetSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            timeout=config.commercial_budget.dwh_timeout,
+        ),
+        # BI and Comercial fill the budget by role (any area where the module is on).
+        policy=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="presupuesto-comercial"
+        ),
+        leaders=providers.Factory(
+            AnyAreaLeaderPolicy,
+            areas=area_service,
+            area_slugs=config.commercial_budget.leader_area_slugs,
+        ),
+        scopes=sales_scope_service,
+        start_period=config.commercial_budget.start_period,
+        backfill_months=config.commercial_budget.backfill_months,
+        max_upload_bytes=config.commercial_budget.max_upload_bytes,
+        writer=providers.Object(board_workbook),
+        template_writer=providers.Object(budget_template),
+        reader=providers.Object(read_budget_file),
+        runs=job_run_repository,
+        jobs_enabled=config.jobs.enabled,
+        request_run=job_request.provided.set,
     )
     # The board of Listas principales; its sync is the background job ``main-lists-sync``.
     main_board_service = providers.Factory(

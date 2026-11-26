@@ -127,7 +127,7 @@ def test_comercial_fills_the_budget_and_reads_the_board(client, world) -> None:
     world.caller = world.member(
         "comercial", "analista@jdh.com.co", [("presupuesto-comercial", "manage")]
     )
-    client.post(f"{BASE}/sync")
+    asyncio.run(world.service.refresh())
 
     saved = client.put(
         f"{BASE}/2026-09/budgets",
@@ -151,9 +151,17 @@ def test_comercial_fills_the_budget_and_reads_the_board(client, world) -> None:
     assert client.post(f"{BASE}/2026-09/close").status_code == 403
 
 
+def test_the_sync_is_a_background_job(client, world) -> None:
+    world.caller = world.admin
+
+    # The worker is off in the tests: the sync is refused, never run inside the request.
+    assert client.post(f"{BASE}/sync").status_code == 409
+    assert client.get(f"{BASE}/sync").json() is None
+
+
 def test_a_leader_closes_and_a_closed_month_refuses_changes(client, world) -> None:
     world.caller = world.admin
-    client.post(f"{BASE}/sync")
+    asyncio.run(world.service.refresh())
 
     closed = client.post(f"{BASE}/2026-09/close")
     refused = client.put(
@@ -168,7 +176,7 @@ def test_a_leader_closes_and_a_closed_month_refuses_changes(client, world) -> No
 
 def test_the_budget_workbook_simulates_then_applies(client, world) -> None:
     world.caller = world.admin
-    client.post(f"{BASE}/sync")
+    asyncio.run(world.service.refresh())
     workbook = Workbook()
     workbook.active.append(["CÓDIGO VENDEDOR", "PPTO VENTA", "PPTO RECAUDO"])
     workbook.active.append(["101", 900, 950])

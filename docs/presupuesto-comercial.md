@@ -82,9 +82,14 @@ La vista nunca espera al DWH: lee tablas propias.
 - el maestro de vendedores;
 - el mes en curso;
 - el anterior, si no está cerrado;
-- hasta `COMMERCIAL_BUDGET_BACKFILL_MONTHS` meses de historia que falten, desde un año antes del inicio (las comparaciones con el año anterior).
+- hasta `COMMERCIAL_BUDGET_BACKFILL_MONTHS` (24) meses de historia que falten, desde un año antes del inicio (las comparaciones con el año anterior).
 
-Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente. `POST /sync` hace lo mismo a pedido (`manage`).
+Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente.
+
+**Sincronizar a pedido** (`POST /sync`, `manage`):
+- Encola la misma tarea y responde de inmediato (202). Se sigue con `GET /sync`, que da el estado, los meses copiados y los pendientes.
+- Antes corría dentro de la petición. El 2026-11-26 tardó 46 s y el proxy de infraestructura corta a los 30 s, así que mostró un 504 aunque terminó y guardó los meses.
+- Sirve para la primera carga o para no esperar a la tarea del día siguiente. Los meses ya copiados no se vuelven a leer, salvo el mes en curso y el anterior.
 
 **Meses sin copiar:** la vista los lista en `missing_months`.
 
@@ -119,7 +124,8 @@ Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente. `POST /sync` hace l
 | `POST /commercial-budget/{periodo}/budget-upload?apply=` | Carga del presupuesto (multipart `file`, `note`) |
 | `POST /commercial-budget/{periodo}/close` y `/reopen` | Cierre y reapertura (líderes) |
 | `GET /commercial-budget/{periodo}/export` | Excel con la forma de la plantilla de BI: grupos por regional y equipo con sus totales |
-| `POST /commercial-budget/sync` | Copia las ventas y el maestro ahora (`manage`) |
+| `POST /commercial-budget/sync` | Encola la copia de las ventas y el maestro (`manage`); 202 con la corrida, 409 si ya hay una en cola o en curso |
+| `GET /commercial-budget/sync` | La última copia: estado, cuándo, meses copiados (`months`) y pendientes (`pending`) |
 | `GET /vendor-master/status` | `configured`, `can_read`, `can_manage`. Abierto |
 | `GET /vendor-master/template` | Plantilla vacía |
 | `POST /vendor-master/upload` | Reenvío a dwh-platform (multipart `file`, .xlsx de hasta 10 MB) |
