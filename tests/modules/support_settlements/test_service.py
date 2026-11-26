@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import date
 from decimal import Decimal
 
@@ -178,10 +179,11 @@ async def test_a_recalculation_finishes_when_the_request_is_cancelled(repository
     with pytest.raises(asyncio.CancelledError):
         await request
     slow.release.set()
-    for _ in range(20):
-        if (OCTOBER_INVENTORY) in repository.items:
+    # The calculation runs in a worker thread: wait real time, not just loop turns.
+    for _ in range(200):
+        if OCTOBER_INVENTORY in repository.items:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert repository.items[OCTOBER_QUOTE].supported_lines == 1
     assert repository.items[OCTOBER_INVENTORY].supported_lines == 1
@@ -220,3 +222,21 @@ async def test_both_bases_come_from_one_read_and_close_on_their_own(
     assert repository.items[OCTOBER_INVENTORY].status == CLOSED
     with pytest.raises(InvalidInputError, match="Base de costo"):
         await service.summary(READER, "2026-10", "otra")
+
+
+async def test_the_calculation_runs_off_the_event_loop(service, monkeypatch) -> None:
+    # On the loop, a month's calculation froze every other request of the API (504s).
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+    settle = SettlementService.settle
+
+    def recorded(inputs, basis):
+        threads.append(threading.get_ident())
+        return settle(inputs, basis)
+
+    monkeypatch.setattr(service, "settle", recorded)
+
+    await service.recalculate(ANALYST, "2026-10")
+    await service.refresh_open()
+
+    assert threads and loop_thread not in threads
