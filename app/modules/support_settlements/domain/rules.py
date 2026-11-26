@@ -151,7 +151,19 @@ def applies(
 ) -> bool:
     """Whether the support covers the sale line on its day."""
 
-    agreement = Agreement(
+    return _covers(
+        support,
+        _agreement(support),
+        line,
+        _probe(line, customer, supplier_code),
+        _scope(line, customer),
+    )
+
+
+def _agreement(support: SettlementSupport) -> Agreement:
+    """The support as the order validator's agreement (it depends on the support only)."""
+
+    return Agreement(
         id=support.id,
         # A support of one reference is that reference's, whatever supplier the master says.
         supplier_code=None if support.product_sku else support.supplier_code,
@@ -170,8 +182,12 @@ def applies(
         customer_group=support.customer_group,
         promo_warehouses=support.promo_warehouses,
     )
-    scope = _scope(line, customer)
-    probe = OrderLine(
+
+
+def _probe(line: SaleLine, customer: CustomerBranch | None, supplier_code: str | None) -> OrderLine:
+    """The sale line as the order validator's line (it depends on the sale only)."""
+
+    return OrderLine(
         row_number=0,
         document=line.document or "",
         customer_nit=line.nit,
@@ -180,6 +196,22 @@ def applies(
         channel=customer.channel if customer else None,
         warehouse=line.warehouse_code,
     )
+
+
+def _covers(
+    support: SettlementSupport,
+    agreement: Agreement,
+    line: SaleLine,
+    probe: OrderLine,
+    scope: CustomerScope | None,
+) -> bool:
+    """:func:`applies` with the agreement, the probe and the scope already built.
+
+    A month crosses tens of thousands of lines with about a hundred supports each: building
+    them once per support and once per line, instead of once per pair, is what keeps the
+    calculation in seconds (2026-11-26: 172 s per cost basis before).
+    """
+
     if scope_of(agreement, probe, scope, line.sale_date) == APPLIES:
         return True
     # A support written with the warehouse's name instead of its code.
@@ -419,10 +451,10 @@ def build_settlement(
 
     if cost_basis not in COST_BASES:
         raise ValueError(f"Unknown cost basis: {cost_basis}")
-    by_sku: dict[str, list[SettlementSupport]] = defaultdict(list)
+    by_sku: dict[str, list[tuple[SettlementSupport, Agreement]]] = defaultdict(list)
     for support in supports:
         if support.kind in SETTLED_KINDS and support.funding != "jdh":
-            by_sku[support.product_sku or ""].append(support)
+            by_sku[support.product_sku or ""].append((support, _agreement(support)))
 
     settled: list[SettledSale] = []
     for line in sales:
@@ -431,11 +463,13 @@ def build_settlement(
         customer = customers.get(line.customer_key or "")
         if not line.quantity or not line.net:
             continue  # gifts, internal consumption, services: no sale to support
+        probe = _probe(line, customer, supplier_code)
+        scope = _scope(line, customer)
         candidates = [
             support
-            for support in (*by_sku.get(line.sku, ()), *by_sku.get("", ()))
+            for support, agreement in (*by_sku.get(line.sku, ()), *by_sku.get("", ()))
             if (support.product_sku or support.supplier_code == supplier_code)
-            and applies(support, line, customer, supplier_code)
+            and _covers(support, agreement, line, probe, scope)
         ]
         if not candidates:
             continue

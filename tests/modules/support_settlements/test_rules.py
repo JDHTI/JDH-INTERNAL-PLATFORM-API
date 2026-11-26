@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.modules.support_settlements.domain import rules
 from app.modules.support_settlements.domain.entities import (
     COST_INVENTORY,
     COST_QUOTE,
@@ -354,3 +355,27 @@ def test_a_supplier_wide_support_covers_its_supplier_products_only() -> None:
 
     assert [line.line.sku for line in result.sales] == ["18369"]
     assert result.sales[0].amount == (D("9142.67") * D("0.05") * 45).quantize(D("0.01"))
+
+
+def test_each_support_and_each_line_is_prepared_once(monkeypatch) -> None:
+    # A month is ~40.000 lines × ~100 supports: preparing per pair took 172 s (2026-11-26).
+    calls = {"agreement": 0, "scope": 0}
+    agreement, scope = rules._agreement, rules._scope
+
+    def counted_agreement(item):
+        calls["agreement"] += 1
+        return agreement(item)
+
+    def counted_scope(line, branch):
+        calls["scope"] += 1
+        return scope(line, branch)
+
+    monkeypatch.setattr(rules, "_agreement", counted_agreement)
+    monkeypatch.setattr(rules, "_scope", counted_scope)
+    lines = [sale(document=f"FEV-{n}") for n in range(5)]
+    supports = [support(), support(customer_nit="900"), support(customer_nit="901")]
+
+    result = settle(lines, supports)
+
+    assert len(result.sales) == 5
+    assert calls == {"agreement": 3, "scope": 5}

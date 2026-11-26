@@ -207,10 +207,19 @@ class SettlementService:
             cost_basis=cost_basis,
         )
 
+    async def _settle(self, inputs: MonthInputs, cost_basis: str) -> SettlementResult:
+        """:meth:`settle` in a worker thread.
+
+        A month is tens of thousands of lines of pure Python: on the event loop it froze the
+        whole API, the pages of every other user included, while it ran (2026-11-26, 504s).
+        """
+
+        return await asyncio.to_thread(self.settle, inputs, cost_basis)
+
     async def calculate(self, period: str, cost_basis: str = COST_QUOTE) -> SettlementResult:
         """Settle the month with one cost basis, without storing it."""
 
-        return self.settle(await self.inputs(period), self._check_basis(cost_basis))
+        return await self._settle(await self.inputs(period), self._check_basis(cost_basis))
 
     async def _open_bases(self, period: str) -> list[str]:
         """The cost bases of the month not closed."""
@@ -258,7 +267,7 @@ class SettlementService:
             stored[basis] = await self.repository.replace(
                 period,
                 basis,
-                self.settle(inputs, basis),
+                await self._settle(inputs, basis),
                 actor,
                 now,
                 close=close and basis == target,
@@ -314,7 +323,7 @@ class SettlementService:
                 now = datetime.now(UTC)
                 for basis in bases:
                     stored = await self.repository.replace(
-                        period, basis, self.settle(inputs, basis), SYSTEM_ACTOR, now
+                        period, basis, await self._settle(inputs, basis), SYSTEM_ACTOR, now
                     )
                     month[basis] = {"lineas": stored.supported_lines, "apoyo": str(stored.amount)}
             done[period] = month
@@ -425,7 +434,9 @@ class SettlementService:
         settlement = await self._settlement(period, cost_basis)
         code = _clean(supplier_code)
         sales, references = await self.repository.export_rows(settlement.id, code)
-        content = self.writer(
+        # Building the workbook is CPU work: off the event loop, like the calculation.
+        content = await asyncio.to_thread(
+            self.writer,
             settlement.period,
             "Cerrado" if settlement.status == CLOSED else "Borrador",
             references,
