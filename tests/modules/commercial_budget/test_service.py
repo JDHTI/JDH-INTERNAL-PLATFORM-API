@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from datetime import date
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -17,6 +18,8 @@ from app.modules.commercial_budget.infrastructure.budget_file import (
     read_budget_file,
 )
 from app.modules.commercial_budget.infrastructure.export_file import board_workbook
+from app.modules.jobs.domain.entities import JobRun
+from app.modules.jobs.domain.registry import RunStatus, Trigger
 from tests.modules.commercial_budget.fakes import (
     FakeRepository,
     FakeWarehouse,
@@ -92,6 +95,53 @@ async def test_the_copy_takes_the_reps_the_open_months_and_the_missing_history(
     # From a year before the start (2025-01) to today: 22 months, newest first.
     assert len(warehouse.reads) == 22 and report["pendientes"] == []
     assert (await service.refresh())["meses"].keys() == {"2026-10", "2026-09"}
+
+
+class Runs:
+    def __init__(self) -> None:
+        self.items: list[JobRun] = []
+
+    async def queue(self, job, trigger, now, *, triggered_by=None) -> JobRun:
+        if any(item.status is RunStatus.QUEUED for item in self.items):
+            raise ConflictError("en cola")
+        run = JobRun(uuid4(), job, trigger, RunStatus.QUEUED, now, triggered_by=triggered_by)
+        self.items.append(run)
+        return run
+
+    async def latest(self, job) -> JobRun | None:
+        return self.items[-1] if self.items else None
+
+
+async def test_a_manual_sync_is_queued_for_the_worker_and_answers_at_once(
+    repository, warehouse
+) -> None:
+    runs, handed = Runs(), []
+    service = BudgetService(
+        repository,
+        warehouse,
+        Policy(managers={ANALYST.email}, readers={READER.email}),
+        Policy(),
+        Scopes(),
+        runs=runs,
+        jobs_enabled=True,
+        request_run=handed.append,
+        today=lambda: TODAY,
+    )
+
+    run = await service.sync(ANALYST)
+
+    assert run.job == "commercial-budget-sales" and run.trigger is Trigger.MANUAL
+    assert handed == [run.id] and warehouse.reads == []
+    assert (await service.latest_sync(READER)) == run
+    with pytest.raises(ConflictError, match="en cola o en curso"):
+        await service.sync(ANALYST)
+    with pytest.raises(ForbiddenError):
+        await service.sync(READER)
+
+
+async def test_a_sync_without_the_worker_is_refused(service) -> None:
+    with pytest.raises(ConflictError, match="JOBS_ENABLED"):
+        await service.sync(ANALYST)
 
 
 async def test_permissions(service) -> None:

@@ -6,9 +6,10 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from urllib.parse import quote
+from uuid import UUID
 
 from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.app_container import ApplicationContainer
@@ -32,6 +33,7 @@ from app.modules.commercial_budget.domain.entities import (
 from app.modules.commercial_budget.domain.modules import BUDGET
 from app.modules.identity.domain.principal import Principal
 from app.modules.identity.presentation.principal import get_current_principal
+from app.modules.jobs.domain.entities import JobRun
 
 router = APIRouter()
 _GATE = Depends(require_permission(BUDGET))
@@ -406,19 +408,71 @@ async def list_periods(
     ]
 
 
+class SyncResponse(BaseModel):
+    """A copy of the rep master and the sales (background job ``commercial-budget-sales``)."""
+
+    id: UUID
+    status: Literal["queued", "running", "success", "partial", "failed"]
+    # ``dwh`` (the day's sales load), ``scheduled`` (daily fallback), ``manual`` or ``startup``.
+    trigger: str
+    triggered_by: str | None
+    queued_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error: str | None
+    # Months copied in the run, and the history still missing.
+    months: list[str]
+    pending: list[str]
+
+
+def _sync(run: JobRun | None) -> SyncResponse | None:
+    if run is None:
+        return None
+    detail = run.detail or {}
+    return SyncResponse(
+        id=run.id,
+        status=run.status.value,  # type: ignore[arg-type]
+        trigger=run.trigger.value,
+        triggered_by=run.triggered_by,
+        queued_at=run.queued_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        error=run.error,
+        months=sorted(detail.get("meses") or {}),
+        pending=sorted(detail.get("pendientes") or []),
+    )
+
+
 @router.post(
     "/sync",
+    response_model=SyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     dependencies=[_GATE],
-    summary="Copy the rep master and the sales from the DWH now",
+    summary="Queue the copy of the rep master and the sales from the DWH",
 )
 @inject
 async def sync(
     principal: Principal = _principal, service: BudgetService = _service
-) -> dict[str, Any]:
-    """The daily job's work (``manage``): the current month, the previous one when open and
-    the missing months of the history."""
+) -> SyncResponse:
+    """Answers at once (``manage``): the background job copies the current month, the previous
+    one when open and the missing months of the history; follow it with ``GET /sync``. It also
+    runs by itself after the DWH's sales load. 409 when the worker is off or a copy is already
+    queued or running."""
 
-    return dict(await service.sync(principal))
+    return _sync(await service.sync(principal))  # type: ignore[return-value]
+
+
+@router.get(
+    "/sync",
+    response_model=SyncResponse | None,
+    dependencies=[_GATE],
+    summary="The latest copy of the sales (to follow a sync)",
+)
+@inject
+async def latest_sync(
+    principal: Principal = _principal, service: BudgetService = _service
+) -> SyncResponse | None:
+    return _sync(await service.latest_sync(principal))
 
 
 @router.get(

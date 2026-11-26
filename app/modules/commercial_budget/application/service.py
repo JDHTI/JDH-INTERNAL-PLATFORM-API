@@ -14,14 +14,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import unicodedata
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Protocol
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.core.errors import ConflictError, ForbiddenError, InvalidInputError, PayloadTooLargeError
@@ -50,8 +50,24 @@ from app.modules.commercial_budget.domain.ports import (
     ScopeResolver,
 )
 from app.modules.identity.domain.principal import Principal
+from app.modules.jobs.domain.entities import JobRun
+from app.modules.jobs.domain.registry import Trigger
 
 logger = logging.getLogger(__name__)
+# The background job that copies the rep master and the months of sales.
+SYNC_JOB = "commercial-budget-sales"
+
+
+class SyncRuns(Protocol):
+    """The runs of the background jobs (``app.modules.jobs``)."""
+
+    async def queue(
+        self, job: str, trigger: Trigger, now: datetime, *, triggered_by: str | None = None
+    ) -> JobRun: ...
+
+    async def latest(self, job: str) -> JobRun | None: ...
+
+
 BOGOTA = ZoneInfo("America/Bogota")
 SYSTEM_ACTOR = "presupuesto-automatico"
 MAX_ITEMS = 1000
@@ -149,6 +165,9 @@ class BudgetService:
         template_writer: Callable[..., bytes] | None = None,
         reader: Callable[[bytes], list[BudgetFileRow]] | None = None,
         today: Callable[[], date] | None = None,
+        runs: SyncRuns | None = None,
+        jobs_enabled: bool = False,
+        request_run: Callable[[UUID], None] | None = None,
     ) -> None:
         """Create the service.
 
@@ -166,6 +185,10 @@ class BudgetService:
             template_writer (Callable[..., bytes] | None): Builds the budget template.
             reader (Callable[[bytes], list[BudgetFileRow]] | None): Reads a budget workbook.
             today (Callable[[], date] | None): The day in Bogotá (tests).
+            runs (SyncRuns | None): The background jobs' runs (the copy is
+                ``commercial-budget-sales``).
+            jobs_enabled (bool): Whether the background worker runs (``JOBS_ENABLED``).
+            request_run (Callable[[UUID], None] | None): Hands a queued run to the worker.
         """
 
         periods.parse(start_period)
@@ -181,6 +204,9 @@ class BudgetService:
         self.template_writer = template_writer
         self.reader = reader
         self._today = today or (lambda: datetime.now(BOGOTA).date())
+        self.runs = runs
+        self.jobs_enabled = jobs_enabled
+        self.request_run = request_run
 
     # --- access ---
 
@@ -596,23 +622,37 @@ class BudgetService:
         pending = [month for month in missing if month not in done]
         return {"vendedores": saved_reps, "meses": done, "pendientes": pending}
 
-    async def sync(self, principal: Principal) -> Mapping[str, Any]:
-        """Run the copy now (``manage``); it goes on even if the request is cancelled."""
+    async def sync(self, principal: Principal) -> JobRun:
+        """Queue the copy now (``manage``) as the background job ``commercial-budget-sales``.
+
+        It answers at once: the copy reads one month at a time (2–6 s each, more with the
+        missing history), longer than the infrastructure proxy waits (30 s, 504 on
+        2026-11-26). The board shows the run with :meth:`latest_sync`.
+
+        Raises:
+            ConflictError: The worker is off, or a copy is already queued or running.
+        """
 
         await self._require_manage(principal)
-        return await _detached(self.refresh())
+        if self.runs is None or self.request_run is None or not self.jobs_enabled:
+            raise ConflictError(
+                "La sincronización corre en las tareas en segundo plano y están apagadas "
+                "(JOBS_ENABLED)"
+            )
+        try:
+            run = await self.runs.queue(
+                SYNC_JOB, Trigger.MANUAL, datetime.now(UTC), triggered_by=principal.email
+            )
+        except ConflictError as exc:
+            raise ConflictError("Ya hay una sincronización en cola o en curso") from exc
+        self.request_run(run.id)
+        return run
 
+    async def latest_sync(self, principal: Principal) -> JobRun | None:
+        """The latest copy (by the job, at start-up or by hand), to follow it."""
 
-_RUNNING: set[asyncio.Task] = set()
-
-
-async def _detached(work: Coroutine[Any, Any, Any]) -> Any:
-    """Run the copy to the end even if the client hangs up (minutes reading the DWH)."""
-
-    task = asyncio.ensure_future(work)
-    _RUNNING.add(task)
-    task.add_done_callback(_RUNNING.discard)
-    return await asyncio.shield(task)
+        await self._require_read(principal)
+        return await self.runs.latest(SYNC_JOB) if self.runs is not None else None
 
 
 def _options(rows: Sequence[RepRow]) -> dict[str, list[Any]]:

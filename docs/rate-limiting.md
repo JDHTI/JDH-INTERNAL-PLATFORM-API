@@ -142,6 +142,7 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/clientes` | `read` |  |
 | `GET` | `/v1/commercial-budget/periods` | `read` |  |
 | `GET` | `/v1/commercial-budget/permissions` | `read` |  |
+| `GET` | `/v1/commercial-budget/sync` | `read` |  |
 | `POST` | `/v1/commercial-budget/sync` | `relaxed` |  |
 | `GET` | `/v1/commercial-budget/{period}` | `read` |  |
 | `GET` | `/v1/commercial-budget/{period}/budget-template` | `read` |  |
