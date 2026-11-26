@@ -110,6 +110,19 @@ def _support_settlements(build: Callable[[], SupportSettlements]) -> JobHandler:
     return handler
 
 
+class CommercialBudget(Protocol):
+    """The commercial budget: the rep master and the months of sales, copied."""
+
+    async def refresh(self) -> Mapping[str, Any]: ...
+
+
+def _commercial_budget(build: Callable[[], CommercialBudget]) -> JobHandler:
+    async def handler() -> Mapping[str, Any]:
+        return await build().refresh()
+
+    return handler
+
+
 def build_job_handlers(
     masters: Callable[[], MasterService],
     commercial_sync: Callable[[], MasterSyncService],
@@ -119,6 +132,7 @@ def build_job_handlers(
     stale_drafts: Callable[[], StaleDrafts] | None = None,
     cost_novelties: Callable[[], CostNovelties] | None = None,
     support_settlements: Callable[[], SupportSettlements] | None = None,
+    commercial_budget: Callable[[], CommercialBudget] | None = None,
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
@@ -142,6 +156,8 @@ def build_job_handlers(
         extra["costs-novelties-sync"] = _cost_novelties(cost_novelties)
     if support_settlements is not None:
         extra["support-settlements-refresh"] = _support_settlements(support_settlements)
+    if commercial_budget is not None:
+        extra["commercial-budget-sales"] = _commercial_budget(commercial_budget)
     return {
         **extra,
         "masters-warm-identity": _warm(masters, "identidad"),

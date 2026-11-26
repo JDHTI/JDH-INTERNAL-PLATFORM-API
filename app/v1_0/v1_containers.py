@@ -28,6 +28,21 @@ from app.modules.areas.infrastructure.policies import (
     UnrestrictedAreaAccess,
 )
 from app.modules.areas.infrastructure.repository import SqlAlchemyAreaRepository
+from app.modules.commercial_budget.application.service import BudgetService
+from app.modules.commercial_budget.application.vendor_master import VendorMasterService
+from app.modules.commercial_budget.infrastructure.budget_file import (
+    budget_template,
+    read_budget_file,
+)
+from app.modules.commercial_budget.infrastructure.dwh_platform import DwhPlatformClient
+from app.modules.commercial_budget.infrastructure.dwh_source import WarehouseBudgetSource
+from app.modules.commercial_budget.infrastructure.export_file import board_workbook
+from app.modules.commercial_budget.infrastructure.policies import AnyAreaLeaderPolicy
+from app.modules.commercial_budget.infrastructure.repository import SqlAlchemyBudgetRepository
+from app.modules.commercial_budget.infrastructure.vendor_template import vendor_master_template
+from app.modules.commercial_budget.infrastructure.vendor_uploads import (
+    SqlAlchemyVendorUploadRepository,
+)
 from app.modules.commercial_masters.application.employee_prices import EmployeePriceService
 from app.modules.commercial_masters.application.price_increases import (
     AnalysisCache,
@@ -1165,6 +1180,48 @@ class V1Container(containers.DeclarativeContainer):
         start_period=config.support_settlements.start_period,
         writer=providers.Object(settlement_workbook),
     )
+    # --- Gestión comercial: the budget by sales rep and the rep master upload ---
+    commercial_budget_service = providers.Factory(
+        BudgetService,
+        repository=providers.Factory(SqlAlchemyBudgetRepository, database=database),
+        warehouse=providers.Factory(
+            WarehouseBudgetSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            timeout=config.commercial_budget.dwh_timeout,
+        ),
+        # BI and Comercial fill the budget by role (any area where the module is on).
+        policy=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="presupuesto-comercial"
+        ),
+        leaders=providers.Factory(
+            AnyAreaLeaderPolicy,
+            areas=area_service,
+            area_slugs=config.commercial_budget.leader_area_slugs,
+        ),
+        scopes=sales_scope_service,
+        start_period=config.commercial_budget.start_period,
+        backfill_months=config.commercial_budget.backfill_months,
+        max_upload_bytes=config.commercial_budget.max_upload_bytes,
+        writer=providers.Object(board_workbook),
+        template_writer=providers.Object(budget_template),
+        reader=providers.Object(read_budget_file),
+    )
+    vendor_master_service = providers.Factory(
+        VendorMasterService,
+        client=providers.Factory(
+            DwhPlatformClient,
+            base_url=config.commercial_budget.dwh_platform_url,
+            api_key=config.commercial_budget.dwh_platform_api_key,
+            timeout=config.commercial_budget.dwh_platform_timeout,
+        ),
+        history=providers.Factory(SqlAlchemyVendorUploadRepository, database=database),
+        policy=providers.Factory(
+            PermissionPolicy, areas=area_service, area_slug=None, module="maestro-vendedores"
+        ),
+        template=providers.Object(vendor_master_template),
+        max_upload_bytes=config.commercial_budget.vendor_master_max_upload_bytes,
+    )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)
     job_watermarks = providers.Factory(SqlAlchemySequenceWatermarks, database=database)
@@ -1230,6 +1287,7 @@ class V1Container(containers.DeclarativeContainer):
         stale_drafts=quotation_service.provider,
         cost_novelties=cost_novelty_service.provider,
         support_settlements=support_settlement_service.provider,
+        commercial_budget=commercial_budget_service.provider,
     )
     job_service = providers.Factory(
         JobService,

@@ -78,6 +78,11 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
   proveedor por las ventas apoyadas del mes (cotización del proveedor, descuento real, copias
   una vez), margen recompuesto, cierre del mes vencido y Excel por proveedor. Ver
   [`docs/liquidacion-apoyos.md`](docs/liquidacion-apoyos.md).
+- Gestión comercial (BI y Comercial): el presupuesto comercial vive en
+  `/api/v1/commercial-budget` (venta, margen y clientes por vendedor del mes, el promedio de los
+  tres meses anteriores y el mismo mes del año anterior, presupuesto por campos y cierre que
+  congela la asignación) y la carga del maestro de vendedores al DWH en `/api/v1/vendor-master`.
+  Ver [`docs/presupuesto-comercial.md`](docs/presupuesto-comercial.md).
 - El ajuste de costos (BI) vive en `/api/v1/cost-settings`: el factor de costo por familia, el
   umbral de negociación y la sucursal del proveedor por C.O. (Team Foods en Antioquia, Lactalis
   en Centro), con su historial. Ver [`docs/ajuste-costos.md`](docs/ajuste-costos.md).

@@ -1,0 +1,126 @@
+# Gestión comercial: presupuesto comercial y maestro de vendedores
+
+Lo que el ERP no guarda de la fuerza de ventas, en la plataforma (2026-11-26). Reemplaza el
+Excel que BI arma cada mes (`PLANTILLA PRESUPUESTO`, la carga `Ppto <mes>`) y la carga del
+maestro de vendedores que vivía en la plataforma de proveedores.
+
+- **Módulo:** `app/modules/commercial_budget`.
+- **Prefijos:** `/api/v1/commercial-budget` y `/api/v1/vendor-master`.
+- **Migración:** `0093_commercial_budget`.
+- **Sección de la UI:** «Gestión comercial», con «Presupuesto comercial» y «Maestro de
+  vendedores».
+
+## Permisos
+
+| Clave | Áreas por defecto | `read` | `manage` |
+| --- | --- | --- | --- |
+| `presupuesto-comercial` | BI y Comercial | la vista, el historial, la plantilla y el Excel | diligenciar y cargar el presupuesto; sincronizar las ventas |
+| `maestro-vendedores` | BI (se enciende en otras áreas) | la plantilla y el historial de cargas | subir el maestro al DWH |
+
+- **Cerrar y reabrir un mes:**
+  - lo hacen los líderes o responsables de BI y de Comercial (`COMMERCIAL_BUDGET_LEADER_AREA_SLUGS`) y los administradores;
+  - ningún permiso de módulo lo da.
+- **Alcance:** cada persona ve los vendedores de su alcance de ventas (`salespeople`):
+  - BI, los directores y los líderes de Comercial ven todo;
+  - un coordinador ve su equipo;
+  - un vendedor se ve a sí mismo.
+  - El presupuesto de un vendedor fuera del alcance responde 403.
+  - «Sin vendedor asignado» solo lo ve quien ve todo.
+
+## Reglas
+
+Comprobadas contra la plantilla de BI de septiembre de 2026 (piloto en el DWH, 2026-11-26). Los totales de 2025-09, 2026-06 y 2026-08 cuadran al peso; 2026-07 difiere en 0,005 %.
+
+| Cifra | Regla |
+| --- | --- |
+| Venta | `sum(subtotal)` de `consumo.ventas`: neta antes de IVA, las devoluciones restan, sin el SKU `NC530535` de descuentos comerciales (comparado con `is distinct from`, porque las filas de 2025 del C.O. 100 no traen SKU). Sin filtro de `concepto` ni de `estado` |
+| Margen | `(venta − costo) / venta`, sin recomponer |
+| Clientes | sucursales de cliente (`cliente_key`) con venta neta positiva en el mes. Cuadró con la plantilla en los 361 vendedor-mes comparables; el NIT cuadró en 31 |
+| Promedio 3 meses | los tres meses anteriores (septiembre: junio, julio y agosto). Es el promedio simple de venta, margen y clientes de los meses en que el vendedor vendió, como el `PROMEDIO` de Excel, que salta las celdas vacías |
+| Mismo mes año anterior | la venta, el margen y los clientes de ese mes |
+| % var. venta LY | presupuesto de venta / venta del mismo mes del año anterior − 1 |
+| Cumplimiento | venta / presupuesto de venta |
+| Margen contra ppto | margen − presupuesto de margen (fracción: 0,01 = un punto) |
+| Totales (equipo, regional, unidad, compañía) | venta, clientes y presupuestos se suman. El margen real se pondera por venta y el presupuestado por presupuesto (`SUMAPRODUCTO`), como la plantilla |
+
+- **De quién es una venta:** del **vendedor actual** de la sucursal del cliente (`consumo.clientes.cod_vendedor`, copiado a diario a `customers.salesperson_code`). El equipo, la regional y la unidad de negocio salen del maestro de vendedores (`consumo.vendedores`).
+  - La venta de un cliente sin vendedor, o que no está en el maestro de clientes, va a «Sin vendedor asignado». Se muestra aparte, nunca se esconde.
+- **Mes abierto:** se recalcula con la asignación de hoy, también sus comparaciones. Así compara igual con igual.
+- **Cierre:** solo un mes terminado y con sus ventas copiadas. Congela la foto:
+  - cada fila, con sus tres cortes y su presupuesto;
+  - el equipo, la regional y la unidad de cada vendedor;
+  - la asignación cliente → vendedor de cada sucursal que vendió ese mes, con su venta.
+
+  Una reasignación posterior de clientes o de equipos ya no lo cambia. Reabrir descarta la foto y el mes vuelve a calcularse en vivo.
+- **Rotación:** el piloto mostró por qué hace falta el cierre. Con el vendedor actual de hoy, la plantilla de septiembre cuadra en 47 de 113 vendedores. Con la asignación del 2026-09-04 cuadra en 81, y el resto es rotación anterior a esa fecha. Desde ahora, cada mes cerrado guarda su propia asignación.
+- **Mantener el maestro de clientes al día** (el vendedor de cada sucursal) queda fuera de este módulo.
+
+## Presupuesto
+
+- Por vendedor y mes: venta, margen (fracción), clientes y recaudo. **Cada campo es independiente**: se puede diligenciar uno y dejar los otros vacíos hasta el cierre.
+- **Editar a mano** (`PUT /{periodo}/budgets`):
+  - cambia solo los campos enviados, y `null` borra uno;
+  - la `version` leída evita pisar un cambio ajeno (409);
+  - un mes cerrado responde 409.
+- **Cargar con Excel** (`GET /{periodo}/budget-template`, luego `POST /{periodo}/budget-upload?apply=`):
+  - Primero simula y después aplica.
+  - Las columnas se encuentran por encabezado: CÓDIGO VENDEDOR (o el nombre del vendedor), PPTO VENTA, PPTO MARGEN, PPTO # CLIENTES y PPTO RECAUDO.
+  - Una celda vacía deja el campo como está, y las filas `TOTAL …` se saltan.
+  - El margen va como 0,18, 18 % o 18.
+  - También lee el archivo plano de BI (`Ppto Septiembre 2026.xlsx`), que trae el nombre: se busca sin tildes ni mayúsculas y queda una advertencia con el código encontrado.
+- **Historial** (`GET /{periodo}/changes`): antes y después de cada campo, el origen (`manual` o `archivo`), la nota, quién y cuándo.
+- **Meses:** desde `COMMERCIAL_BUDGET_START_PERIOD` (2026-01) hasta el mes siguiente, para preparar su presupuesto por adelantado.
+
+## Ventas copiadas del DWH
+
+La vista nunca espera al DWH: lee tablas propias.
+- `sales_month_customers` guarda la venta, el costo y las líneas por mes y sucursal.
+- `sales_month_loads` dice qué meses se copiaron y cuándo.
+- `sales_reps` es la copia del maestro de vendedores.
+
+**Tarea diaria `commercial-budget-sales`** (después de `reporte_ventas`, lunes a sábado). Copia:
+- el maestro de vendedores;
+- el mes en curso;
+- el anterior, si no está cerrado;
+- hasta `COMMERCIAL_BUDGET_BACKFILL_MONTHS` meses de historia que falten, desde un año antes del inicio (las comparaciones con el año anterior).
+
+Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente. `POST /sync` hace lo mismo a pedido (`manage`).
+
+**Meses sin copiar:** la vista los lista en `missing_months`.
+
+## Maestro de vendedores (`/vendor-master`)
+
+- **Quién es dueño:** dwh-platform, no la plataforma.
+  - Escribe en `externo.vendedor_info`, `externo.equipo`, `externo.supervisor` y `externo.unidad_negocio`.
+  - Resuelve cada documento contra el ERP.
+  - Hace upsert: los vendedores que no vienen en el archivo no cambian.
+  - Corre dbt para publicarlo en `consumo.vendedores`.
+- **Qué hace la plataforma:**
+  - sirve la plantilla «Maestro Vendedores JDH» v4 (`GET /template`), con las hojas COMERCIALES JDH, Coordinadores y Directores, el encabezado en la fila 1 y columnas de texto;
+  - reenvía el archivo (`POST /upload`) a `POST {DWH_PLATFORM_URL}/maestro-vendedores/cargar` con `X-API-Key`;
+  - devuelve la respuesta tal cual: los conteos, `filas_rechazadas`, `advertencias` y `transformacion`.
+- **Respuestas de error:**
+  - 400 con el motivo cuando dwh-platform rechaza el archivo;
+  - 503 cuando no está configurado o no responde.
+- **Historial** (`GET /uploads`): cada carga, con quién, cuándo, el archivo, el tamaño y lo que respondió dwh-platform. **El archivo no se guarda**, porque trae datos personales (documentos, correos, celulares).
+- **Configuración:** `DWH_PLATFORM_URL`, `DWH_PLATFORM_API_KEY` y `DWH_PLATFORM_TIMEOUT_SECONDS`. Con la URL vacía la carga queda apagada y `GET /status` lo dice.
+- **Plataforma de proveedores:** cuando la carga funcione aquí en producción, se quitan su `/admin/maestro-vendedores`, su cliente de dwh-platform y la tarjeta de su panel. Su copia diaria de `sellers` desde `consumo.vendedores` se queda.
+
+## Endpoints
+
+| Método y ruta | Uso |
+| --- | --- |
+| `GET /commercial-budget/permissions` | `can_read`, `can_manage`, `can_close` y `scope`. Abierto: responde `false`, no 403 |
+| `GET /commercial-budget/periods` | Meses desde el inicio hasta el siguiente, con su estado |
+| `GET /commercial-budget/{periodo}?regional=&business_unit=&team=&salesperson=&q=` | La vista: KPIs (`totals`), filas por vendedor con `current`, `average`, `last_year`, `budget` y `derived`, grupos por regional, unidad y equipo, opciones de filtro y `missing_months`. Los filtros aceptan varios valores |
+| `PUT /commercial-budget/{periodo}/budgets` | `{items: [{salesperson_code, version?, budget_sales?, budget_margin?, budget_customers?, budget_collection?}], note?}` |
+| `GET /commercial-budget/{periodo}/changes?salesperson_code=&limit=` | Historial del presupuesto |
+| `GET /commercial-budget/{periodo}/budget-template` | Plantilla del mes con los vendedores del alcance |
+| `POST /commercial-budget/{periodo}/budget-upload?apply=` | Carga del presupuesto (multipart `file`, `note`) |
+| `POST /commercial-budget/{periodo}/close` y `/reopen` | Cierre y reapertura (líderes) |
+| `GET /commercial-budget/{periodo}/export` | Excel con la forma de la plantilla de BI: grupos por regional y equipo con sus totales |
+| `POST /commercial-budget/sync` | Copia las ventas y el maestro ahora (`manage`) |
+| `GET /vendor-master/status` | `configured`, `can_read`, `can_manage`. Abierto |
+| `GET /vendor-master/template` | Plantilla vacía |
+| `POST /vendor-master/upload` | Reenvío a dwh-platform (multipart `file`, .xlsx de hasta 10 MB) |
+| `GET /vendor-master/uploads?limit=` | Historial de cargas |
