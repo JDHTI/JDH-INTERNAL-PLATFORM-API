@@ -88,8 +88,12 @@ async def test_the_board_hides_rows_without_stock_and_small_rises_are_no_alza() 
     counts, page = _sql(database.statements[0][0]), _sql(database.statements[-1][0])
     stock = "quotation_lines.stock_on_hand IS NULL OR quotation_lines.stock_on_hand >"
     assert stock in counts and stock in page
-    rise = "coalesce(quotation_lines.new_price, quotation_lines.optimal_price) >="
-    assert rise in page
+    # 2026-11-26: an «alza» is a current price under the highest cost at the minimum margin.
+    floor = (
+        "quotation_lines.last_price < ceil(quotation_lines.cost / "
+        "CAST((%(min_margin_pct_2)s - quotation_lines.min_margin_pct) AS NUMERIC(14, 6)))"
+    )
+    assert floor in page and "new_price" not in page.split("WHERE", 1)[1]
 
 
 async def test_the_stock_filter_can_be_turned_off() -> None:

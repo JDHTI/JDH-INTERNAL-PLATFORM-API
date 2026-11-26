@@ -19,9 +19,10 @@ from app.modules.quotations.domain.entities import QuotationLine
 REVIEW_CHIPS = ("sin_marcar", "por_validar", "validada", "cargada")
 MARGIN_CHIPS = ("alza", "objetivo", "encima", "alerta")
 CHIPS = REVIEW_CHIPS + MARGIN_CHIPS
-# Where the new price leaves the list's current one (2026-11-25): up, down, or the same (or no
-# new price). A row without a current price is in none: it is «sin precio».
-TRENDS = ("sube", "baja", "estable")
+# What goes up and what down (BI, 2026-11-26): the current price under the highest cost at the
+# minimum margin goes up, otherwise down. A row without a current price is in none: it is
+# «sin precio»; one without a cost or a minimum margin, in none either.
+TRENDS = ("sube", "baja")
 NO_LIST_PRICE = "sin_precio"
 # Half a point of room either way around the target (decided 2026-11-12).
 TARGET_TOLERANCE = Decimal("0.005")
@@ -120,9 +121,9 @@ class BoardPage:
     total: int
     page: int
     size: int
-    # Rows of each chip under every filter but the chip; of each trend (``sube``, ``baja``,
-    # ``estable``) and ``sin_precio``, one group of options, under every filter but that
-    # group; and ``todos``: every row under the filters but the chip.
+    # Rows of each chip under every filter but the chip; of each trend (``sube``, ``baja``)
+    # and ``sin_precio``, one group of options, under every filter but that group; and
+    # ``todos``: every row under the filters but the chip.
     counts: dict[str, int]
 
 

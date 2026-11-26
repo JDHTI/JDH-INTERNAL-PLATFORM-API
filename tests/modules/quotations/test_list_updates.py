@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -10,6 +11,7 @@ import pytest
 from app.core.errors import ForbiddenError, InvalidInputError
 from app.modules.order_validation.domain.entities import CustomerScope
 from app.modules.quotations.application.service import LineChange
+from app.modules.quotations.domain import pricing
 from app.modules.quotations.domain.entities import ItemInfo, ListPrice
 from tests.modules.order_validation.conftest import agreement
 from tests.modules.quotations.conftest import (
@@ -53,6 +55,28 @@ async def test_a_list_update_starts_from_every_sku_of_the_list(service, lister, 
     # The last sale is read for the list's active branches.
     call = next(item for item in warehouse.calls if item[0] == "list_last_sales")
     assert call[2] == ("1-900315138-001", "1-800111222-001")
+
+
+async def test_a_wholesale_list_takes_the_wholesale_margin_whatever_its_customers(
+    service, lister, warehouse
+) -> None:
+    """2026-11-26: 1DR's customers gave the Food service margin; a list of the skill's
+    families is priced with its family's margin (Mayoristas here), whatever the channel."""
+
+    warehouse.list_branch_rows["10U"] = [
+        replace(item, channel_code="0142", channel="HOTELES Y CLUBES")
+        for item in warehouse.list_branch_rows["10U"]
+    ]
+
+    detail = await service.create_list_update(lister, price_list_id="10U")
+
+    abrasive = detail.lines[0]
+    assert abrasive.margin_basis == "mayoristas" and abrasive.target_margin_pct == Decimal("0.12")
+    assert pricing.list_margin_field("1DR") == "margin_wholesale"
+    assert pricing.list_margin_field("001") == "margin_list"
+    assert pricing.list_margin_field("35P") == "margin_market"
+    # A list outside the families keeps its customers' channel.
+    assert pricing.list_margin_field("C01") is None
 
 
 async def test_every_support_of_the_list_is_shown_and_the_lowest_price_applies(
