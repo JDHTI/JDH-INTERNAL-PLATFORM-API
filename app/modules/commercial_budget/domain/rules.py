@@ -28,6 +28,7 @@ from app.modules.commercial_budget.domain.entities import (
     Budget,
     CustomerMonth,
     Figures,
+    RepMonth,
     RepRow,
     SalesRep,
     Totals,
@@ -94,11 +95,37 @@ def average(months: Sequence[Figures]) -> Figures:
     )
 
 
+def rep_months(
+    sales: Mapping[str, Sequence[CustomerMonth]], assignments: Mapping[str, Assignment]
+) -> list[RepMonth]:
+    """Each month's figures per rep from the sales by customer (what the repository does in
+    SQL: ``sales_month_customers`` joined to ``customers`` and grouped by month and rep)."""
+
+    names: dict[str, str] = {}
+    for item in assignments.values():
+        code = (item.salesperson_code or "").strip()
+        if code and item.salesperson_name and code not in names:
+            names[code] = item.salesperson_name
+    found = []
+    for month, items in sales.items():
+        accumulated: dict[str, _Accumulator] = defaultdict(_Accumulator)
+        for item in items:
+            total = accumulated[rep_of(item.customer_key, assignments)]
+            total.net += item.net
+            total.cost += item.cost
+            if item.net > 0:
+                total.customers += 1
+        found += [
+            RepMonth(month, code, names.get(code), total.net, total.cost, total.customers)
+            for code, total in accumulated.items()
+        ]
+    return found
+
+
 def build_rows(
     period: str,
     *,
-    sales: Mapping[str, Sequence[CustomerMonth]],
-    assignments: Mapping[str, Assignment],
+    months: Iterable[RepMonth],
     reps: Mapping[str, SalesRep],
     budgets: Mapping[str, Budget],
     roster_codes: Iterable[str] = (),
@@ -107,9 +134,8 @@ def build_rows(
 
     Args:
         period (str): The month, ``YYYY-MM``.
-        sales (Mapping[str, Sequence[CustomerMonth]]): Sales by customer of every month of
-            :func:`periods.window` that was loaded.
-        assignments (Mapping[str, Assignment]): Each customer branch's current rep.
+        months (Iterable[RepMonth]): Each rep's figures in the months of
+            :func:`periods.window` that were loaded.
         reps (Mapping[str, SalesRep]): The rep master, by code.
         budgets (Mapping[str, Budget]): The month's budget, by rep code.
         roster_codes (Iterable[str]): Reps listed even without sales or budget (the active
@@ -119,16 +145,17 @@ def build_rows(
         list[RepRow]: One row per rep with sales in any cut, a budget or in the roster.
     """
 
-    by_month = {
-        month: month_by_rep(sales.get(month, ()), assignments) for month in periods.window(period)
-    }
+    by_month: dict[str, dict[str, Figures]] = {month: {} for month in periods.window(period)}
+    names: dict[str, str] = {}
+    for item in months:
+        if item.period in by_month:
+            by_month[item.period][item.code] = Figures(
+                item.net, margin(item.net, item.cost), Decimal(item.customers)
+            )
+        if item.name and item.code not in names:
+            names[item.code] = item.name
     previous = periods.previous_three(period)
     last_year = periods.last_year(period)
-    names: dict[str, str] = {}
-    for item in assignments.values():
-        code = (item.salesperson_code or "").strip()
-        if code and item.salesperson_name and code not in names:
-            names[code] = item.salesperson_name
     codes = (
         {code for month in by_month.values() for code in month}
         | {code for code, budget in budgets.items() if not budget.is_empty}
