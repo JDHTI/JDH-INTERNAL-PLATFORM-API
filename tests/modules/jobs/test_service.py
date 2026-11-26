@@ -144,6 +144,7 @@ async def test_the_fallback_runs_today_what_the_dwh_did_not(make_service, runs):
         "commercial-sync-products",
         "support-settlements-refresh",
         "commercial-budget-sales",
+        "service-level-sync",
     }
     assert all(runs.items[i].trigger is Trigger.SCHEDULED for i in queued)
 

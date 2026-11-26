@@ -25,6 +25,7 @@ from app.modules.pqrsf.infrastructure import models as pqrsf_models
 from app.modules.projects.infrastructure import models as projects_models
 from app.modules.quotations.infrastructure import models as quotations_models
 from app.modules.salespeople.infrastructure import models as salespeople_models
+from app.modules.service_level.infrastructure import models as service_level_models
 from app.modules.sites.infrastructure import models as sites_models
 from app.modules.supplier_supports.infrastructure import models as supplier_supports_models
 from app.modules.support_settlements.infrastructure import models as support_settlements_models
@@ -52,6 +53,7 @@ __all__ = [
     "projects_models",
     "quotations_models",
     "salespeople_models",
+    "service_level_models",
     "sites_models",
     "supplier_supports_models",
     "support_settlements_models",

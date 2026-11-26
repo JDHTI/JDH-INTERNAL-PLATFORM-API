@@ -236,6 +236,20 @@ class Settings(BaseSettings):
     COSTS_INCREASE_SUPPORT_MAX_MB: int = 10
     COSTS_INCREASE_SUPPORT_EXTENSIONS: str = "pdf,png,jpg,jpeg,webp,xlsx,xls,docx,doc"
 
+    # Nivel de servicio (Abastecimiento). The daily job copies the lines of the fulfilled orders
+    # from the warehouse view, re-reading these days (the warehouse re-reads 45); the first run
+    # copies from the start date. The ABCD classes rank the requested value of the closed months
+    # with these cuts (A, B, C; the rest D). A service level is green above the first band and
+    # amber from the second.
+    SERVICE_LEVEL_DWH_VIEW: str = "pedidos_venta_lineas"
+    SERVICE_LEVEL_DWH_TIMEOUT_SECONDS: float = 300.0
+    SERVICE_LEVEL_SYNC_DAYS: int = 45
+    SERVICE_LEVEL_START_DATE: date = date(2026, 9, 1)
+    SERVICE_LEVEL_MAX_RANGE_DAYS: int = 370
+    SERVICE_LEVEL_ABCD_CUTS: str = "0.80,0.95,0.99"
+    SERVICE_LEVEL_ABCD_MONTHS: int = 2
+    SERVICE_LEVEL_BANDS: str = "0.96,0.90"
+
     # Liquidación de apoyos. A month of sales reads in seconds warm but minutes cold, so the
     # warehouse query waits long; months before the start were not loaded in the platform.
     SUPPORT_SETTLEMENTS_DWH_TIMEOUT_SECONDS: float = 600.0
@@ -745,6 +759,16 @@ class Settings(BaseSettings):
                 "area_slug": self.COSTS_AREA_SLUG,
                 "support_max_bytes": self.COSTS_INCREASE_SUPPORT_MAX_MB * 1024 * 1024,
                 "support_extensions": _split_lower(self.COSTS_INCREASE_SUPPORT_EXTENSIONS),
+            },
+            "service_level": {
+                "dwh_view": self.SERVICE_LEVEL_DWH_VIEW,
+                "dwh_timeout": self.SERVICE_LEVEL_DWH_TIMEOUT_SECONDS,
+                "sync_days": self.SERVICE_LEVEL_SYNC_DAYS,
+                "start_date": self.SERVICE_LEVEL_START_DATE,
+                "max_range_days": self.SERVICE_LEVEL_MAX_RANGE_DAYS,
+                "abcd_cuts": self.SERVICE_LEVEL_ABCD_CUTS,
+                "abcd_months": self.SERVICE_LEVEL_ABCD_MONTHS,
+                "bands": self.SERVICE_LEVEL_BANDS,
             },
             "support_settlements": {
                 "dwh_timeout": self.SUPPORT_SETTLEMENTS_DWH_TIMEOUT_SECONDS,

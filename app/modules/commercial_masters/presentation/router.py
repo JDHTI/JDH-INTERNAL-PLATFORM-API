@@ -65,6 +65,9 @@ router = APIRouter(
                 "novedades-compras",
                 "alzas-proveedor",
                 "acumulado-alzas",
+                # Nivel de servicio: the customer and supplier searches of the filters.
+                "pendientes-pedidos",
+                "nivel-servicio",
             )
         )
     ]

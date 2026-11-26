@@ -86,6 +86,10 @@ Si alguno de los puertos publicados ya está ocupado, cambia los valores
 - El ajuste de costos (BI) vive en `/api/v1/cost-settings`: el factor de costo por familia, el
   umbral de negociación y la sucursal del proveedor por C.O. (Team Foods en Antioquia, Lactalis
   en Centro), con su historial. Ver [`docs/ajuste-costos.md`](docs/ajuste-costos.md).
+- El nivel de servicio (Abastecimiento) vive en `/api/v1/service-level`: las líneas de los
+  pedidos cumplidos copiadas del DWH, el motivo y el responsable de cada pendiente, los KPIs por
+  pedido, línea, cantidad y valor, el tablero por C.O. y la clasificación ABCD de producto y
+  cliente. Ver [`docs/nivel-servicio.md`](docs/nivel-servicio.md).
 - El mapa comercial (Comercial → Mapa comercial) vive en `/api/v1/territory`: prospectos del
   archivo mensual sobre el mapa (PostGIS), zonas comerciales trazadas y rutas de visita por
   calles con openrouteservice; ver [`docs/mapa-comercial.md`](docs/mapa-comercial.md).

@@ -219,6 +219,11 @@ from app.modules.quotations.infrastructure.workbook import PriceListWorkbookWrit
 from app.modules.salespeople.application.service import SalesScopeService
 from app.modules.salespeople.infrastructure.dwh_roster import WarehouseSalesRoster
 from app.modules.salespeople.infrastructure.repository import SqlAlchemyLinkRepository
+from app.modules.service_level.application.access import ServiceLevelAccess
+from app.modules.service_level.application.service import ServiceLevelService
+from app.modules.service_level.domain.entities import Bands, Cuts
+from app.modules.service_level.infrastructure.dwh_source import WarehouseOrderLineSource
+from app.modules.service_level.infrastructure.repository import SqlAlchemyServiceLevelRepository
 from app.modules.sites.application.service import SiteService
 from app.modules.sites.infrastructure.repository import SqlAlchemySiteRepository
 from app.modules.supplier_supports.application.attachments import SupportAttachmentService
@@ -1154,6 +1159,33 @@ class V1Container(containers.DeclarativeContainer):
         ),
         area_slug=config.costs.area_slug,
     )
+    # --- Nivel de servicio (Abastecimiento): fulfilled orders, pending lines and their reasons ---
+    service_level_service = providers.Factory(
+        ServiceLevelService,
+        repository=providers.Factory(SqlAlchemyServiceLevelRepository, database=database),
+        source=providers.Factory(
+            WarehouseOrderLineSource,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            view=config.service_level.dwh_view,
+            timeout=config.service_level.dwh_timeout,
+        ),
+        access=providers.Factory(
+            ServiceLevelAccess,
+            pending=providers.Factory(
+                PermissionPolicy, areas=area_service, area_slug=None, module="pendientes-pedidos"
+            ),
+            dashboard=providers.Factory(
+                PermissionPolicy, areas=area_service, area_slug=None, module="nivel-servicio"
+            ),
+        ),
+        cuts=providers.Callable(Cuts.parse, config.service_level.abcd_cuts),
+        bands=providers.Callable(Bands.parse, config.service_level.bands),
+        class_months=config.service_level.abcd_months,
+        sync_days=config.service_level.sync_days,
+        start_date=config.service_level.start_date,
+        max_range_days=config.service_level.max_range_days,
+    )
     # --- Liquidación de apoyos (BI): what each supplier owes for a month of sales ---
     support_settlement_service = providers.Factory(
         SettlementService,
@@ -1293,6 +1325,7 @@ class V1Container(containers.DeclarativeContainer):
         cost_novelties=cost_novelty_service.provider,
         support_settlements=support_settlement_service.provider,
         commercial_budget=commercial_budget_service.provider,
+        service_level=service_level_service.provider,
     )
     job_service = providers.Factory(
         JobService,
