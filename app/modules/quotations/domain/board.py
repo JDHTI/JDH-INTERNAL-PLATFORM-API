@@ -59,6 +59,19 @@ class BoardFilter:
     in_stock: bool = True
     sort: str = "lista"
     descending: bool = False
+    # Warehouses (2026-11-26): only the lists that have one of them; with ``in_stock``, only
+    # the rows with stock in one of them. The stock shown and sorted is theirs.
+    warehouses: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WarehouseStock:
+    """A row's stock in one of its list's warehouses, as the sync read it."""
+
+    warehouse: str
+    warehouse_name: str | None
+    on_hand: Decimal
+    available: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -74,6 +87,8 @@ class BoardRow:
     # was not read.
     stock_on_hand: Decimal | None = None
     stock_available: Decimal | None = None
+    # The stock by warehouse (only the warehouses with some), as the sync read it.
+    stock_by_warehouse: tuple[WarehouseStock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,6 +110,8 @@ class BoardList:
     line_count: int = 0
     counts: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
+    # The warehouses whose stock the board reads for the list.
+    warehouses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,4 +142,5 @@ __all__ = [
     "BoardList",
     "BoardPage",
     "BoardRow",
+    "WarehouseStock",
 ]

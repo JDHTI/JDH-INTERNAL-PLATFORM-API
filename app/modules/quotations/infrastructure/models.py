@@ -323,3 +323,21 @@ class QuotationLineModel(Base):
         UUID(as_uuid=True),
         ForeignKey("quotation_requested_products.id", ondelete="SET NULL"),
     )
+
+
+class MainListStockModel(Base):
+    """A main list item's stock in one of its list's warehouses, read by the sync (migration
+    ``0094_main_list_stock``, 2026-11-26): only the warehouses with stock. The board filters
+    by warehouse and breaks the stock down with it."""
+
+    __tablename__ = "main_list_stock"
+    __table_args__ = (Index("ix_main_list_stock_warehouse", "quotation_id", "warehouse"),)
+
+    quotation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("quotations.id", ondelete="CASCADE"), primary_key=True
+    )
+    sku: Mapped[str] = mapped_column(Text, primary_key=True)
+    warehouse: Mapped[str] = mapped_column(Text, primary_key=True)
+    warehouse_name: Mapped[str | None] = mapped_column(Text)
+    on_hand: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    available: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))

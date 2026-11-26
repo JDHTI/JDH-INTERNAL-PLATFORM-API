@@ -36,12 +36,13 @@ from app.modules.quotations.domain.board import (
     BoardList,
     BoardPage,
     BoardRow,
+    WarehouseStock,
 )
 from app.modules.quotations.domain.entities import (
     Quotation,
     QuotationDetail,
+    StockRow,
     StockTotal,
-    stock_totals,
 )
 from app.modules.quotations.domain.ports import InsightSource
 
@@ -87,7 +88,10 @@ class BoardRepository(Protocol):
     async def options(self, quotation_ids: Sequence[UUID]) -> tuple[list[str], list[str]]: ...
 
     async def set_stock(
-        self, quotation_id: UUID, stock: dict[str, tuple[Decimal, Decimal | None]]
+        self,
+        quotation_id: UUID,
+        stock: dict[str, tuple[Decimal, Decimal | None]],
+        breakdown: Sequence[StockRow] = (),
     ) -> None: ...
 
 
@@ -99,6 +103,8 @@ class BoardOverview:
     # The latest sync (job ``main-lists-sync``) and whether the worker runs at all.
     sync: JobRun | None = None
     sync_enabled: bool = False
+    # Every warehouse of the main lists (the warehouse filter).
+    warehouses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,6 +131,19 @@ class BoardEdit:
     done: int
     skipped: tuple[Skipped, ...]
     rows: tuple[BoardRow, ...] = ()
+
+
+def _total(items: Sequence[WarehouseStock]) -> StockTotal | None:
+    """Warehouses' stock summed (the available is unknown if one warehouse's is)."""
+
+    if not items:
+        return None
+    available: Decimal | None = Decimal(0)
+    for item in items:
+        available = (
+            None if available is None or item.available is None else available + item.available
+        )
+    return StockTotal(sum((item.on_hand for item in items), Decimal(0)), available, len(items))
 
 
 class MainBoardService:
@@ -211,7 +230,11 @@ class MainBoardService:
                     name = info.name if info else None
                 except DependencyUnavailableError:
                     logger.warning("quotations: name of list %s not read", code)
-                lists.append(BoardList(code=code, name=name))
+                lists.append(
+                    BoardList(
+                        code=code, name=name, warehouses=pricing.MAIN_LIST_WAREHOUSES.get(code, ())
+                    )
+                )
                 continue
             lists.append(
                 BoardList(
@@ -222,12 +245,32 @@ class MainBoardService:
                     line_count=update.line_count,
                     counts=counts.get(update.id, {}),
                     warnings=update.warnings,
+                    warehouses=pricing.main_list_scope(
+                        code, update.cost_centers, update.cost_warehouses, update.promo_warehouses
+                    ).warehouses,
                 )
             )
         suppliers, categories = await self.repository.options(ids)
         latest = await self.runs.latest(SYNC_JOB) if self.runs is not None else None
         return BoardOverview(
-            tuple(lists), tuple(suppliers), tuple(categories), latest, self.jobs_enabled
+            tuple(lists),
+            tuple(suppliers),
+            tuple(categories),
+            latest,
+            self.jobs_enabled,
+            warehouses=self.warehouses,
+        )
+
+    @property
+    def warehouses(self) -> tuple[str, ...]:
+        """Every warehouse of the main lists, in list order (the board's warehouse filter)."""
+
+        return tuple(
+            dict.fromkeys(
+                code
+                for list_code in self.codes
+                for code in pricing.MAIN_LIST_WAREHOUSES.get(list_code, ())
+            )
         )
 
     async def sync(self, principal: Principal) -> JobRun:
@@ -324,7 +367,7 @@ class MainBoardService:
         """
 
         quotation = detail.quotation
-        scope = pricing.stock_scope(
+        scope = pricing.main_list_scope(
             quotation.price_list_id,
             quotation.cost_centers,
             quotation.cost_warehouses,
@@ -343,7 +386,7 @@ class MainBoardService:
                 on_hand + row.on_hand,
                 None if available is None or row.available is None else available + row.available,
             )
-        await self.repository.set_stock(quotation.id, stock)
+        await self.repository.set_stock(quotation.id, stock, found)
 
     def _checked(self, filters: BoardFilter) -> BoardFilter:
         if filters.chip is not None and filters.chip not in board.CHIPS:
@@ -355,6 +398,9 @@ class MainBoardService:
         unknown = [code for code in filters.lists if code not in self.codes]
         if unknown:
             raise InvalidInputError(f"La lista {unknown[0]} no es una lista principal")
+        strange = [code for code in filters.warehouses if code not in self.warehouses]
+        if strange:
+            raise InvalidInputError(f"La bodega {strange[0]} no es de una lista principal")
         return filters
 
     async def rows(
@@ -373,45 +419,67 @@ class MainBoardService:
         filters = self._checked(filters)
         current = await self._current()
         by_id = {item.id: item for item in current.values()}
-        rows, total, counts = await self.repository.rows(list(by_id), filters, page, size)
-        result = BoardPage(tuple(rows), total, page, size, counts)
-        stock = {
-            (row.quotation_id, row.line.sku): StockTotal(row.stock_on_hand, row.stock_available, 0)
-            for row in rows
-            if row.stock_on_hand is not None and row.stock_on_hand > 0
-        }
+        rows, total_rows, counts = await self.repository.rows(list(by_id), filters, page, size)
+        stock_read = True
         unread = [row for row in rows if row.stock_on_hand is None]
         if unread:
             try:
-                stock.update(await self._stock(unread, by_id))
+                live = await self._stock(unread, by_id)
             except DependencyUnavailableError as exc:
                 logger.warning("quotations: stock of the board not read: %s", exc)
-                return BoardResult(result, stock, stock_read=False)
-        return BoardResult(result, stock)
+                live, stock_read = {}, False
+            rows = [
+                replace(row, stock_by_warehouse=live[(row.quotation_id, row.line.sku)])
+                if (row.quotation_id, row.line.sku) in live
+                else row
+                for row in rows
+            ]
+        chosen = set(filters.warehouses)
+        stock: dict[tuple[UUID, str], StockTotal] = {}
+        for row in rows:
+            key = (row.quotation_id, row.line.sku)
+            if chosen:
+                # The stock of the warehouses chosen (2026-11-26), from the breakdown.
+                total = _total(
+                    [item for item in row.stock_by_warehouse if item.warehouse in chosen]
+                )
+            elif row.stock_on_hand is not None:
+                total = StockTotal(
+                    row.stock_on_hand, row.stock_available, len(row.stock_by_warehouse)
+                )
+            else:
+                total = _total(row.stock_by_warehouse)
+            if total is not None and total.on_hand > 0:
+                stock[key] = total
+        result = BoardPage(tuple(rows), total_rows, page, size, counts)
+        return BoardResult(result, stock, stock_read=stock_read)
 
     async def _stock(
         self, rows: Sequence[BoardRow], updates: dict[UUID, Quotation]
-    ) -> dict[tuple[UUID, str], StockTotal]:
-        """Stock of each row in the warehouses of its list's operation centers, one read per
-        list (:func:`pricing.stock_scope`)."""
+    ) -> dict[tuple[UUID, str], tuple[WarehouseStock, ...]]:
+        """Stock by warehouse of each row in its list's warehouses, one read per list
+        (:func:`pricing.main_list_scope`)."""
 
         skus: dict[UUID, list[str]] = defaultdict(list)
         for row in rows:
             if not row.line.is_local:
                 skus[row.quotation_id].append(row.line.sku)
-        totals: dict[tuple[UUID, str], StockTotal] = {}
+        found_by_key: dict[tuple[UUID, str], list[WarehouseStock]] = defaultdict(list)
         for quotation_id, items in skus.items():
             update = updates[quotation_id]
-            scope = pricing.stock_scope(
+            scope = pricing.main_list_scope(
                 update.price_list_id,
                 update.cost_centers,
                 update.cost_warehouses,
                 update.promo_warehouses,
             )
-            found = await self.insights.stock(items, scope.warehouses, scope.centers)
-            for sku, total in stock_totals(found).items():
-                totals[(quotation_id, sku)] = total
-        return totals
+            for item in await self.insights.stock(items, scope.warehouses, scope.centers):
+                found_by_key[(quotation_id, item.sku)].append(
+                    WarehouseStock(
+                        item.warehouse, item.warehouse_name, item.on_hand, item.available
+                    )
+                )
+        return {key: tuple(items) for key, items in found_by_key.items()}
 
     async def keys(self, principal: Principal, filters: BoardFilter) -> list[BoardKey]:
         """Every row of the filter (at most 10,000), for an action on all of them."""

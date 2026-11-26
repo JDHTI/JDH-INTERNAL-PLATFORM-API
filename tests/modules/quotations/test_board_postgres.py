@@ -14,7 +14,7 @@ import pytest
 from app.infrastructure.database import Database
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain.board import BoardFilter
-from app.modules.quotations.domain.entities import ItemInfo, ListItem, ListPrice
+from app.modules.quotations.domain.entities import ItemInfo, ListItem, ListPrice, StockRow
 from app.modules.quotations.infrastructure.board_repository import SqlAlchemyBoardRepository
 from app.modules.quotations.infrastructure.repository import SqlAlchemyQuotationRepository
 from tests.modules.quotations.conftest import MAIN_MANAGER, cost, product
@@ -115,5 +115,29 @@ async def test_the_trend_and_the_rows_without_a_list_price(
         assert (await skus())[0] == ["2537"]
         found, counts = await skus(in_stock=False)
         assert found == ["2537", "90001", "90002", "90003"] and counts["todos"] == 4
+
+        # By warehouse (2026-11-26): the breakdown is stored with the totals; the filter
+        # keeps the rows in stock in a chosen warehouse and sorts by their stock there.
+        await board.set_stock(
+            quotation_id,
+            {"2537": (Decimal(8), Decimal(8)), "90001": (Decimal(5), None)},
+            [
+                StockRow("2537", "MDE1", "MEDELLIN", "001", Decimal(2), Decimal(2)),
+                StockRow("2537", "MDE3", "CUARTO FRIO", "001", Decimal(6), Decimal(6)),
+                StockRow("90001", "MDE1", "MEDELLIN", "001", Decimal(5), None),
+            ],
+        )
+        assert (await skus(warehouses=("MDE3",)))[0] == ["2537"]
+        rows, _, _ = await board.rows(
+            [quotation_id],
+            BoardFilter(warehouses=("MDE1",), sort="existencia", descending=True),
+            1,
+            50,
+        )
+        assert [row.line.sku for row in rows] == ["90001", "2537"]
+        breakdown = {row.line.sku: row.stock_by_warehouse for row in rows}
+        assert [item.warehouse for item in breakdown["2537"]] == ["MDE3", "MDE1"]
+        # A warehouse of no list of the board's updates leaves nothing.
+        assert (await skus(warehouses=("BAQ1",)))[0] == []
     finally:
         await repository.delete(quotation_id)
