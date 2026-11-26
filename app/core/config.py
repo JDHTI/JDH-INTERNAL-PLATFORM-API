@@ -241,6 +241,21 @@ class Settings(BaseSettings):
     SUPPORT_SETTLEMENTS_DWH_TIMEOUT_SECONDS: float = 600.0
     SUPPORT_SETTLEMENTS_START_PERIOD: str = "2026-10"
 
+    # Presupuesto comercial. The board offers months from the start; sales are copied by month
+    # from a year before it (its comparison with last year), a few missing months per run.
+    COMMERCIAL_BUDGET_START_PERIOD: str = "2026-01"
+    COMMERCIAL_BUDGET_BACKFILL_MONTHS: int = 6
+    COMMERCIAL_BUDGET_DWH_TIMEOUT_SECONDS: float = 300.0
+    COMMERCIAL_BUDGET_MAX_UPLOAD_MB: int = 10
+    # Areas whose leader (or responsible) closes and reopens a month.
+    COMMERCIAL_BUDGET_LEADER_AREA_SLUGS: str = "bi,comercial"
+    # Maestro de vendedores: dwh-platform (the warehouse's API) takes the upload. A blank URL
+    # leaves the upload off; the key is sent as ``X-API-Key``.
+    DWH_PLATFORM_URL: str = ""
+    DWH_PLATFORM_API_KEY: SecretStr = SecretStr("")
+    DWH_PLATFORM_TIMEOUT_SECONDS: float = 120.0
+    VENDOR_MASTER_MAX_UPLOAD_MB: int = 10
+
     # Area whose roles grant `validador-pedidos: manage` (upload, approve, re-run). Empty means
     # every area the catalog lists for the module (BI and Comercial); a slug narrows it to one.
     ORDER_VALIDATION_MANAGER_AREA_SLUG: str = ""
@@ -734,6 +749,17 @@ class Settings(BaseSettings):
             "support_settlements": {
                 "dwh_timeout": self.SUPPORT_SETTLEMENTS_DWH_TIMEOUT_SECONDS,
                 "start_period": self.SUPPORT_SETTLEMENTS_START_PERIOD,
+            },
+            "commercial_budget": {
+                "start_period": self.COMMERCIAL_BUDGET_START_PERIOD,
+                "backfill_months": self.COMMERCIAL_BUDGET_BACKFILL_MONTHS,
+                "dwh_timeout": self.COMMERCIAL_BUDGET_DWH_TIMEOUT_SECONDS,
+                "max_upload_bytes": self.COMMERCIAL_BUDGET_MAX_UPLOAD_MB * 1024 * 1024,
+                "leader_area_slugs": _split_lower(self.COMMERCIAL_BUDGET_LEADER_AREA_SLUGS),
+                "dwh_platform_url": self.DWH_PLATFORM_URL,
+                "dwh_platform_api_key": self.DWH_PLATFORM_API_KEY.get_secret_value(),
+                "dwh_platform_timeout": self.DWH_PLATFORM_TIMEOUT_SECONDS,
+                "vendor_master_max_upload_bytes": self.VENDOR_MASTER_MAX_UPLOAD_MB * 1024 * 1024,
             },
             "order_validation": {
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,

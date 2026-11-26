@@ -140,6 +140,17 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `POST` | `/v1/auth/me/photo/refresh` | `strict` | Llama a Microsoft Graph en cada solicitud |
 | `POST` | `/v1/auth/refresh` | `relaxed` |  |
 | `GET` | `/v1/clientes` | `read` |  |
+| `GET` | `/v1/commercial-budget/periods` | `read` |  |
+| `GET` | `/v1/commercial-budget/permissions` | `read` |  |
+| `POST` | `/v1/commercial-budget/sync` | `relaxed` |  |
+| `GET` | `/v1/commercial-budget/{period}` | `read` |  |
+| `GET` | `/v1/commercial-budget/{period}/budget-template` | `read` |  |
+| `POST` | `/v1/commercial-budget/{period}/budget-upload` | `relaxed` |  |
+| `PUT` | `/v1/commercial-budget/{period}/budgets` | `relaxed` |  |
+| `GET` | `/v1/commercial-budget/{period}/changes` | `read` |  |
+| `POST` | `/v1/commercial-budget/{period}/close` | `relaxed` |  |
+| `GET` | `/v1/commercial-budget/{period}/export` | `read` |  |
+| `POST` | `/v1/commercial-budget/{period}/reopen` | `relaxed` |  |
 | `GET` | `/v1/commercial/customers` | `read` |  |
 | `GET` | `/v1/commercial/legal-suppliers` | `read` |  |
 | `GET` | `/v1/commercial/price-increases` | `read` |  |
@@ -515,4 +526,8 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/users/me` | `read` |  |
 | `GET` | `/v1/users/{user_id}` | `read` |  |
 | `PATCH` | `/v1/users/{user_id}` | `relaxed` |  |
+| `GET` | `/v1/vendor-master/status` | `read` |  |
+| `GET` | `/v1/vendor-master/template` | `read` |  |
+| `POST` | `/v1/vendor-master/upload` | `relaxed` |  |
+| `GET` | `/v1/vendor-master/uploads` | `read` |  |
 <!-- niveles:fin -->

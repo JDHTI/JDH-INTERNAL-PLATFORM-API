@@ -174,6 +174,22 @@ MODULES: tuple[Module, ...] = (
         ("comercial", "bi"),
         "Excepciones de margen mínimo que Comercial pide a BI",
     ),
+    # Gestión comercial (2026-11-26): what the ERP does not hold about the sales force.
+    # ``manage`` fills the budget; closing a month is for the leaders of BI and Comercial.
+    Module(
+        "presupuesto-comercial",
+        "Presupuesto comercial",
+        ("bi", "comercial"),
+        "Venta, margen y clientes por vendedor contra su presupuesto; cierre del mes",
+    ),
+    # ``manage`` uploads the rep master to the DWH (dwh-platform), moved from the supplier
+    # platform; ``read`` downloads the template and sees the uploads.
+    Module(
+        "maestro-vendedores",
+        "Maestro de vendedores",
+        ("bi",),
+        "Equipo, regional, unidad de negocio y coordinador de cada vendedor (carga al DWH)",
+    ),
     # A permission without a screen of its own: ``manage`` approves or rejects the internal
     # support requests asked from a customer quotation (BI's supports managers decide too).
     # Turn it on in another area to designate reviewers there.

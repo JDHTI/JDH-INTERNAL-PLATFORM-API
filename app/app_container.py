@@ -41,6 +41,8 @@ WIRED_MODULES = (
     "app.modules.costs.presentation.router",
     "app.modules.costs.presentation.increases_router",
     "app.modules.support_settlements.presentation.router",
+    "app.modules.commercial_budget.presentation.router",
+    "app.modules.commercial_budget.presentation.vendor_master_router",
     "app.modules.cost_settings.presentation.router",
     "app.modules.supplier_supports.presentation.router",
     "app.modules.supplier_supports.presentation.requests_router",

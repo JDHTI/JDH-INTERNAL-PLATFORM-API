@@ -111,6 +111,8 @@ Un coordinador sin equipo en el maestro no ve a nadie, hasta que se le complete 
 | abastecimiento | `acumulado-alzas` | histórico y análisis de alzas (`/commercial/price-increases`), lotes de cargue a SIESA y sus archivos | generar, confirmar y anular lotes de cargue a SIESA, cargar el libro del área, marcar alzas como cargadas en SIESA, poner o quitar la fecha de SIESA (igual que `maestros` en BI) |
 | bi | `ajuste-costos` | factor de costo por familia, umbral de negociación y sucursal del proveedor por C.O., con su historial (`/cost-settings`) | cambiar parámetros y reglas de sucursal |
 | bi (bloqueado) | `liquidacion-apoyos` | liquidación de apoyos del mes por proveedor, referencia y venta; Excel (`/support-settlements`) | recalcular y cerrar el mes vencido. Reabrir un mes cerrado: solo el líder o responsable de BI y los administradores (`AreaLeaderPolicy`) |
+| bi, comercial | `presupuesto-comercial` | venta, margen y clientes por vendedor contra su presupuesto, historial, plantilla y Excel (`/commercial-budget`), en el alcance de ventas de cada persona | diligenciar y cargar el presupuesto de los vendedores de su alcance y sincronizar las ventas. Cerrar y reabrir un mes: solo los líderes o responsables de BI y de Comercial y los administradores (`COMMERCIAL_BUDGET_LEADER_AREA_SLUGS`) |
+| bi (se enciende en otras áreas) | `maestro-vendedores` | plantilla «Maestro Vendedores JDH» y el historial de cargas (`/vendor-master`) | subir el maestro de vendedores al DWH (dwh-platform) |
 
 `/commercial/*` también lo leen `apoyos`, `cotizador`, `actualizacion-listas`,
 `validador-pedidos` y las cuatro claves de Costos, porque esas pantallas buscan proveedores y

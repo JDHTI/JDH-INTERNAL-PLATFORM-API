@@ -161,6 +161,16 @@ JOBS: tuple[JobDefinition, ...] = (
         "reporte_ventas",
         MONDAY_TO_SATURDAY,
     ),
+    # After the sales load (2026-11-26): the commercial budget's months of sales and the rep
+    # master (refreshed earlier by ``identidad``); a closed month keeps its own picture.
+    JobDefinition(
+        "commercial-budget-sales",
+        "Presupuesto comercial: ventas por cliente",
+        "Copia del DWH el maestro de vendedores y las ventas por cliente del mes en curso, del "
+        "mes anterior si no está cerrado y de los meses de historia que falten",
+        "reporte_ventas",
+        MONDAY_TO_SATURDAY,
+    ),
 )
 JOBS_BY_KEY = {job.key: job for job in JOBS}
 

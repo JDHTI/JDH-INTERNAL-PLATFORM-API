@@ -8,6 +8,7 @@ from app.infrastructure.database import Base
 from app.modules.action_plans.infrastructure import models as action_plans_models
 from app.modules.app_monitoring.infrastructure import models as app_monitoring_models
 from app.modules.areas.infrastructure import models as areas_models
+from app.modules.commercial_budget.infrastructure import models as commercial_budget_models
 from app.modules.commercial_masters.infrastructure import models as commercial_masters_models
 from app.modules.cost_settings.infrastructure import models as cost_settings_models
 from app.modules.costs.infrastructure import models as costs_models
@@ -34,6 +35,7 @@ __all__ = [
     "action_plans_models",
     "app_monitoring_models",
     "areas_models",
+    "commercial_budget_models",
     "commercial_masters_models",
     "cost_settings_models",
     "costs_models",
