@@ -70,11 +70,10 @@ _CHIP_CONDITIONS = {
     "cargada": L.load_id.is_not(None),
     # The same rule as «sube» (2026-11-26).
     "alza": _UP,
-    "objetivo": and_(
-        _JUDGED,
-        ~_UP,
-        _MARGIN.between(_TARGET - TARGET_TOLERANCE, _TARGET + TARGET_TOLERANCE),
-    ),
+    # The three margin chips split the rows that can be judged: under the floor («alza»),
+    # covering it up to half a point over the target («objetivo», under the target too) and
+    # more than that («encima»).
+    "objetivo": and_(_JUDGED, ~_UP, _MARGIN <= _TARGET + TARGET_TOLERANCE),
     "encima": and_(_JUDGED, ~_UP, _MARGIN > _TARGET + TARGET_TOLERANCE),
     "alerta": and_(
         L.is_active,

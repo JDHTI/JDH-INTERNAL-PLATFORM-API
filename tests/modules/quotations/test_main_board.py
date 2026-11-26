@@ -50,7 +50,7 @@ def _chip(line, chip: str) -> bool:
         "validada": line.review_status == "validada" and line.load_id is None,
         "cargada": line.load_id is not None,
         "alza": up,
-        "objetivo": judged and not up and target - TOLERANCE <= margin <= target + TOLERANCE,
+        "objetivo": judged and not up and margin <= target + TOLERANCE,
         "encima": judged and not up and margin > target + TOLERANCE,
         "alerta": line.is_active
         and (line.below_target or line.cost is None or "precio_marcador" in line.problems),
@@ -452,6 +452,16 @@ async def test_the_board_hides_what_is_out_of_stock_and_small_rises(
     assert _trend(replace(line, last_price=Decimal("999"), new_price=Decimal("2000")), "sube")
     # Without a cost there is no trend.
     assert not _trend(replace(line, cost=None, last_price=Decimal("1")), "sube")
+    # Covering the floor but under the target is «objetivo»: alza, objetivo and encima split
+    # the rows.
+    covers = replace(
+        line,
+        last_price=Decimal("1100"),
+        current_margin_with_support_pct=Decimal("0.19"),
+        target_margin_pct=Decimal("0.25"),
+    )
+    assert _chip(covers, "objetivo") and not _chip(covers, "alza")
+    assert not _chip(covers, "encima")
 
 
 class FakeRuns:

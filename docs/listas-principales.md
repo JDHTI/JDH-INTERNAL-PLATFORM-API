@@ -45,8 +45,11 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   - `sube`: el precio actual de la lista está **por debajo** del piso.
   - `baja`: está en el piso o por encima.
   - El chip `alza` es la misma regla que `sube`.
-  - `objetivo` y `encima` siguen midiendo el margen contra el objetivo (±0,5 puntos), pero nunca
-    incluyen una fila que sube.
+  - Los tres chips de margen reparten las filas que se pueden juzgar:
+    - `alza`: bajo el piso;
+    - `objetivo`: cubre el piso y su margen no pasa de 0,5 puntos sobre el objetivo; incluye las
+      que están bajo el objetivo pero sobre el piso;
+    - `encima`: cubre el piso y su margen pasa de 0,5 puntos sobre el objetivo.
   - **Antes:** la tendencia comparaba el precio nuevo con el actual (`sube`, `baja`, `estable`).
     Como casi ninguna fila tiene precio nuevo, en producción 26.484 de 26.518 filas salían
     `estable`. `estable` ya no existe y responde 400.
