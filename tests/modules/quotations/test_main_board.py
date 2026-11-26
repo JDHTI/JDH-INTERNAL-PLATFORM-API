@@ -12,8 +12,9 @@ from app.core.errors import ConflictError, ForbiddenError, InvalidInputError
 from app.modules.jobs.domain.entities import JobRun
 from app.modules.jobs.domain.registry import OPEN_STATUSES, RunStatus
 from app.modules.quotations.application.main_board import MainBoardService, PriceInput
-from app.modules.quotations.domain.board import BoardFilter, BoardKey, BoardRow
+from app.modules.quotations.domain.board import BoardFilter, BoardKey, BoardRow, WarehouseStock
 from app.modules.quotations.domain.entities import ItemInfo, ListItem, PriceListInfo, StockRow
+from app.modules.quotations.domain.pricing import MAIN_LIST_WAREHOUSES
 from app.modules.quotations.domain.vocabulary import MAIN_LIST
 from tests.modules.quotations.conftest import MAIN_APPROVER, MAIN_MANAGER, NIT, branch
 from tests.modules.supplier_supports.conftest import person
@@ -64,10 +65,20 @@ class FakeBoardRepository:
 
     def __init__(self, quotations) -> None:
         self.quotations = quotations
-        # What the sync stored: (on hand, available) by (update, SKU).
+        # What the sync stored: (on hand, available) by (update, SKU), and the stock by
+        # warehouse (2026-11-26).
         self.stock: dict[tuple, tuple] = {}
+        self.breakdown: dict[tuple, tuple[WarehouseStock, ...]] = {}
 
-    async def set_stock(self, quotation_id, stock):
+    async def set_stock(self, quotation_id, stock, breakdown=()):
+        for key in [key for key in self.breakdown if key[0] == quotation_id]:
+            del self.breakdown[key]
+        for row in breakdown:
+            if row.on_hand > 0:
+                self.breakdown[(quotation_id, row.sku)] = (
+                    *self.breakdown.get((quotation_id, row.sku), ()),
+                    WarehouseStock(row.warehouse, row.warehouse_name, row.on_hand, row.available),
+                )
         for line in self.quotations.items[quotation_id].lines:
             if not line.is_local:
                 self.stock[(quotation_id, line.sku)] = stock.get(line.sku, (Decimal(0), Decimal(0)))
@@ -89,6 +100,10 @@ class FakeBoardRepository:
             quotation = detail.quotation
             if board.lists and quotation.price_list_id not in board.lists:
                 continue
+            chosen = set(board.warehouses)
+            own = set(MAIN_LIST_WAREHOUSES.get(quotation.price_list_id, ()))
+            if chosen and not chosen & own:
+                continue
             for line in detail.lines:
                 if board.q and not (
                     line.sku.startswith(board.q)
@@ -102,7 +117,11 @@ class FakeBoardRepository:
                 if board.without_list_price and line.last_price is not None:
                     continue
                 on_hand, available = self.stock.get((quotation.id, line.sku), (None, None))
-                if on_hand is not None and on_hand <= 0:
+                by_warehouse = self.breakdown.get((quotation.id, line.sku), ())
+                if chosen and board.in_stock:
+                    if not any(item.warehouse in chosen for item in by_warehouse):
+                        continue  # in stock in a warehouse chosen (2026-11-26)
+                elif board.in_stock and on_hand is not None and on_hand <= 0:
                     continue  # only what is in stock (2026-11-23)
                 yield BoardRow(
                     quotation.id,
@@ -112,6 +131,7 @@ class FakeBoardRepository:
                     line,
                     on_hand,
                     available,
+                    by_warehouse,
                 )
 
     async def rows(self, ids, board, page, size):
@@ -354,6 +374,40 @@ async def test_the_sync_stores_the_stock_and_the_board_sorts_by_it(
     assert again.stock_read and again.stock[(first.quotation_id, "2537")].on_hand == Decimal(80)
     # One read per list.
     assert [call[0] for call in insights.calls] == ["stock", "stock"]
+
+
+async def test_the_board_breaks_the_stock_down_by_warehouse_and_filters_by_it(
+    board, insights, collaborator
+) -> None:
+    """2026-11-26: each list reads its own warehouses (BI's mapping), stores the stock of
+    each one, and the board filters by warehouse showing only the chosen ones' stock."""
+
+    await board.build(collaborator, "002")
+    await board.build(collaborator, "001")
+    reads = {tuple(call[2]) for call in insights.calls if call[0] == "stock"}
+    assert ("MDE1", "MDE3") in reads and ("OCC1", "OCC16") in reads
+
+    every = await board.rows(collaborator, BoardFilter(), 1, 50)
+    row = next(item for item in every.page.rows if item.price_list_id == "002")
+    assert {item.warehouse for item in row.stock_by_warehouse} <= {"OCC1", "OCC16"}
+    assert row.stock_by_warehouse
+
+    chosen = row.stock_by_warehouse[0]
+    only = await board.rows(collaborator, BoardFilter(warehouses=(chosen.warehouse,)), 1, 50)
+    assert {item.price_list_id for item in only.page.rows} == {"002"}
+    picked = next(item for item in only.page.rows if item.line.sku == row.line.sku)
+    assert only.stock[(picked.quotation_id, picked.line.sku)].on_hand == chosen.on_hand
+
+    overview = await board.overview(collaborator)
+    # The warehouses of the configured lists, in list order, without repeats.
+    assert overview.warehouses[:2] == ("MDE1", "MDE3")
+    assert len(overview.warehouses) == len(set(overview.warehouses))
+    assert next(item for item in overview.lists if item.code == "001").warehouses == (
+        "MDE1",
+        "MDE3",
+    )
+    with pytest.raises(InvalidInputError, match="bodega"):
+        await board.rows(collaborator, BoardFilter(warehouses=("XYZ9",)), 1, 50)
 
 
 async def test_the_trend_filter_is_checked_and_reaches_the_keys(board, collaborator) -> None:

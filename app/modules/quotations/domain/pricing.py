@@ -132,6 +132,40 @@ CENTER_STOCK_WAREHOUSES: dict[str, tuple[str, ...]] = {
     "005": ("BGA1", "BGA11"),
     "009": ("BAQ1", "BAQ2", "BAQ10"),
 }
+# The warehouses of each main list (BI, 2026-11-26): the board of Listas principales reads
+# and breaks down the stock of a list in these, and filters by them. SIESA and the DWH have no
+# list → warehouse relation (``docs/cotizador-dwh.md`` §9.2.2), so it is fixed here. The
+# saved filter of operation centers of each list (``cost_centers``) no longer decides the
+# board's stock: it had 001 and list 1 on C.O. 004 and 1DR on none. The cost keeps its own
+# rule (:data:`LIST_WAREHOUSES`; list 1, the highest of :data:`GENERAL_WAREHOUSES`).
+MAIN_LIST_WAREHOUSES: dict[str, tuple[str, ...]] = {
+    "001": ("MDE1", "MDE3"),
+    "002": ("OCC1", "OCC16"),
+    "003": ("BTA8", "BTA9"),
+    "004": ("CTG1", "CTG15"),
+    "005": ("BGA1",),
+    "009": ("BAQ1", "BAQ2"),
+    "1M": ("MDE1", "MDE3"),
+    "10T": ("OCC1", "OCC16"),
+    "10U": ("BTA8", "BTA9"),
+    "11N": ("CTG1", "CTG15"),
+    "10N": ("BGA1",),
+    "1DR": ("BAQ1", "BAQ2"),
+    "35P": ("URA6",),
+    "1": (
+        "MDE1",
+        "MDE3",
+        "OCC1",
+        "OCC16",
+        "BTA8",
+        "BTA9",
+        "CTG1",
+        "CTG15",
+        "BGA1",
+        "BAQ1",
+        "BAQ2",
+    ),
+}
 # Product lines that go to warehouse 2.
 COLD_LINES = ("CONGELADOS", "REFRIGERADOS")
 
@@ -410,6 +444,22 @@ def stock_warehouses(
     return stock_scope(price_list_id, centers, warehouses, promos).warehouses
 
 
+def main_list_scope(
+    price_list_id: str | None,
+    centers: Sequence[str],
+    warehouses: Mapping[str, Sequence[str]] | None = None,
+    promos: Mapping[str, Sequence[str]] | None = None,
+) -> StockScope:
+    """Where the board of Listas principales reads a list's stock: the list's own
+    warehouses (:data:`MAIN_LIST_WAREHOUSES`, 2026-11-26); a list without a row, as any
+    update (:func:`stock_scope`)."""
+
+    own = MAIN_LIST_WAREHOUSES.get(price_list_id or "")
+    if own:
+        return StockScope(own)
+    return stock_scope(price_list_id, centers, warehouses, promos)
+
+
 def stock_label(plans: Mapping[str | None, StockPlan]) -> str:
     """Where the inventory cost comes from, in words, for the header."""
 
@@ -582,6 +632,8 @@ __all__ = [
     "StockPlan",
     "StockScope",
     "stock_scope",
+    "MAIN_LIST_WAREHOUSES",
+    "main_list_scope",
     "centers_set_cost",
     "chosen_warehouses",
     "costliest_center",

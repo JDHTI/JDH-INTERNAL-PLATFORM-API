@@ -60,6 +60,8 @@ class BoardListResponse(BaseModel):
     # Rows of each review state: ``sin_marcar``, ``por_validar``, ``validada``, ``cargada``.
     counts: dict[str, int]
     warnings: list[WarningResponse]
+    # The warehouses whose stock the board reads for the list (2026-11-26).
+    warehouses: list[str] = []
 
 
 class SyncListResponse(BaseModel):
@@ -91,6 +93,15 @@ class BoardOverviewResponse(BaseModel):
     sync: SyncResponse | None = None
     # False when the background worker is off: the sync cannot run.
     sync_enabled: bool = False
+    # Every warehouse of the main lists, in list order: the options of the warehouse filter.
+    warehouses: list[str] = []
+
+
+class WarehouseStockResponse(BaseModel):
+    warehouse: str
+    warehouse_name: str | None
+    on_hand: Decimal
+    available: Decimal | None
 
 
 class BoardRowResponse(LineResponse):
@@ -104,8 +115,11 @@ class BoardRowResponse(LineResponse):
     # not read it).
     stock_on_hand: Decimal | None = None
     stock_available: Decimal | None = None
-    # Warehouses with stock when the page read it from the warehouse; 0 when the sync had.
+    # Warehouses with stock behind ``stock_on_hand``.
     stock_warehouses: int = 0
+    # The stock in each of the list's warehouses with some, the largest first (2026-11-26).
+    # With a warehouse filter, ``stock_on_hand`` is the sum of the chosen ones; this keeps all.
+    stock_by_warehouse: list[WarehouseStockResponse] = []
 
 
 class BoardPageResponse(BaseModel):
@@ -166,6 +180,15 @@ def _row(row: BoardRow, stock: StockTotal | None = None) -> BoardRowResponse:
         stock_on_hand=stock.on_hand if stock else None,
         stock_available=stock.available if stock else None,
         stock_warehouses=stock.warehouses if stock else 0,
+        stock_by_warehouse=[
+            WarehouseStockResponse(
+                warehouse=item.warehouse,
+                warehouse_name=item.warehouse_name,
+                on_hand=item.on_hand,
+                available=item.available,
+            )
+            for item in row.stock_by_warehouse
+        ],
     )
 
 
@@ -188,8 +211,12 @@ def _filter(
     trend: str | None = None,
     without_list_price: bool = False,
     in_stock: bool = True,
+    warehouses: list[str] | None = None,
 ) -> BoardFilter:
     return BoardFilter(
+        warehouses=tuple(
+            dict.fromkeys(code.strip().upper() for code in warehouses or () if code.strip())
+        )[:30],
         lists=tuple(dict.fromkeys(code.strip() for code in lists or () if code.strip()))[:20],
         q=(q or "").strip() or None,
         suppliers=tuple(suppliers or ())[:200],
@@ -238,6 +265,7 @@ async def overview(
                     WarningResponse(code=code, label=WARNING_LABELS.get(code, code))
                     for code in item.warnings
                 ],
+                warehouses=list(item.warehouses),
             )
             for item in result.lists
         ],
@@ -245,6 +273,7 @@ async def overview(
         categories=list(result.categories),
         sync=_sync(result.sync),
         sync_enabled=result.sync_enabled,
+        warehouses=list(result.warehouses),
     )
 
 
@@ -307,6 +336,7 @@ async def rows(
     trend: Trend | None = None,
     without_list_price: bool = False,
     in_stock: bool = True,
+    warehouses: TextsQuery = None,
     sort: Sort = "lista",
     desc: bool = False,
     page: int = Query(default=1, ge=1),
@@ -322,12 +352,26 @@ async def rows(
     the sync read without stock; ``false`` shows it too. ``counts`` has the rows of each
     chip (under every filter but the chip), of ``sube``, ``baja``, ``estable`` and
     ``sin_precio`` (one group, under every filter but the trend and
-    ``without_list_price``), and ``todos``; every count follows ``in_stock``."""
+    ``without_list_price``), and ``todos``; every count follows ``in_stock``.
+
+    ``warehouses`` (2026-11-26, the warehouses of ``GET /main``): only the lists that have
+    one of them and, with ``in_stock``, the rows with stock in one of them; the stock shown
+    (and sorted by ``existencia``) is theirs. ``stock_by_warehouse`` breaks down every row."""
 
     result = await service.rows(
         principal,
         _filter(
-            lists, q, suppliers, categories, chip, sort, desc, trend, without_list_price, in_stock
+            lists,
+            q,
+            suppliers,
+            categories,
+            chip,
+            sort,
+            desc,
+            trend,
+            without_list_price,
+            in_stock,
+            warehouses,
         ),
         page,
         size,
@@ -361,11 +405,12 @@ async def keys(
     trend: Trend | None = None,
     without_list_price: bool = False,
     in_stock: bool = True,
+    warehouses: TextsQuery = None,
     principal: Principal = _principal,
     service: MainBoardService = _service,
 ) -> list[BoardKeyModel]:
     """At most 10,000, for a bulk action on every row of the filter (``trend``,
-    ``without_list_price`` and ``in_stock`` as in ``/main/rows``)."""
+    ``without_list_price``, ``in_stock`` and ``warehouses`` as in ``/main/rows``)."""
 
     found = await service.keys(
         principal,
@@ -380,6 +425,7 @@ async def keys(
             trend,
             without_list_price,
             in_stock,
+            warehouses,
         ),
     )
     return [BoardKeyModel(quotation_id=item.quotation_id, sku=item.sku) for item in found]

@@ -76,12 +76,43 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   filas como quedaron (`rows`), para que la UI las muestre sin releer la página.
 - **Compartido:** cualquiera con `manage` en el módulo edita todas las listas, aunque las haya
   armado otra persona; cualquiera con `read` las ve todas.
-- **Existencias:** la sincronización guarda la existencia de cada referencia en las bodegas de los
-  C.O. de su lista (desde el 2026-11-19, `pricing.stock_scope`; sin C.O., las 17 principales)
-  (`quotation_lines.stock_on_hand` y `stock_available`, migración `0060`: 0 sin existencia,
-  NULL sin leer). La página la toma de ahí y se puede ordenar por ella (`sort=existencia`, sin
-  leer al final). Las filas sin leer (una lista sin sincronizar desde la `0060`) se leen del DWH
-  por página; si no responde, salen sin ella (`stock_read: false`).
+- **Existencias:** la sincronización guarda la existencia de cada referencia en **las bodegas de su
+  lista** (`quotation_lines.stock_on_hand` y `stock_available`, migración `0060`: 0 sin existencia,
+  NULL sin leer).
+  - La página la toma de ahí y se puede ordenar por ella (`sort=existencia`, lo que no se leyó va al final).
+  - Las filas sin leer (una lista sin sincronizar) se leen del DWH por página; si no responde, salen
+    sin ella (`stock_read: false`).
+- **Bodegas de cada lista (BI, 2026-11-26):** SIESA y el DWH no relacionan lista y bodega
+  ([cotizador-dwh.md](cotizador-dwh.md) §9.2.2), así que el mapeo está en
+  `pricing.MAIN_LIST_WAREHOUSES`:
+
+  | Listas | Bodegas |
+  | --- | --- |
+  | 001, 1M | MDE1, MDE3 |
+  | 002, 10T | OCC1, OCC16 |
+  | 003, 10U | BTA8, BTA9 |
+  | 004, 11N | CTG1, CTG15 |
+  | 005, 10N | BGA1 |
+  | 009, 1DR | BAQ1, BAQ2 |
+  | 35P | URA6 |
+  | 1 | las 11 anteriores salvo URA6: MDE1, MDE3, OCC1, OCC16, BTA8, BTA9, CTG1, CTG15, BGA1, BAQ1, BAQ2 |
+
+  - **Antes:** la existencia salía del filtro de C.O. guardado en cada lista y estaba mal en varias.
+    En producción, 001 y la lista 1 leían el C.O. 004 (Cartagena), 1DR no tenía C.O. (leía las 17)
+    y 35P leía el C.O. 200.
+  - **El costo no cambia:** sigue con sus bodegas 1 y 2 (`LIST_WAREHOUSES`), y la lista 1 con el
+    mayor de las 17.
+- **Desglose por bodega:** la sincronización guarda también la existencia de cada bodega con
+  existencia (`main_list_stock`, migración `0094`). Cada fila trae `stock_by_warehouse`, de mayor a
+  menor.
+- **Filtro por bodega** (`warehouses`, varias):
+  - deja solo las listas que tienen alguna de esas bodegas;
+  - con «Con existencia», deja solo las filas con existencia en alguna de ellas;
+  - la existencia que se muestra, y por la que se ordena, es la suma de las bodegas elegidas.
+
+  Las opciones salen de `GET /main` (`warehouses` en general y por lista).
+- **Al desplegar la `0094`:** hay que sincronizar las listas («Sincronizar» o la tarea de
+  abastecimiento del día siguiente) para corregir las existencias y llenar el desglose.
 
 ## Datos generales
 
@@ -176,9 +207,9 @@ La revisión por ítem, el staging y las cargas son los de
 
 | Endpoint | Qué hace |
 | --- | --- |
-| `GET /main` | las 14 listas, armadas o no, con sus conteos, los proveedores y categorías para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
+| `GET /main` | las 14 listas, armadas o no, con sus conteos y sus bodegas (`warehouses`), los proveedores, categorías y bodegas para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
 | `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
-| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&in_stock=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio` |
+| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&in_stock=&warehouses=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio`, y el desglose por bodega de cada fila (`stock_by_warehouse`) |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
 | `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos (pasan a `por_validar`); `null` lo borra. Trae las filas como quedaron (`rows`) |
 | `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas (sin `rows`: pueden ser 10.000) |

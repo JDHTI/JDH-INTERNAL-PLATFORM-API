@@ -5,9 +5,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from decimal import Decimal
+from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, bindparam, case, func, or_, select, true, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    bindparam,
+    case,
+    delete,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    true,
+    update,
+)
 
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.board import (
@@ -18,10 +32,16 @@ from app.modules.quotations.domain.board import (
     BoardFilter,
     BoardKey,
     BoardRow,
+    WarehouseStock,
 )
 from app.modules.quotations.domain.entities import Quotation
+from app.modules.quotations.domain.pricing import MAIN_LIST_WAREHOUSES
 from app.modules.quotations.domain.vocabulary import LOCAL, TO_VALIDATE, UNMARKED, VALIDATED
-from app.modules.quotations.infrastructure.models import QuotationLineModel, QuotationModel
+from app.modules.quotations.infrastructure.models import (
+    MainListStockModel,
+    QuotationLineModel,
+    QuotationModel,
+)
 from app.modules.quotations.infrastructure.repository import _line, _quotation
 
 Q = QuotationModel
@@ -76,6 +96,69 @@ _SORT_COLUMNS = {
 }
 
 
+S = MainListStockModel
+_CHUNK = 2000
+
+
+class WarehouseStockRow(Protocol):
+    """A SKU's stock in one warehouse (the quoter's ``StockRow``)."""
+
+    sku: str
+    warehouse: str
+    warehouse_name: str | None
+    on_hand: Decimal
+    available: Decimal | None
+
+
+def _in_warehouses(warehouses: Sequence[str]) -> ColumnElement[bool]:
+    """The row has stock in one of the warehouses (as the sync read it)."""
+
+    return exists().where(
+        S.quotation_id == L.quotation_id,
+        S.sku == L.sku,
+        S.warehouse.in_(list(warehouses)),
+        S.on_hand > 0,
+    )
+
+
+def _warehouse_stock(warehouses: Sequence[str]) -> Any:
+    """The row's stock in the warehouses, for sorting."""
+
+    return (
+        select(func.sum(S.on_hand))
+        .where(S.quotation_id == L.quotation_id, S.sku == L.sku, S.warehouse.in_(list(warehouses)))
+        .correlate(L)
+        .scalar_subquery()
+    )
+
+
+async def _breakdown(
+    session: Any, keys: Sequence[tuple[UUID, str]]
+) -> dict[tuple[UUID, str], tuple[WarehouseStock, ...]]:
+    """The stock by warehouse of the page's rows, the largest first."""
+
+    if not keys:
+        return {}
+    ids = sorted({quotation_id for quotation_id, _ in keys})
+    skus = sorted({sku for _, sku in keys})
+    found = (
+        await session.execute(
+            select(S)
+            .where(S.quotation_id.in_(ids), S.sku.in_(skus))
+            .order_by(S.quotation_id, S.sku, S.on_hand.desc(), S.warehouse)
+        )
+    ).scalars()
+    wanted = set(keys)
+    result: dict[tuple[UUID, str], list[WarehouseStock]] = {}
+    for item in found:
+        key = (item.quotation_id, item.sku)
+        if key in wanted:
+            result.setdefault(key, []).append(
+                WarehouseStock(item.warehouse, item.warehouse_name, item.on_hand, item.available)
+            )
+    return {key: tuple(items) for key, items in result.items()}
+
+
 def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -127,7 +210,18 @@ class SqlAlchemyBoardRepository:
 
     def _base(self, quotation_ids: Sequence[UUID], board: BoardFilter) -> list:
         conditions = [L.quotation_id.in_(list(quotation_ids))]
-        if board.in_stock:
+        if board.warehouses:
+            # Only the lists that have one of the warehouses (2026-11-26).
+            lists = sorted(
+                code
+                for code, own in MAIN_LIST_WAREHOUSES.items()
+                if set(own) & set(board.warehouses)
+            )
+            conditions.append(Q.price_list_id.in_(lists))
+            if board.in_stock:
+                # In stock in one of them, as the sync read it by warehouse.
+                conditions.append(_in_warehouses(board.warehouses))
+        elif board.in_stock:
             # Only what is in stock (2026-11-23; the default, a quick filter since 2026-11-25):
             # a SKU the sync read at 0 is left out; one whose stock was not read (``None``)
             # stays, so a DWH outage hides nothing.
@@ -167,6 +261,9 @@ class SqlAlchemyBoardRepository:
         chip, trend, unpriced = _facets(board)
         filtered = [*base, chip, trend, unpriced]
         sort = _SORT_COLUMNS.get(board.sort)
+        if board.sort == "existencia" and board.warehouses:
+            # The stock of the warehouses chosen, not of the whole list.
+            sort = (_warehouse_stock(board.warehouses),)
         if sort:
             order = [
                 (column.desc() if board.descending else column.asc()).nulls_last()
@@ -215,6 +312,9 @@ class SqlAlchemyBoardRepository:
                     .limit(size)
                 )
             ).all()
+            breakdown = await _breakdown(
+                session, [(quotation_id, line.sku) for line, quotation_id, *_ in found]
+            )
         rows = [
             BoardRow(
                 quotation_id=quotation_id,
@@ -224,6 +324,7 @@ class SqlAlchemyBoardRepository:
                 line=_line(line),
                 stock_on_hand=line.stock_on_hand,
                 stock_available=line.stock_available,
+                stock_by_warehouse=breakdown.get((quotation_id, line.sku), ()),
             )
             for line, quotation_id, version, list_id, list_name in found
         ]
@@ -271,13 +372,32 @@ class SqlAlchemyBoardRepository:
         return result
 
     async def set_stock(
-        self, quotation_id: UUID, stock: dict[str, tuple[Decimal, Decimal | None]]
+        self,
+        quotation_id: UUID,
+        stock: dict[str, tuple[Decimal, Decimal | None]],
+        breakdown: Sequence[WarehouseStockRow] = (),
     ) -> None:
-        """Store the stock the sync read for an update: ``(on hand, available)`` by SKU; its
-        other SIESA items have none (0)."""
+        """Store the stock the sync read for an update: ``(on hand, available)`` by SKU (its
+        other SIESA items have none, 0) and, in the same transaction, the stock by warehouse
+        in place of the previous one."""
 
         table = L.__table__
         async with self.database.session_factory() as session, session.begin():
+            await session.execute(delete(S).where(S.quotation_id == quotation_id))
+            rows = [
+                {
+                    "quotation_id": quotation_id,
+                    "sku": item.sku,
+                    "warehouse": item.warehouse,
+                    "warehouse_name": item.warehouse_name,
+                    "on_hand": item.on_hand,
+                    "available": item.available,
+                }
+                for item in {(row.sku, row.warehouse): row for row in breakdown}.values()
+                if item.on_hand > 0
+            ]
+            for start in range(0, len(rows), _CHUNK):
+                await session.execute(insert(S), rows[start : start + _CHUNK])
             await session.execute(
                 update(table)
                 .where(table.c.quotation_id == quotation_id, table.c.origin != LOCAL)
