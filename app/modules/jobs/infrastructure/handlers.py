@@ -123,6 +123,19 @@ def _commercial_budget(build: Callable[[], CommercialBudget]) -> JobHandler:
     return handler
 
 
+class ServiceLevel(Protocol):
+    """Nivel de servicio: the lines of the fulfilled orders, copied, and the ABCD classes."""
+
+    async def sync(self) -> Mapping[str, Any]: ...
+
+
+def _service_level(build: Callable[[], ServiceLevel]) -> JobHandler:
+    async def handler() -> Mapping[str, Any]:
+        return await build().sync()
+
+    return handler
+
+
 def build_job_handlers(
     masters: Callable[[], MasterService],
     commercial_sync: Callable[[], MasterSyncService],
@@ -133,6 +146,7 @@ def build_job_handlers(
     cost_novelties: Callable[[], CostNovelties] | None = None,
     support_settlements: Callable[[], SupportSettlements] | None = None,
     commercial_budget: Callable[[], CommercialBudget] | None = None,
+    service_level: Callable[[], ServiceLevel] | None = None,
 ) -> dict[str, JobHandler]:
     """Bind every job key of the registry to its work.
 
@@ -158,6 +172,8 @@ def build_job_handlers(
         extra["support-settlements-refresh"] = _support_settlements(support_settlements)
     if commercial_budget is not None:
         extra["commercial-budget-sales"] = _commercial_budget(commercial_budget)
+    if service_level is not None:
+        extra["service-level-sync"] = _service_level(service_level)
     return {
         **extra,
         "masters-warm-identity": _warm(masters, "identidad"),

@@ -10,6 +10,7 @@ by the DWH team on 2026-11-05 (Bogotá, median data ready):
 - ``reporte_ventas``, Mon-Sat 07:30, ready ~07:56: products and sales.
 - ``abastecimiento``, Mon-Fri 08:30, ready ~08:56: price lists, inventory and the
   product-supplier bridge.
+- ``cartera_pedidos``, Mon-Sat 11:50: receivables and the sales orders (t430/t431).
 
 A job key is a URL segment (``POST /jobs/{key}/run``).
 """
@@ -169,6 +170,17 @@ JOBS: tuple[JobDefinition, ...] = (
         "Copia del DWH el maestro de vendedores y las ventas por cliente del mes en curso, del "
         "mes anterior si no está cerrado y de los meses de historia que falten",
         "reporte_ventas",
+        MONDAY_TO_SATURDAY,
+    ),
+    # After the orders load (2026-11-26): the lines of the fulfilled orders of Nivel de
+    # servicio; when the month changes, the ABCD classes of the two closed months.
+    JobDefinition(
+        "service-level-sync",
+        "Nivel de servicio: pedidos cumplidos",
+        "Copia del DWH las líneas de los pedidos cumplidos de los últimos 45 días (la primera vez "
+        "desde el inicio), conserva sus motivos y recalcula la clasificación ABCD al cambiar de "
+        "mes",
+        "cartera_pedidos",
         MONDAY_TO_SATURDAY,
     ),
 )

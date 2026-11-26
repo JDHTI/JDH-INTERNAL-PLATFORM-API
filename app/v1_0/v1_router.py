@@ -51,6 +51,7 @@ from app.modules.quotations.presentation.list_router import (
 )
 from app.modules.quotations.presentation.router import router as quotations_router
 from app.modules.salespeople.presentation.router import router as salespeople_router
+from app.modules.service_level.presentation.router import router as service_level_router
 from app.modules.sites.presentation.router import router as sites_router
 from app.modules.supplier_supports.presentation.attachments_router import (
     router as supports_attachments_router,
@@ -105,6 +106,7 @@ v1_router.include_router(
     support_settlements_router, prefix="/support-settlements", tags=["support-settlements"]
 )
 v1_router.include_router(cost_settings_router, prefix="/cost-settings", tags=["cost-settings"])
+v1_router.include_router(service_level_router, prefix="/service-level", tags=["service-level"])
 v1_router.include_router(
     commercial_budget_router, prefix="/commercial-budget", tags=["commercial-budget"]
 )

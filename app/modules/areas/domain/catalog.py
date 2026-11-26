@@ -231,6 +231,21 @@ MODULES: tuple[Module, ...] = (
         ("abastecimiento",),
         "Histórico y análisis de las alzas de costo de los productos",
     ),
+    # Nivel de servicio (Abastecimiento, 2026-11-26): the fulfilled sales orders, out of the
+    # area's Power BI board. ``pendientes-pedidos: manage`` gives reasons to the pending lines,
+    # keeps the reasons' catalog and recalculates the ABCD; the dashboard only reads.
+    Module(
+        "pendientes-pedidos",
+        "Pendientes de pedidos",
+        ("abastecimiento",),
+        "Líneas de pedidos cumplidos con pendiente, su motivo y su responsable",
+    ),
+    Module(
+        "nivel-servicio",
+        "Nivel de servicio",
+        ("abastecimiento",),
+        "Nivel de servicio por pedido, línea, cantidad y valor, por C.O. y responsable",
+    ),
     # The month's settlement of the supplier supports (2026-11-24): BI only. ``read`` sees and
     # downloads it, ``manage`` recalculates and closes; the area's leader reopens.
     Module(

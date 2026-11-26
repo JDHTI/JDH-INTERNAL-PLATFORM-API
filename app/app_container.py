@@ -44,6 +44,7 @@ WIRED_MODULES = (
     "app.modules.commercial_budget.presentation.router",
     "app.modules.commercial_budget.presentation.vendor_master_router",
     "app.modules.cost_settings.presentation.router",
+    "app.modules.service_level.presentation.router",
     "app.modules.supplier_supports.presentation.router",
     "app.modules.supplier_supports.presentation.requests_router",
     "app.modules.supplier_supports.presentation.internal_requests_router",
