@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
@@ -61,6 +61,19 @@ class CustomerMonth:
     net: Decimal
     cost: Decimal
     lines: int = 0
+
+
+@dataclass(frozen=True)
+class RepMonth:
+    """A rep's figures in one month: sale, cost and customers with a positive net sale.
+    ``code`` is :data:`NO_REP` for the sales of customers with no rep."""
+
+    period: str
+    code: str
+    name: str | None
+    net: Decimal
+    cost: Decimal
+    customers: int
 
 
 @dataclass(frozen=True)
@@ -200,10 +213,10 @@ class BudgetFileRow:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """What a closed month keeps: every row and who had which customer."""
+    """What a closed month keeps: every row. Who had which customer is copied by the
+    repository itself (the month's sales joined to the customers' current rep)."""
 
     rows: list[RepRow]
-    customers: list[tuple[Assignment, CustomerMonth]] = field(default_factory=list)
 
 
 __all__ = [
@@ -227,6 +240,7 @@ __all__ = [
     "CustomerMonth",
     "Figures",
     "MonthLoad",
+    "RepMonth",
     "RepRow",
     "SalesRep",
     "Snapshot",

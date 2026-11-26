@@ -83,8 +83,7 @@ def test_rows_cover_sales_budgets_and_the_roster() -> None:
 
     rows = rules.build_rows(
         "2026-09",
-        sales=sales,
-        assignments=ASSIGNMENTS,
+        months=rules.rep_months(sales, ASSIGNMENTS),
         reps=REPS,
         budgets=budgets,
         roster_codes=["999"],
@@ -102,8 +101,9 @@ def test_rows_cover_sales_budgets_and_the_roster() -> None:
 def test_totals_weight_the_margin_like_bis_template() -> None:
     rows = rules.build_rows(
         "2026-09",
-        sales={"2026-09": [sold("c1", "1000", "800"), sold("c3", "3000", "2700")]},
-        assignments=ASSIGNMENTS,
+        months=rules.rep_months(
+            {"2026-09": [sold("c1", "1000", "800"), sold("c3", "3000", "2700")]}, ASSIGNMENTS
+        ),
         reps=REPS,
         budgets={
             "101": Budget("2026-09", "101", D(1200), D("0.20"), 10, D(1000)),
@@ -133,9 +133,7 @@ def test_variation_compliance_and_margin_gap() -> None:
 
 
 def test_filters_take_several_values() -> None:
-    rows = rules.build_rows(
-        "2026-09", sales={}, assignments={}, reps=REPS, budgets={}, roster_codes=REPS
-    )
+    rows = rules.build_rows("2026-09", months=[], reps=REPS, budgets={}, roster_codes=REPS)
 
     assert {r.code for r in rows if rules.matches(r, regionals=["CENTRO"])} == {"201"}
     assert {r.code for r in rows if rules.matches(r, teams=["Senior Medellin"])} == {"101", "102"}

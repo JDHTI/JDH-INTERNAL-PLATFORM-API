@@ -32,7 +32,6 @@ from app.modules.commercial_budget.domain.entities import (
     FILE,
     MANUAL,
     NO_REP,
-    Assignment,
     Budget,
     BudgetChange,
     BudgetFileRow,
@@ -264,26 +263,18 @@ class BudgetService:
 
     # --- the board ---
 
-    async def live_rows(self, period: str) -> tuple[list[RepRow], dict, dict[str, Assignment]]:
-        """Every rep of an open month, unscoped: rows, the window's sales and assignments."""
+    async def live_rows(self, period: str) -> list[RepRow]:
+        """Every rep of an open month, unscoped, with today's assignment of customers."""
 
-        window = periods.window(period)
-        sales = await self.repository.sales(window)
-        assignments = await self.repository.assignments()
+        months = await self.repository.rep_months(periods.window(period))
         reps = await self.repository.reps()
         budgets = await self.repository.budgets(period)
         roster = [
             code for code, rep in reps.items() if rep.is_active and rep.business_unit is not None
         ]
-        rows = rules.build_rows(
-            period,
-            sales=sales,
-            assignments=assignments,
-            reps=reps,
-            budgets=budgets,
-            roster_codes=roster,
+        return rules.build_rows(
+            period, months=months, reps=reps, budgets=budgets, roster_codes=roster
         )
-        return rows, sales, assignments
 
     async def _scoped_rows(
         self, principal: Principal, period: str
@@ -293,7 +284,7 @@ class BudgetService:
         if stored.status == CLOSED:
             rows = await self.repository.snapshot(period)
         else:
-            rows, _, _ = await self.live_rows(period)
+            rows = await self.live_rows(period)
             loads = await self.repository.loads()
         scope = await self.scopes.scope_for(principal)
         if scope.codes is not None:
@@ -556,17 +547,9 @@ class BudgetService:
             raise InvalidInputError(
                 f"Las ventas de {period} no se han copiado del DWH; sincroniza antes de cerrar"
             )
-        rows, sales, assignments = await self.live_rows(period)
-        customers = [
-            (
-                assignments.get(item.customer_key) or Assignment(item.customer_key, None, None),
-                item,
-            )
-            for item in sales.get(period, ())
-        ]
         return await self.repository.close(
             period,
-            Snapshot(rows=rows, customers=customers),
+            Snapshot(rows=await self.live_rows(period)),
             stored.version,
             principal.email,
             datetime.now(UTC),

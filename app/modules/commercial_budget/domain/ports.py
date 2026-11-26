@@ -7,12 +7,12 @@ from datetime import date, datetime
 from typing import Any, Protocol
 
 from app.modules.commercial_budget.domain.entities import (
-    Assignment,
     Budget,
     BudgetChange,
     BudgetPeriod,
     CustomerMonth,
     MonthLoad,
+    RepMonth,
     RepRow,
     SalesRep,
     Snapshot,
@@ -65,14 +65,12 @@ class BudgetRepository(Protocol):
 
     async def loads(self) -> dict[str, MonthLoad]: ...
 
-    async def sales(self, months: Sequence[str]) -> dict[str, list[CustomerMonth]]: ...
+    async def rep_months(self, months: Sequence[str]) -> list[RepMonth]: ...
 
-    # the rep master and the customers' current rep
+    # the rep master
     async def replace_reps(self, reps: Sequence[SalesRep], now: datetime) -> int: ...
 
     async def reps(self) -> dict[str, SalesRep]: ...
-
-    async def assignments(self) -> dict[str, Assignment]: ...
 
     # months and budgets
     async def period(self, period: str) -> BudgetPeriod: ...
