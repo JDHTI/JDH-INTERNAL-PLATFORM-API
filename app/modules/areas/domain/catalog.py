@@ -167,11 +167,12 @@ MODULES: tuple[Module, ...] = (
         "Pedidos retenidos contra el maestro de apoyos",
     ),
     Module("apoyos", "Maestro de apoyos", ("bi", "comercial"), "Apoyos de proveedores"),
+    # Renamed «Excepciones de margen» on 2026-11-26; the key stays so grants keep working.
     Module(
         "solicitudes-apoyos",
-        "Solicitudes de apoyo JDH",
+        "Excepciones de margen",
         ("comercial", "bi"),
-        "Solicitudes de apoyo a BI",
+        "Excepciones de margen mínimo que Comercial pide a BI",
     ),
     # A permission without a screen of its own: ``manage`` approves or rejects the internal
     # support requests asked from a customer quotation (BI's supports managers decide too).

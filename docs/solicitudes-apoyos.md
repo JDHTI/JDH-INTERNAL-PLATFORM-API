@@ -1,4 +1,7 @@
-# Solicitudes de apoyo JDH
+# Excepciones de margen (antes «Solicitudes de apoyo JDH»)
+
+- **Nombre:** desde el 2026-11-26 el módulo se llama «Excepciones de margen» en el catálogo y en
+  la UI. La clave (`solicitudes-apoyos`), las rutas y los permisos no cambian.
 
 Funcionalidad implementada en API, rama `feat/module-supplier-supports-requests`. Frontend coordinado en `internal-platform-ui/supplier-supports-form`, rama `feat/supplier-supports-requests`.
 
