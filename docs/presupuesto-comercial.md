@@ -112,7 +112,7 @@ Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente. `POST /sync` hace l
 | --- | --- |
 | `GET /commercial-budget/permissions` | `can_read`, `can_manage`, `can_close` y `scope`. Abierto: responde `false`, no 403 |
 | `GET /commercial-budget/periods` | Meses desde el inicio hasta el siguiente, con su estado |
-| `GET /commercial-budget/{periodo}?regional=&business_unit=&team=&salesperson=&q=` | La vista: KPIs (`totals`), filas por vendedor con `current`, `average`, `last_year`, `budget` y `derived`, grupos por regional, unidad y equipo, opciones de filtro y `missing_months`. Los filtros aceptan varios valores |
+| `GET /commercial-budget/{periodo}?regional=&business_unit=&team=&salesperson=&q=` | La vista: KPIs (`totals`), filas por vendedor con `current`, `average`, `last_year`, `budget` y `derived`, grupos por regional, unidad y equipo, subtotales por regional y equipo (`team_groups`, para la tabla regional → equipo → vendedor), opciones de filtro y `missing_months`. Los filtros aceptan varios valores |
 | `PUT /commercial-budget/{periodo}/budgets` | `{items: [{salesperson_code, version?, budget_sales?, budget_margin?, budget_customers?, budget_collection?}], note?}` |
 | `GET /commercial-budget/{periodo}/changes?salesperson_code=&limit=` | Historial del presupuesto |
 | `GET /commercial-budget/{periodo}/budget-template` | Plantilla del mes con los vendedores del alcance |

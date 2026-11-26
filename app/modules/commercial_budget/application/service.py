@@ -97,6 +97,8 @@ class BoardView:
     rows: list[RepRow]
     totals: Totals
     groups: Mapping[str, list[tuple[str | None, Totals]]]
+    # Subtotals per regional and team, for the regional → team → rep table.
+    team_groups: list[tuple[str | None, str | None, Totals]]
     # Filter options over the person's whole scope (not only the filtered rows).
     options: Mapping[str, list[Any]]
     # Months of the window not copied from the warehouse yet (an open month only).
@@ -306,6 +308,7 @@ class BudgetService:
             rows=rows,
             totals=rules.totals(rows),
             groups={by: rules.group(rows, by) for by in ("regional", "business_unit", "team")},
+            team_groups=rules.group_teams(rows),
             options=_options(scoped),
             missing_months=(
                 [] if stored.status == CLOSED else [m for m in reachable if m not in loads]

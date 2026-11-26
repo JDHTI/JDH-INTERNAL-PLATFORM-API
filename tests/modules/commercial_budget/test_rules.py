@@ -141,3 +141,7 @@ def test_filters_take_several_values() -> None:
     assert {r.code for r in rows if rules.matches(r, teams=["Senior Medellin"])} == {"101", "102"}
     assert {r.code for r in rows if rules.matches(r, query="giraldo")} == {"102"}
     assert [key for key, _ in rules.group(rows, "regional")] == ["ANTIOQUIA", "CENTRO"]
+    assert [(r, t) for r, t, _ in rules.group_teams(rows)] == [
+        ("ANTIOQUIA", "Senior Medellin"),
+        ("CENTRO", "Zona 1 Bogota"),
+    ]

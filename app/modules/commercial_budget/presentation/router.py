@@ -125,6 +125,13 @@ class GroupResponse(TotalsResponse):
     key: str | None
 
 
+class TeamGroupResponse(TotalsResponse):
+    """A team's subtotal under one regional (a team under two regionals gives two)."""
+
+    regional: str | None
+    team: str | None
+
+
 class SalespersonOption(BaseModel):
     code: str
     name: str | None
@@ -149,7 +156,10 @@ class BoardResponse(BaseModel):
     window: WindowResponse
     totals: TotalsResponse
     rows: list[RowResponse]
+    # Totals per regional, business unit and team (the team across regionals).
     groups: dict[str, list[GroupResponse]]
+    # Subtotals per regional and team, for the regional → team → rep table.
+    team_groups: list[TeamGroupResponse]
     options: OptionsResponse
     # Months of the window whose sales are not copied yet (an open month).
     missing_months: list[str]
@@ -314,6 +324,10 @@ def _board(view: BoardView) -> BoardResponse:
             by: [GroupResponse(key=key, **_totals(totals)) for key, totals in items]
             for by, items in view.groups.items()
         },
+        team_groups=[
+            TeamGroupResponse(regional=regional, team=team, **_totals(totals))
+            for regional, team, totals in view.team_groups
+        ],
         options=OptionsResponse(
             regionals=options["regionals"],
             business_units=options["business_units"],

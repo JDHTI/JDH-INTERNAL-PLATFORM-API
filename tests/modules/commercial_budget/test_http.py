@@ -145,6 +145,8 @@ def test_comercial_fills_the_budget_and_reads_the_board(client, world) -> None:
         "previous": ["2026-06", "2026-07", "2026-08"],
         "last_year": "2025-09",
     }
+    assert board["team_groups"][0]["regional"] == "ANTIOQUIA"
+    assert float(board["team_groups"][0]["current"]["net"]) == 1000
     assert exported.status_code == 200
     assert client.post(f"{BASE}/2026-09/close").status_code == 403
 

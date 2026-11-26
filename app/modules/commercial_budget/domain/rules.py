@@ -225,6 +225,26 @@ def group(rows: Sequence[RepRow], by: str) -> list[tuple[str | None, Totals]]:
     ]
 
 
+def group_teams(rows: Sequence[RepRow]) -> list[tuple[str | None, str | None, Totals]]:
+    """Totals per regional and team (a team listed under two regionals gives two subtotals)."""
+
+    found: dict[tuple[str | None, str | None], list[RepRow]] = defaultdict(list)
+    for row in rows:
+        found[(row.regional, row.team)].append(row)
+    return [
+        (regional, team, totals(items))
+        for (regional, team), items in sorted(
+            found.items(),
+            key=lambda pair: (
+                pair[0][0] is None,
+                pair[0][0] or "",
+                pair[0][1] is None,
+                pair[0][1] or "",
+            ),
+        )
+    ]
+
+
 def variation(budget_sales: Decimal | None, last_year_net: Decimal | None) -> Decimal | None:
     """``% var. venta LY``: budget / last year's sale − 1 (``None`` without both)."""
 
