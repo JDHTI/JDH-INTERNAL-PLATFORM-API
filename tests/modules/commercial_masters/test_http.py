@@ -318,3 +318,11 @@ def test_non_managers_can_read_but_not_edit(outsider_api) -> None:
     assert client.get(f"{BASE}/products/7244").status_code == 200
     assert client.get(f"{BASE}/products/options").status_code == 200
     assert client.get(f"{BASE}/products/margins/template").status_code == 200
+    # The UI offers the edits only to whoever may make them.
+    assert client.get(f"{BASE}/permissions").json() == {"can_manage": False}
+
+
+def test_managers_are_told_they_may_edit(api) -> None:
+    client, _ = api
+
+    assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
