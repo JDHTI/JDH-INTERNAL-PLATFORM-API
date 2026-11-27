@@ -22,39 +22,36 @@ from tests.modules.supplier_supports.conftest import person
 TOLERANCE = Decimal("0.005")
 
 
-def _rise(line) -> bool:
-    """The price needs at least 1 % more (the new price, else the optimal one)."""
+def _floor(line) -> Decimal | None:
+    """The highest cost at the minimum margin, in whole pesos up (BI, 2026-11-26)."""
 
-    price = line.new_price if line.new_price is not None else line.optimal_price
-    last = line.last_price
-    return bool(last and last > 0 and price is not None and price >= last * Decimal("1.01"))
+    if line.cost is None or line.min_margin_pct is None or line.min_margin_pct >= 1:
+        return None
+    return (line.cost / (1 - line.min_margin_pct)).to_integral_value(rounding="ROUND_CEILING")
 
 
 def _trend(line, trend: str) -> bool:
-    """As the board's SQL: a row without a current price has no trend."""
+    """As the board's SQL: under the floor goes up, else down; without a current price, a
+    cost or a minimum margin, no trend."""
 
-    if line.last_price is None:
+    floor = _floor(line)
+    if line.last_price is None or floor is None:
         return False
-    if trend == "estable":
-        return line.new_price is None or line.new_price == line.last_price
-    if line.new_price is None:
-        return False
-    return line.new_price > line.last_price if trend == "sube" else line.new_price < line.last_price
+    return line.last_price < floor if trend == "sube" else line.last_price >= floor
 
 
 def _chip(line, chip: str) -> bool:
     margin, target = line.current_margin_with_support_pct, line.target_margin_pct
     judged = line.last_price is not None and margin is not None and target is not None
-    below = judged and margin < target - TOLERANCE
+    up = _trend(line, "sube")
     return {
         "sin_marcar": line.review_status == "sin_marcar" and line.load_id is None,
         "por_validar": line.review_status == "por_validar" and line.load_id is None,
         "validada": line.review_status == "validada" and line.load_id is None,
         "cargada": line.load_id is not None,
-        "alza": below and _rise(line),
-        "objetivo": judged
-        and (target - TOLERANCE <= margin <= target + TOLERANCE or (below and not _rise(line))),
-        "encima": judged and margin > target + TOLERANCE,
+        "alza": up,
+        "objetivo": judged and not up and margin <= target + TOLERANCE,
+        "encima": judged and not up and margin > target + TOLERANCE,
         "alerta": line.is_active
         and (line.below_target or line.cost is None or "precio_marcador" in line.problems),
     }[chip]
@@ -411,26 +408,27 @@ async def test_the_board_breaks_the_stock_down_by_warehouse_and_filters_by_it(
 
 
 async def test_the_trend_filter_is_checked_and_reaches_the_keys(board, collaborator) -> None:
-    """2026-11-25: ``trend`` and ``without_list_price`` filter the rows and the keys; the
-    SQL is checked on PostgreSQL in ``test_board_postgres``."""
+    """``trend`` and ``without_list_price`` filter the rows and the keys; the SQL is checked
+    on PostgreSQL in ``test_board_postgres``. «estable» is gone since 2026-11-26."""
 
     await board.build(collaborator, "002")
-    with pytest.raises(InvalidInputError, match="Tendencia desconocida"):
-        await board.rows(collaborator, BoardFilter(trend="arriba"), 1, 50)
+    for unknown in ("arriba", "estable"):
+        with pytest.raises(InvalidInputError, match="Tendencia desconocida"):
+            await board.rows(collaborator, BoardFilter(trend=unknown), 1, 50)
     every = await board.keys(collaborator, BoardFilter())
-    stable = await board.keys(collaborator, BoardFilter(trend="estable"))
     rising = await board.keys(collaborator, BoardFilter(trend="sube"))
-    # Nothing has a new price yet: what has a current price is stable, nothing rises.
-    assert rising == [] and stable and set(stable) <= set(every)
+    falling = await board.keys(collaborator, BoardFilter(trend="baja"))
+    # Up and down never overlap, and both are rows of the board.
+    assert not set(rising) & set(falling) and set(rising) | set(falling) <= set(every)
     unpriced = await board.keys(collaborator, BoardFilter(without_list_price=True))
-    assert not set(unpriced) & set(stable)
+    assert not set(unpriced) & (set(rising) | set(falling))
 
 
 async def test_the_board_hides_what_is_out_of_stock_and_small_rises(
     board, insights, collaborator
 ) -> None:
-    """2026-11-23: a row the sync read at 0 is not on the board; one needing less than 1 %
-    more is on target, not an «alza»."""
+    """2026-11-23: a row the sync read at 0 is not on the board. 2026-11-26: a current price
+    under the highest cost at the minimum margin goes up («alza» and «sube»), else down."""
 
     insights.stock_rows = [row for row in insights.stock_rows if row.sku != "26278"]
     await board.build(collaborator, "002")
@@ -439,21 +437,31 @@ async def test_the_board_hides_what_is_out_of_stock_and_small_rises(
 
     assert [row.line.sku for row in result.page.rows] == ["2537"]
     assert result.page.counts["todos"] == 1
-    line = result.page.rows[0].line
-    below = replace(
-        line,
-        current_margin_with_support_pct=Decimal("0.10"),
-        target_margin_pct=Decimal("0.20"),
-        last_price=Decimal("1000"),
+    line = replace(
+        result.page.rows[0].line,
+        cost=Decimal("820"),
+        min_margin_pct=Decimal("0.18"),
         new_price=None,
     )
-    assert _chip(replace(below, optimal_price=Decimal("1009")), "objetivo")
-    assert not _chip(replace(below, optimal_price=Decimal("1009")), "alza")
-    assert _chip(replace(below, optimal_price=Decimal("1010")), "alza")
-    # A new price chosen decides over the optimal one.
-    assert not _chip(
-        replace(below, optimal_price=Decimal("1500"), new_price=Decimal("1005")), "alza"
+    # 820 / 0.82 = 1000: the floor price.
+    assert _chip(replace(line, last_price=Decimal("999")), "alza")
+    assert _trend(replace(line, last_price=Decimal("999")), "sube")
+    assert _trend(replace(line, last_price=Decimal("1000")), "baja")
+    assert not _chip(replace(line, last_price=Decimal("1000")), "alza")
+    # The new price no longer decides: only the current one against the floor.
+    assert _trend(replace(line, last_price=Decimal("999"), new_price=Decimal("2000")), "sube")
+    # Without a cost there is no trend.
+    assert not _trend(replace(line, cost=None, last_price=Decimal("1")), "sube")
+    # Covering the floor but under the target is «objetivo»: alza, objetivo and encima split
+    # the rows.
+    covers = replace(
+        line,
+        last_price=Decimal("1100"),
+        current_margin_with_support_pct=Decimal("0.19"),
+        target_margin_pct=Decimal("0.25"),
     )
+    assert _chip(covers, "objetivo") and not _chip(covers, "alza")
+    assert not _chip(covers, "encima")
 
 
 class FakeRuns:

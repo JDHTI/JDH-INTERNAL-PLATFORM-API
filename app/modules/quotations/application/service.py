@@ -1095,7 +1095,9 @@ class QuotationService:
                     item=entry.item,
                     nit=context.nit,
                     channel=context.channel,
-                    margin_field=_margin_field(context),
+                    # A list of the skill's families takes its family's margin (2026-11-26).
+                    margin_field=pricing.list_margin_field(context.price_list_id)
+                    or _margin_field(context),
                     scope=None,
                     product=products.get(sku),
                     supplier_name=names.get(supplier or ""),

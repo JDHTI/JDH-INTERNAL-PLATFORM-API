@@ -26,7 +26,6 @@ from sqlalchemy import (
 from app.infrastructure.database import Database
 from app.modules.quotations.domain.board import (
     MAX_KEYS,
-    MIN_INCREASE,
     NO_LIST_PRICE,
     TARGET_TOLERANCE,
     BoardFilter,
@@ -50,41 +49,40 @@ L = QuotationLineModel
 _MARGIN = L.current_margin_with_support_pct
 _TARGET = L.target_margin_pct
 _JUDGED = and_(L.last_price.is_not(None), _MARGIN.is_not(None), _TARGET.is_not(None))
-_BELOW = _MARGIN < _TARGET - TARGET_TOLERANCE
-# The increase the price needs (2026-11-23): the new price chosen, else the optimal one,
-# against the current price. Under :data:`MIN_INCREASE` it is not an increase.
-_RISE = and_(
-    L.last_price > 0,
-    func.coalesce(L.new_price, L.optimal_price) >= L.last_price * (1 + MIN_INCREASE),
+# What goes up and what down (BI, 2026-11-26): the highest cost (quotation, inventory or the
+# pending increase, with the list's factor) at the minimum margin gives the floor price,
+# ``ceil(cost / (1 − minimum margin))``. A current price under it goes up; otherwise down.
+# Until then the trend compared the new price with the current one, and as almost no row has a
+# new price, 26,484 of 26,518 rows were «estable».
+_FLOOR = func.ceil(L.cost / (1 - L.min_margin_pct))
+_FLOORED = and_(
+    L.last_price.is_not(None),
+    L.cost.is_not(None),
+    L.min_margin_pct.is_not(None),
+    L.min_margin_pct < 1,
 )
+_UP = and_(_FLOORED, L.last_price < _FLOOR)
+_DOWN = and_(_FLOORED, L.last_price >= _FLOOR)
 _CHIP_CONDITIONS = {
     "sin_marcar": and_(L.review_status == UNMARKED, L.load_id.is_(None)),
     "por_validar": and_(L.review_status == TO_VALIDATE, L.load_id.is_(None)),
     "validada": and_(L.review_status == VALIDATED, L.load_id.is_(None)),
     "cargada": L.load_id.is_not(None),
-    "alza": and_(_JUDGED, _BELOW, _RISE),
-    # Under the target but needing less than 1 % more is on target (2026-11-23).
-    "objetivo": and_(
-        _JUDGED,
-        or_(
-            _MARGIN.between(_TARGET - TARGET_TOLERANCE, _TARGET + TARGET_TOLERANCE),
-            and_(_BELOW, ~_RISE),
-        ),
-    ),
-    "encima": and_(_JUDGED, _MARGIN > _TARGET + TARGET_TOLERANCE),
+    # The same rule as «sube» (2026-11-26).
+    "alza": _UP,
+    # The three margin chips split the rows that can be judged: under the floor («alza»),
+    # covering it up to half a point over the target («objetivo», under the target too) and
+    # more than that («encima»).
+    "objetivo": and_(_JUDGED, ~_UP, _MARGIN <= _TARGET + TARGET_TOLERANCE),
+    "encima": and_(_JUDGED, ~_UP, _MARGIN > _TARGET + TARGET_TOLERANCE),
     "alerta": and_(
         L.is_active,
         or_(L.below_target, L.cost.is_(None), L.problems.contains(["precio_marcador"])),
     ),
 }
-# The new price against the list's current one (2026-11-25). Without a current price a row is
-# in none of them: it is «sin precio».
-_PRICED = L.last_price.is_not(None)
-_TREND_CONDITIONS = {
-    "sube": and_(_PRICED, L.new_price.is_not(None), L.new_price > L.last_price),
-    "baja": and_(_PRICED, L.new_price.is_not(None), L.new_price < L.last_price),
-    "estable": and_(_PRICED, or_(L.new_price.is_(None), L.new_price == L.last_price)),
-}
+# Without a current price a row is in none of them: it is «sin precio»; without a cost or a
+# minimum margin it cannot be judged either.
+_TREND_CONDITIONS = {"sube": _UP, "baja": _DOWN}
 _NO_LIST_PRICE = L.last_price.is_(None)
 _SORT_COLUMNS = {
     "sku": (L.sku,),

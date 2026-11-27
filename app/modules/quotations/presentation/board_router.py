@@ -44,7 +44,7 @@ _principal = Depends(get_current_principal)
 Chip = Literal[
     "sin_marcar", "por_validar", "validada", "cargada", "alza", "objetivo", "encima", "alerta"
 ]
-Trend = Literal["sube", "baja", "estable"]
+Trend = Literal["sube", "baja"]
 Sort = Literal[
     "lista", "sku", "precio_actual", "margen_actual", "precio_nuevo", "variacion", "existencia"
 ]
@@ -346,11 +346,12 @@ async def rows(
 ) -> BoardPageResponse:
     """Rows of every main list (or the chosen ``lists``), filtered and sorted.
 
-    ``trend`` compares the new price with the list's current one: ``sube``, ``baja``, or
-    ``estable`` (the same, or no new price); a row without a current price is in none.
+    ``trend`` (2026-11-26): ``sube`` when the current price is under the highest cost at the
+    minimum margin, ``ceil(cost / (1 − minimum margin))``, else ``baja``; a row without a
+    current price, a cost or a minimum margin is in none. The «alza» chip is ``sube``.
     ``without_list_price`` keeps only those. ``in_stock`` (default ``true``) leaves out what
     the sync read without stock; ``false`` shows it too. ``counts`` has the rows of each
-    chip (under every filter but the chip), of ``sube``, ``baja``, ``estable`` and
+    chip (under every filter but the chip), of ``sube``, ``baja`` and
     ``sin_precio`` (one group, under every filter but the trend and
     ``without_list_price``), and ``todos``; every count follows ``in_stock``.
 

@@ -10,6 +10,7 @@ import os
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.infrastructure.database import Database
 from app.modules.quotations.application.service import LineChange
@@ -86,28 +87,39 @@ async def test_the_trend_and_the_rows_without_a_list_price(
             quotation_id,
             {sku: (Decimal(5), Decimal(5)) for sku in ("2537", "90001", "90002", "90003")},
         )
+        # The rule of 2026-11-26: cost 820 at an 18 % minimum margin is a floor of 1000; a
+        # current price under it goes up, otherwise down (the new price does not decide).
+        async with database.session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "update quotation_lines set cost = 820, min_margin_pct = 0.18,"
+                    " last_price = case sku when '2537' then 999 when '90001' then 1000"
+                    " when '90002' then 1500 else last_price end"
+                    " where quotation_id = :id"
+                ),
+                {"id": quotation_id},
+            )
         assert (await skus())[0] == ["2537", "90001", "90002", "90003"]
         assert (await skus(trend="sube"))[0] == ["2537"]
-        assert (await skus(trend="baja"))[0] == ["90001"]
-        assert (await skus(trend="estable"))[0] == ["90002"]
+        assert (await skus(trend="baja"))[0] == ["90001", "90002"]
+        assert (await skus(chip="alza"))[0] == ["2537"]
         found, counts = await skus(without_list_price=True)
         assert found == ["90003"]
         # The trends and «sin precio» are one group: counted without any of them.
-        assert {name: counts[name] for name in ("sube", "baja", "estable", "sin_precio")} == {
+        assert {name: counts[name] for name in ("sube", "baja", "sin_precio")} == {
             "sube": 1,
-            "baja": 1,
-            "estable": 1,
+            "baja": 2,
             "sin_precio": 1,
         }
         assert counts["todos"] == 1  # «sin precio» is on: only that row
         # Combined with a chip: under «validada» (none) every trend counts 0; under
-        # «sin_marcar» (all four) each counts its row.
+        # «sin_marcar» (all four) each counts its rows.
         _, counts = await skus(chip="validada")
         assert (counts["sube"], counts["baja"], counts["sin_precio"]) == (0, 0, 0)
         _, counts = await skus(chip="sin_marcar", trend="sube")
-        assert (counts["sube"], counts["baja"], counts["estable"]) == (1, 1, 1)
+        assert (counts["sube"], counts["baja"]) == (1, 2)
         assert counts["sin_marcar"] == 1  # the chip's count follows the trend
-        assert (await skus(chip="sin_marcar", trend="baja"))[0] == ["90001"]
+        assert (await skus(chip="sin_marcar", trend="baja"))[0] == ["90001", "90002"]
         keys = await board.keys([quotation_id], BoardFilter(trend="sube"))
         assert [key.sku for key in keys] == ["2537"]
         # «Con existencia» (on by default) leaves out what the sync read at 0; off, it shows.

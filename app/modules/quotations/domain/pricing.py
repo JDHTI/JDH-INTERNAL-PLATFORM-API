@@ -59,6 +59,15 @@ FAMILY_LISTS = {
     WHOLESALE: ("1M", "10T", "10U", "11N", "1DR", "10N", *SALSAMENTARIAS_LISTS),
     MARKET: ("35P",),
 }
+# The margin column of each family (skill ``lista-precios``): Generales take Margen Lista 1
+# (Food service), Mayoristas the Mayorista one, Market the Market Apartadó one. A list of a
+# family is priced with it whatever channel its customers are in (2026-11-26: 1DR's customers
+# gave the Food service margin, so 1,564 of its 1,644 rows looked under the minimum).
+FAMILY_MARGIN_FIELDS = {
+    GENERAL: "margin_list",
+    WHOLESALE: "margin_wholesale",
+    MARKET: "margin_market",
+}
 # Factor on the cost by family (the wholesale lists do not carry it).
 COST_FACTOR = {
     GENERAL: Decimal("1.004"),
@@ -283,6 +292,16 @@ def family(price_list_id: str | None, margin_basis: str | None = None) -> str:
     if margin_basis == "market":
         return MARKET
     return GENERAL
+
+
+def list_margin_field(price_list_id: str | None) -> str | None:
+    """The margin column of a list of the skill's families; ``None`` for any other list (its
+    customers' channel decides)."""
+
+    for name, lists in FAMILY_LISTS.items():
+        if price_list_id in lists:
+            return FAMILY_MARGIN_FIELDS[name]
+    return None
 
 
 def stock_plan(price_list_id: str | None, billing_center: str | None) -> StockPlan:
@@ -639,6 +658,8 @@ __all__ = [
     "costliest_center",
     "effective_cost",
     "family",
+    "FAMILY_MARGIN_FIELDS",
+    "list_margin_field",
     "highest_cost",
     "prefer_stocked",
     "price_from_margin",

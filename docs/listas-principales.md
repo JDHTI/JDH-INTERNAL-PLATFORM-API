@@ -35,16 +35,29 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   chip: revisión (`sin_marcar`, `por_validar`, `validada`, `cargada`) o margen (`alza`, `objetivo`,
   `encima`, `alerta`, con ±0,5 puntos). Cada chip trae cuántas filas mostraría con los demás
   filtros; `todos`, el total.
-- **Tendencia y sin precio** (2026-11-25), combinables con el chip y los demás filtros, también
-  en `/main/keys`:
-  - `trend` compara el precio nuevo con el precio actual de la lista:
-    - `sube`: el nuevo es mayor;
-    - `baja`: el nuevo es menor;
-    - `estable`: igual, o sin precio nuevo.
+- **Qué sube y qué baja (regla de BI, 2026-11-26)**, combinable con el chip y los demás filtros,
+  también en `/main/keys`:
+  - **Precio piso** = costo más alto llevado al margen mínimo:
+    `ceil(costo / (1 − margen mínimo))`.
+    - El costo es el mayor entre la cotización, el inventario y el alza pendiente, con el factor
+      de la familia.
+    - El margen mínimo es el de la fila (`min_margin_pct`).
+  - `sube`: el precio actual de la lista está **por debajo** del piso.
+  - `baja`: está en el piso o por encima.
+  - El chip `alza` es la misma regla que `sube`.
+  - Los tres chips de margen reparten las filas que se pueden juzgar:
+    - `alza`: bajo el piso;
+    - `objetivo`: cubre el piso y su margen no pasa de 0,5 puntos sobre el objetivo; incluye las
+      que están bajo el objetivo pero sobre el piso;
+    - `encima`: cubre el piso y su margen pasa de 0,5 puntos sobre el objetivo.
+  - **Antes:** la tendencia comparaba el precio nuevo con el actual (`sube`, `baja`, `estable`).
+    Como casi ninguna fila tiene precio nuevo, en producción 26.484 de 26.518 filas salían
+    `estable`. `estable` ya no existe y responde 400.
   - Una fila sin precio actual no entra en ninguna tendencia: está en `without_list_price=true`
-    (sin precio de lista, o con el precio marcador de $1).
+    (sin precio de lista, o con el precio marcador de $1). Una sin costo o sin margen mínimo
+    tampoco entra.
   - Con «Con existencia» encendido (por defecto), es «con existencia y sin precio».
-  - Conteos `sube`, `baja`, `estable` y `sin_precio`:
+  - Conteos `sube`, `baja` y `sin_precio`:
     - son un solo grupo de opciones, así que se cuentan con todos los filtros menos la
       tendencia y «sin precio»;
     - los chips se cuentan con la tendencia y «sin precio» puestos.
@@ -56,9 +69,17 @@ salen su costo, sus apoyos, su staging y sus archivos. Cada lista se arma o refr
   - **Solo lo que tiene existencia** (salvo `in_stock=false`): una fila que la sincronización leyó en 0 no aparece en el
     tablero, ni en los conteos ni en «todas las filas del filtro». Una cuyo inventario no se leyó
     (`null`, por ejemplo con el DWH caído) sí aparece.
-  - **«Alza» solo desde el 1 %:** una fila bajo el objetivo cuenta como `alza` solo si su precio
-    debe subir al menos 1 % sobre el actual (el precio nuevo elegido o, si no hay, el óptimo).
-    Si sube menos, cuenta como `objetivo`.
+  - **«Alza»:** desde el 2026-11-26 es la regla del piso (arriba). La del 1 % sobre el objetivo
+    quedó sin uso.
+  - **Margen de cada lista (2026-11-26):** una lista de las familias de la skill toma el margen
+    de su familia, sea cual sea el canal de sus clientes (`pricing.list_margin_field`):
+    - Generales: Margen Lista 1 (Food Service);
+    - Mayoristas, incluidas 10X, 10R y 10S: Margen Mayorista;
+    - 35P: Margen Market Apartadó.
+
+    Antes salía del canal mayoritario de los clientes. A la 1DR le daba Food Service, mínimo
+    18,7 % contra 12,7 % de Mayoristas, y 1.564 de sus 1.644 filas aparecían por debajo del
+    mínimo. Se corrige en la siguiente sincronización.
   - **Fecha del alza:** cada fila trae `increase_on`, la fecha de la última alza de precio del
     proveedor para ese SKU (cuándo rige, o cuándo se notificó), si tiene una
     ([alzas-precios.md](alzas-precios.md)).
@@ -209,7 +230,7 @@ La revisión por ítem, el staging y las cargas son los de
 | --- | --- |
 | `GET /main` | las 14 listas, armadas o no, con sus conteos y sus bodegas (`warehouses`), los proveedores, categorías y bodegas para filtrar, la última sincronización (`sync`) y si las tareas están encendidas (`sync_enabled`) |
 | `POST /main/sync` | pone en cola la sincronización de las 14 listas (202); 409 si ya hay una o las tareas están apagadas |
-| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&in_stock=&warehouses=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja`, `estable` y `sin_precio`, y el desglose por bodega de cada fila (`stock_by_warehouse`) |
+| `GET /main/rows?lists=&q=&suppliers=&categories=&chip=&trend=&without_list_price=&in_stock=&warehouses=&sort=&desc=&page=&size=` | una página del tablero (hasta 200 filas) con los conteos de cada chip, de `sube`, `baja` y `sin_precio`, y el desglose por bodega de cada fila (`stock_by_warehouse`) |
 | `GET /main/keys?…` | todas las filas del filtro (máximo 10.000), para actuar sobre todas |
 | `PUT /main/prices` `{changes: [{quotation_id, sku, new_price}]}` | precios nuevos (pasan a `por_validar`); `null` lo borra. Trae las filas como quedaron (`rows`) |
 | `POST /main/apply` `{keys, mode}` | `optimo`, `minimo` o `limpiar` sobre las filas (sin `rows`: pueden ser 10.000) |
