@@ -111,6 +111,25 @@ Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente.
 - **Configuración:** `DWH_PLATFORM_URL`, `DWH_PLATFORM_API_KEY` y `DWH_PLATFORM_TIMEOUT_SECONDS`. Con la URL vacía la carga queda apagada y `GET /status` lo dice.
 - **Plataforma de proveedores:** cuando la carga funcione aquí en producción, se quitan su `/admin/maestro-vendedores`, su cliente de dwh-platform y la tarjeta de su panel. Su copia diaria de `sellers` desde `consumo.vendedores` se queda.
 
+### Equipos desde el maestro externo (2026-11-27)
+
+El Excel es la fuente de verdad, pero los equipos se toman del **maestro de equipos**. Así no se crean nombres nuevos por un error de escritura, como pasó con JUNIOR/CALL MEDELLIN y RETAIL BOGOTA.
+
+- **El maestro de equipos** (`GET /vendor-master/teams`) junta dos cosas:
+  - `consumo.equipos`, que es lo que dwh-platform guardó en `externo.equipo`;
+  - los equipos creados en la plataforma (`vendor_master_teams`, migración `0096`).
+
+  Cada equipo trae su clase, de dónde viene (`dwh` o `plataforma`) y cuántos vendedores activos tiene.
+- **Un equipo nuevo** se crea primero en la plataforma (`POST /teams`, `manage`), con su clase. La plantilla lo ofrece desde ese momento, y la primera carga con un vendedor en él lo crea en el DWH.
+- **Cambiar un equipo** (`PATCH /teams/{nombre}`):
+  - su clase, que llega al DWH con la siguiente carga;
+  - ocultarlo de la plantilla (`is_active: false`). Sirve, por ejemplo, para un equipo que se fusionó.
+- **La plantilla** (`GET /template`) viene **llena con el maestro de hoy**: vendedores con su documento, equipo, regional, unidad, coordinador del equipo, correo, celular y C. COSTO, más coordinadores y directores. Con `?empty=true` viene vacía.
+  - EQUIPO, en las hojas de vendedores y de coordinadores, es una lista que **Excel no deja salir del maestro**.
+  - La CLASE sale sola del equipo, con una fórmula.
+- **La simulación** (`POST /preview`) rechaza la fila de un vendedor o de un coordinador cuyo equipo no está en el maestro. La clase que muestra es la del maestro, nunca la del archivo.
+- **La carga** se niega si alguna fila tiene un equipo fuera del maestro. Si no, la plataforma escribe la clase del maestro en la columna CLASE de cada fila antes de enviar el archivo a dwh-platform.
+
 ## Endpoints
 
 | Método y ruta | Uso |
@@ -127,6 +146,10 @@ Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente.
 | `POST /commercial-budget/sync` | Encola la copia de las ventas y el maestro (`manage`); 202 con la corrida, 409 si ya hay una en cola o en curso |
 | `GET /commercial-budget/sync` | La última copia: estado, cuándo, meses copiados (`months`) y pendientes (`pending`) |
 | `GET /vendor-master/status` | `configured`, `can_read`, `can_manage`. Abierto |
-| `GET /vendor-master/template` | Plantilla vacía |
-| `POST /vendor-master/upload` | Reenvío a dwh-platform (multipart `file`, .xlsx de hasta 10 MB) |
+| `GET /vendor-master/template?empty=` | Plantilla llena con el maestro de hoy (o vacía), con la lista de equipos del maestro |
+| `GET /vendor-master/teams` | Maestro de equipos: `{name, team_class, source, is_active, reps, note}` |
+| `POST /vendor-master/teams` | Crear un equipo `{name, team_class, note?}` (`manage`); 409 si ya existe |
+| `PATCH /vendor-master/teams/{nombre}` | Cambiar `team_class`, `is_active` o `note` (`manage`) |
+| `POST /vendor-master/preview` | Simulación de la carga contra el DWH de hoy, sin escribir: `changes`, `rejected`, `warnings`, `new_teams`, `emptied_teams`, `teams`, `missing` y `coordinators` |
+| `POST /vendor-master/upload` | Reenvío a dwh-platform (multipart `file`, .xlsx de hasta 10 MB). Se niega si un equipo no está en el maestro, y escribe la clase del maestro |
 | `GET /vendor-master/uploads?limit=` | Historial de cargas |

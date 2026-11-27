@@ -20,6 +20,8 @@ its leading zeros).
 from __future__ import annotations
 
 import io
+from collections.abc import Mapping
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -121,6 +123,18 @@ INSTRUCTIONS = [
         "Coordinadores: C.O es la regional del coordinador. Directores: C.O es informativa (un "
         "director opera a nivel nacional).",
     ),
+    (
+        "7.",
+        "EQUIPO (vendedores y coordinadores) solo admite los equipos del maestro externo: "
+        "escógelo de la lista. La CLASE sale sola del equipo. Un equipo nuevo se crea primero "
+        "en la plataforma (Maestro de vendedores → Equipos) y vuelve a descargar la plantilla.",
+    ),
+    (
+        "8.",
+        "La plantilla viene con los vendedores, coordinadores y directores que tiene hoy el "
+        "DWH: cambia solo lo que se reasigna en el mes y súbela completa. Antes de cargar, la "
+        "plataforma muestra qué cambia.",
+    ),
     ("Importante", None),
     (
         "!",
@@ -169,23 +183,109 @@ _DROPDOWNS = {
 _HEAD = PatternFill("solid", fgColor="1F3864")
 
 
-def vendor_master_template() -> bytes:
-    """The empty workbook to fill and upload."""
+def _rows(data: Any) -> dict[str, list[dict[str, Any]]]:
+    """The current master as rows of each sheet, by header."""
+
+    if data is None:
+        return {name: [] for name in SHEETS}
+    coordinator_of = {
+        item.team: item.name for item in data.supervisors if item.is_coordinator and item.team
+    }
+    reps = [
+        {
+            "N° DOCUMENTO": rep.document,
+            "NOMBRE VENDEDOR": rep.name,
+            "EQUIPO": rep.team,
+            "UNIDAD NEGOCIO": rep.business_unit,
+            "REGIONAL": rep.regional,
+            "COORDINADOR": coordinator_of.get(rep.team),
+            "CORREO": rep.email,
+            "CELULAR": rep.phone,
+            "C. COSTO": rep.cost_center,
+        }
+        for rep in data.reps
+    ]
+    coordinators = [
+        {
+            "CEDULA": item.document,
+            "COORDINADOR": item.name,
+            "EQUIPO": item.team,
+            "C.O": item.regional,
+            "CORREO": item.email,
+            "CELULAR": item.phone,
+        }
+        for item in data.supervisors
+        if item.is_coordinator
+    ]
+    directors = [
+        {
+            "CEDULA": item.document,
+            "DIRECTOR": item.name,
+            "CORREO": item.email,
+            "CELULAR": item.phone,
+        }
+        for item in data.supervisors
+        if item.is_director
+    ]
+    return {"COMERCIALES JDH": reps, "Coordinadores": coordinators, "Directores": directors}
+
+
+def vendor_master_template(
+    teams: Mapping[str, str | None] | None = None, data: Any = None
+) -> bytes:
+    """The workbook to fill and upload.
+
+    Args:
+        teams (Mapping[str, str | None] | None): The team master (name → class, 2026-11-27):
+            EQUIPO only takes one of them (Excel refuses another) and CLASE follows the team.
+            ``None`` gives the free template of the supplier platform.
+        data: The current master (``TemplateData``): the sheets come filled with it, so BI
+            only changes the month's reassignments. ``None`` gives them empty.
+    """
 
     workbook = Workbook()
     workbook.remove(workbook.active)
     workbook.properties.title = "Maestro Vendedores JDH"
+    filled = _rows(data)
+    team_names = sorted(teams) if teams else []
     for sheet_name, columns in SHEETS.items():
         sheet = workbook.create_sheet(sheet_name)
         sheet.append(columns)
+        for record in filled[sheet_name]:
+            sheet.append([record.get(header) for header in columns])
+        last = max(EMPTY_ROWS, len(filled[sheet_name]) + 100) + 1
         for index, header in enumerate(columns, start=1):
             cell = sheet.cell(1, index)
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = _HEAD
             letter = get_column_letter(index)
             sheet.column_dimensions[letter].width = max(14, len(header) + 4)
-            for row in range(2, EMPTY_ROWS + 2):
+            for row in range(2, last + 1):
                 sheet.cell(row, index).number_format = "@"
+            if header == "EQUIPO" and team_names:
+                rule = DataValidation(
+                    type="list",
+                    formula1=f"=Listas!$C$1:$C${len(team_names)}",
+                    allow_blank=True,
+                    errorStyle="stop",
+                    errorTitle="Equipo fuera del maestro",
+                    error="Escoge un equipo de la lista. Un equipo nuevo se crea primero en la "
+                    "plataforma (Maestro de vendedores → Equipos).",
+                    promptTitle="EQUIPO",
+                    prompt="Solo equipos del maestro externo.",
+                    showErrorMessage=True,
+                    showInputMessage=True,
+                )
+                rule.add(f"{letter}2:{letter}{last}")
+                sheet.add_data_validation(rule)
+            if header == "CLASE" and team_names and sheet_name == "COMERCIALES JDH":
+                team_letter = get_column_letter(columns.index("EQUIPO") + 1)
+                for row in range(2, last + 1):
+                    sheet.cell(row, index).value = (
+                        f'=IF({team_letter}{row}="","",IFERROR(VLOOKUP({team_letter}{row},'
+                        f'Listas!$C$1:$D${len(team_names)},2,FALSE),""))'
+                    )
+                    sheet.cell(row, index).number_format = "General"
             if header in _DROPDOWNS:
                 column, values, title, help_text, error_text = _DROPDOWNS[header]
                 rule = DataValidation(
@@ -200,7 +300,7 @@ def vendor_master_template() -> bytes:
                     showErrorMessage=True,
                     showInputMessage=True,
                 )
-                rule.add(f"{letter}2:{letter}{EMPTY_ROWS + 1}")
+                rule.add(f"{letter}2:{letter}{last}")
                 sheet.add_data_validation(rule)
         sheet.freeze_panes = "C2" if sheet_name == "COMERCIALES JDH" else "A2"
         sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}1"
@@ -208,6 +308,9 @@ def vendor_master_template() -> bytes:
     for column, values, *_ in {spec[0]: spec for spec in _DROPDOWNS.values()}.values():
         for row, name in enumerate(values, start=1):
             lists[f"{column}{row}"] = name
+    for row, name in enumerate(team_names, start=1):
+        lists[f"C{row}"] = name
+        lists[f"D{row}"] = (teams or {}).get(name)
     lists.sheet_state = "hidden"
     guide = workbook.create_sheet("Instrucciones")
     guide.column_dimensions["A"].width = 20
