@@ -72,13 +72,39 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     INFORMS,
                 ),
                 Rule(
+                    "costo_bodega",
+                    "Costo promedio de la bodega",
+                    "Cada línea muestra el costo promedio del producto en la bodega por la que "
+                    "entró el pedido, con sus existencias, tomados del inventario de SIESA del día "
+                    "en que se validó. Es el costo con el que SIESA margina. Si el costo que "
+                    "implica el archivo (precio menos el descuento, al margen del archivo) se "
+                    "aleja más de 1 % de ese costo, la línea lo advierte; solo informa.",
+                    INFORMS,
+                ),
+                Rule(
+                    "margen_100_con_existencias",
+                    "Margen 100 % con existencias",
+                    "Una línea con margen 100 % cuyo producto tiene existencias en la bodega del "
+                    "pedido queda lista para liberación. No cuenta en el margen del pedido.",
+                    RELEASES,
+                ),
+                Rule(
                     "margen_100",
-                    "Margen 100 %, revisar",
-                    "Una línea con margen 100 % no trae costo: queda pendiente con «Margen 100 %, "
-                    "revisar» en el detalle, no cuenta en el margen del pedido y el pedido no se "
-                    "libera por sus líneas ni por su margen; solo con aprobación manual. "
-                    "Inflaría el margen acumulado y dejaría pasar pedidos que no deben pasar.",
+                    "Margen 100 % sin existencias, revisar",
+                    "Una línea con margen 100 % sin existencias en la bodega del pedido no trae "
+                    "costo: queda pendiente con «Margen 100 %, revisar» en el detalle, no cuenta "
+                    "en el margen del pedido y el pedido no se libera por sus líneas ni por su "
+                    "margen; solo con aprobación manual. Inflaría el margen acumulado y dejaría "
+                    "pasar pedidos que no deben pasar.",
                     HOLDS,
+                ),
+                Rule(
+                    "precio_libre",
+                    "Costo 0 o 1: precio libre",
+                    "Si el costo promedio del producto en la bodega del pedido es 0 o 1, no se "
+                    "valida el precio de venta: la línea queda lista con cualquier precio y no "
+                    "cuenta en el margen del pedido.",
+                    RELEASES,
                 ),
                 Rule(
                     "datos_incompletos",
@@ -131,8 +157,9 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     "El margen del pedido es el promedio de los márgenes de sus líneas ponderado "
                     "por valor (precio × cantidad), y cada línea cuenta con su apoyo cuando un "
                     "apoyo activo con dinero la decidió: una línea al 1 % que el apoyo lleva al "
-                    "22 % suma como 22 %. No cuentan las líneas sin precio, cantidad o margen ni "
-                    "las de margen 100 %. El objetivo del pedido se pondera igual.",
+                    "22 % suma como 22 %. No cuentan las líneas sin precio, cantidad o margen, "
+                    "las de margen 100 % ni las de precio libre. El objetivo del pedido se pondera "
+                    "igual.",
                     INFORMS,
                 ),
                 Rule(
@@ -178,7 +205,8 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     "Lo que el margen no rescata",
                     "El margen del pedido no libera un pedido con una línea pendiente por otra "
                     "razón (datos incompletos, apoyo en revisión, vencido o no evaluable), sin "
-                    "margen de referencia, sin el impuesto al licor o con margen 100 %.",
+                    "margen de referencia, sin el impuesto al licor o con margen 100 % sin "
+                    "existencias.",
                     HOLDS,
                 ),
             ),
@@ -193,7 +221,7 @@ def catalog(policy: OrderPolicy) -> tuple[Section, ...]:
                     "Quien gestiona puede liberar a mano pedidos pendientes, todos o ninguno, con "
                     "una nota opcional. La aprobación es del pedido: sus líneas conservan su "
                     "motivo, y volver a validar el archivo la conserva. Es la única forma de "
-                    "liberar un pedido con un producto en margen 100 %.",
+                    "liberar un pedido con un producto en margen 100 % sin existencias.",
                     RELEASES,
                 ),
             ),

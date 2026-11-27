@@ -183,7 +183,12 @@ def test_catalogs_label_every_status_and_reason(service) -> None:
     ready = [
         item["value"] for item in catalogs["reasons"] if item["status"] == "listo_para_liberar"
     ]
-    assert ready == ["cumple_con_apoyo", "cumple_margen_lista"]
+    assert ready == [
+        "cumple_con_apoyo",
+        "cumple_margen_lista",
+        "precio_libre",
+        "margen_100_con_existencias",
+    ]
 
 
 async def test_marking_an_order_releases_it_and_keeps_its_lines(service, source, manager) -> None:

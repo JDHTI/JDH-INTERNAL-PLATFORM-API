@@ -146,6 +146,7 @@ from app.modules.notifications.infrastructure.repository import (
 from app.modules.order_validation.application.service import OrderValidationService
 from app.modules.order_validation.domain.entities import OrderPolicy
 from app.modules.order_validation.infrastructure.agreements import SqlAlchemyAgreementSource
+from app.modules.order_validation.infrastructure.inventory import WarehouseInventorySource
 from app.modules.order_validation.infrastructure.order_file import SpreadsheetOrderReader
 from app.modules.order_validation.infrastructure.repository import (
     SqlAlchemyOrderValidationRepository,
@@ -809,6 +810,10 @@ class V1Container(containers.DeclarativeContainer):
     )
     order_validation_agreements = providers.Factory(SqlAlchemyAgreementSource, database=database)
     order_validation_reader = providers.Singleton(SpreadsheetOrderReader)
+    # Average cost and stock of each product in its order's warehouse (2026-11-27).
+    order_validation_inventory = providers.Factory(
+        WarehouseInventorySource, connection=data_provider, schema=settings.provided.DWH_SCHEMA
+    )
     order_validation_service = providers.Factory(
         OrderValidationService,
         repository=order_validation_repository,
@@ -819,6 +824,7 @@ class V1Container(containers.DeclarativeContainer):
         max_upload_bytes=config.order_validation.max_upload_bytes,
         max_lines=config.order_validation.max_lines,
         policy=order_validation_policy,
+        inventory=order_validation_inventory,
     )
     # --- Quoter (Comercial → Cotizador): live DWH reads plus the supports of the validator ---
     quotation_manager_policy = providers.Factory(

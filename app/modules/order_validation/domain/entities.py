@@ -39,7 +39,26 @@ class OrderLine:
     # `Vlr. imp. IMPTOLIC`: the liquor tax the order carries per unit; `None` when the file
     # has no such column or cell.
     liquor_tax_value: Decimal | None = None
+    # The line's average discount at the foot of the invoice, as a fraction (0.15 = 15 %);
+    # the file writes points, as with the margin. SIESA's margin is taken on the price net of it.
+    discount_pct: Decimal | None = None
     problems: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InventoryInfo:
+    """A product in one warehouse, from SIESA's inventory snapshot (``inventario_fecha``).
+
+    ``cost`` is the average unit cost of the warehouse's installation (``costo_prom_unit_ins``):
+    the cost SIESA margins an order with (it explains the margin of 635 of the 665 lines of the
+    2026-11-27 files; the rest carried a discount or another unit). ``None`` when SIESA has none.
+    """
+
+    sku: str
+    warehouse: str
+    cost: Decimal | None = None
+    stock: Decimal | None = None
+    snapshot_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +206,11 @@ class LineResult:
     # The product has liquor tax and the order may have been keyed without it.
     liquor_tax: bool = False
     liquor_tax_amount: Decimal | None = None
+    # The product in the order's warehouse when the line was validated (2026-11-27): its average
+    # cost, its stock and the day of the snapshot. `None` when not read (files validated before).
+    inventory_cost: Decimal | None = None
+    inventory_stock: Decimal | None = None
+    inventory_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -294,6 +318,9 @@ class OrderView:
     # Released by its margin, but only thanks to the threshold: the margin alone fell short.
     released_by_threshold: bool = False
     has_liquor_tax: bool = False
+    # The average discount at the foot of the invoice, weighted by value (price x quantity)
+    # over the lines that carry one.
+    discount_pct: Decimal | None = None
     # Warnings for a person: a 100 % margin product, a product far below its target...
     alerts: tuple[OrderAlert, ...] = ()
     # Per line id: the margin it brings to the order and its alert codes.
@@ -334,6 +361,9 @@ class OrderPage:
     operation_centers: tuple[tuple[str, int], ...] = ()
     # Every salesperson of the file (the order header's) and how many orders they have, by name.
     salespeople: tuple[tuple[str, int], ...] = ()
+    # The first and last order date of the whole file, for the date filter; `None` without dates.
+    first_date: date | None = None
+    last_date: date | None = None
 
 
 def _text(value: Decimal | None) -> str | None:

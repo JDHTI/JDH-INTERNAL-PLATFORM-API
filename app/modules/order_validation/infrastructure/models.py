@@ -115,6 +115,8 @@ class OrderValidationLineModel(Base):
     price_list: Mapped[str | None] = mapped_column(Text)
     retained: Mapped[str | None] = mapped_column(Text)
     liquor_tax_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    # The average discount at the foot of the invoice, as a fraction (migration 0097).
+    discount_pct: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     problems: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="{}")
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     reason: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -128,4 +130,8 @@ class OrderValidationLineModel(Base):
     margin_basis: Mapped[str | None] = mapped_column(String(20))
     liquor_tax: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     liquor_tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    # The product in the line's warehouse when it was validated (migration 0097).
+    inventory_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    inventory_stock: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    inventory_date: Mapped[date | None] = mapped_column(Date)
     checks: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")

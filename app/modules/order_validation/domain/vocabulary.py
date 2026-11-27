@@ -23,6 +23,8 @@ STATUS_LABELS = {
 REASONS = (
     "cumple_con_apoyo",  # an active agreement brings the margin to what was agreed
     "cumple_margen_lista",  # the margin already reaches the product's margin for the channel
+    "precio_libre",  # the warehouse's average cost is 0 or 1: the price is not checked
+    "margen_100_con_existencias",  # 100 % margin, but the warehouse has stock: releasable
     "falta_impuesto_licor",  # it complies, but the product's liquor tax is missing in the line
     "acuerdo_en_revision",  # it would comply, but the agreement still has data issues
     "no_cumple_acuerdo",  # there is an agreement and the order does not meet it
@@ -33,11 +35,18 @@ REASONS = (
     "datos_incompletos",  # the file row lacks the supplier, price or margin
 )
 
-READY_REASONS = ("cumple_con_apoyo", "cumple_margen_lista")
+READY_REASONS = (
+    "cumple_con_apoyo",
+    "cumple_margen_lista",
+    "precio_libre",
+    "margen_100_con_existencias",
+)
 
 REASON_LABELS = {
     "cumple_con_apoyo": "Cumple con el apoyo pactado",
     "cumple_margen_lista": "Cumple el margen del producto para el canal",
+    "precio_libre": "Costo 0 o 1: precio libre",
+    "margen_100_con_existencias": "Margen 100 % con existencias",
     "falta_impuesto_licor": "Falta el impuesto al licor",
     "acuerdo_en_revision": "Apoyo pendiente de revisión",
     "no_cumple_acuerdo": "No cumple las condiciones del apoyo",
@@ -52,12 +61,13 @@ REASON_LABELS = {
 RELEASE_BASES = ("lineas", "margen", "tolerancia", "manual")
 
 # Warnings raised on an order (and on the lines behind them) for a person to look at.
-ALERTS = ("margen_100", "bajo_objetivo", "falta_impuesto_licor")
+ALERTS = ("margen_100", "bajo_objetivo", "falta_impuesto_licor", "costo_distinto")
 
 ALERT_LABELS = {
     "margen_100": "Margen 100 %, revisar",
     "bajo_objetivo": "Producto muy por debajo de su margen objetivo",
     "falta_impuesto_licor": "Falta el impuesto al licor",
+    "costo_distinto": "El costo del pedido no es el costo promedio de la bodega",
 }
 
 # Result of checking one agreement against one line.

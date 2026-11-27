@@ -128,11 +128,12 @@ def test_bad_files_are_422_with_a_spanish_detail(client) -> None:
 def test_permissions_catalogs_and_outsiders(client) -> None:
     assert client.get(f"{BASE}/permissions").json() == {"can_manage": True}
     catalogs = client.get(f"{BASE}/catalogs").json()
-    assert len(catalogs["reasons"]) == 10 and catalogs["statuses"][0]["label"]
+    assert len(catalogs["reasons"]) == 12 and catalogs["statuses"][0]["label"]
     assert [item["value"] for item in catalogs["alerts"]] == [
         "margen_100",
         "bajo_objetivo",
         "falta_impuesto_licor",
+        "costo_distinto",
     ]
 
     client.app.dependency_overrides[get_current_principal] = lambda: person("otro@jdh.com.co")
@@ -219,6 +220,16 @@ def test_orders_carry_the_margin_flag_and_sort(client, source) -> None:
     assert first["margin_basis"] == "lista" and first["checks"] == []
     assert "threshold_applied" not in str(default)
     assert batch["margin_threshold_points"] == "0.00"
+    # No inventory in the tests; the file has no discount column. The cost the file implies is
+    # still shown: 118.628 x (1 − 5 %).
+    assert first["inventory_cost"] is None and first["discount_pct"] is None
+    assert Decimal(first["file_cost"]) == Decimal("112696.60") and first["cost_differs"] is False
+    assert pv2["discount_pct"] is None
+    day = default["first_date"]
+    assert day == default["last_date"] == "2026-10-09"
+    assert client.get(url, params={"date_from": "2026-10-10"}).json()["total"] == 0
+    assert client.get(url, params={"date_to": day}).json()["total"] == 2
+    assert client.get(url, params={"date_from": day, "date_to": "2026-10-01"}).status_code == 422
 
     assert default["items"][1]["release_basis"] == "lineas"
     in_file = client.get(url, params={"sort": "file"}).json()["items"]

@@ -73,6 +73,16 @@ HEADERS: dict[str, str] = {
     "valor impuesto licor": "liquor_tax_value",
     "impuesto licor": "liquor_tax_value",
     "imptolic": "liquor_tax_value",
+    # The average discount at the foot of the invoice (2026-11-27), in points like the margin.
+    "descuento promedio": "discount",
+    "desc promedio": "discount",
+    "dcto promedio": "discount",
+    "dscto promedio": "discount",
+    "descuento": "discount",
+    "porcentaje descuento": "discount",
+    "descuento pie de factura": "discount",
+    "dcto": "discount",
+    "dscto": "discount",
 }
 
 REQUIRED = {
@@ -225,6 +235,7 @@ def _line(row_number: int, row: Sequence[Any], positions: dict[str, int]) -> Ord
         problems.append(f"Fecha ilegible: {cell('order_date')!r}")
     margin_points = number("margin", "Margen")
     liquor_tax_value = number("liquor_tax_value", "Impuesto al licor")
+    discount_points = number("discount", "Descuento")
     supplier_code, supplier_name = _supplier(cell("supplier"))
     return OrderLine(
         row_number=row_number,
@@ -248,6 +259,8 @@ def _line(row_number: int, row: Sequence[Any], positions: dict[str, int]) -> Ord
         price_list=_code(cell("price_list")),
         retained=_text(cell("retained")),
         liquor_tax_value=liquor_tax_value,
+        # Points, as the margin: 15 is 15 %.
+        discount_pct=None if discount_points is None else discount_points / 100,
         problems=tuple(problems),
     )
 
