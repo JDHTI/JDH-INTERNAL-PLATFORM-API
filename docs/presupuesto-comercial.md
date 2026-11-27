@@ -96,7 +96,7 @@ Un mes tarda de 2 a 6 s en frío y cerca de 1 s en caliente.
 ## Maestro de vendedores (`/vendor-master`)
 
 - **Quién es dueño:** dwh-platform, no la plataforma.
-  - Escribe en `externo.vendedor_info`, `externo.equipo`, `externo.supervisor` y `externo.unidad_negocio`.
+  - Escribe en `externo.vendedor_info`, `externo.supervisor` y `externo.unidad_negocio`. `externo.equipo` es de la plataforma desde 2026-11-27 (ver más abajo).
   - Resuelve cada documento contra el ERP.
   - Hace upsert: los vendedores que no vienen en el archivo no cambian.
   - Corre dbt para publicarlo en `consumo.vendedores`.
@@ -130,6 +130,32 @@ El Excel es la fuente de verdad, pero los equipos se toman del **maestro de equi
 - **La simulación** (`POST /preview`) rechaza la fila de un vendedor o de un coordinador cuyo equipo no está en el maestro. La clase que muestra es la del maestro, nunca la del archivo.
 - **La carga** se niega si alguna fila tiene un equipo fuera del maestro. Si no, la plataforma escribe la clase del maestro en la columna CLASE de cada fila antes de enviar el archivo a dwh-platform.
 
+### La plataforma escribe `externo.equipo` (2026-11-27)
+
+El maestro de equipos del DWH pasa a ser de la plataforma. Los vendedores (`externo.vendedor_info`) y los coordinadores (`externo.supervisor`) siguen llegando con la carga del Excel por dwh-platform.
+
+- **Rol:** `svc_plataforma_externo`, creado por el equipo del DWH.
+  - Solo lee y escribe el esquema `externo`: sin DDL y sin `consumo`.
+  - Admite 5 conexiones, con `statement_timeout` de 1 min y `lock_timeout` de 10 s.
+  - Entra solo por `hostssl` desde el servidor de la plataforma, directo a Postgres (5432) y no por PgBouncer.
+  - La plataforma abre un pool propio de 2 conexiones como máximo (`application_name` `plataforma-maestro-vendedores`). Lo abre con el primer cambio de equipo y lo cierra al apagarse.
+- **Configuración:** `DWH_EXTERNO_WRITER_HOST`, `_PORT`, `_DATABASE` (vacío: `DWH_DATABASE`), `_USER`, `_PASSWORD`, `_SSLMODE` y `_POOL_SIZE` (de 1 a 5). `VENDOR_MASTER_COMPANY_ID` es el `id_cia` de un equipo nuevo (1).
+  - Sin host o sin usuario todo sigue como en la sección anterior: el equipo nuevo o la clase esperan en la plataforma a la siguiente carga.
+  - `GET /status` lo dice con `writes_teams`.
+- **Con el rol configurado:**
+  - **Maestro:** los nombres y las clases salen de `externo.equipo`, y un cambio se ve de inmediato, sin esperar a dbt. Los vendedores activos salen de `consumo`.
+  - **Un equipo nuevo** (`POST /teams`) se inserta en `externo.equipo` con `origen = 'plataforma'` y queda con `source: dwh`. La plataforma solo guarda la nota, si la hay. Si otra carga o persona ya lo creó, responde 409.
+  - **Cambiar la clase** (`PATCH /teams/{nombre}`) actualiza `externo.equipo`. Una clase que la plataforma tenía guardada para ese equipo se escribe con el siguiente cambio, y la plataforma deja de guardar la clase.
+  - **Ocultar** un equipo solo lo saca de la plantilla. En el DWH no cambia nada, porque `externo.equipo` no tiene columna de activo.
+  - **Si el DWH no responde:** 503 y no se guarda nada.
+- **Reglas acordadas con el DWH:**
+  - nunca se borra un equipo, porque las llaves foráneas son `ON DELETE SET NULL` y dejarían a sus vendedores sin equipo;
+  - nunca se renombra un equipo ni se reescribe su `uuid`;
+  - `consumo.equipos` y `consumo.vendedores` cambian con la siguiente corrida de dbt.
+- **Pendiente en dwh-platform:** su carga del Excel (`_upsert_equipos`) todavía hace `insert … on conflict (nombre) do update set clase`. El equipo del DWH la está dejando como solo lectura del maestro.
+  - Mientras tanto, una carga directa a dwh-platform, sin pasar por la plataforma, puede crear equipos o pisar clases.
+  - Por la plataforma no pasa: la carga se niega con equipos fuera del maestro y envía la clase del maestro.
+
 ## Endpoints
 
 | Método y ruta | Uso |
@@ -145,11 +171,11 @@ El Excel es la fuente de verdad, pero los equipos se toman del **maestro de equi
 | `GET /commercial-budget/{periodo}/export` | Excel con la forma de la plantilla de BI: grupos por regional y equipo con sus totales |
 | `POST /commercial-budget/sync` | Encola la copia de las ventas y el maestro (`manage`); 202 con la corrida, 409 si ya hay una en cola o en curso |
 | `GET /commercial-budget/sync` | La última copia: estado, cuándo, meses copiados (`months`) y pendientes (`pending`) |
-| `GET /vendor-master/status` | `configured`, `can_read`, `can_manage`. Abierto |
+| `GET /vendor-master/status` | `configured`, `can_read`, `can_manage` y `writes_teams` (la plataforma escribe `externo.equipo`). Abierto |
 | `GET /vendor-master/template?empty=` | Plantilla llena con el maestro de hoy (o vacía), con la lista de equipos del maestro |
 | `GET /vendor-master/teams` | Maestro de equipos: `{name, team_class, source, is_active, reps, note}` |
-| `POST /vendor-master/teams` | Crear un equipo `{name, team_class, note?}` (`manage`); 409 si ya existe |
-| `PATCH /vendor-master/teams/{nombre}` | Cambiar `team_class`, `is_active` o `note` (`manage`) |
+| `POST /vendor-master/teams` | Crear un equipo `{name, team_class, note?}` (`manage`); con `writes_teams`, en `externo.equipo`. 409 si ya existe, 503 si el DWH no responde |
+| `PATCH /vendor-master/teams/{nombre}` | Cambiar `team_class` (con `writes_teams`, en `externo.equipo`), `is_active` o `note` (`manage`) |
 | `POST /vendor-master/preview` | Simulación de la carga contra el DWH de hoy, sin escribir: `changes`, `rejected`, `warnings`, `new_teams`, `emptied_teams`, `teams`, `missing` y `coordinators` |
 | `POST /vendor-master/upload` | Reenvío a dwh-platform (multipart `file`, .xlsx de hasta 10 MB). Se niega si un equipo no está en el maestro, y escribe la clase del maestro |
 | `GET /vendor-master/uploads?limit=` | Historial de cargas |

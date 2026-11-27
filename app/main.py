@@ -180,6 +180,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 await container.v1_container.mail_client().close()
             # The routing client opens its connections on the first route only.
             await container.v1_container.territory_routing().close()
+            # The externo.equipo writer too: its pool opens on the first team change.
+            await container.v1_container.externo_writer().close()
             if resources is not None:
                 await shutdown_global_resources(resources)
 

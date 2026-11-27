@@ -69,6 +69,7 @@ class WarehouseWriterConnection:
         statement_timeout_ms: int = 60_000,
         lock_timeout_ms: int = 10_000,
         idle_in_transaction_timeout_ms: int = 60_000,
+        application_name: str = APPLICATION_NAME,
     ) -> None:
         """Create the connection settings; nothing is opened until the first write.
 
@@ -84,6 +85,8 @@ class WarehouseWriterConnection:
             statement_timeout_ms (int): Longest statement.
             lock_timeout_ms (int): Longest wait for a lock.
             idle_in_transaction_timeout_ms (int): Longest idle open transaction.
+            application_name (str): How the DWH names the connections (the ``externo``
+                writer, 2026-11-27, is another role and another name).
         """
 
         self.host = host
@@ -95,7 +98,7 @@ class WarehouseWriterConnection:
         self.max_size = max_size
         self.connect_timeout = connect_timeout
         self.server_settings = {
-            "application_name": APPLICATION_NAME,
+            "application_name": application_name,
             "statement_timeout": str(statement_timeout_ms),
             "lock_timeout": str(lock_timeout_ms),
             "idle_in_transaction_session_timeout": str(idle_in_transaction_timeout_ms),
