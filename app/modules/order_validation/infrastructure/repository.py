@@ -68,6 +68,9 @@ def _result_columns(result: LineResult) -> dict[str, object]:
         "margin_basis": result.margin_basis,
         "liquor_tax": result.liquor_tax,
         "liquor_tax_amount": result.liquor_tax_amount,
+        "inventory_cost": result.inventory_cost,
+        "inventory_stock": result.inventory_stock,
+        "inventory_date": result.inventory_date,
     }
 
 
@@ -87,6 +90,9 @@ def _stored(model: OrderValidationLineModel) -> StoredLine:
         margin_basis=model.margin_basis,
         liquor_tax=model.liquor_tax,
         liquor_tax_amount=model.liquor_tax_amount,
+        inventory_cost=model.inventory_cost,
+        inventory_stock=model.inventory_stock,
+        inventory_date=model.inventory_date,
     )
     return StoredLine(id=model.id, line=line, result=result)
 

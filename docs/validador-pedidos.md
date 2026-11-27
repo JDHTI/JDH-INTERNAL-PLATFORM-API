@@ -6,8 +6,8 @@ contra el [maestro de apoyos](apoyos-proveedores.md) y el
 cuáles quedan **listos para liberación** y cuáles quedan **pendientes de validación**, con
 el motivo. Toda la validación es del lado del servidor.
 
-Módulo `order_validation`. Migraciones `0020`, `0021`, `0023`, `0030` a `0032` y `0035`
-(motivo `margen_100`).
+Módulo `order_validation`. Migraciones `0020`, `0021`, `0023`, `0030` a `0032`, `0035`
+(motivo `margen_100`) y `0097` (inventario por bodega y descuento).
 
 ## El archivo
 
@@ -24,13 +24,41 @@ por su encabezado, en cualquier orden, y el encabezado puede estar debajo de un 
 | `PROVEEDOR` | `359 - LOCERIA COLOMBIANA S.A.` → código comercial `359` | sí |
 | `Fecha` | fecha del pedido; define la vigencia de los apoyos | no |
 | `Vlr. imp. IMPTOLIC` | impuesto al licor por unidad que ya trae la línea (ver [Impuesto al licor](#impuesto-al-licor)) | no |
-| `Cant. pedida`, `CANAL`, `Bodega`, `Lista de precios fact`, `C.O. factura` (también `C.O.`, `CO`, `Centro de operación`), `Estado docto.`, `Razon social cliente factura`, `Nombre vendedor cliente`, `Desc. item`, `Retenido margen` | se guardan y se muestran | no |
+| `Descuento promedio` (también `Descuento`, `Dcto promedio`, `Porcentaje descuento`) | descuento a pie de factura de la línea, en puntos como el margen (`15` = 15 %) | no |
+| `Bodega` | bodega por la que entró el pedido (`MDE1`, `CTG14`): de ella salen el costo promedio y las existencias | no |
+| `Cant. pedida`, `CANAL`, `Lista de precios fact`, `C.O. factura` (también `C.O.`, `CO`, `Centro de operación`), `Estado docto.`, `Razon social cliente factura`, `Nombre vendedor cliente`, `Desc. item`, `Retenido margen` | se guardan y se muestran | no |
 
 Una celda ilegible no descarta la fila: queda vacía, la línea guarda el problema y sale
 pendiente con `datos_incompletos`. Límites: `ORDER_VALIDATION_MAX_UPLOAD_MB` (10) y
 `ORDER_VALIDATION_MAX_LINES` (10 000).
 
 ## Cómo se decide una línea
+
+### Costo promedio y existencias de la bodega (2026-11-27)
+
+Al validar (y al revalidar) se lee el inventario de SIESA del día (`consumo.inventario_fecha`)
+para cada referencia **en la bodega de su línea** (`Bodega` del archivo; los pedidos entran por
+bodegas distintas). Cada línea guarda:
+
+- `inventory_cost`: el **costo promedio** de la bodega, `costo_prom_unit_ins` (promedio de la
+  instalación de la bodega), sin IVA y por unidad de inventario. Es el costo con el que SIESA
+  margina: en los archivos del 2026-11-27 explica el margen de 635 de 665 líneas. El promedio
+  propio de la bodega (`costo_prom_uni_bodega`) solo explicó 4 más.
+- `inventory_stock` (existencias) e `inventory_date` (día de la foto).
+
+Si el DWH no responde, el archivo no se valida (503): sin el costo, las dos reglas de abajo
+decidirían mal. Las líneas validadas antes no tienen estos campos hasta revalidar el archivo.
+
+**Costo del pedido.** `file_cost` es el costo que implica el archivo:
+`precio × (1 − descuento) × (1 − margen)`. El margen del reporte se toma sobre el precio neto
+del descuento a pie de factura: una línea a $74.924 con 15 % de descuento y 5,12 % de margen
+tiene un costo de $60.422, que es el de la bodega. Si `file_cost` se aleja más de 1 % del costo
+promedio de la bodega, la línea trae `cost_differs` y la alerta `costo_distinto`. La causa puede
+ser un costo que cambió, otra unidad (caja contra unidad) o un descuento que el archivo no trae.
+**Solo informa** y no retiene el pedido.
+
+**Descuento promedio.** `discount_pct` va en la línea (la columna del archivo) y en el pedido,
+ponderado por valor (`precio × cantidad`) sobre las líneas que lo traen.
 
 ### Qué apoyos cuentan (jerarquía, 2026-11-24)
 
@@ -128,8 +156,10 @@ y documentadas, pero el validador las ignora.
 
 | Motivo | Estado | Cuándo |
 | --- | --- | --- |
-| `margen_100` | pendiente | el margen de la línea es 100 % (no trae costo); retiene el pedido entero (ver [Producto con margen 100 %](#producto-con-margen-100-)) |
 | `datos_incompletos` | pendiente | falta proveedor, precio o margen |
+| `margen_100_con_existencias` | **listo** | el margen de la línea es 100 % y la referencia tiene existencias en la bodega del pedido (2026-11-27) |
+| `margen_100` | pendiente | el margen de la línea es 100 % (no trae costo) y no hay existencias en la bodega; retiene el pedido entero (ver [Producto con margen 100 %](#producto-con-margen-100-)) |
+| `precio_libre` | **listo** | el costo promedio de la bodega es 0 o 1 (hasta $1): no se valida el precio de venta (2026-11-27) |
 | `falta_impuesto_licor` | pendiente | cumpliría el margen o el apoyo, pero el producto tiene impuesto al licor y la línea no lo trae; manda sobre los dos motivos de abajo |
 | `cumple_con_apoyo` | **listo** | un apoyo activo que aplica se cumple; se muestra el de mayor holgura |
 | `cumple_margen_lista` | **listo** | el margen de la línea ya alcanza el margen del producto para el canal |
@@ -171,8 +201,8 @@ apoyo** cuando un apoyo activo con dinero la decidió (`pct_costo`, `costo_neto`
 `precio_neto`, `pct_precio_lista`), lo cumpla o no: una línea al 1 % en el archivo que el apoyo
 lleva al 22 % suma como 22 %. Un apoyo en revisión, vencido o no evaluable no cuenta, ni las
 excepciones de margen mínimo (no traen dinero). Cada línea trae `order_margin_pct`: el margen
-con el que suma al pedido. Quedan fuera las líneas sin precio, cantidad o margen y las de margen
-100 % (sin costo). `required_margin_pct` es el objetivo ponderado de las líneas que tienen uno.
+con el que suma al pedido. Quedan fuera las líneas sin precio, cantidad o margen, las de margen
+100 % (sin costo) y las de precio libre (costo 0 o 1). `required_margin_pct` es el objetivo ponderado de las líneas que tienen uno.
 
 Antes el pedido se calculaba con el margen del archivo sin apoyos: en «Pedidos Retenidos 2» el
 pedido `PV-02592133` daba 0,94 % (1,94 % con el umbral de 1 punto) con todas sus líneas por
@@ -193,6 +223,14 @@ Las reglas, con sus valores vigentes, se publican para los colaboradores en
 
 #### Producto con margen 100 %
 
+**Con existencias** en la bodega del pedido (2026-11-27), la línea queda lista
+(`margen_100_con_existencias`): no trae alerta, no retiene el pedido y tampoco cuenta en su margen.
+Lo que sigue aplica a la línea **sin existencias**, o sin inventario leído (archivos validados
+antes).
+
+El margen 100 % lo decide la existencia, aunque el costo de la bodega sea 0: una línea al 100 %
+con costo 0 y sin existencias queda retenida y no pasa a precio libre.
+
 Una línea con margen 100 % (o más) no trae costo: sale con el motivo y la alerta `margen_100`
 («Margen 100 %, revisar»), no cuenta en el margen del pedido y **el pedido no se libera solo**:
 ni por sus líneas ni por su margen. **Sí se puede aprobar a mano**, después de revisarlo; la
@@ -200,7 +238,15 @@ línea conserva su motivo y su alerta. Se detecta por el margen del archivo, as�
 aplica a los archivos subidos antes de esta regla (sus líneas dicen `datos_incompletos` hasta
 revalidar).
 
-Las alertas (`margen_100`, `bajo_objetivo`, `falta_impuesto_licor`) son para el **desglose** de
+#### Costo 0 o 1: precio libre
+
+Si el costo promedio de la referencia en la bodega del pedido está entre 0 y 1 (SIESA pone esos
+valores cuando no hay costo), no se valida el precio de venta. La línea queda lista con cualquier
+precio (`precio_libre`) y no cuenta en el margen del pedido, porque lo inflaría. Un costo
+desconocido (la referencia no está en esa bodega) no es precio libre. Si al producto le falta el
+impuesto al licor, sigue retenido por `falta_impuesto_licor`.
+
+Las alertas (`margen_100`, `bajo_objetivo`, `falta_impuesto_licor`, `costo_distinto`) son para el **desglose** de
 cada referencia en el detalle del pedido; en la vista general el pedido solo dice su estado
 («Pendiente de validación»).
 
@@ -222,8 +268,8 @@ margen (`sin_acuerdo`, `no_cumple_acuerdo`).
 ### Alertas
 
 Cada pedido trae `alerts`: `[{code, label, message, row_numbers}]`, y cada línea sus códigos en
-`alerts`: `margen_100`, `bajo_objetivo` y `falta_impuesto_licor`. Catálogo en
-`GET /order-validations/catalogs` (`alerts`).
+`alerts`: `margen_100` (solo sin existencias), `bajo_objetivo`, `falta_impuesto_licor` y
+`costo_distinto` (solo informa). Catálogo en `GET /order-validations/catalogs` (`alerts`).
 
 ### Margen del pedido y umbral
 
@@ -255,7 +301,7 @@ pedido al 19,5 % frente a un objetivo de 20 % queda listo. Reglas:
 
 Un **pedido** está listo para liberación si **todas** sus líneas lo están, si una persona lo
 **aprobó a mano**, si su **margen** (con el umbral) alcanza el objetivo o si entra en la
-**tolerancia**; con un producto en margen 100 %, solo a mano. `release_basis` dice cuál:
+**tolerancia**; con un producto en margen 100 % sin existencias, solo a mano. `release_basis` dice cuál:
 `lineas`, `manual`, `margen`, `tolerancia`, o `null` mientras está pendiente.
 
 Cuando se libera por `margen`, `released_by_threshold` dice si el margen solo no alcanzaba y lo que
@@ -323,7 +369,7 @@ cualquiera de esas dos áreas, el líder o responsable del área, y los administ
 | `POST /order-validations` | Subir el archivo (`multipart/form-data`, campo `file` y opcional `margin_threshold_points`); valida todo y devuelve el lote con sus conteos y su umbral |
 | `GET /order-validations` | Archivos subidos, más recientes primero (`page`, `size`) |
 | `GET /order-validations/{id}` | Un archivo con sus conteos y `margin_threshold_points` |
-| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `released_by_threshold`, `threshold_released_count` (de la lista), `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `operation_center` (C.O. factura del pedido), `salesperson` (vendedor del pedido, «Nombre vendedor cliente»; sin distinguir mayúsculas ni espacios), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado. `operation_centers` (`[{code, order_count}]`, por código) lista todos los C.O. del archivo con sus pedidos, sin importar los filtros. `salespeople` (`[{name, order_count}]`, por nombre) hace lo mismo con los vendedores del archivo, para el desplegable (2026-11-24) |
+| `GET /order-validations/{id}/orders` | Pedidos con sus líneas, `manual_approval`, `margin_pct`, `required_margin_pct`, `margin_with_threshold_pct`, `release_basis`, `released_by_threshold`, `threshold_released_count` (de la lista), `without_support_line_count` y `has_liquor_tax`. Filtros: `status`, `reason`, `q` (documento, cliente, proveedor, referencia, vendedor), `operation_center` (C.O. factura del pedido), `salesperson` (vendedor del pedido, «Nombre vendedor cliente»; sin distinguir mayúsculas ni espacios), `date_from` y `date_to` (rango de la fecha del pedido, inclusive; un pedido sin fecha queda fuera; inicial posterior a la final: 422; 2026-11-27), `sort` (`attention` por defecto, o `file`), `margin_threshold_points` (probar un umbral sin guardarlo), `page`, `size`. `counts` trae los pedidos por estado antes de filtrar por estado. `operation_centers` (`[{code, order_count}]`, por código) lista todos los C.O. del archivo con sus pedidos, sin importar los filtros. `salespeople` (`[{name, order_count}]`, por nombre) hace lo mismo con los vendedores del archivo, para el desplegable (2026-11-24). `first_date` y `last_date` son la primera y la última fecha de pedido del archivo, sin importar los filtros, para el selector de fechas. Cada pedido trae `discount_pct`; cada línea, `discount_pct`, `inventory_cost`, `inventory_stock`, `inventory_date`, `file_cost` y `cost_differs` (2026-11-27) |
 | `POST /order-validations/{id}/revalidate` | Vuelve a validar con los apoyos y márgenes como están ahora. Cuerpo opcional `{"margin_threshold_points": 0.5}`; sin valor conserva el umbral guardado. Conserva las aprobaciones manuales |
 | `PUT /order-validations/{id}/margin-threshold` | `{"margin_threshold_points": 0.5}`: guarda el umbral del archivo y recalcula qué pedidos libera, sin revalidar las líneas; conserva las aprobaciones |
 | `POST /order-validations/{id}/approvals` | `{"documents": [...], "note": "..."}`: marca como liberados pedidos pendientes o listos, todo o nada; devuelve el archivo con sus conteos (`released_order_count`) |
@@ -347,3 +393,10 @@ cualquiera de esas dos áreas, el líder o responsable del área, y los administ
 7. Cuándo aplicar Margen Masivo Food y Margen Market Apartadó, y el margen de los productos
    cuya nota dice «Margen mínimo» distinto del de lista (por ejemplo RPB: lista 57 %, mínimo
    50 %).
+8. **Formato de la columna de descuento.** Se lee en puntos (`15` = 15 %). Si SIESA la exporta
+   como fracción (`0,15`) o en pesos, hay que ajustarla. El costo del pedido (`file_cost`) lo
+   delata, porque no cuadraría con el de la bodega.
+9. **Existencias suficientes.** Margen 100 % con existencias pide existencias mayores que 0 en la
+   bodega, no que alcancen para la cantidad pedida.
+10. **Otra unidad.** El precio puede venir en una unidad distinta de la del inventario: la 12799
+    se vende por caja de 45 y el inventario está por unidad. Su costo sale como `costo_distinto`.

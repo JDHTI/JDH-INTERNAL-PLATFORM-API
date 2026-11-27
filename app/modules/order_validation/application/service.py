@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -29,6 +29,7 @@ from app.modules.order_validation.domain.ports import (
     AgreementSource,
     BatchRepository,
     Calendar,
+    InventorySource,
     ManagerPolicy,
     OrderFileReader,
 )
@@ -164,6 +165,7 @@ class OrderValidationService:
         max_upload_bytes: int,
         max_lines: int,
         policy: OrderPolicy = rules.DEFAULT_POLICY,
+        inventory: InventorySource | None = None,
     ) -> None:
         """Create the service.
 
@@ -177,6 +179,8 @@ class OrderValidationService:
             max_lines (int): Most lines accepted per file.
             policy (OrderPolicy): Order-level limits (tolerance, points below target). The
                 repository must count with the same one.
+            inventory (InventorySource | None): Average cost and stock of each product in the
+                warehouse of its line (2026-11-27). Without it, those rules do not act.
         """
 
         self.repository = repository
@@ -187,6 +191,7 @@ class OrderValidationService:
         self.max_upload_bytes = max_upload_bytes
         self.max_lines = max_lines
         self.policy = policy
+        self.inventory = inventory
 
     async def _require_manager(self, principal: Principal) -> None:
         if not await self.managers.is_manager(principal):
@@ -212,11 +217,14 @@ class OrderValidationService:
         return (points / 100).quantize(Decimal("0.000001"))
 
     async def _validate(self, lines: Sequence[OrderLine]) -> list[LineResult]:
-        """Decide every line against the supports in force on its order date."""
+        """Decide every line against the supports in force on its order date, and against the
+        product's average cost and stock in the warehouse of its line."""
 
         codes = sorted({line.supplier_code for line in lines if line.supplier_code})
         skus = sorted({line.sku for line in lines if line.sku})
         nits = sorted({line.customer_nit for line in lines if line.customer_nit})
+        keys = {key for line in lines if (key := rules.inventory_key(line))}
+        stock = await self.inventory.inventory(sorted(keys)) if self.inventory and keys else {}
         grouped = rules.by_supplier(await self.agreements.agreements(codes, skus, nits))
         products = await self.agreements.products(skus)
         customers = await self.agreements.customers(nits)
@@ -228,6 +236,7 @@ class OrderValidationService:
                 customers.get(line.customer_nit or ""),
                 products.get(line.sku or ""),
                 today,
+                stock.get(key) if (key := rules.inventory_key(line)) else None,
             )
             for line in lines
         ]
@@ -452,6 +461,7 @@ class OrderValidationService:
                         and rules.needs_threshold(margin, required)
                     ),
                     has_liquor_tax=any(item.result.liquor_tax for item in lines),
+                    discount_pct=rules.order_discount(item.line for item in lines),
                     alerts=rules.order_alerts(pairs, self.policy),
                     line_margins={
                         item.id: rules.line_margin(item.line, item.result) for item in lines
@@ -487,6 +497,8 @@ class OrderValidationService:
         q: str | None = None,
         operation_center: str | None = None,
         salesperson: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
         margin_threshold_points: Decimal | None = None,
         sort: str = "attention",
         page: int = 1,
@@ -504,6 +516,9 @@ class OrderValidationService:
             salesperson (str | None): Only the orders of this salesperson (the order header's
                 «Nombre vendedor cliente», exactly as ``salespeople`` lists it; case and spaces
                 are ignored).
+            date_from (date | None): Only the orders dated on or after this day (the order
+                header's date, 2026-11-27); an order without a date is left out.
+            date_to (date | None): Only the orders dated on or before this day.
             margin_threshold_points (Decimal | None): Try another margin threshold, in points,
                 without saving it: statuses, counts and margins come out as if the file had it.
                 The saved threshold is used when omitted.
@@ -525,6 +540,8 @@ class OrderValidationService:
             raise InvalidInputError(f"reason debe ser uno de: {', '.join(vocabulary.REASONS)}")
         if sort not in SORTS:
             raise InvalidInputError(f"sort debe ser uno de: {', '.join(SORTS)}")
+        if date_from and date_to and date_from > date_to:
+            raise InvalidInputError("La fecha inicial no puede ser posterior a la final")
         batch = await self.get_batch(batch_id)
         tried = self._threshold(margin_threshold_points)
         threshold = batch.margin_threshold if tried is None else tried
@@ -535,6 +552,15 @@ class OrderValidationService:
         # The centers of the whole file, so the filter always offers all of them.
         centers = Counter(center for order in orders if (center := order.first.operation_center))
         sellers = Counter(name for order in orders if (name := _seller(order)))
+        dates = [day for order in orders if (day := order.first.order_date)]
+        if date_from or date_to:
+            orders = [
+                order
+                for order in orders
+                if (day := order.first.order_date) is not None
+                and (date_from is None or day >= date_from)
+                and (date_to is None or day <= date_to)
+            ]
         term = " ".join((q or "").lower().split())
         if term:
             orders = [order for order in orders if _matches(order, term)]
@@ -573,6 +599,8 @@ class OrderValidationService:
             threshold_released_count=threshold_released,
             operation_centers=tuple(sorted(centers.items())),
             salespeople=tuple(sorted(sellers.items(), key=lambda item: item[0].casefold())),
+            first_date=min(dates, default=None),
+            last_date=max(dates, default=None),
         )
 
     def rule_catalog(self) -> tuple[Section, ...]:

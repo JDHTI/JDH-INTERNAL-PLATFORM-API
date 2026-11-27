@@ -46,6 +46,8 @@ OrderStatus = Literal["listo_para_liberar", "pendiente_validacion", "liberado"]
 Reason = Literal[
     "cumple_con_apoyo",
     "cumple_margen_lista",
+    "precio_libre",
+    "margen_100_con_existencias",
     "falta_impuesto_licor",
     "acuerdo_en_revision",
     "no_cumple_acuerdo",
@@ -56,7 +58,7 @@ Reason = Literal[
     "datos_incompletos",
 ]
 ReleaseBasis = Literal["lineas", "margen", "tolerancia", "manual"]
-AlertCode = Literal["margen_100", "bajo_objetivo", "falta_impuesto_licor"]
+AlertCode = Literal["margen_100", "bajo_objetivo", "falta_impuesto_licor", "costo_distinto"]
 # The Salsamentarias margin was removed on 2026-11-23 (those customers use Mayoristas).
 MarginBasis = Literal["lista", "mayoristas", "masivo_food", "market"]
 _BASES = frozenset(get_args(MarginBasis))
@@ -144,6 +146,30 @@ class LineResponse(BaseModel):
         description="Margin points (as a fraction) below its target, with its support; null when "
         "it is not below"
     )
+    discount_pct: Decimal | None = Field(
+        default=None,
+        description="Average discount at the foot of the invoice, as a fraction (the file's "
+        "column, in points); null when the file does not carry it",
+    )
+    inventory_cost: Decimal | None = Field(
+        default=None,
+        description="Average unit cost of the product in the line's warehouse when validated "
+        "(SIESA's inventory snapshot): the cost SIESA margins with",
+    )
+    inventory_stock: Decimal | None = Field(
+        default=None, description="Stock of the product in the line's warehouse when validated"
+    )
+    inventory_date: date | None = Field(
+        default=None, description="Day of the inventory snapshot the cost and stock come from"
+    )
+    file_cost: Decimal | None = Field(
+        default=None,
+        description="The unit cost the file implies: price x (1 - discount) x (1 - margin)",
+    )
+    cost_differs: bool = Field(
+        default=False,
+        description="The cost the file implies is more than 1 % off the warehouse's average cost",
+    )
     alerts: list[AlertCode]
     checks: list[CheckResponse]
 
@@ -208,6 +234,10 @@ class OrderResponse(BaseModel):
     released_by_threshold: bool
     without_support_line_count: int
     has_liquor_tax: bool
+    discount_pct: Decimal | None = Field(
+        default=None,
+        description="Average discount of the order, weighted by value over the lines with one",
+    )
     alerts: list[AlertResponse]
     lines: list[LineResponse]
 
@@ -240,6 +270,9 @@ class OrderPageResponse(BaseModel):
     operation_centers: list[OperationCenterCount]
     # Every salesperson of the whole file, whatever the filters, by name.
     salespeople: list[SalespersonCount] = []
+    # The first and last order date of the whole file, whatever the filters (date picker bounds).
+    first_date: date | None = None
+    last_date: date | None = None
 
 
 class CatalogItem(BaseModel):
@@ -349,6 +382,12 @@ def _line(item: StoredLine, order: OrderView) -> LineResponse:
         liquor_tax_amount=result.liquor_tax_amount,
         order_margin_pct=order.line_margins.get(item.id),
         points_below_target=rules.points_below_target(line, result),
+        discount_pct=line.discount_pct,
+        inventory_cost=result.inventory_cost,
+        inventory_stock=result.inventory_stock,
+        inventory_date=result.inventory_date,
+        file_cost=rules.file_cost(line),
+        cost_differs=rules.cost_differs(line, result),
         alerts=list(order.line_alerts.get(item.id, ())),  # type: ignore[arg-type]
         checks=[_check(check) for check in result.checks],
     )
@@ -377,6 +416,7 @@ def _order(order: OrderView) -> OrderResponse:
         released_by_threshold=order.released_by_threshold,
         without_support_line_count=order.without_support_line_count,
         has_liquor_tax=order.has_liquor_tax,
+        discount_pct=order.discount_pct,
         alerts=[
             AlertResponse(
                 code=alert.code,  # type: ignore[arg-type]
@@ -537,6 +577,8 @@ async def list_orders(
     q: str | None = Query(default=None, max_length=100),
     operation_center: str | None = Query(default=None, max_length=20),
     salesperson: str | None = Query(default=None, max_length=150),
+    date_from: date | None = Query(default=None, description="Orders dated on or after this day"),  # noqa: B008
+    date_to: date | None = Query(default=None, description="Orders dated on or before this day"),  # noqa: B008
     margin_threshold_points: Decimal | None = _TRY_THRESHOLD,
     sort: Literal[
         "attention", "file", "document_asc", "document_desc", "margin_asc", "margin_desc"
@@ -558,7 +600,9 @@ async def list_orders(
     threshold, without saving it; `PUT /{id}/margin-threshold` saves it. `operation_center`
     keeps the orders of one C.O. factura; `operation_centers` lists every one in the file.
     `salesperson` keeps the orders of one salesperson (a `name` of `salespeople`, which lists
-    every salesperson in the file).
+    every salesperson in the file). `date_from` / `date_to` keep the orders dated in that range
+    (the order header's date; orders without one are left out); `first_date` / `last_date` are
+    the bounds of the whole file.
     """
 
     result = await service.orders(
@@ -568,6 +612,8 @@ async def list_orders(
         q=q,
         operation_center=operation_center,
         salesperson=salesperson,
+        date_from=date_from,
+        date_to=date_to,
         margin_threshold_points=margin_threshold_points,
         sort=sort,
         page=page,
@@ -587,6 +633,8 @@ async def list_orders(
         salespeople=[
             SalespersonCount(name=name, order_count=count) for name, count in result.salespeople
         ],
+        first_date=result.first_date,
+        last_date=result.last_date,
     )
 
 

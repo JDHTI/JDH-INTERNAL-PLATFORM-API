@@ -14,6 +14,7 @@ from app.modules.order_validation.domain.entities import (
     Batch,
     BatchPage,
     CustomerScope,
+    InventoryInfo,
     LineResult,
     ManualApproval,
     OrderLine,
@@ -40,6 +41,16 @@ class AgreementSource(Protocol):
     async def customers(self, nits: Sequence[str]) -> dict[str, CustomerScope]: ...
 
     async def branch_scope(self, nit: str, branch_id: str) -> CustomerScope | None: ...
+
+
+class InventorySource(Protocol):
+    """SIESA's inventory snapshot by warehouse (the warehouse, read-only)."""
+
+    async def inventory(
+        self, items: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], InventoryInfo]:
+        """The products in their warehouses, keyed by ``(sku, WAREHOUSE)`` (code upper-cased)."""
+        ...
 
 
 class BatchRepository(Protocol):

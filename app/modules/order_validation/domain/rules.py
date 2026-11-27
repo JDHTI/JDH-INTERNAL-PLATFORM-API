@@ -25,6 +25,7 @@ from app.modules.order_validation.domain.entities import (
     Agreement,
     AgreementCheck,
     CustomerScope,
+    InventoryInfo,
     LineResult,
     OrderAlert,
     OrderLine,
@@ -51,6 +52,13 @@ APPLIES = "aplica"
 OUT_OF_DATE = "fuera_de_vigencia"
 OUT_OF_SCOPE = "fuera_de_alcance"
 FULL_MARGIN = "margen_100"
+# 2026-11-27: a 100 % margin line whose warehouse has stock is releasable, and a line whose
+# warehouse average cost is 0 or 1 has a free price.
+STOCKED_FULL_MARGIN = "margen_100_con_existencias"
+FREE_PRICE = "precio_libre"
+COST_MISMATCH = "costo_distinto"
+# The cost the file implies and the warehouse's average cost differ when more than 1 % apart.
+COST_TOLERANCE = Decimal("0.01")
 DEFAULT_POLICY = OrderPolicy()
 
 BASIS = {
@@ -536,6 +544,7 @@ def decide(
     customer: CustomerScope | None,
     product: ProductInfo | None,
     today: date,
+    inventory: InventoryInfo | None = None,
 ) -> LineResult:
     """Release decision for one line.
 
@@ -546,19 +555,24 @@ def decide(
     flagged, whatever the decision, only when the line does not carry the tax: the ``Vlr. imp.
     IMPTOLIC`` of the file is empty or 0, or the file has no such column.
 
+    The product in the order's warehouse (2026-11-27) decides two cases first: a 100 % margin line
+    is releasable when the warehouse has stock, and a line whose warehouse average cost is 0 or 1
+    has a free price (its price is not checked).
+
     Args:
         line (OrderLine): The order line.
         agreements (Sequence[Agreement]): Candidate supports of the line's supplier.
         customer (CustomerScope | None): The client in the master, if known.
         product (ProductInfo | None): The product in the master, if known.
         today (date): Day used when the file carries no order date.
+        inventory (InventoryInfo | None): The product in the line's warehouse, if read.
 
     Returns:
         LineResult: Status, reason, the margins of the deciding check and every check.
     """
 
     reference, basis = reference_margin(line, customer, product)
-    result = _decide(line, agreements, customer, reference, basis, today)
+    result = _decide(line, agreements, customer, reference, basis, today, inventory)
     owed = product.liquor_tax if product and product.liquor_tax and product.liquor_tax > 0 else None
     carried = line.liquor_tax_value is not None and line.liquor_tax_value > 0
     tax = owed if owed is not None and not carried else None
@@ -567,6 +581,9 @@ def decide(
         margin_basis=basis if reference is not None else None,
         liquor_tax=tax is not None,
         liquor_tax_amount=tax,
+        inventory_cost=inventory.cost if inventory else None,
+        inventory_stock=inventory.stock if inventory else None,
+        inventory_date=inventory.snapshot_date if inventory else None,
     )
     if tax is not None and result.status == vocabulary.READY:
         # A line that meets its margin but lacks the liquor tax is held back: the order cannot
@@ -596,6 +613,7 @@ def _decide(
     reference: Decimal | None,
     basis: str | None,
     today: date,
+    inventory: InventoryInfo | None = None,
 ) -> LineResult:
     if line.supplier_code is None or line.margin_pct is None or line.unit_price is None:
         missing = [
@@ -613,15 +631,44 @@ def _decide(
             detail="; ".join((f"Falta {', '.join(missing)} en el archivo", *line.problems)),
         )
 
+    warehouse = line.warehouse or "del pedido"
     if is_full_margin(line):
+        if inventory is not None and _stocked(inventory.stock):
+            # 2026-11-27: with stock in the order's warehouse the line is releasable.
+            return LineResult(
+                status=vocabulary.READY,
+                reason=STOCKED_FULL_MARGIN,
+                detail=(
+                    f"Margen {pct(line.margin_pct)} con existencias en la bodega {warehouse} "
+                    f"({_quantity(inventory.stock)}): se puede liberar"
+                ),
+                effective_margin_pct=_round(line.margin_pct),
+            )
         # A 100 % margin is a line with no cost in the order, not a profitable one, and it would
         # carry the margin of the whole order: only a person releases it (see release_basis).
+        stock = (
+            f"sin existencias en la bodega {warehouse}"
+            if inventory is not None
+            else f"sin inventario de la referencia en la bodega {warehouse}"
+        )
         return LineResult(
             status=vocabulary.PENDING,
             reason=FULL_MARGIN,
             detail=(
-                f"Margen {pct(line.margin_pct)}, revisar: la línea no trae costo. El pedido solo "
-                "se libera con aprobación manual"
+                f"Margen {pct(line.margin_pct)}, revisar: la línea no trae costo y está {stock}. "
+                "El pedido solo se libera con aprobación manual"
+            ),
+            effective_margin_pct=_round(line.margin_pct),
+        )
+
+    if inventory is not None and is_placeholder_cost(inventory.cost):
+        # 2026-11-27: a product at 0 or 1 in the warehouse has no price to check.
+        return LineResult(
+            status=vocabulary.READY,
+            reason=FREE_PRICE,
+            detail=(
+                f"Costo promedio {_money(inventory.cost)} en la bodega {warehouse}: precio libre, "  # type: ignore[arg-type]
+                "no se valida el precio de venta"
             ),
             effective_margin_pct=_round(line.margin_pct),
         )
@@ -718,6 +765,84 @@ def is_full_margin(line: OrderLine) -> bool:
     return line.margin_pct is not None and line.margin_pct >= ONE
 
 
+def warehouse_key(value: str | None) -> str:
+    """A warehouse code as the inventory keys it (``mde1 `` is ``MDE1``)."""
+
+    return " ".join((value or "").upper().split())
+
+
+def inventory_key(line: OrderLine) -> tuple[str, str] | None:
+    """``(sku, WAREHOUSE)`` of a line, to find it in the inventory; `None` without either."""
+
+    sku, warehouse = (line.sku or "").strip(), warehouse_key(line.warehouse)
+    return (sku, warehouse) if sku and warehouse else None
+
+
+def _stocked(stock: Decimal | None) -> bool:
+    return stock is not None and stock > ZERO
+
+
+def _quantity(value: Decimal | None) -> str:
+    """Units in Spanish: 1250.5 becomes ``1.250,5 unidades``."""
+
+    number = f"{(value or ZERO).normalize():,f}".replace(",", "_").replace(".", ",")
+    return f"{number.replace('_', '.')} unidades"
+
+
+def is_placeholder_cost(cost: Decimal | None) -> bool:
+    """A warehouse average cost of 0 or 1 (up to one peso): SIESA's placeholder, not a cost."""
+
+    return cost is not None and ZERO <= cost <= ONE
+
+
+def holds_full_margin(line: OrderLine, result: LineResult) -> bool:
+    """A 100 % margin line that only a person releases: its warehouse had no stock when it was
+    validated, or its stock was not read (files validated before 2026-11-27)."""
+
+    return is_full_margin(line) and not _stocked(result.inventory_stock)
+
+
+def file_cost(line: OrderLine) -> Decimal | None:
+    """The unit cost SIESA margined the line with: ``price x (1 − discount) x (1 − margin)``.
+
+    The report's margin is taken on the price net of the discount at the foot of the invoice
+    (a line at 74.924 with 15 % off and 5,12 % margin is a cost of 60.422, the warehouse's).
+    ``None`` without a price or a margin, or at a 100 % margin.
+    """
+
+    if line.unit_price is None or line.margin_pct is None or is_full_margin(line):
+        return None
+    net = line.unit_price * (ONE - (line.discount_pct or ZERO))
+    return (net * (ONE - line.margin_pct)).quantize(Decimal("0.01"))
+
+
+def cost_differs(line: OrderLine, result: LineResult) -> bool:
+    """Whether the cost the file implies is more than 1 % off the warehouse's average cost: the
+    order was margined with another cost (a stale one, another unit, a discount the file does not
+    carry). Only informs."""
+
+    implied = file_cost(line)
+    cost = result.inventory_cost
+    if implied is None or cost is None or is_placeholder_cost(cost):
+        return False
+    return abs(implied - cost) > cost * COST_TOLERANCE
+
+
+def order_discount(lines: Iterable[OrderLine]) -> Decimal | None:
+    """The average discount of an order, weighted by value over the lines that carry one."""
+
+    value = weighted = ZERO
+    for line in lines:
+        if line.discount_pct is None or line.unit_price is None or line.quantity is None:
+            continue
+        amount = line.unit_price * line.quantity
+        if amount <= ZERO:
+            continue
+        value += amount
+        weighted += amount * line.discount_pct
+    return _round(weighted / value) if value else None
+
+
 def _amount(line: OrderLine) -> Decimal | None:
     """Sales of a line that carries a cost, or `None` when it cannot be weighted."""
 
@@ -780,8 +905,8 @@ def order_margins(
     ``1 - sum(cost) / sum(sales)`` with each line's cost taken as ``price x quantity x
     (1 - margin)`` is the amount-weighted average of the line margins, each one with its support
     when a support decided the line (:func:`line_margin`). Lines with no price, quantity or
-    margin, and lines that carry no cost (100 % margin), are left out. The target is weighted the
-    same way over the lines that have one.
+    margin, lines that carry no cost (100 % margin) and lines at a free price (cost 0 or 1,
+    2026-11-27) are left out. The target is weighted the same way over the lines that have one.
 
     Returns:
         tuple[Decimal | None, Decimal | None]: The order margin and the weighted target;
@@ -792,7 +917,7 @@ def order_margins(
     for line, result in lines:
         amount = _amount(line)
         margin = line_margin(line, result)
-        if amount is None or margin is None:
+        if amount is None or margin is None or result.reason == FREE_PRICE:
             continue
         sales += amount
         weighted += amount * margin
@@ -813,12 +938,14 @@ def line_alerts(
     """The alert codes of one line (see :data:`vocabulary.ALERTS`)."""
 
     codes = []
-    if is_full_margin(line):
+    if holds_full_margin(line, result):
         codes.append(FULL_MARGIN)
     if _far_below(line, result, policy):
         codes.append("bajo_objetivo")
     if result.liquor_tax:
         codes.append("falta_impuesto_licor")
+    if cost_differs(line, result):
+        codes.append(COST_MISMATCH)
     return tuple(codes)
 
 
@@ -844,6 +971,10 @@ def order_alerts(
         "falta_impuesto_licor": (
             "Hay productos con impuesto al licor que la línea no trae: el pedido no se libera por "
             "su margen"
+        ),
+        COST_MISMATCH: (
+            "Hay productos cuyo costo en el pedido (precio menos descuento, al margen del archivo) "
+            "no es el costo promedio de su bodega: revisa con qué costo se marginó. Solo informa"
         ),
     }
     return tuple(
@@ -925,7 +1056,7 @@ def release_by_margin(
         return None
     short = 0
     for line, result in pairs:
-        if result.liquor_tax or is_full_margin(line):
+        if result.liquor_tax or holds_full_margin(line, result):
             # No margin makes up for these: only a person can release the order.
             return None
         if result.status == vocabulary.READY:
@@ -955,13 +1086,14 @@ def release_basis(
 ) -> str | None:
     """Why an order is ready: ``manual``, all its ``lineas``, its ``margen`` or ``tolerancia``.
 
-    An order with a 100 % margin product is only ready with a manual approval: neither its
-    lines nor its margin release it.
+    An order with a 100 % margin product and no stock of it in the warehouse is only ready with a
+    manual approval: neither its lines nor its margin release it. With stock the line is ready
+    (2026-11-27) and the order goes on as any other.
     """
 
     if approved:
         return RELEASE_MANUAL
-    if any(is_full_margin(line) for line, _ in items):
+    if any(holds_full_margin(line, result) for line, result in items):
         return None
     if order_status(result.status for _, result in items) == vocabulary.READY:
         return RELEASE_LINES
