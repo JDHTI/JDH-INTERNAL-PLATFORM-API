@@ -39,6 +39,11 @@ from app.modules.commercial_budget.infrastructure.dwh_source import WarehouseBud
 from app.modules.commercial_budget.infrastructure.export_file import board_workbook
 from app.modules.commercial_budget.infrastructure.policies import AnyAreaLeaderPolicy
 from app.modules.commercial_budget.infrastructure.repository import SqlAlchemyBudgetRepository
+from app.modules.commercial_budget.infrastructure.vendor_file import (
+    read_vendor_master,
+    standardize_classes,
+)
+from app.modules.commercial_budget.infrastructure.vendor_state import WarehouseVendorState
 from app.modules.commercial_budget.infrastructure.vendor_template import vendor_master_template
 from app.modules.commercial_budget.infrastructure.vendor_uploads import (
     SqlAlchemyVendorUploadRepository,
@@ -1227,6 +1232,15 @@ class V1Container(containers.DeclarativeContainer):
         ),
         template=providers.Object(vendor_master_template),
         max_upload_bytes=config.commercial_budget.vendor_master_max_upload_bytes,
+        # The simulation before an upload: the file against consumo.vendedores today.
+        reader=providers.Object(read_vendor_master),
+        standardizer=providers.Object(standardize_classes),
+        state=providers.Factory(
+            WarehouseVendorState,
+            connection=data_provider,
+            schema=settings.provided.DWH_SCHEMA,
+            timeout=config.commercial_budget.dwh_timeout,
+        ),
     )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---
     job_run_repository = providers.Factory(SqlAlchemyJobRunRepository, database=database)

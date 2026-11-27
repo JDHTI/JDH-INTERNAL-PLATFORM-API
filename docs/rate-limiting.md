@@ -541,7 +541,11 @@ Agregar una `Rule` en `app/core/rate_policy.py` y regenerar la tabla de abajo co
 | `GET` | `/v1/users/me` | `read` |  |
 | `GET` | `/v1/users/{user_id}` | `read` |  |
 | `PATCH` | `/v1/users/{user_id}` | `relaxed` |  |
+| `POST` | `/v1/vendor-master/preview` | `relaxed` |  |
 | `GET` | `/v1/vendor-master/status` | `read` |  |
+| `GET` | `/v1/vendor-master/teams` | `read` |  |
+| `POST` | `/v1/vendor-master/teams` | `relaxed` |  |
+| `PATCH` | `/v1/vendor-master/teams/{name}` | `relaxed` |  |
 | `GET` | `/v1/vendor-master/template` | `read` |  |
 | `POST` | `/v1/vendor-master/upload` | `relaxed` |  |
 | `GET` | `/v1/vendor-master/uploads` | `read` |  |

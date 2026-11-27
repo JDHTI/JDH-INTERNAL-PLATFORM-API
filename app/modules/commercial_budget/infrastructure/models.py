@@ -206,7 +206,24 @@ class VendorMasterUploadModel(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class VendorMasterTeamModel(Base):
+    """A team of the rep master kept by the platform (migration ``0096``, 2026-11-27): a new
+    one not loaded yet, or a warehouse team's class or visibility in the template."""
+
+    __tablename__ = "vendor_master_teams"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    team_class: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(320), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 __all__ = [
+    "VendorMasterTeamModel",
     "SalesBudgetChangeModel",
     "SalesBudgetModel",
     "SalesBudgetPeriodModel",

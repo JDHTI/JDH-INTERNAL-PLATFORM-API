@@ -21,6 +21,7 @@ from app.modules.commercial_budget.application.vendor_master import (
     VendorMasterService,
     VendorUpload,
 )
+from app.modules.commercial_budget.domain.vendor_master import TeamOverride
 from app.modules.commercial_budget.infrastructure.dwh_platform import UPLOAD_PATH, DwhPlatformClient
 from app.modules.commercial_budget.infrastructure.vendor_template import (
     SHEETS,
@@ -55,6 +56,17 @@ class History:
 
     async def list(self, limit: int) -> list[VendorUpload]:
         return []
+
+    async def recent_sellers(self, months):
+        return {}
+
+    async def team_overrides(self):
+        return list(getattr(self, "teams", {}).values())
+
+    async def save_team(self, name, *, team_class, is_active, note, actor, now):
+        self.teams = getattr(self, "teams", {})
+        self.teams[name] = TeamOverride(name, team_class, is_active, note)
+        return self.teams[name]
 
 
 def _client(handler, url: str = "http://dwh-platform:8000/") -> DwhPlatformClient:
