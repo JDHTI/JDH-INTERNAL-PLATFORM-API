@@ -37,6 +37,7 @@ from app.modules.commercial_budget.infrastructure.budget_file import (
 from app.modules.commercial_budget.infrastructure.dwh_platform import DwhPlatformClient
 from app.modules.commercial_budget.infrastructure.dwh_source import WarehouseBudgetSource
 from app.modules.commercial_budget.infrastructure.export_file import board_workbook
+from app.modules.commercial_budget.infrastructure.externo_teams import ExternoTeamWriter
 from app.modules.commercial_budget.infrastructure.policies import AnyAreaLeaderPolicy
 from app.modules.commercial_budget.infrastructure.repository import SqlAlchemyBudgetRepository
 from app.modules.commercial_budget.infrastructure.vendor_file import (
@@ -1218,6 +1219,19 @@ class V1Container(containers.DeclarativeContainer):
         writer=providers.Object(settlement_workbook),
     )
     # --- Gestión comercial: the rep master upload (the budget goes after the jobs) ---
+    # The team master in the DWH (externo.equipo) is the platform's (2026-11-27): its own
+    # role svc_plataforma_externo, writing only externo; unset, teams wait for an upload.
+    externo_writer = providers.Singleton(
+        WarehouseWriterConnection,
+        host=config.commercial_budget.externo_writer.host,
+        port=config.commercial_budget.externo_writer.port,
+        database=config.commercial_budget.externo_writer.database,
+        user=config.commercial_budget.externo_writer.user,
+        password=config.commercial_budget.externo_writer.password,
+        ssl=config.commercial_budget.externo_writer.ssl,
+        max_size=config.commercial_budget.externo_writer.pool_size,
+        application_name="plataforma-maestro-vendedores",
+    )
     vendor_master_service = providers.Factory(
         VendorMasterService,
         client=providers.Factory(
@@ -1240,6 +1254,11 @@ class V1Container(containers.DeclarativeContainer):
             connection=data_provider,
             schema=settings.provided.DWH_SCHEMA,
             timeout=config.commercial_budget.dwh_timeout,
+        ),
+        team_writer=providers.Factory(
+            ExternoTeamWriter,
+            connection=externo_writer,
+            company_id=config.commercial_budget.company_id,
         ),
     )
     # --- Background jobs: the master syncs, started when the DWH sequences finish ---

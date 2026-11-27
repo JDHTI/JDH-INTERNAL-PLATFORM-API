@@ -33,6 +33,9 @@ class StatusResponse(BaseModel):
     configured: bool
     can_read: bool
     can_manage: bool
+    # Whether a new team or a class change is written in the DWH at once (externo.equipo,
+    # 2026-11-27); false: it waits in the platform until the next upload.
+    writes_teams: bool = False
 
 
 class UploadRecordResponse(BaseModel):
@@ -57,7 +60,10 @@ async def status(
 
     result = await service.status(principal)
     return StatusResponse(
-        configured=result.configured, can_read=result.can_read, can_manage=result.can_manage
+        configured=result.configured,
+        can_read=result.can_read,
+        can_manage=result.can_manage,
+        writes_teams=result.writes_teams,
     )
 
 

@@ -388,6 +388,21 @@ class Settings(BaseSettings):
     DWH_WRITER_POOL_SIZE: int = 2
     DWH_WRITER_STATEMENT_TIMEOUT_SECONDS: int = 60
     DWH_WRITER_LOCK_TIMEOUT_SECONDS: int = 10
+    # Writer of the ``externo`` schema (2026-11-27, role ``svc_plataforma_externo``): the
+    # platform owns ``externo.equipo`` (the team master of the rep master). Its own set,
+    # separate from DWH_WRITER_* (``svc_plataforma_apoyos``, schema ``plataforma``). Direct to
+    # 5432 (PgBouncer is for readers only); the role allows at most 5 connections. Empty host:
+    # teams created in the platform wait in ``vendor_master_teams`` until an upload loads them.
+    DWH_EXTERNO_WRITER_HOST: str = ""
+    DWH_EXTERNO_WRITER_PORT: int = 5432
+    # Empty: DWH_DATABASE.
+    DWH_EXTERNO_WRITER_DATABASE: str = ""
+    DWH_EXTERNO_WRITER_USER: str = ""
+    DWH_EXTERNO_WRITER_PASSWORD: SecretStr = SecretStr("")
+    DWH_EXTERNO_WRITER_SSLMODE: str = "require"
+    DWH_EXTERNO_WRITER_POOL_SIZE: int = 2
+    # The company of the rep master's teams (``externo.equipo.id_cia``; every team is 1).
+    VENDOR_MASTER_COMPANY_ID: int = 1
     DWH_PUBLISH_POLL_SECONDS: int = 10
     DWH_PUBLISH_BATCH_SIZE: int = 1000
     # Attempts of an event the DWH rejects before it is set aside as failed.
@@ -575,6 +590,10 @@ class Settings(BaseSettings):
             raise ValueError("DWH_PUBLISH_BATCH_SIZE must be between 1 and 5000")
         if not 1 <= self.DWH_WRITER_POOL_SIZE <= 5:
             raise ValueError("DWH_WRITER_POOL_SIZE must be between 1 and 5 (the role allows 5)")
+        if not 1 <= self.DWH_EXTERNO_WRITER_POOL_SIZE <= 5:
+            raise ValueError(
+                "DWH_EXTERNO_WRITER_POOL_SIZE must be between 1 and 5 (the role allows 5)"
+            )
         if self.DWH_PUBLISH_MAX_ATTEMPTS < 1 or self.DWH_PUBLISH_POLL_SECONDS < 1:
             raise ValueError("DWH_PUBLISH_MAX_ATTEMPTS and DWH_PUBLISH_POLL_SECONDS must be > 0")
         return self
@@ -784,6 +803,16 @@ class Settings(BaseSettings):
                 "dwh_platform_api_key": self.DWH_PLATFORM_API_KEY.get_secret_value(),
                 "dwh_platform_timeout": self.DWH_PLATFORM_TIMEOUT_SECONDS,
                 "vendor_master_max_upload_bytes": self.VENDOR_MASTER_MAX_UPLOAD_MB * 1024 * 1024,
+                "company_id": self.VENDOR_MASTER_COMPANY_ID,
+                "externo_writer": {
+                    "host": self.DWH_EXTERNO_WRITER_HOST,
+                    "port": self.DWH_EXTERNO_WRITER_PORT,
+                    "database": self.DWH_EXTERNO_WRITER_DATABASE or self.DWH_DATABASE,
+                    "user": self.DWH_EXTERNO_WRITER_USER,
+                    "password": self.DWH_EXTERNO_WRITER_PASSWORD.get_secret_value(),
+                    "ssl": self.DWH_EXTERNO_WRITER_SSLMODE,
+                    "pool_size": self.DWH_EXTERNO_WRITER_POOL_SIZE,
+                },
             },
             "order_validation": {
                 "manager_area_slug": self.ORDER_VALIDATION_MANAGER_AREA_SLUG,

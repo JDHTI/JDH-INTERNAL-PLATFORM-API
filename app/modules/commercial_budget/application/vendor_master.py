@@ -32,6 +32,7 @@ from app.core.errors import (
 )
 from app.modules.commercial_budget.domain.ports import Policy
 from app.modules.commercial_budget.domain.vendor_master import (
+    DWH,
     PLATFORM,
     MasterFile,
     Preview,
@@ -70,6 +71,7 @@ class VendorMasterStatus:
     configured: bool
     can_read: bool
     can_manage: bool
+    writes_teams: bool = False
 
 
 class PlatformAnswer(Protocol):
@@ -115,6 +117,19 @@ class MasterState(Protocol):
     async def template(self) -> Any: ...
 
 
+class TeamWriter(Protocol):
+    """``externo.equipo``, written by the platform (2026-11-27)."""
+
+    @property
+    def configured(self) -> bool: ...
+
+    async def teams(self) -> dict[str, str | None]: ...
+
+    async def create(self, name: str, team_class: str) -> None: ...
+
+    async def set_class(self, name: str, team_class: str) -> bool: ...
+
+
 class VendorMasterService:
     """Forward the rep master to dwh-platform and keep the history."""
 
@@ -129,6 +144,7 @@ class VendorMasterService:
         state: MasterState | None = None,
         today: Callable[[], date] | None = None,
         standardizer: Callable[[bytes, Mapping[str, str | None]], bytes] | None = None,
+        team_writer: TeamWriter | None = None,
     ) -> None:
         self.client = client
         self.history = history
@@ -138,13 +154,37 @@ class VendorMasterService:
         self.reader = reader
         self.state = state
         self.standardizer = standardizer
+        self.team_writer = team_writer
         self._today = today or (lambda: datetime.now(BOGOTA).date())
 
     # --- the team master (2026-11-27) ---
 
+    @property
+    def writes_teams(self) -> bool:
+        """Whether the platform writes ``externo.equipo`` (its writer role is set). Without
+        it, a new team or class waits in the platform until an upload writes it."""
+
+        return self.team_writer is not None and self.team_writer.configured
+
+    async def _warehouse_teams(
+        self, published: dict[str, tuple[str | None, int]] | None = None
+    ) -> dict[str, tuple[str | None, int]]:
+        """Team → (class, active reps). With the writer, the names and classes come from
+        ``externo.equipo`` (a change shows at once, before dbt publishes it) and the reps
+        from ``consumo``."""
+
+        if published is None:
+            published = await self.state.teams() if self.state is not None else {}
+        if not self.writes_teams:
+            return published
+        master = await self.team_writer.teams()
+        return {
+            name: (team_class, published.get(name, (None, 0))[1])
+            for name, team_class in master.items()
+        }
+
     async def _catalog(self) -> list[TeamEntry]:
-        warehouse = await self.state.teams() if self.state is not None else {}
-        return team_catalog(warehouse, await self.history.team_overrides())
+        return team_catalog(await self._warehouse_teams(), await self.history.team_overrides())
 
     async def teams(self, principal: Principal) -> list[TeamEntry]:
         """The team master: the warehouse's teams and the ones created in the platform."""
@@ -155,11 +195,13 @@ class VendorMasterService:
     async def create_team(
         self, principal: Principal, name: str, team_class: str | None, note: str | None
     ) -> TeamEntry:
-        """A new team, offered by the template until an upload creates it in the warehouse.
+        """A new team. With the writer it goes straight into ``externo.equipo``; without it,
+        the template offers it until an upload creates it in the warehouse.
 
         Raises:
             ConflictError: The master already has a team with that name.
             InvalidInputError: No name or no class.
+            DependencyUnavailableError: The warehouse could not take the write.
         """
 
         await self._require_manage(principal)
@@ -170,6 +212,16 @@ class VendorMasterService:
             raise InvalidInputError("Escribe la clase del equipo (por ejemplo JUNIOR o MAYORISTAS)")
         if any(item.name == clean for item in await self._catalog()):
             raise ConflictError(f"El equipo {clean} ya está en el maestro")
+        if self.writes_teams:
+            await self.team_writer.create(clean, klass)
+            text = _note(note)
+            if text is not None:
+                # The note is the platform's; the class lives in the warehouse only.
+                await self.history.save_team(
+                    clean, team_class=None, is_active=True, note=text,
+                    actor=principal.email, now=datetime.now(UTC),
+                )  # fmt: skip
+            return TeamEntry(clean, klass, DWH, True, 0, text)
         saved = await self.history.save_team(
             clean, team_class=klass, is_active=True, note=_note(note),
             actor=principal.email, now=datetime.now(UTC),
@@ -185,28 +237,41 @@ class VendorMasterService:
         is_active: bool | None = None,
         note: str | None = None,
     ) -> TeamEntry:
-        """Change a team's class (the next upload writes it) or hide it from the template.
+        """Change a team's class or hide it from the template.
+
+        With the writer, the class of a warehouse team is written in ``externo.equipo`` (a
+        class the platform kept for it before is written then too) and the platform keeps only
+        its visibility and note; without it, the next upload writes the class. Hiding never
+        touches the warehouse: a team is never deleted there.
 
         Raises:
             NotFoundError: No such team in the master.
+            DependencyUnavailableError: The warehouse could not take the write.
         """
 
         await self._require_manage(principal)
         clean = normalize(name)
-        found = next((item for item in await self._catalog() if item.name == clean), None)
+        master = await self._warehouse_teams()
+        catalog = team_catalog(master, await self.history.team_overrides())
+        found = next((item for item in catalog if item.name == clean), None)
         if found is None:
             raise NotFoundError(f"El equipo {name} no está en el maestro")
+        wanted = normalize(team_class) or found.team_class
+        local_class = wanted
+        if self.writes_teams and found.source == DWH:
+            if wanted is not None and wanted != master[found.name][0]:
+                if not await self.team_writer.set_class(found.name, wanted):
+                    raise NotFoundError(f"El equipo {name} ya no está en el maestro del DWH")
+            local_class = None
         saved = await self.history.save_team(
             found.name,
-            team_class=normalize(team_class) or found.team_class,
+            team_class=local_class,
             is_active=found.is_active if is_active is None else is_active,
             note=_note(note) if note is not None else found.note,
             actor=principal.email,
             now=datetime.now(UTC),
         )
-        return TeamEntry(
-            saved.name, saved.team_class, found.source, saved.is_active, found.reps, saved.note
-        )
+        return TeamEntry(saved.name, wanted, found.source, saved.is_active, found.reps, saved.note)
 
     async def _require_manage(self, principal: Principal) -> None:
         if not await self.policy.is_manager(principal):
@@ -254,13 +319,15 @@ class VendorMasterService:
             centers=warehouse.centers,
             regionals=warehouse.regionals,
             recent=recent,
-            teams=allowed_teams(team_catalog(warehouse.teams, overrides)),
+            teams=allowed_teams(
+                team_catalog(await self._warehouse_teams(warehouse.teams), overrides)
+            ),
         )
 
     async def status(self, principal: Principal) -> VendorMasterStatus:
         manage = await self.policy.is_manager(principal)
         read = manage or await self.policy.can_read(principal)
-        return VendorMasterStatus(self.client.configured, read, manage)
+        return VendorMasterStatus(self.client.configured, read, manage, self.writes_teams)
 
     async def _require_read(self, principal: Principal) -> None:
         if not await self.policy.can_read(principal) and not await self.policy.is_manager(

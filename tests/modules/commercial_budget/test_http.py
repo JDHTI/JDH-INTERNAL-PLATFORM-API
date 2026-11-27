@@ -202,7 +202,12 @@ def test_bi_uploads_the_rep_master(client, world) -> None:
         f"{MASTER}/upload", files={"file": ("Maestro.xlsx", b"PK..", "application/octet-stream")}
     )
 
-    assert status == {"configured": True, "can_read": True, "can_manage": True}
+    assert status == {
+        "configured": True,
+        "can_read": True,
+        "can_manage": True,
+        "writes_teams": False,  # no writer role in the tests
+    }
     assert template.status_code == 200 and template.content[:2] == b"PK"
     assert uploaded.json() == {"vendedores_procesados": 1}
     assert world.uploads.items[0]["actor"] == "maestro@jdh.com.co"
