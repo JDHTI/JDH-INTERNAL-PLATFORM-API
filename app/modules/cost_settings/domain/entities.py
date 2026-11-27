@@ -26,11 +26,17 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-# Parameters, by key.
-FACTOR_GENERAL = "factor_costo_generales"
-FACTOR_WHOLESALE = "factor_costo_mayoristas"
-FACTOR_MARKET = "factor_costo_market"
+# Parameters, by key. The cost of each list family is raised by a fraction (2026-11-27,
+# BI): 0.004 is 0,4 % more and 0 leaves the standard cost. Until then they were factors
+# (1.004) that could not go under 1; a stored value of the old keys is ignored.
+INCREMENT_GENERAL = "incremento_costo_generales"
+INCREMENT_WHOLESALE = "incremento_costo_mayoristas"
+INCREMENT_MARKET = "incremento_costo_market"
 THRESHOLD = "umbral_negociacion"
+# Former names, kept for the callers.
+FACTOR_GENERAL = INCREMENT_GENERAL
+FACTOR_WHOLESALE = INCREMENT_WHOLESALE
+FACTOR_MARKET = INCREMENT_MARKET
 
 # Entities of the change history.
 PARAMETER = "parametro"
@@ -44,41 +50,43 @@ class ParameterSpec:
     key: str
     label: str
     description: str
-    # ``factor`` multiplies the cost (1.004); ``margen`` is a fraction of margin (0.01 is
-    # one point).
+    # ``incremento`` raises the cost by a fraction (0.004 is 0,4 % more; 0 is the standard
+    # cost); ``margen`` is a fraction of margin (0.01 is one point).
     unit: str
     minimum: Decimal
     maximum: Decimal
-    # The list family a cost factor belongs to (``pricing.FAMILY_LABELS``).
+    # The list family a cost increment belongs to (``pricing.FAMILY_LABELS``).
     family: str | None = None
 
 
+INCREMENT = "incremento"
 PARAMETERS: tuple[ParameterSpec, ...] = (
     ParameterSpec(
-        FACTOR_GENERAL,
-        "Factor de costo: Generales",
-        "Multiplica el costo de las listas Generales (1,004 es 0,4 % más).",
-        "factor",
-        Decimal("1"),
-        Decimal("1.1"),
+        INCREMENT_GENERAL,
+        "Incremento de costo: Generales",
+        "Sube el costo de las listas Generales (0,4 % hoy). En 0 queda el costo estándar.",
+        INCREMENT,
+        Decimal("0"),
+        Decimal("0.1"),
         "generales",
     ),
     ParameterSpec(
-        FACTOR_MARKET,
-        "Factor de costo: Market",
-        "Multiplica el costo de la lista Market.",
-        "factor",
-        Decimal("1"),
-        Decimal("1.1"),
+        INCREMENT_MARKET,
+        "Incremento de costo: Market",
+        "Sube el costo de la lista Market (0,4 % hoy). En 0 queda el costo estándar.",
+        INCREMENT,
+        Decimal("0"),
+        Decimal("0.1"),
         "market",
     ),
     ParameterSpec(
-        FACTOR_WHOLESALE,
-        "Factor de costo: Mayoristas",
-        "Multiplica el costo de las listas Mayoristas (hoy 1: sin factor).",
-        "factor",
-        Decimal("1"),
-        Decimal("1.1"),
+        INCREMENT_WHOLESALE,
+        "Incremento de costo: Mayoristas",
+        "Sube el costo de las listas Mayoristas y de los clientes con margen Mayoristas (0 hoy: "
+        "costo estándar).",
+        INCREMENT,
+        Decimal("0"),
+        Decimal("0.1"),
         "mayoristas",
     ),
     ParameterSpec(
@@ -164,10 +172,11 @@ class CostSettings:
         return self.parameters[key]
 
     def cost_factors(self) -> dict[str, Decimal]:
-        """The factor on the cost by list family (``pricing.FAMILY_LABELS`` keys)."""
+        """The factor on the cost by list family (``pricing.FAMILY_LABELS`` keys): 1 plus
+        its increment (0 increment is a factor of 1, the standard cost)."""
 
         return {
-            spec.family: self.parameters[spec.key]
+            spec.family: 1 + self.parameters[spec.key]
             for spec in PARAMETERS
             if spec.family is not None and spec.key in self.parameters
         }
@@ -214,6 +223,10 @@ __all__ = [
     "FACTOR_GENERAL",
     "FACTOR_MARKET",
     "FACTOR_WHOLESALE",
+    "INCREMENT",
+    "INCREMENT_GENERAL",
+    "INCREMENT_MARKET",
+    "INCREMENT_WHOLESALE",
     "PARAMETER",
     "PARAMETERS",
     "PARAMETER_SPECS",

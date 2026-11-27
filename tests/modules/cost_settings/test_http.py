@@ -46,18 +46,19 @@ def test_the_cost_settings_contract(client) -> None:
     body = overview.json()
     threshold = next(item for item in body["parameters"] if item["key"] == "umbral_negociacion")
     assert threshold["unit"] == "margen" and threshold["is_default"] is True
-    assert {item["family"] for item in body["parameters"] if item["unit"] == "factor"} == {
+    assert {item["family"] for item in body["parameters"] if item["unit"] == "incremento"} == {
         "generales",
         "mayoristas",
         "market",
     }
-    # Salsamentarias is no family since 2026-11-25: its lists are Mayoristas.
-    assert (
-        client.put(
-            f"{BASE}/parameters", json={"values": {"factor_costo_salsamentarias": 1.004}}
-        ).status_code
-        == 422
-    )
+    # Salsamentarias is no family since 2026-11-25, and the factors became increments on
+    # 2026-11-27: the old keys answer 422.
+    for key in ("factor_costo_salsamentarias", "factor_costo_generales"):
+        assert client.put(f"{BASE}/parameters", json={"values": {key: 1.004}}).status_code == 422
+    zero = client.put(f"{BASE}/parameters", json={"values": {"incremento_costo_mayoristas": 0.01}})
+    assert zero.status_code == 200
+    back = client.put(f"{BASE}/parameters", json={"values": {"incremento_costo_mayoristas": 0}})
+    assert back.status_code == 200
 
     changed = client.put(
         f"{BASE}/parameters", json={"values": {"umbral_negociacion": 0.015}, "note": "BI"}

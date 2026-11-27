@@ -294,6 +294,17 @@ def family(price_list_id: str | None, margin_basis: str | None = None) -> str:
     return GENERAL
 
 
+def customer_family(price_list_id: str | None, margin_basis: str | None = None) -> str:
+    """The family of a customer's cost: a customer with the Mayoristas margin is always
+    Mayoristas, whatever its list (BI, 2026-11-27: the supports master raised by 0,4 % the
+    cost of wholesale customers on list 1 or a general list; 1,305 supports on list 1).
+    Otherwise as :func:`family`."""
+
+    if margin_basis == "mayoristas":
+        return WHOLESALE
+    return family(price_list_id, margin_basis)
+
+
 def list_margin_field(price_list_id: str | None) -> str | None:
     """The margin column of a list of the skill's families; ``None`` for any other list (its
     customers' channel decides)."""
@@ -658,6 +669,7 @@ __all__ = [
     "costliest_center",
     "effective_cost",
     "family",
+    "customer_family",
     "FAMILY_MARGIN_FIELDS",
     "list_margin_field",
     "highest_cost",

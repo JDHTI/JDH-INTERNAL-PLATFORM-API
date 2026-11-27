@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from app.modules.quotations.application.service import LineChange
 from app.modules.quotations.domain import rules
-from tests.modules.quotations.conftest import NIT
+from tests.modules.quotations.conftest import NIT, branch
 
 
 class FakeCostRules:
@@ -41,6 +41,22 @@ async def test_the_threshold_and_the_factor_come_from_the_module(service, adviso
         rule for section in rules_page for rule in section.rules if rule.code == "costo_actual"
     )
     assert cost_rule.parameters["factor_costo"] == "1,01"
+
+
+async def test_a_wholesale_customer_on_a_general_list_carries_no_factor(
+    service, advisor, warehouse
+) -> None:
+    """2026-11-27: a customer with the Mayoristas margin is costed as Mayoristas whatever
+    its list (here 001, Generales): no 0,4 %."""
+
+    warehouse.branch_rows[NIT] = [
+        branch(channel_code="0150", channel="MAYORISTAS Y DISTRIBUIDORES")
+    ]
+
+    created = await service.create(advisor, NIT, 12)
+
+    assert created.lines[0].cost == Decimal("3000.0000")
+    assert created.quotation.price_family == "mayoristas"
 
 
 async def test_without_the_module_the_quoter_keeps_its_own(service, advisor) -> None:

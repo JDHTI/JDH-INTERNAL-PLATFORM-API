@@ -35,11 +35,13 @@ class ParameterResponse(BaseModel):
     key: str
     label: str
     description: str
-    # ``factor`` multiplies the cost; ``margen`` is a fraction of margin (0.01 is one point).
-    unit: Literal["factor", "margen"]
+    # ``incremento`` raises the cost by a fraction (0.004 is 0,4 % more, 0 the standard cost;
+    # 2026-11-27, it was a factor ``factor`` 1.004); ``margen`` is a fraction of margin (0.01
+    # is one point).
+    unit: Literal["incremento", "margen"]
     minimum: Decimal
     maximum: Decimal
-    # The list family of a cost factor.
+    # The list family of a cost increment.
     family: str | None
     value: Decimal
     default: Decimal
