@@ -313,7 +313,8 @@ async def test_only_a_leader_closes_a_finished_month_and_it_freezes(loaded, repo
 
     assert closed.status == CLOSED and closed.closed_by == LEADER.email
     assert next(row for row in view.rows if row.code == "101").current.net == D(1000)
-    assert len(repository.snapshots["2026-09"].customers) == 3
+    assert repository.snapshot_customers["2026-09"]["c1"].salesperson_code == "101"
+    assert len(repository.snapshot_customers["2026-09"]) == 3
     with pytest.raises(ConflictError, match="cerrado"):
         await loaded.update_budgets(
             ANALYST, "2026-09", [{"salesperson_code": "101", "budget_sales": 1}]

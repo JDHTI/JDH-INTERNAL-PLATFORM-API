@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.errors import ConflictError, NotFoundError
+from app.modules.commercial_budget.domain import rules
 from app.modules.commercial_budget.domain.entities import (
     BUDGET_FIELDS,
     CLOSED,
@@ -19,6 +20,7 @@ from app.modules.commercial_budget.domain.entities import (
     BudgetPeriod,
     CustomerMonth,
     MonthLoad,
+    RepMonth,
     RepRow,
     SalesRep,
     Snapshot,
@@ -102,6 +104,7 @@ class FakeRepository:
         self.budget_map: dict[tuple[str, str], Budget] = {}
         self.change_list: list[BudgetChange] = []
         self.snapshots: dict[str, Snapshot] = {}
+        self.snapshot_customers: dict[str, dict[str, Assignment | None]] = {}
 
     def assign(self, customer: str, code: str | None, name: str | None = None) -> None:
         self.assignment_map[customer] = Assignment(customer, code, name)
@@ -117,8 +120,10 @@ class FakeRepository:
     async def loads(self) -> dict[str, MonthLoad]:
         return dict(self.load_by_month)
 
-    async def sales(self, months: Sequence[str]) -> dict[str, list[CustomerMonth]]:
-        return {m: list(self.sales_by_month[m]) for m in months if m in self.sales_by_month}
+    async def rep_months(self, months: Sequence[str]) -> list[RepMonth]:
+        # The same rule the repository runs in SQL.
+        sales = {m: list(self.sales_by_month[m]) for m in months if m in self.sales_by_month}
+        return rules.rep_months(sales, self.assignment_map)
 
     async def replace_reps(self, reps, now) -> int:
         if reps:
@@ -127,9 +132,6 @@ class FakeRepository:
 
     async def reps(self) -> dict[str, SalesRep]:
         return dict(self.rep_map)
-
-    async def assignments(self) -> dict[str, Assignment]:
-        return dict(self.assignment_map)
 
     async def period(self, period: str) -> BudgetPeriod:
         return self.period_map.get(period, BudgetPeriod(period))
@@ -198,6 +200,10 @@ class FakeRepository:
         if month.version != expected_version:
             raise ConflictError("cambió")
         self.snapshots[period] = snapshot
+        self.snapshot_customers[period] = {
+            item.customer_key: self.assignment_map.get(item.customer_key)
+            for item in self.sales_by_month.get(period, [])
+        }
         closed = replace(
             month, status=CLOSED, closed_at=now, closed_by=actor, version=month.version + 1
         )

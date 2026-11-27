@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,14 +17,15 @@ from app.infrastructure.database import Database
 from app.modules.commercial_budget.domain.entities import (
     BUDGET_FIELDS,
     CLOSED,
+    NO_REP,
     OPEN,
-    Assignment,
     Budget,
     BudgetChange,
     BudgetPeriod,
     CustomerMonth,
     Figures,
     MonthLoad,
+    RepMonth,
     RepRow,
     SalesRep,
     Snapshot,
@@ -41,7 +41,6 @@ from app.modules.commercial_budget.infrastructure.models import (
     SalesMonthLoadModel,
     SalesRepModel,
 )
-from app.modules.commercial_masters.infrastructure.models import CustomerModel
 
 P = SalesBudgetPeriodModel
 B = SalesBudgetModel
@@ -90,6 +89,41 @@ async def _insert(session: AsyncSession, table: Any, rows: list[dict]) -> None:
         await session.execute(insert(table), rows[start : start + _CHUNK])
 
 
+# Each month's sales per current rep (``customers.salesperson_code``); the sales of a customer
+# with no rep, or not in the customer master, go to the blank code (shown as «sin vendedor»).
+_REP_MONTHS = text(
+    """
+    select s.period, nullif(btrim(c.salesperson_code), '') as code,
+           max(nullif(btrim(c.salesperson_name), '')) as name,
+           sum(s.net) as net, sum(s.cost) as cost,
+           count(*) filter (where s.net > 0) as customers
+    from sales_month_customers s
+    left join customers c on c.cliente_key = s.customer_key
+    where s.period = any(:months)
+    group by 1, 2
+    """
+)
+_SNAPSHOT_CUSTOMERS = text(
+    """
+    insert into sales_budget_snapshot_customers
+        (period, customer_key, salesperson_code, salesperson_name, net, cost, lines)
+    select s.period, s.customer_key, nullif(btrim(c.salesperson_code), ''),
+           nullif(btrim(c.salesperson_name), ''), s.net, s.cost, s.lines
+    from sales_month_customers s
+    left join customers c on c.cliente_key = s.customer_key
+    where s.period = :period
+    """
+)
+
+
+async def _lock(session: AsyncSession, name: str) -> None:
+    """A lock held until the transaction ends, so two copies of the same data never mix."""
+
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtext(:name))"), {"name": f"commercial_budget:{name}"}
+    )
+
+
 async def _locked_period(session: AsyncSession, period: str) -> SalesBudgetPeriodModel:
     """The month's row, created when missing, locked for the transaction."""
 
@@ -134,6 +168,9 @@ class SqlAlchemyBudgetRepository:
             "net": sum((item.net for item in sales), ZERO),
         }
         async with self.database.session_factory() as session, session.begin():
+            # Two copies of the same month at once (the job and a person, 2026-11-26) both
+            # deleted and both inserted: a duplicate key. One waits for the other.
+            await _lock(session, f"sales_month:{period}")
             await session.execute(
                 delete(SalesMonthCustomerModel).where(SalesMonthCustomerModel.period == period)
             )
@@ -152,22 +189,31 @@ class SqlAlchemyBudgetRepository:
             models = (await session.execute(select(SalesMonthLoadModel))).scalars().all()
         return {model.period: _load(model) for model in models}
 
-    async def sales(self, months: Sequence[str]) -> dict[str, list[CustomerMonth]]:
-        S = SalesMonthCustomerModel
-        async with self.database.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(S.period, S.customer_key, S.net, S.cost, S.lines).where(
-                        S.period.in_(list(months))
-                    )
-                )
-            ).all()
-        found: dict[str, list[CustomerMonth]] = defaultdict(list)
-        for row in rows:
-            found[row.period].append(CustomerMonth(row.customer_key, row.net, row.cost, row.lines))
-        return dict(found)
+    async def rep_months(self, months: Sequence[str]) -> list[RepMonth]:
+        """Each month's figures per current rep, grouped in the database.
 
-    # --- reps and customers ---
+        The months' sales by customer (about 10,000 per month) joined to each customer's rep
+        (``customers``, 73,500 on 2026-11-26) come back as a few hundred rows: carrying them
+        to the API took about 2.5 s per board on the event loop; grouped here, 150 ms.
+        """
+
+        if not months:
+            return []
+        async with self.database.session_factory() as session:
+            rows = (await session.execute(_REP_MONTHS, {"months": list(months)})).all()
+        return [
+            RepMonth(
+                period=row.period,
+                code=row.code or NO_REP,
+                name=row.name,
+                net=row.net or ZERO,
+                cost=row.cost or ZERO,
+                customers=int(row.customers or 0),
+            )
+            for row in rows
+        ]
+
+    # --- reps ---
 
     async def replace_reps(self, reps: Sequence[SalesRep], now: datetime) -> int:
         """Store the rep master in place of the previous copy (an empty read keeps it)."""
@@ -189,6 +235,7 @@ class SqlAlchemyBudgetRepository:
             for rep in unique.values()
         ]
         async with self.database.session_factory() as session, session.begin():
+            await _lock(session, "sales_reps")
             await session.execute(delete(SalesRepModel))
             await _insert(session, SalesRepModel, rows)
         return len(rows)
@@ -207,23 +254,6 @@ class SqlAlchemyBudgetRepository:
                 is_active=model.is_active,
             )
             for model in models
-        }
-
-    async def assignments(self) -> dict[str, Assignment]:
-        """Each customer branch's current rep (the customer master, synced daily)."""
-
-        C = CustomerModel
-        async with self.database.session_factory() as session:
-            rows = (
-                await session.execute(select(C.cliente_key, C.salesperson_code, C.salesperson_name))
-            ).all()
-        return {
-            row.cliente_key: Assignment(
-                row.cliente_key,
-                (row.salesperson_code or "").strip() or None,
-                (row.salesperson_name or "").strip() or None,
-            )
-            for row in rows
         }
 
     # --- months and budgets ---
@@ -384,22 +414,8 @@ class SqlAlchemyBudgetRepository:
                 SalesBudgetSnapshotRepModel,
                 [_snapshot_row(period, row) for row in snapshot.rows],
             )
-            await _insert(
-                session,
-                SalesBudgetSnapshotCustomerModel,
-                [
-                    {
-                        "period": period,
-                        "customer_key": sale.customer_key,
-                        "salesperson_code": owner.salesperson_code,
-                        "salesperson_name": owner.salesperson_name,
-                        "net": sale.net,
-                        "cost": sale.cost,
-                        "lines": sale.lines,
-                    }
-                    for owner, sale in snapshot.customers
-                ],
-            )
+            # Who had which customer that month, copied in the database (thousands of rows).
+            await session.execute(_SNAPSHOT_CUSTOMERS, {"period": period})
             month.status = CLOSED
             month.closed_at = now
             month.closed_by = actor
