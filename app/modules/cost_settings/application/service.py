@@ -54,8 +54,11 @@ def clear_cache() -> None:
 def default_values(threshold: Decimal) -> dict[str, Decimal]:
     """Each parameter's value while BI has not set it: the quoter's own."""
 
+    # The increment of each family: the quoter's factor minus 1 (0.004, 0 for Mayoristas).
     values = {
-        spec.key: pricing.COST_FACTOR[spec.family] for spec in PARAMETERS if spec.family is not None
+        spec.key: pricing.COST_FACTOR[spec.family] - 1
+        for spec in PARAMETERS
+        if spec.family is not None
     }
     values[THRESHOLD] = threshold
     return values

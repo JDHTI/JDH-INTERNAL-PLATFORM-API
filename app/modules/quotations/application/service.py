@@ -416,8 +416,15 @@ def _group_agreements(agreements: Sequence[Agreement], group: str) -> list[Agree
 
 def _setup(context: CustomerContext) -> _Setup:
     basis = BASIS.get(_margin_field(context), "lista")
+    # A customer's quotation with the Mayoristas margin is costed as Mayoristas, whatever its
+    # list (2026-11-27), as the supports master does; a list update keeps its list's family.
+    family = (
+        pricing.customer_family(context.price_list_id, basis)
+        if context.nit
+        else pricing.family(context.price_list_id, basis)
+    )
     return _Setup(
-        family=pricing.family(context.price_list_id, basis),
+        family=family,
         plans=pricing.stock_plans(
             context.price_list_id,
             context.cost_centers,

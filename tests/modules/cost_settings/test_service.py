@@ -22,8 +22,10 @@ async def test_the_defaults_are_the_quoters_until_bi_sets_one(settings) -> None:
     overview = await settings.overview(person(COST_READER))
 
     values = {item.spec.key: item for item in overview.parameters}
-    assert values[FACTOR_GENERAL].value == Decimal("1.004") and values[FACTOR_GENERAL].is_default
-    assert values[FACTOR_WHOLESALE].value == Decimal(1)
+    # Increments since 2026-11-27: 0.004 is 0,4 % more; 0 is the standard cost.
+    assert values[FACTOR_GENERAL].value == Decimal("0.004") and values[FACTOR_GENERAL].is_default
+    assert values[FACTOR_GENERAL].spec.unit == "incremento"
+    assert values[FACTOR_WHOLESALE].value == Decimal(0)
     assert values[THRESHOLD].value == Decimal("0.01")
     assert overview.can_manage is False
     threshold, factors = await settings.threshold_and_factors()
@@ -37,7 +39,7 @@ async def test_a_parameter_changes_within_its_range_and_leaves_history(
     manager = person(COST_MANAGER)
 
     changed = await settings.set_parameters(
-        manager, {THRESHOLD: "0,015", FACTOR_GENERAL: Decimal("1.004")}, "Ajuste de BI"
+        manager, {THRESHOLD: "0,015", FACTOR_GENERAL: Decimal("0.004")}, "Ajuste de BI"
     )
 
     by_key = {item.spec.key: item for item in changed}
@@ -53,14 +55,28 @@ async def test_a_parameter_changes_within_its_range_and_leaves_history(
     assert entry.actor == COST_MANAGER and entry.note == "Ajuste de BI"
     assert (await settings.threshold_and_factors())[0] == Decimal("0.015")
 
-    with pytest.raises(InvalidInputError, match="entre 1 y 1.1"):
-        await settings.set_parameters(manager, {FACTOR_GENERAL: "0.99"})
+    with pytest.raises(InvalidInputError, match="entre 0 y 0.1"):
+        await settings.set_parameters(manager, {FACTOR_GENERAL: "-0.01"})
+    with pytest.raises(InvalidInputError, match="entre 0 y 0.1"):
+        await settings.set_parameters(manager, {FACTOR_GENERAL: "1.004"})
     with pytest.raises(InvalidInputError, match="desconocido"):
         await settings.set_parameters(manager, {"otro": "1"})
     with pytest.raises(InvalidInputError, match="número"):
         await settings.set_parameters(manager, {THRESHOLD: "uno"})
     with pytest.raises(InvalidInputError, match="no hay nada que cambiar"):
         await settings.set_parameters(manager, {THRESHOLD: "0.015"})
+
+
+async def test_an_increment_of_zero_leaves_the_standard_cost(settings) -> None:
+    """2026-11-27: BI may set any family's increment to 0 (no factor)."""
+
+    manager = person(COST_MANAGER)
+
+    await settings.set_parameters(manager, {FACTOR_GENERAL: "0"}, "Costo estándar")
+
+    _, factors = await settings.threshold_and_factors()
+    assert factors["generales"] == Decimal(1) and factors["market"] == Decimal("1.004")
+    assert factors["mayoristas"] == Decimal(1)
 
 
 async def test_only_managers_change_and_readers_only_read(settings) -> None:

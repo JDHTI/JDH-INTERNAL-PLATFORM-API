@@ -8,7 +8,8 @@ highest of their plans; a support for every client uses list 1, the highest amon
 warehouses. The cost carries the factor of the client's list family, as the quoter's
 (``pricing.COST_FACTOR``: 1,004, none for the wholesale lists; BI, 2026-11-18), so the
 master, the preview and the order validator use the quoter's very cost. The family is the
-list's when the skill names it, else the client's margin list's.
+list's when the skill names it, else the client's margin list's; a client with the Mayoristas
+margin is Mayoristas whatever its list (2026-11-27: its cost is never raised by 0,4 %).
 
 The result is stored locally (``supplier_support_costs``) so the screens never wait for the
 DWH; the job runs when the warehouse publishes the supply data (``abastecimiento``).
@@ -113,9 +114,10 @@ def cost_factor(
     price_list_id: str | None, basis: str | None, factors: Mapping[str, Decimal] | None = None
 ) -> Decimal:
     """The quoter's factor on the cost of a list family: module ``ajuste-costos``'s
-    (``factors``, 2026-11-25), else the code's (1,004; 1 for the wholesale lists)."""
+    (``factors``, 2026-11-25), else the code's (1,004; 1 for the wholesale lists). A
+    customer with the Mayoristas margin is Mayoristas whatever its list (2026-11-27)."""
 
-    family = pricing.family(price_list_id, basis)
+    family = pricing.customer_family(price_list_id, basis)
     found = (factors or {}).get(family)
     return found if found is not None else pricing.COST_FACTOR.get(family, ONE)
 

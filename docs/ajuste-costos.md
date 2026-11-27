@@ -26,9 +26,21 @@ negocio.
 
 | Clave | Qué es | Por defecto | Rango |
 | --- | --- | --- | --- |
-| `factor_costo_generales` | Factor sobre el costo de las listas Generales | 1,004 (0,4 % más) | 1 a 1,1 |
-| `factor_costo_market` | Ídem, Market | 1,004 | 1 a 1,1 |
-| `factor_costo_mayoristas` | Ídem, Mayoristas (también las listas Salsamentarias 10X, 10R y 10S) | 1 (sin factor) | 1 a 1,1 |
+| `incremento_costo_generales` | Incremento sobre el costo de las listas Generales (fracción: 0,004 = 0,4 % más; 0 = costo estándar) | 0,004 | 0 a 0,1 |
+| `incremento_costo_market` | Ídem, Market | 0,004 | 0 a 0,1 |
+| `incremento_costo_mayoristas` | Ídem, Mayoristas (también las listas Salsamentarias 10X, 10R y 10S) y los clientes con margen Mayoristas | 0 (costo estándar) | 0 a 0,1 |
+
+- **Incremento en vez de factor (2026-11-27):** antes eran factores (1,004) con mínimo 1, así
+  que no se podía dejar el costo estándar escribiendo 0. Ahora cada familia lleva un incremento:
+  0 es el costo estándar. El cotizador sigue aplicando un factor de 1 + incremento.
+  - Las claves viejas (`factor_costo_*`) responden 422.
+  - Un valor guardado con ellas se ignora. En producción no había ninguno.
+- **Clientes con margen Mayoristas (2026-11-27):** se costean como Mayoristas sea cual sea su
+  lista, tanto en el maestro de apoyos como en las cotizaciones de cliente
+  (`pricing.customer_family`).
+  - Antes, un cliente mayorista con la lista 1 o una lista General llevaba el 0,4 % de las
+    Generales. En producción eran 1.305 apoyos con la lista 1, más 60 en MDE1/MDE3 y 16 en URA6.
+  - Las actualizaciones de lista siguen con la familia de su lista.
 | `umbral_negociacion` | Puntos de margen bajo el objetivo que un precio puede bajar y pasar sin alerta (fracción: 0,01 = 1 punto) | `QUOTATIONS_MAX_POINTS_BELOW_TARGET` / 100 (1 punto) | 0 a 0,1 |
 
 - **Valor por defecto:** mientras BI no fija un valor, el parámetro toma su valor por defecto. Por

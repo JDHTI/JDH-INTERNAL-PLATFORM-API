@@ -129,6 +129,30 @@ async def test_the_wholesale_family_carries_no_factor() -> None:
     assert costs[by_margin] == D("121.0000") and costs[general] == D("121.4840")
 
 
+async def test_a_wholesale_customer_on_a_general_list_carries_no_factor() -> None:
+    """2026-11-27: the supports master raised by 0,4 % the cost of wholesale customers on
+    list 1 or a general list (1,305 supports on list 1). Their margin is Mayoristas: no
+    factor, whatever the list."""
+
+    class Lists(FakeWarehouse):
+        async def branches(self, nits):
+            return {
+                "904": [BranchPlan("1", None, True)],  # list 1, the highest of its warehouses
+                "905": [BranchPlan("001", "001", True)],  # Generales Antioquia
+            }
+
+    on_list_one, on_general = uuid4(), uuid4()
+    repo = FakeRepository(
+        [CostTarget(on_list_one, "1128", "904"), CostTarget(on_general, "1128", "905")],
+        fields={"904": "margin_wholesale", "905": "margin_wholesale"},
+    )
+
+    await SupportCostService(repo, Lists()).run()
+
+    costs = {cost.support_id: cost.unit_cost for cost in repo.saved}
+    assert costs[on_list_one] == D("110.0000") and costs[on_general] == D("101.0000")
+
+
 def test_the_figures_use_the_dwh_cost_per_unit() -> None:
     data = SupportData(
         kind="tactico_cliente",
